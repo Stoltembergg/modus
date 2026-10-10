@@ -14,6 +14,12 @@ use decoder::PtyDecoder;
 
 type Sessions = Arc<Mutex<HashMap<String, Session>>>;
 type HostWriter = Arc<Mutex<io::Stdout>>;
+type TerminationTasks = Vec<thread::JoinHandle<()>>;
+
+#[cfg(unix)]
+const PROCESS_TREE_TERM_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
+#[cfg(unix)]
+const PROCESS_TREE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
 
 struct Session {
     master: Box<dyn MasterPty + Send>,
@@ -223,15 +229,14 @@ fn spawn_session(
     Ok(())
 }
 
-/// Best-effort termination of a child *and its descendants*, so killing a
-/// terminal that ran e.g. `npm run dev` also stops the `node` server it spawned
-/// and releases the port. Uses only platform CLIs (no extra crates): `taskkill
-/// /T` on Windows, and a process-group `kill` on Unix (PTY children are session
-/// leaders, so the negative pid targets the whole group). The direct
-/// `killer.kill()` in the caller remains the fallback.
-fn kill_process_tree(pid: Option<u32>) {
+/// Starts termination of a child *and its descendants*, so killing a terminal
+/// that ran e.g. `npm run dev` also stops the `node` server it spawned and
+/// releases the port. PTY children are session leaders, so the negative pid
+/// targets their entire process group on Unix. The returned task escalates to
+/// SIGKILL after a short grace period if any process in the group remains.
+fn kill_process_tree(pid: Option<u32>) -> Option<thread::JoinHandle<()>> {
     let Some(pid) = pid else {
-        return;
+        return None;
     };
 
     #[cfg(windows)]
@@ -241,20 +246,77 @@ fn kill_process_tree(pid: Option<u32>) {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status();
+        None
     }
 
     #[cfg(unix)]
     {
-        // Negative pid → the process group led by the PTY child.
-        let _ = std::process::Command::new("kill")
-            .args(["-TERM", &format!("-{pid}")])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
+        let Ok(process_group) = libc::pid_t::try_from(pid) else {
+            return None;
+        };
+
+        // Send the cooperative signal first so ordinary commands can clean up.
+        unsafe {
+            libc::kill(-process_group, libc::SIGTERM);
+        }
+
+        Some(thread::spawn(move || {
+            let deadline = std::time::Instant::now() + PROCESS_TREE_TERM_GRACE;
+            while unix_process_group_exists(process_group)
+                && std::time::Instant::now() < deadline
+            {
+                thread::sleep(PROCESS_TREE_POLL_INTERVAL);
+            }
+
+            // A process group can outlive its original shell. If it did not
+            // exit during the grace period, terminate only that PTY group.
+            if unix_process_group_exists(process_group) {
+                unsafe {
+                    libc::kill(-process_group, libc::SIGKILL);
+                }
+            }
+        }))
     }
 }
 
-fn handle_command(command: HostCommand, sessions: &Sessions, writer: &HostWriter) -> Result<bool> {
+#[cfg(unix)]
+fn unix_process_group_exists(process_group: libc::pid_t) -> bool {
+    if unsafe { libc::kill(-process_group, 0) } == 0 {
+        return true;
+    }
+
+    io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+fn schedule_process_tree_kill(pid: Option<u32>, tasks: &mut TerminationTasks) {
+    let mut pending = Vec::with_capacity(tasks.len());
+    for task in tasks.drain(..) {
+        if task.is_finished() {
+            let _ = task.join();
+        } else {
+            pending.push(task);
+        }
+    }
+    *tasks = pending;
+    if let Some(task) = kill_process_tree(pid) {
+        tasks.push(task);
+    }
+}
+
+fn terminate_sessions(sessions: &Sessions, tasks: &mut TerminationTasks) {
+    let sessions = std::mem::take(&mut *sessions.lock().expect("session lock poisoned"));
+    for (_, mut session) in sessions {
+        schedule_process_tree_kill(session.pid, tasks);
+        let _ = session.killer.kill();
+    }
+}
+
+fn handle_command(
+    command: HostCommand,
+    sessions: &Sessions,
+    writer: &HostWriter,
+    termination_tasks: &mut TerminationTasks,
+) -> Result<bool> {
     match command {
         HostCommand::Spawn {
             id,
@@ -295,15 +357,12 @@ fn handle_command(command: HostCommand, sessions: &Sessions, writer: &HostWriter
                 // Tear down the whole tree first (frees ports held by grandchildren
                 // such as a `node` spawned by `npm run dev`), then signal the PTY
                 // child directly as a fallback in case the tree kill missed it.
-                kill_process_tree(session.pid);
+                schedule_process_tree_kill(session.pid, termination_tasks);
                 let _ = session.killer.kill();
             }
         }
         HostCommand::Shutdown => {
-            for (_, mut session) in sessions.lock().expect("session lock poisoned").drain() {
-                kill_process_tree(session.pid);
-                let _ = session.killer.kill();
-            }
+            terminate_sessions(sessions, termination_tasks);
             return Ok(false);
         }
     }
@@ -314,6 +373,7 @@ fn handle_command(command: HostCommand, sessions: &Sessions, writer: &HostWriter
 fn main() -> Result<()> {
     let sessions = Arc::new(Mutex::new(HashMap::new()));
     let writer = Arc::new(Mutex::new(io::stdout()));
+    let mut termination_tasks = Vec::new();
     let stdin = io::stdin();
 
     for line in stdin.lock().lines() {
@@ -337,9 +397,15 @@ fn main() -> Result<()> {
             }
         };
 
-        if !handle_command(command, &sessions, &writer)? {
+        if !handle_command(command, &sessions, &writer, &mut termination_tasks)? {
             break;
         }
+    }
+
+    // EOF is also a host shutdown; do not leave child process groups behind.
+    terminate_sessions(&sessions, &mut termination_tasks);
+    for task in termination_tasks {
+        let _ = task.join();
     }
 
     Ok(())
@@ -479,10 +545,12 @@ mod tests {
             }
         };
 
+        let mut termination_tasks = Vec::new();
         handle_command(
             HostCommand::Kill { id },
             &sessions,
             &writer,
+            &mut termination_tasks,
         )
         .expect("dispatch normal PTY cancellation command");
 
@@ -500,6 +568,9 @@ mod tests {
             terminated,
             "SIGTERM-ignoring descendant remained active after terminal cancellation"
         );
+        for task in termination_tasks {
+            task.join().expect("process-group escalation task");
+        }
     }
 
     /// Regression guard for the ConPTY blindness bug (wezterm#6783).
