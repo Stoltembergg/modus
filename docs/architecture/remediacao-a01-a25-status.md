@@ -182,8 +182,8 @@ dispatcher can be introduced and safely validated.
 
 ## Milestone 3 — A10–A14 lifecycle and dependency integrity
 
-**Status: implemented and locally checked; independent review and remote CI
-for this patch are pending.**
+**Status: lifecycle service paths are implemented and locally checked; this
+patch is awaiting its own CI run.**
 
 - A10 startup reconciliation now resolves the exact installed version from
   the host catalog, includes exact authorized preloaded manifests in the
@@ -204,6 +204,9 @@ for this patch are pending.**
   without invoking plugin callbacks. Manual disable removes a plugin from the
   restore baseline. Exit retains per-plugin pending restoration state, and
   startup resumes it in dependency order after interrupted restoration.
+  The service derives trust policy from the selected level, rejects upgrade or
+  downgrade candidates outside the persisted level before hot reload, and will
+  not release quarantine for a disallowed plugin during restoration.
 - A14 plugin and capability versions/ranges are validated with SemVer. Invalid
   ranges and unavailable providers fail closed. Install/upgrade preflight
   dependency graph cycles and direct dependent compatibility before changing
@@ -227,11 +230,20 @@ for this patch are pending.**
   dependency cycle; the new synthetic restart test failed with that rejection
   and now passes after cycle-wide quarantine and explicit forced removal.
   Targeted fixes also cover disabled-provider/preloaded-dependent reconciliation
-  and fresh-loader dependency restoration order.
+  and fresh-loader dependency restoration order. Additional A13 regressions
+  reproduced a forged service-level trust allow-list, disallowed
+  upgrade/downgrade candidates being hot-reloaded, and restoration clearing
+  quarantine during Safe Mode. The service now derives the allow-list itself,
+  rejects those transitions before loading candidate code, and retains
+  quarantine (RED/GREEN).
 - Targeted Vitest: **4 files, 137 tests passed** (`plugin.test.ts`,
   `plugin-lifecycle.test.ts`, `plugin-dependency.test.ts`, and
   `plugin-rollback.test.ts`). Tests use only synthetic in-process fixtures; no
   external plugin or adversarial probe ran.
+- The updated rollback/Safe Mode suite passes **39/39**; its three new
+  upgrade, downgrade, and restore regressions first ran RED (3 failures) and
+  then GREEN. Desktop typecheck passes. Targeted Biome passes with two existing
+  warnings and no errors; `git diff --check` passes.
 - Desktop TypeScript typecheck: passed, exit 0.
 - Targeted Biome on 11 changed TypeScript files: exit 0 with 57 warnings and 1
   info, and no errors after correcting one formatting diagnostic. Warning
@@ -241,11 +253,20 @@ for this patch are pending.**
 - Independent review: the initial pass identified startup dependency-order
   gaps and a forced-removal dead end for persisted cycles. The startup ordering
   and cycle-recovery fixes were reviewed again; the reviewer found no remaining
-  concrete blocker. This was a static review and did not execute tests.
-- Remote CI for the preceding published `7cf22eb` does not include this local
-  lifecycle patch. Its core job and Windows/macOS packaging passed, while the
-  Supabase pgTAP job failed test 22 as described above. This patch needs its
-  own CI run after publication.
+  concrete blocker. A13 re-review confirmed the new service-level checks and
+  tests. It also noted same-process runtime accessors to internal loader/service
+  objects; there are no in-repository production callers, external plugin
+  execution remains denied, and that accessor surface remains a residual API
+  concern. Review was static and did not execute tests.
+- Remote CI for `d77cf0e` predates this local A13 patch. The global and Ubuntu
+  plugin test jobs each failed only the WASM `FastVectorDistance` timing
+  assertion (`0.161752 ms` and `0.104707 ms`; required `<0.1 ms`). Global
+  Vitest totals were 1 failed, 4,536 passed, and 8 skipped across 402 files.
+  pgTAP failed test 22 in `17_free_monthly_renewal.test.sql`: actual period end
+  was Oct 30, expected Oct 31, 2026. Windows x64 and macOS arm64/x64 packaging
+  subsequently passed. These failures are recorded without changing the
+  benchmark or classifying them as pre-existing; this patch needs its own CI
+  run after publication.
 - Remaining limits: this does not create an OS execution boundary, prove
   crash-consistent external artifact deployment, or enable external plugins.
   Safe Mode is persisted in the existing plugin state database; full corruption
@@ -739,12 +760,12 @@ acknowledged.
 | A10 | Mitigated | Startup uses exact host-catalog versions, reconciles disabled state before activation, and orders dependency restoration; external artifact identity remains unavailable. |
 | A11 | Mitigated | Disable transaction rollback restores runtime or leaves provider quarantined; broader crash atomicity remains unproven. |
 | A12 | Mitigated | Per-store lifecycle queue serializes shared DB/graph operations; stress/fault injection beyond targeted tests remains open. |
-| A13 | Mitigated | Safe Mode state and restoration are durable and restartable; storage corruption/power-loss proof remains open. |
+| A13 | Mitigated | Persisted Safe Mode policy is service-derived; disallowed upgrade/downgrade transitions are rejected before hot reload, and restore retains quarantine. Same-process runtime accessors still expose internal loader/service objects; no production caller was found, but the API surface remains a residual concern. Storage corruption/power-loss proof remains open. |
 | A14 | Mitigated | SemVer constraints, active-provider checks, cycle preflight/recovery, and dependent suspension are covered; an OS boundary remains absent. |
 | A15 | Partially mitigated | Pi cancellation propagates to terminal/app launches; active root-run agent processes are selected by session+run and cancelled, and cancellation telemetry is distinct. Non-cooperative in-process work and hard OS preemption remain unproven. |
 | A16 | Prior fix preserved | Explicit user-selected model identity and provider. |
 | A17 | Prior fix preserved | Verification evidence integrity. |
-| A18 | Implemented locally; remote CI pending | SQLite source of truth, durable per-recipient broadcast ACKs, bounded inbox queries, host-derived group scope, expiry-safe ACKs and lazy cleanup; independent review found no blocker. |
+| A18 | Implemented and independently reviewed; remote CI partially failed | SQLite source of truth, durable per-recipient broadcast ACKs, bounded inbox queries, host-derived group scope, expiry-safe ACKs and lazy cleanup. Global CI has a WASM benchmark timing failure and pgTAP date assertion failure; Windows x64 and macOS arm64/x64 packaging passed. |
 | A19 | Prior A21.4 implementation preserved | Spill authorization, persistence, quotas, and recovery. |
 | A20 | Partially mitigated | Audit events and checkpoints persist in SQLite; immutable snapshots, transactional retention and verification detect ordinary record changes. No independent signing key or database access boundary exists. |
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |

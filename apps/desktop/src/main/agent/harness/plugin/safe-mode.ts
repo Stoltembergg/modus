@@ -46,10 +46,9 @@ export class PluginSafeModeManager {
   public async enter(
     level: SafeModeLevel = "core",
   ): Promise<{ level: SafeModeLevel; enabledPlugins: string[]; disabledPlugins: string[] }> {
-    const allowedTrusts = this.getTrustLevelsForMode(level);
     let result: Awaited<ReturnType<PluginLifecycleService["enterSafeMode"]>>;
     try {
-      result = await this.service.enterSafeMode(level, allowedTrusts);
+      result = await this.service.enterSafeMode(level);
     } catch (error) {
       // The durable gate is written before providers are disabled. If a later
       // shutdown step fails, report the persisted restrictive state accurately.

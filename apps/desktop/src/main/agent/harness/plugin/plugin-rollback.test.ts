@@ -6,6 +6,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PiSdkRuntime } from "../../pi-sdk-runtime";
+import { HOST_CAPABILITY_REGISTRATION_AUTHORITY } from "../capability/capability-registration-authority";
 import { CapabilityRegistry } from "../capability/capability-registry";
 import {
   resetFeatureFlagOverrides,
@@ -209,6 +210,48 @@ describe("Fase 15 — Rollback e Safe Mode", () => {
       expect(report?.version).toBe("2.0.0");
     });
 
+    it("rejects an upgrade outside the persisted Safe Mode trust level before loading it", async () => {
+      const onLoad = vi.fn();
+      const officialCandidate: PluginManifest = {
+        ...pluginV2,
+        version: "3.0.0",
+        lifecycle: { onLoad },
+      };
+      catalog.add(officialCandidate, "official");
+      await service.install(pluginV1);
+      await service.enable(pluginV1.id);
+      await safeModeManager.enter("core");
+
+      await expect(service.upgrade(officialCandidate)).rejects.toThrow(/Safe Mode 'core'/);
+
+      expect(store.getPlugin(pluginV1.id)).toMatchObject({ version: "1.0.0", trust_level: "core" });
+      expect(loader.getPlugin(pluginV1.id)?.manifest).toBe(pluginV1);
+      expect(onLoad).not.toHaveBeenCalled();
+      expect(registry.isProviderQuarantined(pluginV1.id)).toBe(false);
+    });
+
+    it("rejects a downgrade outside the persisted Safe Mode trust level before loading it", async () => {
+      const onLoad = vi.fn();
+      const officialCandidate: PluginManifest = {
+        ...pluginV1,
+        version: "0.9.0",
+        lifecycle: { onLoad },
+      };
+      catalog.add(officialCandidate, "official");
+      await service.install(pluginV2);
+      await service.enable(pluginV2.id);
+      await safeModeManager.enter("core");
+
+      await expect(service.downgrade(pluginV2.id, officialCandidate.version)).rejects.toThrow(
+        /Safe Mode 'core'/,
+      );
+
+      expect(store.getPlugin(pluginV2.id)).toMatchObject({ version: "2.0.0", trust_level: "core" });
+      expect(loader.getPlugin(pluginV2.id)?.manifest).toBe(pluginV2);
+      expect(onLoad).not.toHaveBeenCalled();
+      expect(registry.isProviderQuarantined(pluginV2.id)).toBe(false);
+    });
+
     it("automatically rolls back and throws UpdateFailedError when health check fails", async () => {
       await service.install(pluginV1);
       await service.enable("@modus/test-plugin");
@@ -375,6 +418,35 @@ describe("Fase 15 — Rollback e Safe Mode", () => {
       expect(coreStatus?.state).toBe("enabled");
       expect(offStatus?.state).toBe("disabled");
       expect(commStatus?.state).toBe("disabled");
+    });
+
+    it("derives the trust allow-list from the Safe Mode level at the service boundary", async () => {
+      const forgedEntry = service.enterSafeMode as unknown as (
+        this: PluginLifecycleService,
+        level: "core",
+        allowedTrusts: string[],
+      ) => ReturnType<PluginLifecycleService["enterSafeMode"]>;
+
+      const result = await forgedEntry.call(service, "core", ["core", "official", "verified"]);
+
+      expect(result.enabledPlugins).toEqual(["@test/core"]);
+      expect(result.disabledPlugins).toContain("@test/official");
+      expect(result.disabledPlugins).toContain("@test/community");
+      expect(store.getSafeModeState().level).toBe("core");
+    });
+
+    it("does not release an already-enabled plugin while persisted Safe Mode excludes it", async () => {
+      const safeMode = store.getSafeModeState();
+      store.setSafeModeState({ ...safeMode, level: "core" });
+      registry.quarantineProvider("@test/official", HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+
+      await expect(service.restoreAfterSafeMode("@test/official")).rejects.toThrow(
+        /Safe Mode 'core'/,
+      );
+
+      expect(store.getPlugin("@test/official")?.state).toBe("enabled");
+      expect(loader.getPlugin("@test/official")?.status).toBe("enabled");
+      expect(registry.isProviderQuarantined("@test/official")).toBe(true);
     });
 
     it('enters safe mode "official" allowing core and official plugins', async () => {

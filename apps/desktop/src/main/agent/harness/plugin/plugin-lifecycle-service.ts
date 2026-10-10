@@ -120,11 +120,28 @@ export class PluginLifecycleService {
     return ["core", "official", "verified"];
   }
 
+  private assertTrustAllowedBySafeMode(
+    pluginId: string,
+    trustLevel: TrustLevel,
+    operation: string,
+    quarantineWhenDenied = false,
+  ): void {
+    const { level } = this.store.getSafeModeState();
+    if (!level || this.allowedTrustLevels(level).includes(trustLevel)) return;
+
+    if (quarantineWhenDenied) {
+      this.registry.quarantineProvider(pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+    }
+    throw new PluginLifecycleError(
+      `Cannot ${operation} plugin '${pluginId}' while Safe Mode '${level}' excludes trust level '${trustLevel}'`,
+    );
+  }
+
   public enterSafeMode(
     level: SafeModeLevel,
-    allowedTrusts: TrustLevel[],
   ): Promise<{ enabledPlugins: string[]; disabledPlugins: string[]; previouslyEnabled: string[] }> {
     return this.withLifecycleLock(async () => {
+      const allowedTrusts = this.allowedTrustLevels(level);
       const records = this.store.listPlugins();
       const currentState = this.store.getSafeModeState();
       const previouslyEnabled =
@@ -247,6 +264,8 @@ export class PluginLifecycleService {
       const loaded = this.loader.getPlugin(pluginId);
       if (manifest && loaded?.manifest === manifest && loaded.status === "enabled") {
         if (this.registry.isProviderQuarantined(pluginId)) {
+          const hostEntry = this.loader.authorizeManifest(manifest);
+          this.assertTrustAllowedBySafeMode(pluginId, hostEntry.trustLevel, "restore", true);
           this.releaseQuarantineAfterDurableEnable(pluginId, record.version);
           return true;
         }
@@ -583,6 +602,8 @@ export class PluginLifecycleService {
       );
     }
 
+    this.assertTrustAllowedBySafeMode(newManifest.id, hostEntry.trustLevel, "upgrade");
+
     const oldVersion = existing.version;
     this.dependencyGraph.assertCanAddPlugin(newManifest);
     this.assertDependentCapabilitiesCompatible(newManifest);
@@ -708,6 +729,7 @@ export class PluginLifecycleService {
     }
     const hostEntry = this.loader.authorizeManifest(targetManifest);
     this.loader.validateManifest(targetManifest);
+    this.assertTrustAllowedBySafeMode(pluginId, hostEntry.trustLevel, "downgrade");
     this.dependencyGraph.assertCanAddPlugin(targetManifest);
     this.assertDependentCapabilitiesCompatible(targetManifest);
 
