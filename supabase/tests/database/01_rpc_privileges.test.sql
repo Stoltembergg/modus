@@ -93,17 +93,19 @@ select is(private.process_stripe_event('evt_priv', 'charge.succeeded', '{"livemo
   'ignored', 'service_role: process_stripe_event works');
 select tests.clear_authentication();
 
--- Case 9: SECURITY DEFINER + search_path='' on every private function.
+-- Case 9: every private function has an empty search_path. Host entry points
+-- are SECURITY DEFINER; the two pure calendar helpers stay SECURITY INVOKER
+-- and are not executable by application roles (checked by test 17).
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private'),
-  33, 'thirty-three functions in private (24 RPCs + 4 trigger functions + the B6a mp_preapproval_mismatch helper + the Free renewal free_renewal_check / backfill_free_plan_allowance helpers + the L5a account_blocked / non_purchased_credits helpers)');
+  37, 'all thirty-seven private functions are inventoried, including the four calendar-anchor helpers');
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private'
       and p.prosecdef
       and p.proconfig @> array['search_path=""']),
-  33, 'all private functions are SECURITY DEFINER with search_path=""');
+  35, 'all thirty-five SECURITY DEFINER functions have search_path=""');
 select is(
   (select array_agg(p.proname::text order by p.proname)
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
@@ -111,12 +113,32 @@ select is(
       and p.prosecdef
       and p.proconfig @> array['search_path=""']),
   array['account_blocked', 'backfill_free_plan_allowance', 'claim_stripe_customer', 'consume_credit_lots', 'debit_credits', 'free_renewal_check', 'grant_credits', 'grant_free_initial_credits',
-        'handle_new_user', 'mp_cancel_targets', 'mp_claim_notification', 'mp_create_checkout', 'mp_create_purchase',
+        'handle_new_user', 'infer_free_renewal_anchor', 'mp_cancel_targets', 'mp_claim_notification', 'mp_create_checkout', 'mp_create_purchase',
         'mp_finish_notification', 'mp_link_checkout', 'mp_link_purchase', 'mp_mark_cancel_requested', 'mp_preapproval_mismatch', 'non_purchased_credits', 'process_mp_payment', 'process_mp_preapproval',
         'process_mp_purchase_payment', 'process_stripe_event', 'purchase_access_plan', 'release_expired_reservations', 'renew_free_credits',
         'renew_free_credits_for_user', 'reserve_credits', 'router_claim_request',
-        'router_reserve', 'router_store_cost', 'set_updated_at', 'settle_usage'],
-  'including the trigger functions handle_new_user, grant_free_initial_credits, set_updated_at, consume_credit_lots');
+        'router_reserve', 'router_store_cost', 'set_updated_at', 'settle_usage', 'sync_free_renewal_anchor'],
+  'host RPC, trigger, and inference SECURITY DEFINER inventory');
+select is(
+  (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'private'
+      and not p.prosecdef
+      and p.proconfig @> array['search_path=""']),
+  2, 'the two pure renewal calendar helpers are SECURITY INVOKER with search_path=""');
+select is(
+  (select array_agg(p.proname::text order by p.proname)
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'private'
+      and not p.prosecdef
+      and p.proconfig @> array['search_path=""']),
+  array['free_renewal_canonical_end', 'free_renewal_period'],
+  'only the two pure renewal calendar helpers are SECURITY INVOKER');
+select is(
+  (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'private'
+      and not p.prosecdef
+      and not (p.proconfig @> array['search_path=""'])),
+  0, 'no SECURITY INVOKER helper in private has an ambient search_path');
 
 -- Hijack attempt: a caller-controlled search_path with decoy objects must not
 -- change what the function touches.
