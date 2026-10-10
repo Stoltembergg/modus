@@ -183,8 +183,29 @@ dispatcher can be introduced and safely validated.
 - Independent read-only review: no blocker. It confirmed Pi SDK 0.80.6 honors
   `noExtensions` on the productive review path and noted the need to protect
   the read-only tool profile; the runtime regression now asserts that profile.
-- Desktop typecheck: passed, exit 0. Targeted Biome and `git diff --check`
-  passed.
+- Follow-up review for host-catalog provenance found that exact manifest
+  identity alone did not prevent its owner from mutating nested permissions,
+  provisions, configuration, or lifecycle hooks after catalog construction.
+  `HostPluginCatalog` now recursively freezes the trusted manifest data graph
+  and stores its index in `#entries`. A fresh local fixture creates its own
+  mutable implementation object; with the freeze removed, the regression is
+  RED (`Object.isFrozen(manifest)` false), and with the implementation present
+  it is GREEN. The final focused catalog/lifecycle/plugin/runtime Vitest passed
+  **312/312** after the review-driven fixture and cleanup refinements. The test
+  also proves replacement of the
+  fresh implementation callback throws and authorization returns the original
+  function. Review found no production blocker and noted that the earlier
+  fixture accidentally reused an implementation already frozen by the global
+  built-in catalog; that weakness is corrected. Runtime test setup and cleanup
+  now run under `try/finally` so the prototype spies and filesystem fixture
+  are restored even if runtime close rejects. The final independent read-only
+  review confirmed those changes and found no blocker; it noted accessors are
+  not traversed, and none exist in the current built-in manifests. This narrows
+  A03 provenance mutation but is not an OS isolation boundary; external plugin
+  execution remains disabled.
+- Desktop typecheck passed, exit 0. Targeted Biome passed with **11 warnings**
+  in the selected files and no errors; no fixes or rule changes were applied.
+  `git diff --check` passed.
 - The full CI-filtered desktop Vitest run completed **401 files passed, 4
   failed; 4,564 tests passed, 8 failed, 8 skipped**. Failures observed were
   two external OAuth fetches (`ECONNREFUSED`), four headless-Chrome style
@@ -210,8 +231,11 @@ dispatcher can be introduced and safely validated.
 
 ## Milestone 3 — A10–A14 lifecycle and dependency integrity
 
-**Status: lifecycle service paths are implemented and locally checked; the
-latest desktop CI and containment checks pass. The documented legacy mode and
+**Status: lifecycle service paths are implemented and locally checked. The
+latest published run on `126c99c` passed Biome/typecheck and has one unresolved
+Vitest benchmark timing failure, one Windows containment timing failure, and
+the recurring pgTAP date failure; Linux/macOS containment passed and Windows
+x64 plus macOS x64/arm64 packaging completed successfully. The documented
 host-process boundary limitations remain.**
 
 - A10 startup reconciliation now resolves the exact installed version from
@@ -325,6 +349,62 @@ host-process boundary limitations remain.**
   crash-consistent external artifact deployment, or enable external plugins.
   Safe Mode is persisted in the existing plugin state database; full corruption
   and power-loss behavior beyond the injected restart fixtures is not proven.
+
+### A13 runtime API hardening follow-up
+
+The audit found that `PiSdkRuntime` returned its mutable capability registry,
+plugin loader, lifecycle store/service, dependency graph, and plugin manager
+objects through ordinary getters. Repository search found no production caller
+outside the runtime, while tests used those getters to inspect state and close
+SQLite handles. The fields themselves were also TypeScript-only `private`, so
+they remained ordinary JavaScript properties.
+
+The runtime now stores the registry, loader, lifecycle service/store, and the
+bootstrap/synchronization promises in ECMAScript `#private` fields. The manager
+getters were removed. A narrow `closePluginLifecycleStore()` waits for startup
+and sync before closing the runtime-owned DB handle; it does not mutate
+durable plugin records. `MODUS_PLUGIN_TRACING` now installs its instrumenter on
+the private capability registry rather than exposing tracing managers. Tests
+use a separately owned store or prototype instrumentation to verify startup
+without receiving the runtime's mutable managers. The built-in bootstrap test
+also observes the six host-catalog loads through the loader prototype.
+
+- RED: before changing the runtime, the new reflective-surface regression
+  listed the exposed mutable plugin APIs; GREEN: the regression now finds none.
+- RED/GREEN runtime coverage: the off/on tracing test checks that the disabled
+  flag makes no registry instrumentation call and the enabled flag installs
+  exactly one; startup waits and closes each store before recreating the next
+  runtime. The existing productive bootstrap test observes the six host
+  catalog plugins being loaded and verifies their durable enabled records.
+- Focused Vitest: runtime and plugin tracing **253/253 passed**; four
+  selected capability-registry, dependency, isolation-facade, and productive
+  built-in-bootstrap tests passed (**4 passed, 134 skipped**). No external
+  plugin code, adversarial test group, or enforcement probe ran.
+- Desktop typecheck: passed locally, exit 0. Targeted Biome passed with
+  **40 warnings and 5 infos** in the selected files; no errors, rule changes,
+  or bulk formatting. Diagnostic origins were not baseline-classified.
+  `git diff --check` passed.
+- Independent read-only review: no direct regression in plugin internals or
+  feature-flag wiring. It identified test cleanup and a race between two test
+  runtimes using one `plugins.db`; both were corrected. It also identified a
+  reduced bootstrap assertion set, which is now supplemented by observing the
+  runtime's six actual `PluginLoader.load` results.
+- Residual: `harnessKernel` remains a TypeScript-private runtime property used
+  by internal tests and the existing Harness integration; A13 here narrows the
+  plugin manager API surface, not the runtime object into a same-process trust
+  boundary. Plugin trace snapshots also remain private when
+  `MODUS_OBSERVABILITY=false`. External consumers that depended on removed
+  getters will need to use supported host operations; no in-repository
+  production caller was found.
+- Remote run `38051942548` on `126c99c`: CI Biome/typecheck passed; the complete
+  Vitest job recorded **4,604 passed, 8 skipped, 1 failed across 408 files**.
+  The failure was the `FastVectorDistance` latency assertion
+  (`0.115167 ms` against `<0.1 ms`). The dedicated Verifier-First job,
+  compile-only sandbox, and Linux/macOS containment passed; Windows containment
+  hit the same timing assertion at `0.188600 ms`. pgTAP test 22 received
+  `2026-10-30` where it expected `2026-10-31`. These failures are not
+  classified as pre-existing or solely unstable. Windows x64 and macOS
+  x64/arm64 packaging later completed successfully.
 
 ### A10 startup gate follow-up
 
@@ -486,6 +566,24 @@ host-imported memory remains measurable after a failed start.
   enforcement probe, or blocked hostile scenario was run, so A05 is not a proof
   of isolation or whole-process memory containment.
 
+### A06 grantless WASI import gate
+
+The host rejects any module importing WASI before instantiation because there
+is no host-owned grant policy for WASI imports, environment variables, or
+preopens. A caller-supplied `enabled: false`, `enabled: true`, environment, or
+preopen map does not override that decision. The standalone `WasiSandbox`
+helper remains available to host tests, but static callsite search found no
+production consumer of it; this is not a grant-backed productive WASI path.
+
+- Safe targeted Vitest: the four exact `rejects WASI imports from` cases passed
+  (**4 passed, 43 skipped**). Each generated module was compiled for inspection;
+  `WebAssembly.instantiate` was spied and asserted not to run, so no module code
+  executed. No probe, external plugin, preopen, filesystem operation, or WASI
+  entry point was run.
+- Status: the no-grant import path is fail-closed. Grant-backed imports,
+  environment/preopen derivation, start-trap behavior, and process isolation
+  remain unavailable or unproven; A06 stays partially mitigated.
+
 ## Milestone 5 — A15 run cancellation and managed-process cleanup
 
 **Status: cooperative cancellation and run-scoped cleanup implemented; hard
@@ -560,7 +658,20 @@ counting cancellation as a plugin failure.
   sandbox compile-only, and the main typecheck/Biome/Test job. The Supabase SQL
   job failed test 22 in `17_free_monthly_renewal.test.sql` (expected 2026-10-31,
   got 2026-10-30); the same failure appeared at `ed00347` and remains unresolved.
-  Windows and macOS packaging for `6f59b7e` are still running.
+  The latest packaging jobs later completed successfully for Windows x64 and
+  macOS x64/arm64.
+
+- Latest published CI at `126c99cadd5e944bcc2f05dd9f5b457b8e375d78`:
+  the dedicated PTY cancellation regression passed **1/1**; Verifier-First,
+  Linux/macOS plugin containment, and compile-only sandbox passed. Windows
+  containment failed only the `FastVectorDistance` timing assertion at
+  `0.188600 ms` against `<0.1 ms`; the same assertion failed in the global
+  Vitest job at `0.115167 ms` (4,604 passed, 8 skipped) and had also appeared
+  in prior runs with different timings. No baseline comparison was run for
+  this check, so it is not classified as pre-existing or solely unstable.
+  Supabase pgTAP test 22 expected `2026-10-31` but received `2026-10-30`.
+  Windows x64 and macOS x64/arm64 packaging later completed successfully. No
+  blocked probe was rerun.
 
 ### Limits
 
@@ -1275,17 +1386,17 @@ rejected rather than mixed.
 |---|---|---|
 | A01 | Partially mitigated | Facade fails closed and Pi review no longer auto-loads project/user extensions; OS process isolation is absent. Audit all other ingress; hostile execution proof remains blocked. |
 | A02 | Partially mitigated | Review auto-discovery is disabled; the facade no longer claims timeout is containment. Preemption/budgets remain absent. Do not run blocked loop probes. |
-| A03 | Partially mitigated | Chat and review loaders block Pi auto-discovery; host-catalog identity and host-derived trust remain tested. Same-process built-in provenance is not an isolation boundary. |
+| A03 | Partially mitigated | Chat/review auto-discovery remains blocked; the catalog now freezes trusted manifest graphs and authorizes by exact host identity/derived trust. This protects against post-registration manifest mutation, but same-process built-in provenance is not an isolation boundary. |
 | A04 | Partially mitigated | External Pi extension ingress is disabled for chat and review; direct dispatch/hooks remain for catalogued built-ins. A single OS-backed dispatcher and lifecycle boundary remain open. |
 | A05 | Partially mitigated | `WasmCapabilityHost` validates a single bounded memory, reserves per-instance/aggregate maximum capacity, reports actual live memory, charges returned callable and JSON helper calls, defers reservation release until active exports unwind, invalidates returned callables on disposal, recognizes cross-realm resources, rejects object-valued globals/callback returns/exports and blocks function-reference escape through host imports/tables/tags/globals, and keeps fuel imports host-owned; external plugin wiring and blocked enforcement proof remain unavailable. |
-| A06 | Prior fix preserved | Deny ungranted WASI imports; recheck static contracts without running enforcement probes. |
+| A06 | Partially mitigated; no-grant WASI denial revalidated | All imported WASI modules are denied before instantiation; exact synthetic tests ran with instantiation asserted unused. Grant-backed env/preopens and host isolation remain unavailable. |
 | A07 | Partially mitigated | Missing-path parent and dangling-link predicates are canonicalized; filesystem I/O fails closed without a race-free backend. No production consumer; scoped safe I/O and race proof remain open. |
 | A08 | Partially mitigated | Caller trust override removed; bracketed/mapped IPv6 and selected local ranges are normalized by a predicate. DNS pinning, redirects, connection enforcement, and production wiring remain open. |
 | A09 | Partially mitigated | Tested shell composition, common interpreter wrappers, forged trust, and direct Git operation grant bypasses are rejected. Arbitrary wrappers, structured argv, resource scoping, and production wiring remain open. |
 | A10 | Mitigated for host-catalog plugins; legacy activation blocked | Startup uses exact host-catalog versions, opens the durable store before deferred activation, reconciles disabled/tombstoned state, and restores dependency order. `MODUS_PLUGINS` now requires `MODUS_PLUGIN_LIFECYCLE`; no direct bootstrap path remains. External artifact identity and crash-consistent package deployment remain unavailable. |
 | A11 | Mitigated | Disable transaction rollback restores runtime or leaves provider quarantined; broader crash atomicity remains unproven. |
 | A12 | Mitigated | Per-store lifecycle queue serializes shared DB/graph operations; stress/fault injection beyond targeted tests remains open. |
-| A13 | Mitigated | Persisted Safe Mode policy is service-derived; disallowed upgrade/downgrade transitions are rejected before hot reload, and restore retains quarantine. Same-process runtime accessors still expose internal loader/service objects; no production caller was found, but the API surface remains a residual concern. Storage corruption/power-loss proof remains open. |
+| A13 | Mitigated; plugin internals encapsulated | Persisted Safe Mode policy is service-derived; transitions are validated before reload and restoration retains quarantine. Runtime registry, loader, store/service, managers, and startup promises are now ECMAScript-private; no in-repository production caller used the removed getters. `harnessKernel` remains TypeScript-private and is not a process isolation boundary. Storage corruption/power-loss proof and a read-only diagnostics API remain open. |
 | A14 | Mitigated | SemVer constraints, active-provider checks, cycle preflight/recovery, and dependent suspension are covered; an OS boundary remains absent. |
 | A15 | Partially mitigated | Pi cancellation propagates to terminal/app launches; active root-run agent processes are selected by session+run and cancelled, and cancellation telemetry is distinct. Non-cooperative in-process work and hard OS preemption remain unproven. |
 | A16 | Prior fix preserved | Explicit user-selected model identity and provider. |
