@@ -206,6 +206,23 @@ dispatcher can be introduced and safely validated.
 - Desktop typecheck passed, exit 0. Targeted Biome passed with **11 warnings**
   in the selected files and no errors; no fixes or rule changes were applied.
   `git diff --check` passed.
+- Remote CI for commit `7475429`: Biome/typecheck, the global test job,
+  Verifier-First regressions, sandbox compile-only, PTY cancellation, and
+  macOS/Windows containment passed; global Vitest recorded **4,606 passed,
+  8 skipped**. The Linux containment subset failed only `FastVectorDistance`
+  at **0.104524 ms** against `<0.1 ms` (280 passed, 7 skipped). On the
+  follow-up docs-only commit `0462dc3`, the global Vitest recorded **4,605
+  passed, 8 skipped, 1 failed**: the same benchmark measured **0.100859 ms**;
+  all three containment jobs passed. A local isolated run measured the same
+  benchmark at **0.182188 ms**, and the exact plugin containment command also
+  measured `FastContextCompactor` at **0.348714 ms** against `<0.1 ms`. These
+  measurements show repeatable threshold exceedances in this environment, but
+  no base comparison establishes that the tests are pre-existing or solely
+  unstable. The benchmark and threshold were not changed. Both CI runs failed
+  the recurring pgTAP test 22 (`2026-10-30` received, `2026-10-31` expected).
+  Windows and macOS packaging for both `7475429` and `0462dc3` subsequently
+  completed successfully (runs `38052909500`, `38052909590`, `38053077890`, and
+  `38053077940`).
 - The full CI-filtered desktop Vitest run completed **401 files passed, 4
   failed; 4,564 tests passed, 8 failed, 8 skipped**. Failures observed were
   two external OAuth fetches (`ECONNREFUSED`), four headless-Chrome style
@@ -389,10 +406,17 @@ also observes the six host-catalog loads through the loader prototype.
   runtimes using one `plugins.db`; both were corrected. It also identified a
   reduced bootstrap assertion set, which is now supplemented by observing the
   runtime's six actual `PluginLoader.load` results.
-- Residual: `harnessKernel` remains a TypeScript-private runtime property used
-  by internal tests and the existing Harness integration; A13 here narrows the
-  plugin manager API surface, not the runtime object into a same-process trust
-  boundary. Plugin trace snapshots also remain private when
+- A13 follow-up: `harnessKernel` was also converted from TypeScript `private`
+  to ECMAScript `#harnessKernel`. A new RED check found the reflected property;
+  after the change, the focused Pi runtime file passed **233/233** tests.
+  Desktop typecheck passed locally and targeted Biome exited 0 with nine
+  warnings and no errors or fixes. Independent review found no blocker. Its
+  test helper captures the actual kernel while the runtime registers hooks and
+  restores the prototype spy in `finally`; one low-risk maintenance caveat is
+  that a future constructor-created kernel registering first could change which
+  instance the helper captures.
+- Residual: ECMAScript-private fields narrow accidental same-process access,
+  but do not establish a same-process trust boundary. Plugin trace snapshots remain private when
   `MODUS_OBSERVABILITY=false`. External consumers that depended on removed
   getters will need to use supported host operations; no in-repository
   production caller was found.
@@ -1207,12 +1231,14 @@ while preserving legacy prompt backfill and message trimming.
 
 ### Limits
 
-`listAgentEvents` still drains every page into one array for compatibility
-consumers, including the legacy session IPC result. Run-source loading no
-longer retains the full selected-run event array; while a lookup is in flight,
-it retains active tool-call state and the bounded source list. Active calls,
-their selected arguments, and output text from an unfinished external-source
-tool still have no byte cap.
+The store-level `listAgentEvents` compatibility helper still drains every
+page into one array, but static callsite search found no production consumer.
+The unbounded `agent:list-events` IPC handler and preload method have now been
+removed; the app uses `agent:list-event-page` with fixed cursor snapshots.
+Run-source loading no longer retains the full selected-run event array; while
+a lookup is in flight, it retains active tool-call state and the bounded
+source list. Active calls, their selected arguments, and output text from an
+unfinished external-source tool still have no byte cap.
 The final assistant-output helpers retain the complete selected message, and a
 single raw event row can still contain an arbitrarily large payload. Inactive
 EventHub buffers are released after the short subscriber handoff window; live
@@ -1351,9 +1377,9 @@ rejected rather than mixed.
 - Independent review found no blocker in the fixed snapshot, cursor ordering,
   boundary isolation, or response preservation. It reviewed the 130-delta
   fixture and confirmed it exercises the default-page continuation without
-  synthetic concurrency. Remaining full-history consumers include the legacy
-  `lastAssistantOutput` helper and explicitly selected past-chat context; the
-  compatibility `listAgentEvents` IPC/API also still aggregates a full session.
+  synthetic concurrency. This follow-up later replaced the unbounded IPC with
+  the existing page API; no production full-history caller remains. The
+  internal store helper still aggregates for legacy test/internal compatibility.
 - Parent commit `87e6466` remote CI (`38044280905`) passed typecheck/Biome,
   Verifier-First regressions, plugin-containment on Ubuntu/macOS/Windows, and
   compile-only sandbox targets. Vitest reported **4,588 passed, 8 skipped,
@@ -1380,6 +1406,37 @@ rejected rather than mixed.
 - Windows x64 packaging (`38045043549`) and macOS x64/arm64 packaging
   (`38045043554`) completed successfully.
 
+### A22 legacy full-history IPC removal
+
+The app still registered `agent:list-events`, which returned
+`listAgentEvents(sessionId)` and accumulated every page into one full-session
+array. Static search found no production renderer consumer; timeline, chat,
+group, and source consumers use the bounded cursor-page API. The legacy IPC
+handler and preload/type declaration are removed, while `listEventPage` and
+the internal store helper remain.
+
+- RED: the new IPC regression failed before the removal because the full-history
+  handler was registered. GREEN: after removal it asserts the old handler is
+  absent and the bounded page handler remains. Five focused IPC, source, and
+  group-renderer files passed **87/87**. Targeted Biome passed for the nine
+  changed files; desktop typecheck passed locally, exit 0. `git diff --check`
+  passed.
+- Independent read-only review found no blocker. It confirmed no production
+  consumer remains and the app still uses the existing page API. The removed
+  compatibility is limited to any external consumer of the internal preload
+  bridge, for which no repository evidence exists.
+- Remote CI run `38053374062` on `e1f175e`: Biome/typecheck passed; global
+  Vitest reported **4,606 passed, 8 skipped, 1 failed across 408 files**. The
+  failure was `FastVectorDistance` at **0.113051 ms** against `<0.1 ms`.
+  All three containment jobs, Verifier-First regressions, sandbox compile-only,
+  and PTY cancellation passed. Supabase pgTAP test 22 failed with
+  `2026-10-30` received versus `2026-10-31` expected. Windows and macOS package
+  jobs were still running at this update.
+- Residual: the store-level `listAgentEvents` helper can still aggregate a full
+  session when explicitly called by internal code/tests, but static search
+  found no productive callsite. Individual persisted payloads and selected
+  source-tool arguments/output still have no byte cap.
+
 ## Current matrix
 
 | Finding | Current status | Implementation state / next evidence |
@@ -1396,7 +1453,7 @@ rejected rather than mixed.
 | A10 | Mitigated for host-catalog plugins; legacy activation blocked | Startup uses exact host-catalog versions, opens the durable store before deferred activation, reconciles disabled/tombstoned state, and restores dependency order. `MODUS_PLUGINS` now requires `MODUS_PLUGIN_LIFECYCLE`; no direct bootstrap path remains. External artifact identity and crash-consistent package deployment remain unavailable. |
 | A11 | Mitigated | Disable transaction rollback restores runtime or leaves provider quarantined; broader crash atomicity remains unproven. |
 | A12 | Mitigated | Per-store lifecycle queue serializes shared DB/graph operations; stress/fault injection beyond targeted tests remains open. |
-| A13 | Mitigated; plugin internals encapsulated | Persisted Safe Mode policy is service-derived; transitions are validated before reload and restoration retains quarantine. Runtime registry, loader, store/service, managers, and startup promises are now ECMAScript-private; no in-repository production caller used the removed getters. `harnessKernel` remains TypeScript-private and is not a process isolation boundary. Storage corruption/power-loss proof and a read-only diagnostics API remain open. |
+| A13 | Mitigated; plugin internals encapsulated | Persisted Safe Mode policy is service-derived; transitions are validated before reload and restoration retains quarantine. Runtime registry, loader, store/service, managers, startup promises, and HarnessKernel are ECMAScript-private; no in-repository production caller used the removed getters. This does not create a process isolation boundary. Storage corruption/power-loss proof and a read-only diagnostics API remain open. |
 | A14 | Mitigated | SemVer constraints, active-provider checks, cycle preflight/recovery, and dependent suspension are covered; an OS boundary remains absent. |
 | A15 | Partially mitigated | Pi cancellation propagates to terminal/app launches; active root-run agent processes are selected by session+run and cancelled, and cancellation telemetry is distinct. Non-cooperative in-process work and hard OS preemption remain unproven. |
 | A16 | Prior fix preserved | Explicit user-selected model identity and provider. |
@@ -1405,7 +1462,7 @@ rejected rather than mixed.
 | A19 | Prior A21.4 implementation preserved | Spill authorization, persistence, quotas, and recovery. |
 | A20 | Partially mitigated; same-connection mutation detection added | Audit events and checkpoints persist in SQLite; immutable snapshots, transactional retention, append-time verification on audit revision changes, and checkpoint comparisons detect ordinary record changes through the same or another connection. No independent signing key or database access boundary exists. |
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |
-| A22 | Partially mitigated; productive readers page and source extraction is incremental | Durable cursor, fixed-snapshot pages, page-driven timeline/history, run-scoped sources, and productive Pi output readers use bounded row pages. Source consumers process each page into a collector capped at 24 references instead of retaining a run-wide event array. Store/helper/context tests passed 89/89, offline Pi runtime 232/232; source/timeline/history/EventHub regressions passed 39/39, desktop typecheck passed, targeted Biome passed, and independent review found no blocker. CI on `f406ccd`: Biome/typecheck passed; 4,606 tests passed, 8 skipped, across 408 files. Ubuntu containment failed only `FastVectorDistance` at 0.121070ms against <0.1ms (280 passed, 7 skipped); macOS/Windows containment, Verifier-First, and compile-only sandbox passed. Windows x64 and macOS x64/arm64 packaging passed. pgTAP test 22 still expects 2026-10-31 and receives 2026-10-30. Neither timing result is classified as pre-existing or solely unstable. Legacy `listAgentEvents` compatibility/IPC still materializes all history; active source-tool arguments/output and individual raw event payloads have no byte cap; synthetic prompt backfill and volatile partial tool previews/early local prompt failure retention remain. A previously canceled broad test command may have started a restricted sandbox test; that run was not counted as validation and was not repeated. |
+| A22 | Partially mitigated; productive readers page and source extraction is incremental | Cursor-page reads now drive IPC, timeline/history, source lookup and Pi output; the unbounded `agent:list-events` bridge endpoint is removed. Store/helper/context tests passed 89/89, offline Pi runtime 232/232; source/timeline/history/EventHub regressions passed 39/39; the A22 IPC follow-up passed 87/87 and independent review found no blocker. The internal `listAgentEvents` helper still aggregates if explicitly called but has no productive callsite. CI on `e1f175e` passed Biome/typecheck, containment on all three platforms, Verifier-First, sandbox compile-only and PTY cancellation. Global Vitest recorded 4,606 passed, 8 skipped, one `FastVectorDistance` timing failure at 0.113051 ms against <0.1 ms; pgTAP test 22 received 2026-10-30 and expected 2026-10-31. Windows/macOS packaging was pending at last check. No baseline or instability classification is claimed. Active source-tool arguments/output, individual raw event payloads, synthetic prompt backfill and volatile partial previews remain byte/retention limitations. |
 | A23 | Mitigated; integrated checks pass | Synthetic capability outputs and the generic core `status: ok` fallback now fail explicitly with `CapabilityUnavailableError`; stale declared grants are reconciled by exact host identity/version; separate Pi runtime services, A16 selection, and A17 evidence flows are preserved. Independent review found no blocker. Workflow `38034484183` passed the desktop feature job, containment, runtime regression, compile-only sandbox, and Windows/macOS packaging. The unrelated pgTAP test 22 still fails. |
 | A24 | Partially mitigated | Compiled-module cache has LRU entry/source-byte caps and hashes caller namespaces; cache counters do not measure native compiled memory. A05 supplies measured failure metrics. WASI remains denied and stdio capture is unavailable. |
 | A25 | Mitigated; prior fix preserved and revalidated | `allow-workspace` requires workspace+tool identity and lookup keys include both plus action/target; the Pi runtime supplies persisted host workspace identity across worktree cwd changes. Unknown tools are blocked before permission prompting and are not read-only safe. Safe focused validation: 52 permission-store/permission-extension/tool-registry tests and one productive Pi runtime workspace-scope test passed. A two-workspace synthetic store test passes; external tool/plugin execution remains disabled. |
