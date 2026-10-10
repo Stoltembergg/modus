@@ -350,6 +350,61 @@ mod tests {
     use super::*;
     use std::time::{Duration, Instant};
 
+    #[cfg(unix)]
+    #[test]
+    fn kill_escalates_for_terminal_descendants_that_ignore_terminate() {
+        let sessions: Sessions = Arc::new(Mutex::new(HashMap::new()));
+        let writer: HostWriter = Arc::new(Mutex::new(io::stdout()));
+        let id = "ignore-term-child".to_string();
+        spawn_session(
+            &sessions,
+            &writer,
+            id.clone(),
+            "/bin/sh".to_string(),
+            ".".to_string(),
+            80,
+            24,
+            None,
+            None,
+            Some(vec![
+                "-c".to_string(),
+                "trap '' TERM; (trap '' TERM; exec sleep 30) & echo READY; wait".to_string(),
+            ]),
+        )
+        .expect("spawn synthetic PTY process group");
+
+        let pid = sessions
+            .lock()
+            .expect("session lock")
+            .get(&id)
+            .and_then(|session| session.pid)
+            .expect("PTY process id");
+        thread::sleep(Duration::from_millis(100));
+
+        let _escalation = kill_process_tree(Some(pid));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while sessions.lock().expect("session lock").contains_key(&id)
+            && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let exited = !sessions.lock().expect("session lock").contains_key(&id);
+        if !exited {
+            let process_group = i32::try_from(pid).expect("test pid fits pid_t");
+            // Ensure a failed assertion never leaves the synthetic child behind.
+            unsafe {
+                libc::kill(-process_group, libc::SIGKILL);
+            }
+            let cleanup_deadline = Instant::now() + Duration::from_secs(2);
+            while sessions.lock().expect("session lock").contains_key(&id)
+                && Instant::now() < cleanup_deadline
+            {
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+        assert!(exited, "terminal descendants remained after kill escalation");
+    }
+
     /// Regression guard for the ConPTY blindness bug (wezterm#6783).
     ///
     /// On Windows, portable-pty 0.9.0 blocks ConPTY output until the host

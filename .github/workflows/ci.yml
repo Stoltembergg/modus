@@ -149,6 +149,21 @@ jobs:
       - name: Compile sandbox probe targets without running them
         run: cargo check --locked -p plugin-sandbox-probe --all-targets
 
+  pty-host-tests:
+    name: PTY host cancellation regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Check PTY host formatting
+        run: cargo fmt --manifest-path crates/pty-host/Cargo.toml -- --check
+
+      - name: Test managed PTY process-tree cancellation
+        run: cargo test --locked -p modus-pty-host
+
   plugin-containment:
     name: plugin-containment · ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
