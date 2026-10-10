@@ -5,9 +5,12 @@
 //! run, and generation, then route each returned invocation through its normal
 //! permission-aware dispatcher.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::io::{self, Write};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -23,11 +26,34 @@ const FRAME_HEADER_BYTES: usize = 4;
 const MAX_IPC_PAYLOAD_BYTES: usize = MAX_IPC_FRAME_BYTES - FRAME_HEADER_BYTES;
 const MAX_ID_BYTES: usize = 128;
 
-/// Message schema for the worker-to-host direction. Identity, trust, grants,
-/// run id, and generation are deliberately absent and unknown fields reject.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+/// Outbound fixture shape for worker frames. It intentionally does not
+/// implement `Deserialize`; inbound frames must enter through `Dispatcher`.
+/// Identity, trust, grants, run id, and generation are absent from the wire.
+///
+/// ```compile_fail
+/// use modus_plugin_execution_protocol::WorkerFrame;
+/// let _: WorkerFrame = serde_json::from_str("{} ").unwrap();
+/// ```
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkerFrame {
+    Hello {
+        protocol_version: u16,
+        challenge: String,
+    },
+    Invoke {
+        protocol_version: u16,
+        sequence: u64,
+        capability: String,
+        payload: Value,
+    },
+}
+
+/// Private worker-to-host input type. External callers cannot deserialize a
+/// worker message into an invocation; only `Dispatcher` can mint authority.
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum InboundWorkerFrame {
     Hello {
         protocol_version: u16,
         challenge: String,
@@ -70,6 +96,10 @@ pub enum ProtocolError {
     ChallengeMismatch,
     InvalidIdentity,
     UnsupportedVersion,
+    IoFailure(io::ErrorKind),
+    AllocationFailed,
+    ReadDeadlineExceeded,
+    ReadCancelled,
     InvalidCapability,
     CapabilityDenied,
     OutOfOrder,
@@ -193,12 +223,13 @@ impl HostProvenance {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct AuthorizedInvocation {
     sequence: u64,
     capability: String,
     payload: Value,
     provenance: HostProvenance,
+    generation_active: Arc<AtomicBool>,
 }
 
 impl AuthorizedInvocation {
@@ -206,16 +237,32 @@ impl AuthorizedInvocation {
         self.sequence
     }
 
-    pub fn capability(&self) -> &str {
-        &self.capability
+    /// Whether this invocation belongs to an open dispatcher generation.
+    /// Hosts must check this immediately before each side effect.
+    pub fn is_current(&self) -> bool {
+        self.generation_active.load(Ordering::Acquire)
     }
 
-    pub fn payload(&self) -> &Value {
-        &self.payload
+    pub fn capability(&self) -> Option<&str> {
+        self.is_current().then_some(self.capability.as_str())
     }
 
-    pub fn provenance(&self) -> &HostProvenance {
-        &self.provenance
+    pub fn payload(&self) -> Option<&Value> {
+        self.is_current().then_some(&self.payload)
+    }
+
+    pub fn provenance(&self) -> Option<&HostProvenance> {
+        self.is_current().then_some(&self.provenance)
+    }
+}
+
+impl PartialEq for AuthorizedInvocation {
+    fn eq(&self, other: &Self) -> bool {
+        self.sequence == other.sequence
+            && self.capability == other.capability
+            && self.payload == other.payload
+            && self.provenance == other.provenance
+            && Arc::ptr_eq(&self.generation_active, &other.generation_active)
     }
 }
 
@@ -229,6 +276,15 @@ pub enum DispatchEvent {
 pub enum InvocationOutcome {
     Success(Value),
     Failure(String),
+}
+
+/// A stream reader whose implementation enforces the supplied absolute
+/// deadline and cancellation. `TimedOut` means deadline elapsed and
+/// `Interrupted` means host cancellation. Generic blocking `Read` adapters
+/// must not be used without a platform-level read timeout. An `Ok(0)` result
+/// denotes EOF, not temporary lack of data.
+pub trait DeadlineReader {
+    fn read_with_deadline(&mut self, buffer: &mut [u8], deadline: Instant) -> io::Result<usize>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -246,7 +302,7 @@ pub struct Dispatcher {
     granted_capabilities: BTreeSet<String>,
     state: SessionState,
     next_sequence: u64,
-    pending: HashSet<u64>,
+    pending: BTreeMap<u64, Arc<AtomicBool>>,
 }
 
 impl Dispatcher {
@@ -272,7 +328,7 @@ impl Dispatcher {
             granted_capabilities,
             state: SessionState::AwaitingHello,
             next_sequence: 1,
-            pending: HashSet::new(),
+            pending: BTreeMap::new(),
         })
     }
 
@@ -289,10 +345,50 @@ impl Dispatcher {
         result
     }
 
+    /// Read one frame from a deadline-aware worker stream and pass it through
+    /// this mandatory validator. The adapter must make reads preemptible; this
+    /// method cannot safely interrupt a generic blocking `Read`. EOF, timeout,
+    /// cancellation, or invalid input closes the generation and clears calls.
+    pub fn receive_from_until<R: DeadlineReader>(
+        &mut self,
+        reader: &mut R,
+        deadline: Instant,
+    ) -> Result<Option<DispatchEvent>, ProtocolError> {
+        if self.state == SessionState::Closed {
+            return Err(ProtocolError::InvalidState);
+        }
+        let result = self.receive_from_validated(reader, deadline);
+        if result.is_err() {
+            self.close();
+        }
+        result
+    }
+
+    fn receive_from_validated<R: DeadlineReader>(
+        &mut self,
+        reader: &mut R,
+        deadline: Instant,
+    ) -> Result<Option<DispatchEvent>, ProtocolError> {
+        match read_worker_frame(reader, deadline)? {
+            Some(frame) => self.dispatch_frame(frame).map(Some),
+            None => {
+                self.close();
+                Ok(None)
+            }
+        }
+    }
+
     fn receive_validated(&mut self, bytes: &[u8]) -> Result<DispatchEvent, ProtocolError> {
         let frame = decode_worker_frame(bytes)?;
+        self.dispatch_frame(frame)
+    }
+
+    fn dispatch_frame(
+        &mut self,
+        frame: InboundWorkerFrame,
+    ) -> Result<DispatchEvent, ProtocolError> {
         match frame {
-            WorkerFrame::Hello {
+            InboundWorkerFrame::Hello {
                 protocol_version,
                 challenge,
             } => {
@@ -308,7 +404,7 @@ impl Dispatcher {
                 self.state = SessionState::Ready;
                 Ok(DispatchEvent::Ready)
             }
-            WorkerFrame::Invoke {
+            InboundWorkerFrame::Invoke {
                 protocol_version,
                 sequence,
                 capability,
@@ -341,12 +437,15 @@ impl Dispatcher {
                     .next_sequence
                     .checked_add(1)
                     .ok_or(ProtocolError::SequenceOverflow)?;
-                self.pending.insert(sequence);
+                let generation_active = Arc::new(AtomicBool::new(true));
+                self.pending
+                    .insert(sequence, Arc::clone(&generation_active));
                 Ok(DispatchEvent::Invocation(AuthorizedInvocation {
                     sequence,
                     capability,
                     payload,
                     provenance: self.provenance.clone(),
+                    generation_active,
                 }))
             }
         }
@@ -361,7 +460,7 @@ impl Dispatcher {
         if self.state != SessionState::Ready {
             return Err(ProtocolError::InvalidState);
         }
-        if !self.pending.contains(&sequence) {
+        if !self.pending.contains_key(&sequence) {
             self.close();
             return Err(ProtocolError::UnknownSequence);
         }
@@ -387,19 +486,30 @@ impl Dispatcher {
             }
         };
         let frame = encode_host_frame(&response)?;
-        self.pending.remove(&sequence);
+        if let Some(generation_active) = self.pending.remove(&sequence) {
+            generation_active.store(false, Ordering::Release);
+        }
         Ok(frame)
     }
 
     /// Stop accepting IPC for this generation. OS process termination/reap is
     /// the responsibility of a platform supervisor and is not implied here.
     pub fn close(&mut self) {
+        for generation_active in self.pending.values() {
+            generation_active.store(false, Ordering::Release);
+        }
         self.pending.clear();
         self.state = SessionState::Closed;
     }
 
     pub fn is_closed(&self) -> bool {
         self.state == SessionState::Closed
+    }
+}
+
+impl Drop for Dispatcher {
+    fn drop(&mut self) {
+        self.close();
     }
 }
 
@@ -423,7 +533,7 @@ pub fn encode_worker_frame(message: &WorkerFrame) -> Result<Vec<u8>, ProtocolErr
     encode_message(message)
 }
 
-pub fn decode_worker_frame(frame: &[u8]) -> Result<WorkerFrame, ProtocolError> {
+fn decode_worker_frame(frame: &[u8]) -> Result<InboundWorkerFrame, ProtocolError> {
     decode_message(frame)
 }
 
@@ -523,6 +633,79 @@ fn decode_message<T: for<'de> Deserialize<'de>>(frame: &[u8]) -> Result<T, Proto
     serde_json::from_slice(&frame[FRAME_HEADER_BYTES..]).map_err(|_| ProtocolError::InvalidJson)
 }
 
+fn read_worker_frame<R: DeadlineReader>(
+    reader: &mut R,
+    deadline: Instant,
+) -> Result<Option<InboundWorkerFrame>, ProtocolError> {
+    let mut header = [0; FRAME_HEADER_BYTES];
+    loop {
+        match deadline_read(reader, &mut header[..1], deadline)? {
+            0 => return Ok(None),
+            1 => break,
+            _ => unreachable!("one-byte read buffer returned more than one byte"),
+        }
+    }
+    deadline_read_exact(reader, &mut header[1..], deadline)?;
+
+    let payload_len = u32::from_be_bytes(header) as usize;
+    if payload_len == 0 {
+        return Err(ProtocolError::InvalidLength);
+    }
+    if payload_len > MAX_IPC_PAYLOAD_BYTES {
+        return Err(ProtocolError::FrameTooLarge);
+    }
+
+    let frame_len = FRAME_HEADER_BYTES + payload_len;
+    let mut frame = Vec::new();
+    frame
+        .try_reserve_exact(frame_len)
+        .map_err(|_| ProtocolError::AllocationFailed)?;
+    frame.extend_from_slice(&header);
+    frame.resize(frame_len, 0);
+    deadline_read_exact(reader, &mut frame[FRAME_HEADER_BYTES..], deadline)?;
+    decode_worker_frame(&frame).map(Some)
+}
+
+fn deadline_read<R: DeadlineReader>(
+    reader: &mut R,
+    buffer: &mut [u8],
+    deadline: Instant,
+) -> Result<usize, ProtocolError> {
+    if Instant::now() >= deadline {
+        return Err(ProtocolError::ReadDeadlineExceeded);
+    }
+    let read = reader
+        .read_with_deadline(buffer, deadline)
+        .map_err(map_frame_read_error)?;
+    if Instant::now() >= deadline {
+        return Err(ProtocolError::ReadDeadlineExceeded);
+    }
+    Ok(read)
+}
+
+fn deadline_read_exact<R: DeadlineReader>(
+    reader: &mut R,
+    mut buffer: &mut [u8],
+    deadline: Instant,
+) -> Result<(), ProtocolError> {
+    while !buffer.is_empty() {
+        match deadline_read(reader, buffer, deadline)? {
+            0 => return Err(ProtocolError::InvalidLength),
+            count => buffer = &mut buffer[count..],
+        }
+    }
+    Ok(())
+}
+
+fn map_frame_read_error(error: io::Error) -> ProtocolError {
+    match error.kind() {
+        io::ErrorKind::TimedOut => ProtocolError::ReadDeadlineExceeded,
+        io::ErrorKind::Interrupted => ProtocolError::ReadCancelled,
+        io::ErrorKind::UnexpectedEof => ProtocolError::InvalidLength,
+        kind => ProtocolError::IoFailure(kind),
+    }
+}
+
 fn valid_capability(capability: &str) -> bool {
     !capability.is_empty()
         && capability.len() <= MAX_ID_BYTES
@@ -544,7 +727,9 @@ fn valid_sha256(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Read;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
 
     use serde::ser::SerializeSeq;
     use serde_json::json;
@@ -553,6 +738,18 @@ mod tests {
 
     const CHALLENGE: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const DIGEST: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    struct TestDeadlineReader<R>(R);
+
+    impl<R: Read> DeadlineReader for TestDeadlineReader<R> {
+        fn read_with_deadline(
+            &mut self,
+            buffer: &mut [u8],
+            _deadline: Instant,
+        ) -> io::Result<usize> {
+            self.0.read(buffer)
+        }
+    }
 
     fn raw_frame(payload: &[u8]) -> Vec<u8> {
         let mut frame = Vec::with_capacity(FRAME_HEADER_BYTES + payload.len());
@@ -647,6 +844,150 @@ mod tests {
             decode_worker_frame(&raw_frame(json.as_bytes())),
             Err(ProtocolError::FrameTooLarge),
         );
+    }
+
+    #[test]
+    fn stream_reader_accepts_one_frame_at_a_time_and_clean_eof() {
+        let mut bytes = hello();
+        bytes.extend(invoke(1, "memory.read", json!({ "key": "one" })));
+        bytes.extend(invoke(2, "memory.read", json!({ "key": "two" })));
+        let mut reader = TestDeadlineReader(io::Cursor::new(bytes));
+        let mut dispatcher = new_dispatcher();
+
+        assert_eq!(
+            dispatcher.receive_from_until(&mut reader, Instant::now() + Duration::from_secs(1)),
+            Ok(Some(DispatchEvent::Ready)),
+        );
+        for sequence in [1, 2] {
+            let event = dispatcher
+                .receive_from_until(&mut reader, Instant::now() + Duration::from_secs(1))
+                .unwrap()
+                .unwrap();
+            assert_eq!(invocation(event).sequence(), sequence);
+        }
+        assert_eq!(
+            dispatcher.receive_from_until(&mut reader, Instant::now() + Duration::from_secs(1)),
+            Ok(None),
+        );
+        assert!(dispatcher.is_closed());
+    }
+
+    #[test]
+    fn stream_reader_rejects_truncated_frames() {
+        let mut partial_header = TestDeadlineReader(io::Cursor::new(vec![0, 0]));
+        let mut dispatcher = new_dispatcher();
+        assert_eq!(
+            dispatcher
+                .receive_from_until(&mut partial_header, Instant::now() + Duration::from_secs(1),),
+            Err(ProtocolError::InvalidLength),
+        );
+        assert!(dispatcher.is_closed());
+
+        let mut partial_payload = TestDeadlineReader(io::Cursor::new(vec![0, 0, 0, 2, b'{']));
+        let mut dispatcher = new_dispatcher();
+        assert_eq!(
+            dispatcher.receive_from_until(
+                &mut partial_payload,
+                Instant::now() + Duration::from_secs(1),
+            ),
+            Err(ProtocolError::InvalidLength),
+        );
+        assert!(dispatcher.is_closed());
+    }
+
+    #[test]
+    fn stream_reader_rejects_oversize_before_reading_the_body() {
+        struct HeaderOnlyReader {
+            header: [u8; FRAME_HEADER_BYTES],
+            offset: usize,
+        }
+
+        impl DeadlineReader for HeaderOnlyReader {
+            fn read_with_deadline(
+                &mut self,
+                buffer: &mut [u8],
+                _deadline: Instant,
+            ) -> io::Result<usize> {
+                if self.offset == self.header.len() {
+                    return Err(io::Error::other("frame body must not be read"));
+                }
+                let count = buffer.len().min(self.header.len() - self.offset);
+                buffer[..count].copy_from_slice(&self.header[self.offset..self.offset + count]);
+                self.offset += count;
+                Ok(count)
+            }
+        }
+
+        let length = (MAX_IPC_PAYLOAD_BYTES as u32 + 1).to_be_bytes();
+        let mut reader = HeaderOnlyReader {
+            header: length,
+            offset: 0,
+        };
+        let mut dispatcher = new_dispatcher();
+
+        assert_eq!(
+            dispatcher.receive_from_until(&mut reader, Instant::now() + Duration::from_secs(1),),
+            Err(ProtocolError::FrameTooLarge),
+        );
+        assert_eq!(reader.offset, FRAME_HEADER_BYTES);
+        assert!(dispatcher.is_closed());
+    }
+
+    #[test]
+    fn stream_reader_closes_generation_on_read_deadline_and_cancellation() {
+        struct StoppedReader(io::ErrorKind);
+
+        impl DeadlineReader for StoppedReader {
+            fn read_with_deadline(
+                &mut self,
+                _buffer: &mut [u8],
+                _deadline: Instant,
+            ) -> io::Result<usize> {
+                Err(io::Error::from(self.0))
+            }
+        }
+
+        let mut dispatcher = new_dispatcher();
+        assert_eq!(
+            dispatcher.receive_from_until(
+                &mut StoppedReader(io::ErrorKind::TimedOut),
+                Instant::now() + Duration::from_secs(1),
+            ),
+            Err(ProtocolError::ReadDeadlineExceeded),
+        );
+        assert!(dispatcher.is_closed());
+
+        let mut dispatcher = new_dispatcher();
+        assert_eq!(
+            dispatcher.receive_from_until(
+                &mut StoppedReader(io::ErrorKind::Interrupted),
+                Instant::now() + Duration::from_secs(1),
+            ),
+            Err(ProtocolError::ReadCancelled),
+        );
+        assert!(dispatcher.is_closed());
+    }
+
+    #[test]
+    fn stream_reader_rejects_an_expired_deadline_without_reading() {
+        struct NeverRead;
+
+        impl DeadlineReader for NeverRead {
+            fn read_with_deadline(
+                &mut self,
+                _buffer: &mut [u8],
+                _deadline: Instant,
+            ) -> io::Result<usize> {
+                panic!("expired deadline must be checked before reading");
+            }
+        }
+
+        let mut dispatcher = new_dispatcher();
+        assert_eq!(
+            dispatcher.receive_from_until(&mut NeverRead, Instant::now() - Duration::from_secs(1)),
+            Err(ProtocolError::ReadDeadlineExceeded),
+        );
+        assert!(dispatcher.is_closed());
     }
 
     #[test]
@@ -781,25 +1122,153 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(invocation.sequence(), 1);
-        assert_eq!(invocation.capability(), "memory.read");
-        assert_eq!(invocation.provenance().plugin_id(), "@modus/fixture");
-        assert_eq!(invocation.provenance().plugin_version(), "1.2.3");
-        assert_eq!(invocation.provenance().artifact_sha256(), DIGEST);
-        assert_eq!(invocation.provenance().artifact_origin(), "host://bundled");
-        assert_eq!(invocation.provenance().trust_level(), HostTrustLevel::Core);
-        assert_eq!(invocation.provenance().session_id(), "session-fixture-1");
+        assert!(invocation.is_current());
+        assert_eq!(invocation.capability(), Some("memory.read"));
         assert_eq!(
-            invocation.provenance().workspace_id(),
+            invocation.provenance().unwrap().plugin_id(),
+            "@modus/fixture"
+        );
+        assert_eq!(invocation.provenance().unwrap().plugin_version(), "1.2.3");
+        assert_eq!(invocation.provenance().unwrap().artifact_sha256(), DIGEST);
+        assert_eq!(
+            invocation.provenance().unwrap().artifact_origin(),
+            "host://bundled"
+        );
+        assert_eq!(
+            invocation.provenance().unwrap().trust_level(),
+            HostTrustLevel::Core
+        );
+        assert_eq!(
+            invocation.provenance().unwrap().session_id(),
+            "session-fixture-1"
+        );
+        assert_eq!(
+            invocation.provenance().unwrap().workspace_id(),
             "workspace-fixture-1"
         );
-        assert_eq!(invocation.provenance().run_id(), "run-fixture-1");
-        assert_eq!(invocation.provenance().generation(), 1);
+        assert_eq!(invocation.provenance().unwrap().run_id(), "run-fixture-1");
+        assert_eq!(invocation.provenance().unwrap().generation(), 1);
 
         assert_eq!(
             dispatcher.receive(&invoke(2, "filesystem.read", json!({}))),
             Err(ProtocolError::CapabilityDenied),
         );
         assert!(dispatcher.is_closed());
+    }
+
+    #[test]
+    fn dispatcher_close_revokes_only_its_outstanding_invocations() {
+        let mut first_dispatcher = new_dispatcher();
+        let mut second_dispatcher = Dispatcher::new(
+            CHALLENGE,
+            HostProvenance::from_host_catalog(
+                "@modus/fixture-two",
+                "1.2.3",
+                DIGEST,
+                "host://bundled",
+                HostTrustLevel::Core,
+                "session-fixture-2",
+                "workspace-fixture-2",
+                "run-fixture-2",
+                2,
+            )
+            .unwrap(),
+            ["memory.read".to_string()],
+        )
+        .unwrap();
+        first_dispatcher.receive(&hello()).unwrap();
+        second_dispatcher.receive(&hello()).unwrap();
+        let first = invocation(
+            first_dispatcher
+                .receive(&invoke(1, "memory.read", json!({})))
+                .unwrap(),
+        );
+        let second = invocation(
+            second_dispatcher
+                .receive(&invoke(1, "memory.read", json!({})))
+                .unwrap(),
+        );
+
+        first_dispatcher.close();
+
+        assert!(!first.is_current());
+        assert_eq!(first.capability(), None);
+        assert_eq!(first.payload(), None);
+        assert_eq!(first.provenance(), None);
+        assert!(second.is_current());
+        assert_eq!(second.capability(), Some("memory.read"));
+    }
+
+    #[test]
+    fn completing_one_invocation_revokes_only_its_authority() {
+        let mut dispatcher = new_dispatcher();
+        dispatcher.receive(&hello()).unwrap();
+        let first = invocation(
+            dispatcher
+                .receive(&invoke(1, "memory.read", json!({})))
+                .unwrap(),
+        );
+        let second = invocation(
+            dispatcher
+                .receive(&invoke(2, "memory.read", json!({})))
+                .unwrap(),
+        );
+
+        dispatcher
+            .complete(1, InvocationOutcome::Success(json!({ "ok": true })))
+            .unwrap();
+
+        assert!(!first.is_current());
+        assert_eq!(first.payload(), None);
+        assert!(second.is_current());
+        assert_eq!(second.capability(), Some("memory.read"));
+    }
+
+    #[test]
+    fn dispatcher_provenance_is_isolated_by_session_workspace_and_run() {
+        let second_provenance = HostProvenance::from_host_catalog(
+            "@modus/fixture",
+            "1.2.3",
+            DIGEST,
+            "host://bundled",
+            HostTrustLevel::Core,
+            "session-fixture-2",
+            "workspace-fixture-2",
+            "run-fixture-2",
+            2,
+        )
+        .unwrap();
+        let mut first = new_dispatcher();
+        let mut second =
+            Dispatcher::new(CHALLENGE, second_provenance, ["memory.read".to_string()]).unwrap();
+
+        first.receive(&hello()).unwrap();
+        second.receive(&hello()).unwrap();
+        let first = invocation(first.receive(&invoke(1, "memory.read", json!({}))).unwrap());
+        let second = invocation(
+            second
+                .receive(&invoke(1, "memory.read", json!({})))
+                .unwrap(),
+        );
+
+        assert_eq!(
+            first.provenance().unwrap().session_id(),
+            "session-fixture-1"
+        );
+        assert_eq!(
+            first.provenance().unwrap().workspace_id(),
+            "workspace-fixture-1"
+        );
+        assert_eq!(first.provenance().unwrap().run_id(), "run-fixture-1");
+        assert_eq!(
+            second.provenance().unwrap().session_id(),
+            "session-fixture-2"
+        );
+        assert_eq!(
+            second.provenance().unwrap().workspace_id(),
+            "workspace-fixture-2"
+        );
+        assert_eq!(second.provenance().unwrap().run_id(), "run-fixture-2");
     }
 
     #[test]

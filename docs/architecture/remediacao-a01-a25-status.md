@@ -92,6 +92,32 @@ found no concrete bypass or regression. Repository search found no production
 constructor or dispatcher caller, so this is a host-side contract only and not
 productive provenance wiring.
 
+The next A01/A02 increment adds bounded length-prefixed ingress through
+`Dispatcher::receive_from_until`: the parser validates the four-byte size
+before reserving at most one protocol frame, consumes one frame per call,
+rejects truncation, and closes the worker generation on invalid input, EOF,
+deadline, or cancellation. The public raw worker decoder was removed, and the
+outbound `WorkerFrame` schema no longer implements `Deserialize`; only the
+dispatcher can produce an `AuthorizedInvocation`. RED was the missing stream
+and revocation API compile failure. Synthetic tests prove oversize rejection
+after four bytes, timeout/cancel closure, and per-invocation revocation on
+completion or dispatcher close without affecting another invocation/session.
+GREEN: the protocol and fixed-policy crate passed **23/23** locally, including a
+compile-fail doctest that prevents external deserialization into `WorkerFrame`;
+Rustfmt, targeted crate formatting check, and `git diff --check` passed.
+Independent review had identified the public decoder bypass, unbounded read,
+and stale invocation concerns; the API and tests now address those codec-level
+gaps. Independent follow-up review found no additional protocol defect, and
+confirmed these residual limits: the `DeadlineReader` trait cannot force an
+adapter to honor its deadline; a read deadline does not itself expire an
+already-returned invocation; and consumers can retain copied arguments or
+race a current-token check against a side effect. This remains a library
+contract only: no process adapter or production caller implements
+`DeadlineReader`, so actual OS-enforced read cancellation, per-call host
+cancellation, process supervision, policy enforcement, and process-tree reap
+remain pending. A future host must revoke on timeout/cancel and recheck the
+invocation immediately before each permission-dispatched side effect.
+
 ## Mission CI prerequisite — Free monthly renewal calendar
 
 **Status: implemented, locally verified, independently reviewed, and CI-green.** This is the
