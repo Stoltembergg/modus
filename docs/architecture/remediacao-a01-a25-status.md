@@ -959,6 +959,17 @@ pending or unavailable, and the UI reports that state.
 - Latest local validation: **264/264 tests in 12 changed-area Vitest files**;
   desktop TypeScript typecheck passed; Biome passed for all 26 changed code
   files; `git diff --check` passed. This revision has not yet received PR CI.
+- Source-page retention follow-up: `useRunSources.ts` previously retained each
+  selected run's completed event array until a later load happened to sweep its
+  expired cache entry. It now keeps only in-flight request deduplication and
+  releases completed arrays after consumers finish. RED: the remount regression
+  failed before the change (`listEventPage` was called once instead of twice).
+  GREEN: with `Date.now()` held constant so the old cache would remain valid,
+  the source hook passes **6/6 tests**; six source/chat/group UI files pass
+  **83/83 tests**. Desktop typecheck, targeted Biome, and `git diff --check`
+  pass. Independent review found no blocker and confirmed the pagination,
+  snapshot guards, and in-flight deduplication remain. In-flight full-run
+  accumulation is still unbounded.
 - Independent review confirmed the main-chat source lookup is run-scoped and
   requested explicit pending/failure state and inclusion of `thinking.completed`
   in stream expansion. A later review found and drove two run-association fixes;
@@ -969,7 +980,9 @@ pending or unavailable, and the UI reports that state.
 
 `listAgentEvents` still drains every page into one array for legacy consumers,
 and the Pi SDK runtime plus subagent context helpers still reconstruct session
-history through it. Run-source loading accumulates all selected-run events.
+history through it. Run-source loading accumulates all selected-run events
+while a lookup is in flight, but completed event arrays are no longer kept in
+the renderer cache after the lookup settles.
 Base row count is capped, but companion stream expansion and individual
 serialized payloads have no byte cap, so memory and IPC size can still be large
 for unusually long results. The renderer event hub also retains per-session
@@ -1004,6 +1017,28 @@ rejected rather than mixed.
   earlier PR runs. This billing issue is outside A01–A25 and was not changed.
 - No enforcement or adversarial probes ran; `PR #191` remains open and Draft.
 
+### Follow-up CI on `12f1dc6`
+
+- Workflow `38041900481`: `typecheck · test · biome` passed. The complete
+  Vitest job reported **406/406 tests passed**; typecheck and Biome passed.
+  The manual-only probe-workflow guard passed. Verifier-First regressions and
+  plugin-containment jobs passed on Ubuntu, macOS, and Windows. The sandbox
+  target was compile-only; no probe target was executed by that workflow.
+- macOS packaging run `38041900486` and Windows packaging run
+  `38041900488` both passed.
+- The only failed job in the workflow was Supabase pgTAP test 22 in
+  `17_free_monthly_renewal.test.sql`: expected `2026-10-31`, received
+  `2026-10-30`. It remains unresolved and is not treated as pre-existing
+  without the base evidence documented above.
+- A local verification command intended to select one file passed the
+  package script's fixed full-suite paths. I cancelled it when its output
+  showed the broad selection; `wasm-sandbox.test.ts` had started and reported
+  a timing failure before cancellation. The interrupted run cannot establish
+  which cases completed, so no assertion is made that restricted cases were
+  skipped. It is not counted as validation and was not repeated. Subsequent
+  A22 verification invoked only the six source/chat/group UI files, desktop
+  typecheck, and targeted Biome.
+
 ## Current matrix
 
 | Finding | Current status | Implementation state / next evidence |
@@ -1029,7 +1064,7 @@ rejected rather than mixed.
 | A19 | Prior A21.4 implementation preserved | Spill authorization, persistence, quotas, and recovery. |
 | A20 | Partially mitigated | Audit events and checkpoints persist in SQLite; immutable snapshots, transactional retention and verification detect ordinary record changes. No independent signing key or database access boundary exists. |
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |
-| A22 | Partially mitigated; renderer paging implemented and independently reviewed | Durable AUTOINCREMENT cursor, session index, fixed-snapshot keyset pages, page-driven activity/transcript, run-scoped sources, and companion-stream completion/run association are wired. 264/264 related tests, TypeScript, and Biome passed locally; workflow `38040823561` for `23cb8ed` failed the Supabase renewal assertion, a `FastVectorDistance` 0.1 ms timing assertion, and the full desktop suite also failed environment-sensitive OAuth/headless-Chrome tests locally. These are not classified as pre-existing without a base run. Review found no blocker in run/session/snapshot isolation. Legacy `listAgentEvents` callers, full-run source accumulation, hub retention, and unbounded bytes per companion stream/result remain. |
+| A22 | Partially mitigated; renderer paging implemented and independently reviewed | Durable AUTOINCREMENT cursor, session index, fixed-snapshot keyset pages, page-driven activity/transcript, run-scoped sources, companion-stream completion/run association, and release of completed source-page arrays are wired. The cache regression demonstrated RED/GREEN; six source/chat/group UI files pass 83/83, source hook 6/6, desktop typecheck and targeted Biome pass. Integrated CI on `12f1dc6` passed 406/406 Vitest tests, typecheck/Biome, all three OS containment jobs, and Windows/macOS packaging; only the pgTAP renewal assertion failed. Review found no blocker in run/session/snapshot isolation or cache removal. Legacy `listAgentEvents` callers, in-flight full-run accumulation, hub retention, and unbounded bytes per companion stream/result remain. A local broad suite attempt was cancelled after its fixed file list ignored the requested filter; a sandbox test file had started, so execution of restricted cases cannot be ruled out. |
 | A23 | Mitigated; integrated checks pass | Synthetic capability outputs and the generic core `status: ok` fallback now fail explicitly with `CapabilityUnavailableError`; stale declared grants are reconciled by exact host identity/version; separate Pi runtime services, A16 selection, and A17 evidence flows are preserved. Independent review found no blocker. Workflow `38034484183` passed the desktop feature job, containment, runtime regression, compile-only sandbox, and Windows/macOS packaging. The unrelated pgTAP test 22 still fails. |
 | A24 | Partially mitigated | Compiled-module cache has LRU entry/source-byte caps and hashes caller namespaces; cache counters do not measure native compiled memory. A05 supplies measured failure metrics. WASI remains denied and stdio capture is unavailable. |
 | A25 | Mitigated; prior fix preserved and revalidated | `allow-workspace` requires workspace+tool identity and lookup keys include both plus action/target; the Pi runtime supplies persisted host workspace identity across worktree cwd changes. Unknown tools are blocked before permission prompting and are not read-only safe. Safe focused validation: 52 permission-store/permission-extension/tool-registry tests and one productive Pi runtime workspace-scope test passed. A two-workspace synthetic store test passes; external tool/plugin execution remains disabled. |

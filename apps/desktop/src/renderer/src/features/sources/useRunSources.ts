@@ -6,19 +6,11 @@ import type {
 } from "../../../../shared/agent-events";
 import { collectRunSources, type RunSource, type RunSourcesSnapshot } from "./runSources";
 
-const EVENT_CACHE_MS = 2_000;
 const EVENT_PAGE_SIZE = 256;
-const recentRunEvents = new Map<string, { expiresAt: number; items: AgentEventItem[] }>();
 const pendingRunEvents = new Map<string, Promise<AgentEventItem[]>>();
 
 async function loadRunEvents(sessionId: string, runId: string): Promise<AgentEventItem[]> {
   const cacheKey = `${sessionId}\0${runId}`;
-  const now = Date.now();
-  for (const [key, cached] of recentRunEvents) {
-    if (cached.expiresAt <= now) recentRunEvents.delete(key);
-  }
-  const cached = recentRunEvents.get(cacheKey);
-  if (cached) return cached.items;
   const pending = pendingRunEvents.get(cacheKey);
   if (pending) return pending;
 
@@ -48,7 +40,6 @@ async function loadRunEvents(sessionId: string, runId: string): Promise<AgentEve
       }
       afterCursor = page.nextCursor;
     }
-    recentRunEvents.set(cacheKey, { expiresAt: Date.now() + EVENT_CACHE_MS, items: events });
     return events;
   })();
   pendingRunEvents.set(cacheKey, request);

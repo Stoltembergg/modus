@@ -94,6 +94,66 @@ describe("useRunSources", () => {
     expect(listEvents).not.toHaveBeenCalled();
   });
 
+  it("does not retain the full event page after the source view unmounts", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const sessionId = "cache-cleanup-session";
+    const runId = "cache-cleanup-run";
+    const page: AgentEventPage = {
+      events: [
+        {
+          id: "cache-run-started",
+          event: { type: "run.started", sessionId, runId, delivery: "normal", eventCursor: 1 },
+          createdAt: "2026-10-01T12:00:00.000Z",
+        },
+        {
+          id: "cache-tool-started",
+          event: {
+            type: "tool.started",
+            sessionId,
+            runId,
+            toolCallId: "cache-tool",
+            toolName: "read_file",
+            args: { path: "/repo/cache-cleanup.ts" },
+            eventCursor: 2,
+          },
+          createdAt: "2026-10-01T12:00:01.000Z",
+        },
+        {
+          id: "cache-tool-ended",
+          event: {
+            type: "tool.ended",
+            sessionId,
+            runId,
+            toolCallId: "cache-tool",
+            toolName: "read_file",
+            isError: false,
+            eventCursor: 3,
+          },
+          createdAt: "2026-10-01T12:00:02.000Z",
+        },
+      ],
+      summaryEvents: [],
+      activityEvents: [],
+      snapshotCursor: 3,
+      nextCursor: 3,
+      hasMore: false,
+    };
+    const listEventPage = vi.fn(async (): Promise<AgentEventPage> => page);
+    Object.assign(window, { modus: { agent: { listEventPage } } });
+
+    const firstView = renderHook(() => useRunSources(sessionId, runId, true));
+    try {
+      await waitFor(() => expect(firstView.result.current).toHaveLength(1));
+      firstView.unmount();
+
+      const secondView = renderHook(() => useRunSources(sessionId, runId, true));
+      await waitFor(() => expect(secondView.result.current).toHaveLength(1));
+      expect(listEventPage).toHaveBeenCalledTimes(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("loads complete main-chat source sets independently for visible runs", async () => {
     const makeRunPage = (runId: string, path: string): AgentEventPage => ({
       events: [
