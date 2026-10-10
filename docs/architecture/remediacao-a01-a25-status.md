@@ -1744,8 +1744,8 @@ cancellation follow-up above.
 |---|---|---|
 | A01 | Partially mitigated | Facade fails closed and Pi chat/review no longer auto-load project/user extensions. The shared protocol validates bounded frames and strict schemas; v2 adds distinct cancellation and rejects v1 on both worker handshake and host-response decode. No OS process executor or production caller exists; isolation and productive wiring remain unproven. Hostile execution proof remains blocked. |
 | A02 | Partially mitigated | The shared resource-policy contract records the approved CPU, memory, time, output, IPC, process, hostcall and concurrency ceilings. No platform adapter enforces them, and no process-tree preemption/reap path is integrated. Do not run blocked probes. |
-| A03 | Partially mitigated | Chat/review auto-discovery remains blocked; the catalog freezes trusted manifest graphs and authorizes exact host identity. The v2 IPC contract carries host-only digest, origin, trust, session/workspace/run and generation provenance, but it has no production caller and does not establish trust on its own. |
-| A04 | Partially mitigated | External Pi extension ingress is disabled for chat and review; the review callsite guard covers loader flags and session creation. The shared IPC dispatcher validates exact grants and cancellation in synthetic fixtures, but direct dispatch/hooks remain for catalogued built-ins and no OS-backed dispatcher/lifecycle boundary is integrated. |
+| A03 | Partially mitigated | Chat/review auto-discovery remains blocked. Host catalog lookups, built-in catalog entries, loader results, and capability provider queries now expose immutable metadata descriptors without lifecycle/implementation callbacks. Exact source references remain private to the trusted in-process loader wiring; this is API encapsulation, not process isolation. The v2 IPC contract carries host-only digest, origin, trust, session/workspace/run and generation provenance, but has no production caller and does not establish trust on its own. |
+| A04 | Partially mitigated | External Pi extension ingress is disabled for chat and review; the review callsite guard covers loader flags and session creation. Registry provider execution remains dispatched through `CapabilityRegistry.execute`; rollback uses opaque registry-owned checkpoints. Public catalog/registry lookup APIs no longer return implementation references. The shared IPC dispatcher validates exact grants and cancellation in synthetic fixtures, but built-ins remain trusted in-process and no OS-backed dispatcher/lifecycle boundary is integrated. |
 | A05 | Partially mitigated | `WasmCapabilityHost` validates a single bounded memory, reserves per-instance/aggregate maximum capacity, reports actual live memory, charges returned callable and JSON helper calls, defers reservation release until active exports unwind, invalidates returned callables on disposal, recognizes cross-realm resources, rejects object-valued globals/callback returns/exports and blocks function-reference escape through host imports/tables/tags/globals, and keeps fuel imports host-owned; external plugin wiring and blocked enforcement proof remain unavailable. |
 | A06 | Partially mitigated; no-grant WASI denial revalidated | All imported WASI modules are denied before instantiation; exact synthetic tests ran with instantiation asserted unused. Grant-backed env/preopens and host isolation remain unavailable. |
 | A07 | Partially mitigated | Missing-path parent and dangling-link predicates are canonicalized; filesystem I/O fails closed without a race-free backend. No production consumer; scoped safe I/O and race proof remain open. |
@@ -1759,14 +1759,54 @@ cancellation follow-up above.
 | A15 | Partially mitigated | Pi cancellation propagates to terminal/app launches; active root-run agent processes are selected by session+run and cancelled, and cancellation telemetry is distinct. Non-cooperative in-process work and hard OS preemption remain unproven. |
 | A16 | Prior fix preserved | Explicit user-selected model identity and provider. |
 | A17 | Prior fix preserved | Verification evidence integrity. |
-| A18 | Implemented and independently reviewed; integrated checks pass | SQLite source of truth, durable per-recipient broadcast ACKs, bounded inbox queries, host-derived group scope, expiry-safe ACKs and lazy cleanup. Workflow `38034484183` passed desktop tests/typecheck/Biome and containment; Windows/macOS packaging passed. The unrelated pgTAP renewal assertion remains unresolved. |
+| A18 | Implemented and independently reviewed; integrated checks pass | SQLite source of truth, durable per-recipient broadcast ACKs, bounded inbox queries, host-derived group scope, expiry-safe ACKs and lazy cleanup. Latest recorded workflow `38081920060` passed Biome/typecheck, Supabase pgTAP (20 files/1,041 tests), PTY/protocol/security regression jobs and platform packaging. Its global Vitest job had one `FastVectorDistance` timing failure; it is not classified as pre-existing or solely environmental. |
 | A19 | Prior A21.4 implementation preserved | Spill authorization, persistence, quotas, and recovery. |
 | A20 | Partially mitigated; same-connection mutation detection added | Audit events and checkpoints persist in SQLite; immutable snapshots, transactional retention, append-time verification on audit revision changes, and checkpoint comparisons detect ordinary record changes through the same or another connection. No independent signing key or database access boundary exists. |
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |
 | A22 | Partially mitigated; productive readers page and source extraction is incremental | Cursor-page reads now drive IPC, timeline/history, source lookup and Pi output; the unbounded `agent:list-events` bridge endpoint is removed. Store/helper/context tests passed 89/89, offline Pi runtime 232/232; source/timeline/history/EventHub regressions passed 39/39; the A22 IPC follow-up passed 87/87 and independent review found no blocker. The internal `listAgentEvents` helper still aggregates if explicitly called but has no productive callsite. CI on `e1f175e` passed Biome/typecheck, containment on all three platforms, Verifier-First, sandbox compile-only and PTY cancellation. Global Vitest recorded 4,606 passed, 8 skipped, one `FastVectorDistance` timing failure at 0.113051 ms against <0.1 ms; pgTAP test 22 received 2026-10-30 and expected 2026-10-31. Windows/macOS packaging later passed. No baseline or instability classification is claimed. Active source-tool arguments/output, individual raw event payloads, synthetic prompt backfill and volatile partial previews remain byte/retention limitations. |
-| A23 | Mitigated; integrated checks pass | Synthetic capability outputs and the generic core `status: ok` fallback now fail explicitly with `CapabilityUnavailableError`; stale declared grants are reconciled by exact host identity/version; separate Pi runtime services, A16 selection, and A17 evidence flows are preserved. Independent review found no blocker. Workflow `38034484183` passed the desktop feature job, containment, runtime regression, compile-only sandbox, and Windows/macOS packaging. The unrelated pgTAP test 22 still fails. |
+| A23 | Mitigated; integrated checks pass | Synthetic capability outputs and the generic core `status: ok` fallback now fail explicitly with `CapabilityUnavailableError`; stale declared grants are reconciled by exact host identity/version; separate Pi runtime services, A16 selection, and A17 evidence flows are preserved. Independent review found no blocker. Workflow `38081920060` passed the relevant feature jobs, Supabase pgTAP (20 files/1,041 tests), containment, compile-only sandbox and Windows/macOS packaging. The same run had one unrelated-to-A23 global Vitest timing failure, without a baseline classification. |
 | A24 | Partially mitigated | Compiled-module cache has LRU entry/source-byte caps and hashes caller namespaces; cache counters do not measure native compiled memory. A05 supplies measured failure metrics. WASI remains denied and stdio capture is unavailable. |
 | A25 | Mitigated; prior fix preserved and revalidated | `allow-workspace` requires workspace+tool identity and lookup keys include both plus action/target; the Pi runtime supplies persisted host workspace identity across worktree cwd changes. Unknown tools are blocked before permission prompting and are not read-only safe. Safe focused validation: 52 permission-store/permission-extension/tool-registry tests and one productive Pi runtime workspace-scope test passed. A two-workspace synthetic store test passes; external tool/plugin execution remains disabled. |
 
 This matrix will be updated as each independent remediation is completed and
 checked. No Checkpoint 2/3 or Guardian Task 5–7 status is changed here.
+
+## A03/A04 incremental provider and catalog boundary
+
+The public host catalog and capability registry no longer return executable
+references through lookup APIs. Host catalog `authorize`/`resolve` methods and
+the built-in entry list return metadata-only manifests; provider descriptors
+are constructed from an explicit metadata allowlist, so extra callable fields
+cannot escape. `PluginLoader` keeps the exact trusted source privately for
+provider registration and lifecycle hooks. Internal plugins continue through
+the existing registry dispatcher and lifecycle service.
+
+- RED: focused regressions reproduced both review findings: direct catalog
+  results contained lifecycle/provision callbacks, and a provider's extra
+  `debugExecute` alias appeared in active/listed provider results.
+- GREEN: after the changes, catalog descriptors omit lifecycle and
+  implementation properties, and provider descriptors contain no callable
+  alias. The combined catalog, registry, loader, lifecycle, rollback,
+  dependency, and Pi SDK runtime rerun passed **7 files / 409 tests**. An
+  intermediate lifecycle regression exposed non-identical descriptors in the
+  test catalog; stable per-source descriptors fixed it, and the final lifecycle
+  suite passed **40/40**.
+- Independent read-only review found no other lifecycle, rollback or metadata
+  regression, and identified the two RED routes above. Both are addressed in
+  this patch. Review was source-only; it did not prove an OS process boundary.
+- Biome passed the touched-file set with no errors (**38 warnings, 2 infos**);
+  no mass formatting or rule suppression was used. Desktop typecheck passed and
+  `git diff --check` passed.
+- Before this patch, remote HEAD `c63b4e6` had all package jobs complete and
+  Supabase pgTAP/Deno passed (**20 files, 1,041 tests**). The global Vitest run
+  had **4,607 passed, 8 skipped, 1 failed** across 408 files; the failure was
+  `FastVectorDistance` at **0.116127 ms** against `<0.1 ms`. No base comparison
+  supports classifying it as pre-existing or solely environmental. Safe
+  protocol, PTY, Verifier-First, and filtered containment jobs passed; no probe
+  ran. Windows x64 and macOS x64/arm64 packaging completed successfully. CI for
+  this incremental patch is pending publication.
+- Residual: trusted built-in callback code still runs in the host process.
+  External plugin execution remains disabled. The IPC v2 dispatcher still has
+  no platform executor or productive caller, so A01–A04 process containment is
+  not proven. This increment does not start Guardian Tasks 5–7 or change any
+  checkpoint.
