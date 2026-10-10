@@ -347,7 +347,15 @@ host-process boundary limitations remain.**
   Desktop typecheck and `git diff --check` passed. Independent read-only review
   found no blocker and confirmed the compatibility impact: configurations that
   enable plugins without lifecycle reconciliation now leave them unloaded.
-  Remote CI for this follow-up commit remains pending publication.
+- Remote CI on `132745d`: Biome/typecheck, Verifier-First regressions,
+  containment on Windows/macOS, and compile-only sandbox targets passed.
+  Vitest reported **4,593 passed, 8 skipped, 1 failed across 406 files**; the
+  unchanged `FastVectorDistance` assertion measured **0.107641 ms** against
+  `<0.1 ms`. Ubuntu plugin containment ran 277 passed/7 skipped/1 failed with
+  the same assertion at **0.103904 ms**. pgTAP test 22 again expected
+  `2026-10-31` but got `2026-10-30`. Windows x64 and macOS x64/arm64 packaging
+  passed. These failures are recorded without attributing them to the A10
+  change or calling the timing failure solely unstable.
 
 ## Milestone 4 — A05 WASM memory accounting
 
@@ -585,6 +593,13 @@ produce an in-memory success record. Returned entries are frozen snapshots;
 the public `clear()` operation was removed. `PiSdkRuntime` now uses the existing
 singleton logger when the isolation feature is enabled.
 
+The append check now also detects writes made through the logger's own SQLite
+connection. `PRAGMA data_version` only reports commits from other connections;
+the database schema now tracks audit-row insert/update/delete revisions with
+triggers, and append verifies the retained chain if that revision changes. It
+also compares the durable checkpoint hash with the in-memory checkpoint before
+accepting an append. Existing databases gain the revision column additively.
+
 ### Evidence
 
 - RED/GREEN: the snapshot regression initially mutated a returned record and
@@ -599,6 +614,20 @@ singleton logger when the isolation feature is enabled.
   other-connection commits with `PRAGMA data_version` and verifies the chain
   before append; explicit verification reads a consistent SQLite snapshot. No
   plugin or enforcement scenario ran.
+- RED/GREEN: two tests using the logger's own connection initially showed that
+  changing a retained payload or `anchor_hash` still allowed a later append.
+  Revision triggers now cause payload changes to be verified and rejected;
+  checkpoint changes fail closed before append. A legacy-schema fixture also
+  verifies additive migration retains and validates an existing synthetic
+  chain.
+- Targeted Vitest: the complete cryptographic audit logger test group passed
+  **12 tests** (39 unrelated tests skipped). Desktop typecheck passed. Targeted
+  Biome passed with **1 existing warning and 5 infos**, all outside the changed
+  hunk; `git diff --check` passed. Independent read-only review found no blocker
+  and confirmed the migration and append transaction ordering. It also noted
+  that external commits anywhere in the shared database can trigger a retained
+  chain recheck, and retention updates the revision per deleted row. Remote CI
+  for this follow-up remains pending.
 - A runtime integration fixture enables the existing isolation flag, invokes
   the production denial facade with a synthetic callback, confirms the callback
   is not called, then reconstructs the singleton and verifies its persisted
@@ -621,14 +650,13 @@ singleton logger when the isolation feature is enabled.
 ### Limits
 
 The logger verifies the persisted chain on startup and explicit verification;
-before append it rechecks the chain when `PRAGMA data_version` shows a commit
-from another SQLite connection. A direct writer using the logger's own
-connection can bypass that version signal, and the hash chain is not a
-signature or separate trust anchor: a process with write access to both the
-SQLite events and checkpoint can rewrite them consistently. The current
-isolation facade still denies untrusted plugin execution, and this patch does
-not claim tamper resistance against host-process compromise or establish an OS
-boundary.
+before append it rechecks the chain when either SQLite's cross-connection
+`data_version` or its same-database audit-row revision changes. Triggers do not
+provide a separate trust boundary: a process with write access to the database
+can alter the events and checkpoint consistently or disable the triggers. The
+hash chain is not a signature or separate trust anchor. The current isolation
+facade still denies untrusted plugin execution, and this patch does not claim
+tamper resistance against host-process compromise or establish an OS boundary.
 
 ## Milestone 7 — A24 WASM cache bounds and measurement truthfulness
 
@@ -1212,7 +1240,7 @@ rejected rather than mixed.
 | A17 | Prior fix preserved | Verification evidence integrity. |
 | A18 | Implemented and independently reviewed; integrated checks pass | SQLite source of truth, durable per-recipient broadcast ACKs, bounded inbox queries, host-derived group scope, expiry-safe ACKs and lazy cleanup. Workflow `38034484183` passed desktop tests/typecheck/Biome and containment; Windows/macOS packaging passed. The unrelated pgTAP renewal assertion remains unresolved. |
 | A19 | Prior A21.4 implementation preserved | Spill authorization, persistence, quotas, and recovery. |
-| A20 | Partially mitigated | Audit events and checkpoints persist in SQLite; immutable snapshots, transactional retention and verification detect ordinary record changes. No independent signing key or database access boundary exists. |
+| A20 | Partially mitigated; same-connection mutation detection added | Audit events and checkpoints persist in SQLite; immutable snapshots, transactional retention, append-time verification on audit revision changes, and checkpoint comparisons detect ordinary record changes through the same or another connection. No independent signing key or database access boundary exists. |
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |
 | A22 | Partially mitigated; renderer and run-response paging implemented and independently reviewed | Durable AUTOINCREMENT cursor, session index, fixed-snapshot keyset pages, page-driven activity/transcript, run-scoped sources, exact-run assistant-output pages, companion-stream completion/run association, and release of completed source-page arrays are wired. Source cache RED/GREEN: six source/chat/group UI files pass 83/83; source hook 6/6. EventHub RED/GREEN: hub/timeline/chat-history integration 30/30, including active-run buffer release after the handoff window and prepared handoff retention. Run-response RED/GREEN: bounded per-run message pages, 130 deltas across the default page boundary, and an offline Pi runtime ResponsePolicy evaluation preserving the exact text. Parent CI `87e6466`: 4,588 passed/8 skipped/1 benchmark failure (`FastVectorDistance` 0.135374ms vs <0.1ms), plus the recurring pgTAP date assertion; typecheck/Biome, containment on all three OSes, Verifier-First, compile-only sandbox, and both package workflows passed. Independent reviewers found no blocker. Legacy `lastAssistantOutput`, past-chat transcript, and `listAgentEvents` compatibility paths still materialize broad history; individual event/result byte caps, volatile partial tool previews before durable `tool.started`, and early local prompt failure retention remain. A local broad suite attempt was cancelled after its fixed file list ignored the requested filter; a sandbox test file had started, so execution of restricted cases cannot be ruled out. |
 | A23 | Mitigated; integrated checks pass | Synthetic capability outputs and the generic core `status: ok` fallback now fail explicitly with `CapabilityUnavailableError`; stale declared grants are reconciled by exact host identity/version; separate Pi runtime services, A16 selection, and A17 evidence flows are preserved. Independent review found no blocker. Workflow `38034484183` passed the desktop feature job, containment, runtime regression, compile-only sandbox, and Windows/macOS packaging. The unrelated pgTAP test 22 still fails. |

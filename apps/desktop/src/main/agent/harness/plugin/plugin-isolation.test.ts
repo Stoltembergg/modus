@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs, { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path, { join } from "node:path";
@@ -250,6 +251,148 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
       } finally {
         database.close();
         rmSync(directory, { recursive: true, force: true });
+      }
+    });
+
+    it("detects audit-row changes made on its own SQLite connection before appending", () => {
+      const logger = SecurityAuditLogger.getInstance();
+      logger.log({
+        pluginId: "@modus/same-connection-tamper-fixture",
+        action: "capability.deny",
+        resource: "original synthetic resource",
+        decision: "deny",
+      });
+      auditDatabase
+        .prepare("update security_audit_events set resource = ? where sequence = 1")
+        .run("changed synthetic resource");
+
+      expect(() =>
+        logger.log({
+          pluginId: "@modus/same-connection-tamper-fixture",
+          action: "capability.deny",
+          resource: "later synthetic resource",
+          decision: "deny",
+        }),
+      ).toThrow("Security audit chain is unavailable");
+    });
+
+    it("detects a checkpoint change on its own SQLite connection before appending", () => {
+      const logger = SecurityAuditLogger.getInstance();
+      auditDatabase
+        .prepare("update security_audit_state set anchor_hash = ? where singleton = 1")
+        .run("f".repeat(64));
+
+      expect(() =>
+        logger.log({
+          pluginId: "@modus/checkpoint-tamper-fixture",
+          action: "capability.deny",
+          resource: "synthetic resource",
+          decision: "deny",
+        }),
+      ).toThrow("Audit log was changed by another writer");
+    });
+
+    it("migrates an existing audit database without losing its retained chain", () => {
+      const database = new DatabaseSync(":memory:");
+      database.exec(`
+        create table security_audit_state (
+          singleton integer primary key check (singleton = 1),
+          anchor_hash text not null,
+          latest_hash text not null,
+          next_sequence integer not null check (next_sequence >= 1)
+        );
+        create table security_audit_events (
+          sequence integer primary key,
+          id text not null unique,
+          timestamp integer not null,
+          plugin_id text not null,
+          action text not null,
+          resource text not null,
+          decision text not null check (decision in ('allow','deny')),
+          reason text not null,
+          hash text not null,
+          previous_hash text not null
+        );
+      `);
+      const previousHash = "0".repeat(64);
+      const id = "legacy-audit-row";
+      const entry = {
+        sequence: 1,
+        id,
+        previousHash,
+        timestamp: 1,
+        pluginId: "@modus/legacy-fixture",
+        action: "capability.deny",
+        resource: "legacy synthetic record",
+        decision: "deny",
+        reason: "",
+      } as const;
+      const hash = createHash("sha256")
+        .update(
+          JSON.stringify([
+            entry.sequence,
+            entry.id,
+            entry.previousHash,
+            entry.timestamp,
+            entry.pluginId,
+            entry.action,
+            entry.resource,
+            entry.decision,
+            entry.reason,
+          ]),
+        )
+        .digest("hex");
+      database
+        .prepare(
+          `insert into security_audit_state
+           (singleton, anchor_hash, latest_hash, next_sequence) values (1, ?, ?, 2)`,
+        )
+        .run(previousHash, hash);
+      database
+        .prepare(
+          `insert into security_audit_events
+           (sequence, id, timestamp, plugin_id, action, resource, decision, reason, hash, previous_hash)
+           values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          entry.sequence,
+          entry.id,
+          entry.timestamp,
+          entry.pluginId,
+          entry.action,
+          entry.resource,
+          entry.decision,
+          entry.reason,
+          hash,
+          entry.previousHash,
+        );
+
+      try {
+        const logger = new SecurityAuditLogger({ database });
+        expect(logger.getEntries().map((row) => row.resource)).toEqual(["legacy synthetic record"]);
+        expect(logger.verifyChain()).toEqual({ valid: true });
+        expect(
+          database
+            .prepare("pragma table_info(security_audit_state)")
+            .all()
+            .some((column) => (column as { name: string }).name === "revision"),
+        ).toBe(true);
+        logger.log({
+          pluginId: "@modus/legacy-fixture",
+          action: "capability.deny",
+          resource: "post-migration synthetic record",
+          decision: "deny",
+        });
+        expect(
+          (
+            database
+              .prepare("select revision from security_audit_state where singleton = 1")
+              .get() as { revision: number }
+          ).revision,
+        ).toBe(1);
+        expect(logger.verifyChain()).toEqual({ valid: true });
+      } finally {
+        database.close();
       }
     });
   });

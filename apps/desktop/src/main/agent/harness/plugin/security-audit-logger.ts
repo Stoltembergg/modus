@@ -57,6 +57,7 @@ type AuditStateRow = {
   anchor_hash: string;
   latest_hash: string;
   next_sequence: number;
+  revision: number;
 };
 
 type ChainVerification = { valid: true } | { valid: false; brokenAtIndex: number; reason: string };
@@ -116,6 +117,7 @@ export class SecurityAuditLogger {
   private latestHash = GENESIS_HASH;
   private nextSequence = 1;
   private databaseVersion = 0;
+  private auditRevision = 0;
   private integrityFailure: string | undefined;
 
   constructor(options: SecurityAuditLoggerOptions = {}) {
@@ -172,21 +174,26 @@ export class SecurityAuditLogger {
 
     this.database.exec("begin immediate");
     let anchorHash = this.anchorHash;
+    let auditRevision = this.auditRevision;
     try {
       const databaseVersion = this.readDatabaseVersion();
       const state = this.readState();
-      if (databaseVersion !== this.databaseVersion) {
+      if (
+        state.anchor_hash !== this.anchorHash ||
+        state.latest_hash !== this.latestHash ||
+        state.next_sequence !== this.nextSequence
+      ) {
+        const reason = "Audit log was changed by another writer; refusing to append.";
+        this.integrityFailure = reason;
+        throw new Error(reason);
+      }
+      if (databaseVersion !== this.databaseVersion || state.revision !== this.auditRevision) {
         const rows = this.readRows();
         const verification = SecurityAuditLogger.verifyRows(state, rows, this.maxEntries);
         if (!verification.valid) {
           this.integrityFailure = verification.reason;
           throw new Error(`Security audit chain is unavailable: ${verification.reason}`);
         }
-      }
-      if (state.latest_hash !== this.latestHash || state.next_sequence !== this.nextSequence) {
-        const reason = "Audit log was changed by another writer; refusing to append.";
-        this.integrityFailure = reason;
-        throw new Error(reason);
       }
 
       this.database
@@ -231,6 +238,7 @@ export class SecurityAuditLogger {
            where singleton = 1`,
         )
         .run(anchorHash, hash, sequence + 1);
+      auditRevision = this.readState().revision;
       this.database.exec("commit");
       this.databaseVersion = databaseVersion;
     } catch (error) {
@@ -259,6 +267,7 @@ export class SecurityAuditLogger {
     this.anchorHash = anchorHash;
     this.latestHash = hash;
     this.nextSequence = sequence + 1;
+    this.auditRevision = auditRevision;
     this.entries = this.entries.filter((stored) => stored.sequence > sequence - this.maxEntries);
     this.entries.push({ sequence, entry });
     if (this.entries.length > this.maxEntries) {
@@ -317,7 +326,8 @@ export class SecurityAuditLogger {
         singleton integer primary key check (singleton = 1),
         anchor_hash text not null,
         latest_hash text not null,
-        next_sequence integer not null check (next_sequence >= 1)
+        next_sequence integer not null check (next_sequence >= 1),
+        revision integer not null default 0 check (revision >= 0)
       );
       insert or ignore into security_audit_state
         (singleton, anchor_hash, latest_hash, next_sequence)
@@ -335,6 +345,31 @@ export class SecurityAuditLogger {
         previous_hash text not null
       );
     `);
+    const stateColumns = this.database
+      .prepare("pragma table_info(security_audit_state)")
+      .all() as Array<{ name: string }>;
+    if (!stateColumns.some((column) => column.name === "revision")) {
+      this.database.exec(
+        "alter table security_audit_state add column revision integer not null default 0 check (revision >= 0)",
+      );
+    }
+    this.database.exec(`
+      create trigger if not exists security_audit_events_revision_insert
+      after insert on security_audit_events
+      begin
+        update security_audit_state set revision = revision + 1 where singleton = 1;
+      end;
+      create trigger if not exists security_audit_events_revision_update
+      after update on security_audit_events
+      begin
+        update security_audit_state set revision = revision + 1 where singleton = 1;
+      end;
+      create trigger if not exists security_audit_events_revision_delete
+      after delete on security_audit_events
+      begin
+        update security_audit_state set revision = revision + 1 where singleton = 1;
+      end;
+    `);
   }
 
   private hydrate(): void {
@@ -346,6 +381,7 @@ export class SecurityAuditLogger {
       this.anchorHash = state.anchor_hash;
       this.latestHash = state.latest_hash;
       this.nextSequence = state.next_sequence;
+      this.auditRevision = state.revision;
       this.entries = rows.map((row) => ({ sequence: row.sequence, entry: asEntry(row) }));
       if (this.entries.length > this.maxEntries) {
         this.entries = this.entries.slice(-this.maxEntries);
@@ -377,7 +413,7 @@ export class SecurityAuditLogger {
   private readState(): AuditStateRow {
     const state = this.database
       .prepare(
-        `select anchor_hash, latest_hash, next_sequence
+        `select anchor_hash, latest_hash, next_sequence, revision
          from security_audit_state where singleton = 1`,
       )
       .get() as AuditStateRow | undefined;
