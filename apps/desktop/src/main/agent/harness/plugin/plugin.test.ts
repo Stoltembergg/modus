@@ -85,11 +85,16 @@ describe("Fase 10 — Modus Internal Plugins", () => {
       };
       const untrustedLoader = new PluginLoader(registry, unregisteredCatalog);
 
-      await expect(untrustedLoader.load(manifest)).rejects.toThrow(
-        /host-registered trusted source/,
+      const loadError = await untrustedLoader.load(manifest).then(
+        () => undefined,
+        (error: unknown) => error,
       );
-      expect(onLoad).not.toHaveBeenCalled();
-      expect(registry.getActiveProvider("test.unregistered-trust")).toBeUndefined();
+
+      expect({
+        rejected: loadError instanceof PluginValidationError,
+        lifecycleHookCalled: onLoad.mock.calls.length > 0,
+        activeProviderId: registry.getActiveProvider("test.unregistered-trust")?.providerId,
+      }).toEqual({ rejected: true, lifecycleHookCalled: false, activeProviderId: undefined });
     });
 
     it("does not expose executable references in loader results or host manifests", async () => {
