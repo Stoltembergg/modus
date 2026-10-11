@@ -1,17 +1,17 @@
-//! One-use admission assessments for future platform workers.
+//! Host-owned admission for a future process-backed plugin worker.
 //!
-//! This module validates a host-side platform assessment, but it does not
-//! implement or prove operating-system enforcement. No production adapter
-//! currently implements [`PlatformAssessmentSource`], so no production caller
-//! can mint an admission token and external worker execution remains
-//! unavailable.
+//! A validated token owns the exact IPC transport assessed by the platform
+//! adapter. The shared dispatcher consumes that token and is the only
+//! production API for reading worker frames or writing host responses. This
+//! module defines the boundary contract; it does not implement or prove
+//! operating-system enforcement. No production adapter currently creates an
+//! [`AssessedWorker`], so external worker execution remains unavailable.
 //!
-//! An admission token is bound to host-owned artifact and run provenance,
-//! carries the approved policy snapshot, and can only be issued after all
-//! required controls and the frozen policy pass validation. It is consumed by
-//! one dispatcher, but it is not bound to a process handle or IPC stream. The
-//! future platform supervisor must own that binding and route all traffic
-//! through the dispatcher before this API can authorize production execution.
+//! Platform adapters live in trusted host crates and cross this boundary with
+//! explicit `unsafe` constructors/implementations. Their safety obligations
+//! are documented on [`WorkerTransport`], [`PlatformAssessment::from_adapter`],
+//! and [`AssessedWorker::from_adapter`]. The admission token is not itself
+//! proof that those obligations were met.
 //!
 //! ```compile_fail
 //! use modus_plugin_execution_protocol::{Dispatcher, HostProvenance, HostTrustLevel};
@@ -19,70 +19,67 @@
 //!     "plugin", "1.0.0", "0".repeat(64), "catalog", HostTrustLevel::Verified,
 //!     "session", "workspace", "run", 1,
 //! ).unwrap();
-//! // Provenance alone is not enough to create a worker dispatcher.
+//! // The low-level dispatcher has no public constructor.
 //! let _dispatcher = Dispatcher::new("0".repeat(64), provenance, Vec::<String>::new());
-//! ```
-//!
-//! ```compile_fail
-//! use modus_plugin_execution_protocol::{HostProvenance};
-//! use modus_plugin_execution_protocol::worker_admission::{
-//!     AdmissionError, PlatformAssessment, PlatformAssessmentSource,
-//! };
-//! struct CallerClaimedAdapter;
-//! impl PlatformAssessmentSource for CallerClaimedAdapter {
-//!     fn assess_started_worker(
-//!         self,
-//!         _: &HostProvenance,
-//!     ) -> Result<PlatformAssessment, AdmissionError>
-//!     where Self: Sized {
-//!         todo!()
-//!     }
-//! }
 //! ```
 //!
 //! ```compile_fail
 //! use modus_plugin_execution_protocol::worker_admission::AdmissionAssessmentToken;
 //! fn require_clone<T: Clone>() {}
-//! fn main() { require_clone::<AdmissionAssessmentToken>(); }
+//! fn main() { require_clone::<AdmissionAssessmentToken<()>>(); }
 //! ```
 //!
 //! ```compile_fail
 //! use modus_plugin_execution_protocol::{Dispatcher, worker_admission::AdmissionAssessmentToken};
-//! fn dispatch_twice(token: AdmissionAssessmentToken) {
+//! fn dispatch_twice(token: AdmissionAssessmentToken<()>) {
 //!     let _ = Dispatcher::new(token, "a".repeat(64), Vec::<String>::new());
 //!     let _ = Dispatcher::new(token, "a".repeat(64), Vec::<String>::new());
 //! }
 //! ```
+//!
+//! ```compile_fail
+//! use std::time::Instant;
+//! use modus_plugin_execution_protocol::{DeadlineReader, WorkerSession};
+//! use modus_plugin_execution_protocol::worker_admission::WorkerTransport;
+//! fn read_from_an_unrelated_stream<R: DeadlineReader, T: WorkerTransport>(
+//!     session: &mut WorkerSession<T>,
+//!     unrelated_reader: &mut R,
+//! ) {
+//!     let _ = session.receive_from_until(unrelated_reader, Instant::now());
+//! }
+//! ```
 
 use std::collections::BTreeSet;
+use std::io;
+use std::time::{Duration, Instant};
 
-use crate::HostProvenance;
 use crate::resource_policy::{APPROVED_RESOURCE_POLICY, ResourcePolicy};
+use crate::{DeadlineReader, HostProvenance};
 
-mod sealed {
-    pub trait Sealed {}
-}
-
-/// A platform adapter that has already created a worker and assessed its
-/// effective policy before any artifact bytes were transferred.
+/// Operations on one host-created worker's IPC endpoint and process tree.
 ///
-/// Implementations are sealed to this crate. A platform adapter must not
-/// implement this contract by reporting configured values alone: it must
-/// inspect the active OS policy, readiness, and termination path. This
-/// assessment interface is not itself proof of those OS properties.
-#[allow(private_bounds)]
-pub trait PlatformAssessmentSource: sealed::Sealed {
-    fn assess_started_worker(
-        self,
-        expected_provenance: &HostProvenance,
-    ) -> Result<PlatformAssessment, AdmissionError>
-    where
-        Self: Sized;
+/// # Safety
+///
+/// Implementations must own the IPC endpoint for exactly one worker process.
+/// Reads and writes must honor the supplied absolute deadlines, enforce the
+/// protocol frame limit before allocating or writing, and never block past a
+/// deadline. `request_termination` must be non-blocking and stop the complete
+/// process tree. `reap_until` must return only after the process tree is gone,
+/// or return an error by the supplied deadline. Dropping the implementation
+/// must also request termination so abandoning an assessment or session does
+/// not leave a worker running. These are adapter obligations; this trait does
+/// not verify that an OS mechanism enforces them.
+pub unsafe trait WorkerTransport: DeadlineReader + Send {
+    fn write_with_deadline(&mut self, frame: &[u8], deadline: Instant) -> io::Result<()>;
+
+    fn request_termination(&mut self);
+
+    fn reap_until(&mut self, deadline: Instant) -> io::Result<()>;
 }
 
-/// Required control categories in the approved worker contract. A single list
-/// defines both the enum and the required set to prevent a new category from
-/// silently being omitted by the validator.
+/// One required control category in the approved worker contract. A single
+/// list defines both the enum and required set so a new category cannot be
+/// omitted silently from validation.
 macro_rules! define_enforcement_controls {
     ($($control:ident),+ $(,)?) => {
         #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -109,9 +106,13 @@ define_enforcement_controls! {
     AmbientFilesystemNetworkAndCredentialDenial,
 }
 
-/// Adapter-supplied assessment. Its constructor is crate-private; it is not a
-/// guest message and has no serialization format. The assessed control list
-/// is only as reliable as the sealed adapter implementation.
+/// Platform adapter assessment attached to a single worker transport.
+///
+/// # Safety
+///
+/// The caller must report only controls actually installed and inspected for
+/// the worker associated with the [`AssessedWorker`] created from this value.
+/// Configuration intent or a synthetic report is not sufficient.
 #[derive(Debug, Eq, PartialEq)]
 pub struct PlatformAssessment {
     provenance: HostProvenance,
@@ -120,7 +121,15 @@ pub struct PlatformAssessment {
 }
 
 impl PlatformAssessment {
-    pub(crate) fn from_adapter(
+    /// Create a platform assessment from trusted host adapter code.
+    ///
+    /// # Safety
+    ///
+    /// `assessed_policy` and `assessed_controls` must describe active
+    /// enforcement on the exact process that will be paired with this
+    /// assessment. Provenance must be host-resolved, and no artifact bytes may
+    /// have been sent to the worker before those controls were installed.
+    pub unsafe fn from_adapter(
         provenance: HostProvenance,
         assessed_policy: ResourcePolicy,
         assessed_controls: impl IntoIterator<Item = EnforcementControl>,
@@ -133,96 +142,194 @@ impl PlatformAssessment {
     }
 }
 
+/// A started worker and the exact transport for the worker assessed by the
+/// platform adapter. The value can only be created through an unsafe adapter
+/// boundary and is consumed by admission validation.
+pub struct AssessedWorker<T> {
+    assessment: Option<PlatformAssessment>,
+    transport: Option<T>,
+}
+
+impl<T: WorkerTransport> AssessedWorker<T> {
+    /// Pair adapter evidence with its worker's transport endpoint.
+    ///
+    /// # Safety
+    ///
+    /// `transport` must address the same process described by `assessment`;
+    /// all reported controls must already be active; and the adapter must not
+    /// have transferred guest artifact bytes before this pair was assessed.
+    pub unsafe fn from_adapter(assessment: PlatformAssessment, transport: T) -> Self {
+        Self {
+            assessment: Some(assessment),
+            transport: Some(transport),
+        }
+    }
+
+    fn into_parts(mut self) -> (PlatformAssessment, T) {
+        (
+            self.assessment
+                .take()
+                .expect("assessed worker is consumed once"),
+            self.transport
+                .take()
+                .expect("assessed worker transport is consumed once"),
+        )
+    }
+}
+
+impl<T: WorkerTransport> Drop for AssessedWorker<T> {
+    fn drop(&mut self) {
+        if let Some(transport) = self.transport.as_mut() {
+            request_and_reap(transport, cleanup_deadline());
+        }
+    }
+}
+
 /// Rejection reason for an incomplete or inconsistent platform assessment.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AdmissionError {
-    AdapterUnavailable,
     ProvenanceMismatch,
     PolicyDiffersFromApproved,
     RequiredControlNotAssessed(EnforcementControl),
+    WorkerCleanupFailed(io::ErrorKind),
 }
 
-/// Opaque, one-use token for a validated adapter assessment. There is no
-/// public constructor, Clone implementation, or deserializer. It does not own
-/// or identify an OS process or IPC stream.
-#[derive(Debug, Eq, PartialEq)]
-pub struct AdmissionAssessmentToken {
+/// Non-cloneable token that owns the assessed worker transport until it is
+/// consumed by `WorkerSession`. It is not a proof of OS enforcement.
+pub struct AdmissionAssessmentToken<T> {
     provenance: HostProvenance,
     approved_policy: ResourcePolicy,
+    transport: Option<T>,
 }
 
-impl AdmissionAssessmentToken {
-    /// Validate an adapter assessment and mint a single-dispatcher token. The
-    /// adapter must establish its platform controls before transferring any
-    /// artifact bytes; this API cannot independently prove the adapter's OS
-    /// calls or bind the token to a worker stream.
-    pub fn validate_from_adapter<A: PlatformAssessmentSource>(
-        adapter: A,
-        provenance: HostProvenance,
+impl<T: WorkerTransport> AdmissionAssessmentToken<T> {
+    /// Validate and consume one platform-assessed worker.
+    pub fn validate(
+        assessed_worker: AssessedWorker<T>,
+        expected_provenance: HostProvenance,
     ) -> Result<Self, AdmissionError> {
-        let assessment = adapter.assess_started_worker(&provenance)?;
-        if assessment.provenance != provenance {
-            return Err(AdmissionError::ProvenanceMismatch);
+        let (assessment, mut transport) = assessed_worker.into_parts();
+        let rejection = if assessment.provenance != expected_provenance {
+            Some(AdmissionError::ProvenanceMismatch)
+        } else if assessment.assessed_policy != APPROVED_RESOURCE_POLICY {
+            // Until the dispatcher and codec apply variable limits, accept
+            // only the exact policy that they actually enforce.
+            Some(AdmissionError::PolicyDiffersFromApproved)
+        } else {
+            REQUIRED_CONTROLS
+                .iter()
+                .find(|control| !assessment.assessed_controls.contains(control))
+                .copied()
+                .map(AdmissionError::RequiredControlNotAssessed)
+        };
+
+        if let Some(reason) = rejection {
+            return match request_and_reap(&mut transport, cleanup_deadline()) {
+                Ok(()) => Err(reason),
+                Err(kind) => Err(AdmissionError::WorkerCleanupFailed(kind)),
+            };
         }
-        // Until Dispatcher and the codec enforce variable limits, accepting
-        // tighter values would record a policy that is not actually applied.
-        if assessment.assessed_policy != APPROVED_RESOURCE_POLICY {
-            return Err(AdmissionError::PolicyDiffersFromApproved);
-        }
-        for &control in REQUIRED_CONTROLS {
-            if !assessment.assessed_controls.contains(&control) {
-                return Err(AdmissionError::RequiredControlNotAssessed(control));
-            }
-        }
+
         Ok(Self {
-            provenance: assessment.provenance,
+            provenance: expected_provenance,
             approved_policy: APPROVED_RESOURCE_POLICY,
+            transport: Some(transport),
         })
     }
 
-    pub fn approved_policy(&self) -> ResourcePolicy {
-        self.approved_policy
+    pub(crate) fn into_parts(mut self) -> (HostProvenance, ResourcePolicy, T) {
+        (
+            self.provenance.clone(),
+            self.approved_policy,
+            self.transport
+                .take()
+                .expect("admission token is consumed once"),
+        )
     }
+}
 
-    pub(crate) fn into_parts(self) -> (HostProvenance, ResourcePolicy) {
-        (self.provenance, self.approved_policy)
+impl<T: WorkerTransport> Drop for AdmissionAssessmentToken<T> {
+    fn drop(&mut self) {
+        if let Some(transport) = self.transport.as_mut() {
+            request_and_reap(transport, cleanup_deadline());
+        }
+    }
+}
+
+fn cleanup_deadline() -> Instant {
+    Instant::now() + Duration::from_millis(
+        APPROVED_RESOURCE_POLICY.forced_termination_reap_deadline_ms,
+    )
+}
+
+fn request_and_reap<T: WorkerTransport>(
+    transport: &mut T,
+    deadline: Instant,
+) -> Result<(), io::ErrorKind> {
+    transport.request_termination();
+    transport.reap_until(deadline).map_err(|error| error.kind())
+}
+
+#[cfg(test)]
+pub(crate) struct SyntheticTestTransport;
+
+#[cfg(test)]
+impl DeadlineReader for SyntheticTestTransport {
+    fn read_with_deadline(&mut self, _buffer: &mut [u8], _deadline: Instant) -> io::Result<usize> {
+        Ok(0)
     }
 }
 
 #[cfg(test)]
-pub(crate) fn synthetic_test_token(provenance: HostProvenance) -> AdmissionAssessmentToken {
-    AdmissionAssessmentToken {
-        provenance,
-        approved_policy: APPROVED_RESOURCE_POLICY,
+unsafe impl WorkerTransport for SyntheticTestTransport {
+    fn write_with_deadline(&mut self, _frame: &[u8], _deadline: Instant) -> io::Result<()> {
+        Ok(())
     }
+
+    fn request_termination(&mut self) {}
+
+    fn reap_until(&mut self, _deadline: Instant) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn synthetic_test_token(
+    provenance: HostProvenance,
+) -> AdmissionAssessmentToken<SyntheticTestTransport> {
+    synthetic_test_token_with_transport(provenance, SyntheticTestTransport)
+}
+
+#[cfg(test)]
+pub(crate) fn synthetic_test_token_with_transport<T: WorkerTransport>(
+    provenance: HostProvenance,
+    transport: T,
+) -> AdmissionAssessmentToken<T> {
+    let assessment = unsafe {
+        PlatformAssessment::from_adapter(
+            provenance.clone(),
+            APPROVED_RESOURCE_POLICY,
+            REQUIRED_CONTROLS.iter().copied(),
+        )
+    };
+    let worker = unsafe { AssessedWorker::from_adapter(assessment, transport) };
+    AdmissionAssessmentToken::validate(worker, provenance)
+        .expect("synthetic test assessment is complete")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    struct SyntheticAdapter(PlatformAssessment);
-
-    impl sealed::Sealed for SyntheticAdapter {}
-
-    impl PlatformAssessmentSource for SyntheticAdapter {
-        fn assess_started_worker(
-            self,
-            _expected_provenance: &HostProvenance,
-        ) -> Result<PlatformAssessment, AdmissionError> {
-            Ok(self.0)
-        }
-    }
-
     fn provenance() -> HostProvenance {
-        provenance_for("session-fixture", "run-fixture")
+        provenance_for_scope("session-fixture", "workspace-fixture", "run-fixture")
     }
 
-    fn provenance_for(session_id: &str, run_id: &str) -> HostProvenance {
-        provenance_for_scope(session_id, "workspace-fixture", run_id)
-    }
-
-    fn provenance_for_scope(session_id: &str, workspace_id: &str, run_id: &str) -> HostProvenance {
+    fn provenance_for_scope(
+        session_id: &str,
+        workspace_id: &str,
+        run_id: &str,
+    ) -> HostProvenance {
         HostProvenance::from_host_catalog(
             "fixture/plugin",
             "1.0.0",
@@ -241,26 +348,28 @@ mod tests {
         REQUIRED_CONTROLS.iter().copied()
     }
 
-    fn adapter(
+    fn assessed_worker(
         provenance: HostProvenance,
         policy: ResourcePolicy,
         controls: impl IntoIterator<Item = EnforcementControl>,
-    ) -> SyntheticAdapter {
-        SyntheticAdapter(PlatformAssessment::from_adapter(
-            provenance, policy, controls,
-        ))
+    ) -> AssessedWorker<SyntheticTestTransport> {
+        let assessment = unsafe { PlatformAssessment::from_adapter(provenance, policy, controls) };
+        unsafe { AssessedWorker::from_adapter(assessment, SyntheticTestTransport) }
     }
 
     #[test]
-    fn issues_a_one_use_assessment_token_only_for_complete_synthetic_controls() {
+    fn issues_a_one_use_token_only_for_complete_synthetic_controls() {
         let provenance = provenance();
-        let adapter = adapter(provenance.clone(), APPROVED_RESOURCE_POLICY, all_controls());
+        let worker = assessed_worker(
+            provenance.clone(),
+            APPROVED_RESOURCE_POLICY,
+            all_controls(),
+        );
 
-        let token =
-            AdmissionAssessmentToken::validate_from_adapter(adapter, provenance.clone()).unwrap();
+        let token = AdmissionAssessmentToken::validate(worker, provenance.clone()).unwrap();
 
         assert_eq!(token.provenance, provenance);
-        assert_eq!(token.approved_policy(), APPROVED_RESOURCE_POLICY);
+        assert_eq!(token.approved_policy, APPROVED_RESOURCE_POLICY);
     }
 
     #[test]
@@ -268,29 +377,33 @@ mod tests {
         let provenance = provenance();
         for missing_control in all_controls() {
             let controls = all_controls().filter(|control| *control != missing_control);
-            let adapter = adapter(provenance.clone(), APPROVED_RESOURCE_POLICY, controls);
-
-            assert_eq!(
-                AdmissionAssessmentToken::validate_from_adapter(adapter, provenance.clone()),
-                Err(AdmissionError::RequiredControlNotAssessed(missing_control)),
-                "missing {missing_control:?} must deny admission",
+            let worker = assessed_worker(
+                provenance.clone(),
+                APPROVED_RESOURCE_POLICY,
+                controls,
             );
+
+            assert!(matches!(
+                AdmissionAssessmentToken::validate(worker, provenance.clone()),
+                Err(AdmissionError::RequiredControlNotAssessed(control))
+                    if control == missing_control
+            ));
         }
     }
 
     #[test]
     fn denies_each_policy_value_that_differs_from_the_frozen_policy() {
         let provenance = provenance();
-        let mut policies_over_ceiling = Vec::new();
+        let mut policies = Vec::new();
         macro_rules! vary_field {
             ($field:ident) => {{
                 let mut policy = APPROVED_RESOURCE_POLICY;
                 policy.$field += 1;
-                policies_over_ceiling.push(policy);
+                policies.push(policy);
                 if APPROVED_RESOURCE_POLICY.$field > 0 {
                     let mut policy = APPROVED_RESOURCE_POLICY;
                     policy.$field -= 1;
-                    policies_over_ceiling.push(policy);
+                    policies.push(policy);
                 }
             }};
         }
@@ -319,14 +432,14 @@ mod tests {
         vary_field!(max_helpers_per_application);
         vary_field!(max_guest_child_processes);
         vary_field!(max_kernel_handles_or_file_descriptors);
-        assert_eq!(policies_over_ceiling.len(), 49);
+        assert_eq!(policies.len(), 49);
 
-        for effective_policy in policies_over_ceiling {
-            let adapter = adapter(provenance.clone(), effective_policy, all_controls());
-            assert_eq!(
-                AdmissionAssessmentToken::validate_from_adapter(adapter, provenance.clone()),
+        for policy in policies {
+            let worker = assessed_worker(provenance.clone(), policy, all_controls());
+            assert!(matches!(
+                AdmissionAssessmentToken::validate(worker, provenance.clone()),
                 Err(AdmissionError::PolicyDiffersFromApproved)
-            );
+            ));
         }
     }
 
@@ -337,16 +450,16 @@ mod tests {
             ("session-fixture", "other-workspace", "run-fixture"),
             ("session-fixture", "workspace-fixture", "other-run"),
         ] {
-            let adapter = adapter(
+            let worker = assessed_worker(
                 provenance_for_scope(session_id, workspace_id, run_id),
                 APPROVED_RESOURCE_POLICY,
                 all_controls(),
             );
 
-            assert_eq!(
-                AdmissionAssessmentToken::validate_from_adapter(adapter, provenance()),
-                Err(AdmissionError::ProvenanceMismatch),
-            );
+            assert!(matches!(
+                AdmissionAssessmentToken::validate(worker, provenance()),
+                Err(AdmissionError::ProvenanceMismatch)
+            ));
         }
     }
 }

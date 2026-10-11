@@ -224,6 +224,42 @@ and does not change the trusted Harness/plugin path.
   differences were corrected, and the full remote validation for the revised
   API is pending.
 
+#### Assessed transport ownership and shared worker session
+
+The next shared-layer increment pairs `PlatformAssessment` with the exact
+`WorkerTransport` in `AssessedWorker<T>`, consumes that pair into a
+non-cloneable `AdmissionAssessmentToken<T>`, and consumes the token into
+`WorkerSession<T>`. The low-level `Dispatcher` is private. A production caller
+cannot pass a different reader or raw frame between calls: handshake, worker
+ingress, host responses, and shutdown all use the transport owned by the same
+session. Protocol/I/O/EOF/read-deadline/write-deadline failures revoke pending
+invocations and request worker-tree termination. Reap deadlines are clamped to
+the approved forced-reap ceiling, including explicit shutdown requests.
+
+The platform bridge is deliberately `unsafe`: its implementer must bind the
+transport to the assessed process, install and inspect controls before sending
+artifact bytes, honor absolute I/O deadlines, terminate the full process tree,
+and reap it within the supplied deadline. The API cannot prove those adapter
+obligations. No platform adapter implements this contract and there is still
+no productive desktop caller, so no external execution is admitted on Windows,
+Linux, or macOS. The trusted in-process Harness/plugin path is unchanged.
+
+- RED: CI run `38111004484`, job `114386372023`, passed the protocol
+  `rustfmt --check`, then failed compiling the new external-runtime fixture:
+  `AssessedWorker`, `WorkerTransport`, and `WorkerSession` did not exist. This
+  directly reproduced the missing transport/session API, without launching a
+  process or executing plugin code.
+- GREEN: pending remote CI for the implementation commit. Safe integration
+  fixtures exercise handshake, invocation, response on the owned endpoint,
+  explicit shutdown, read timeout and termination/reap; unit fixtures also
+  exercise write timeout and reap-deadline clamping. The most recent
+  independent review of the previous assessment-only API does not cover this
+  transport-owning increment; a new review is pending.
+- Remaining A01–A04 proof gaps: no platform implementation of the unsafe
+  adapter, no OS policy attestation, no artifact-transfer boundary, no
+  permission-broker caller and no production lifecycle integration. Do not
+  interpret the synthetic assessment controls as proof of confinement.
+
 ## Mission CI prerequisite — Free monthly renewal calendar
 
 **Status: implemented, locally verified, independently reviewed, and CI-green.** This is the

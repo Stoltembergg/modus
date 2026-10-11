@@ -1,18 +1,22 @@
 //! Shared, host-validated IPC contracts for a future isolated plugin worker.
 //!
 //! This crate does not start processes or claim operating-system isolation.
-//! A host must bind one [`Dispatcher`] to one host-authorized plugin artifact,
-//! run, and generation, then route each returned invocation through its normal
-//! permission-aware dispatcher.
+//! A host must consume a validated
+//! [`AdmissionAssessmentToken`](worker_admission::AdmissionAssessmentToken)
+//! into one [`WorkerSession`] for one host-authorized artifact, run, and
+//! generation, then route each returned invocation through its normal
+//! permission-aware dispatcher. `WorkerSession` owns the assessed worker
+//! transport so callers cannot swap streams between frames.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::io::{self, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::worker_admission::AdmissionAssessmentToken;
+use crate::worker_admission::WorkerTransport;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -105,6 +109,8 @@ pub enum ProtocolError {
     InvalidIdentity,
     UnsupportedVersion,
     IoFailure(io::ErrorKind),
+    WorkerTerminationFailed(io::ErrorKind),
+    WriteDeadlineExceeded,
     AllocationFailed,
     ReadDeadlineExceeded,
     ReadCancelled,
@@ -305,7 +311,7 @@ enum SessionState {
 
 /// Stateful validator and mandatory host-side dispatch gate for one worker.
 /// It contains no process-global state; callers must create one per worker/run.
-pub struct Dispatcher {
+struct Dispatcher {
     challenge: String,
     provenance: HostProvenance,
     approved_policy: resource_policy::ResourcePolicy,
@@ -316,24 +322,13 @@ pub struct Dispatcher {
 }
 
 impl Dispatcher {
-    pub fn new(
-        admission: AdmissionAssessmentToken,
-        challenge: impl Into<String>,
-        granted_capabilities: impl IntoIterator<Item = String>,
-    ) -> Result<Self, ProtocolError> {
-        let challenge = challenge.into();
-        if !valid_sha256(&challenge) {
-            return Err(ProtocolError::InvalidChallenge);
-        }
-        let granted_capabilities: BTreeSet<String> = granted_capabilities.into_iter().collect();
-        if granted_capabilities
-            .iter()
-            .any(|capability| !valid_capability(capability))
-        {
-            return Err(ProtocolError::InvalidCapability);
-        }
-        let (provenance, approved_policy) = admission.into_parts();
-        Ok(Self {
+    fn from_validated_parts(
+        provenance: HostProvenance,
+        approved_policy: resource_policy::ResourcePolicy,
+        challenge: String,
+        granted_capabilities: BTreeSet<String>,
+    ) -> Self {
+        Self {
             challenge,
             provenance,
             approved_policy,
@@ -341,12 +336,30 @@ impl Dispatcher {
             state: SessionState::AwaitingHello,
             next_sequence: 1,
             pending: BTreeMap::new(),
-        })
+        }
+    }
+
+    #[cfg(test)]
+    fn new<T: WorkerTransport>(
+        admission: AdmissionAssessmentToken<T>,
+        challenge: impl Into<String>,
+        granted_capabilities: impl IntoIterator<Item = String>,
+    ) -> Result<Self, ProtocolError> {
+        let (challenge, granted_capabilities) =
+            validate_dispatch_config(challenge, granted_capabilities)?;
+        let (provenance, approved_policy, transport) = admission.into_parts();
+        drop(transport);
+        Ok(Self::from_validated_parts(
+            provenance,
+            approved_policy,
+            challenge,
+            granted_capabilities,
+        ))
     }
 
     /// Accept a bounded worker frame. Any protocol violation closes this
     /// dispatcher so malformed or stale traffic cannot be retried in-session.
-    pub fn receive(&mut self, bytes: &[u8]) -> Result<DispatchEvent, ProtocolError> {
+    fn receive(&mut self, bytes: &[u8]) -> Result<DispatchEvent, ProtocolError> {
         if self.state == SessionState::Closed {
             return Err(ProtocolError::InvalidState);
         }
@@ -361,7 +374,7 @@ impl Dispatcher {
     /// this mandatory validator. The adapter must make reads preemptible; this
     /// method cannot safely interrupt a generic blocking `Read`. EOF, timeout,
     /// cancellation, or invalid input closes the generation and clears calls.
-    pub fn receive_from_until<R: DeadlineReader>(
+    fn receive_from_until<R: DeadlineReader>(
         &mut self,
         reader: &mut R,
         deadline: Instant,
@@ -464,7 +477,7 @@ impl Dispatcher {
     }
 
     /// Encode the host result for one exact, outstanding invocation.
-    pub fn complete(
+    fn complete(
         &mut self,
         sequence: u64,
         outcome: InvocationOutcome,
@@ -510,7 +523,7 @@ impl Dispatcher {
 
     /// Stop accepting IPC for this generation. OS process termination/reap is
     /// the responsibility of a platform supervisor and is not implied here.
-    pub fn close(&mut self) {
+    fn close(&mut self) {
         for generation_active in self.pending.values() {
             generation_active.store(false, Ordering::Release);
         }
@@ -518,13 +531,13 @@ impl Dispatcher {
         self.state = SessionState::Closed;
     }
 
-    pub fn is_closed(&self) -> bool {
+    fn is_closed(&self) -> bool {
         self.state == SessionState::Closed
     }
 
     /// Frozen approved policy associated with this dispatcher's validated
     /// platform assessment. It is not evidence that an OS enforces the limits.
-    pub fn approved_policy(&self) -> resource_policy::ResourcePolicy {
+    fn approved_policy(&self) -> resource_policy::ResourcePolicy {
         self.approved_policy
     }
 }
@@ -533,6 +546,183 @@ impl Drop for Dispatcher {
     fn drop(&mut self) {
         self.close();
     }
+}
+
+/// A protocol dispatcher permanently paired with one assessed worker
+/// transport. Production callers cannot supply frame bytes or swap readers
+/// between calls; all ingress and responses use the transport carried by the
+/// admission token.
+pub struct WorkerSession<T: WorkerTransport> {
+    dispatcher: Dispatcher,
+    transport: Option<T>,
+}
+
+impl<T: WorkerTransport> WorkerSession<T> {
+    /// Consume one validated admission token and bind its transport to the
+    /// dispatcher for the lifetime of this session.
+    pub fn new(
+        admission: AdmissionAssessmentToken<T>,
+        challenge: impl Into<String>,
+        granted_capabilities: impl IntoIterator<Item = String>,
+    ) -> Result<Self, ProtocolError> {
+        let (challenge, granted_capabilities) =
+            validate_dispatch_config(challenge, granted_capabilities)?;
+        let (provenance, approved_policy, transport) = admission.into_parts();
+        let dispatcher = Dispatcher::from_validated_parts(
+            provenance,
+            approved_policy,
+            challenge,
+            granted_capabilities,
+        );
+        Ok(Self {
+            dispatcher,
+            transport: Some(transport),
+        })
+    }
+
+    /// Read exactly one worker frame under an absolute deadline. The matching
+    /// host `Ready` response is written through the same owned transport.
+    /// Protocol, I/O, EOF, or deadline failures close the generation and
+    /// request bounded process-tree termination/reap.
+    pub fn receive_until(
+        &mut self,
+        deadline: Instant,
+    ) -> Result<Option<DispatchEvent>, ProtocolError> {
+        let result = match self.transport.as_mut() {
+            Some(transport) => self.dispatcher.receive_from_until(transport, deadline),
+            None => return Err(ProtocolError::InvalidState),
+        };
+
+        let event = match result {
+            Ok(Some(event)) => event,
+            Ok(None) => {
+                self.stop_with_default_deadline()?;
+                return Ok(None);
+            }
+            Err(error) => return Err(self.finish_error(error)),
+        };
+
+        if event == DispatchEvent::Ready {
+            let ready = match encode_host_frame(&HostFrame::Ready {
+                protocol_version: PROTOCOL_VERSION,
+            }) {
+                Ok(frame) => frame,
+                Err(error) => return Err(self.finish_error(error)),
+            };
+            let write_result = match self.transport.as_mut() {
+                Some(transport) => write_worker_frame(transport, &ready, deadline),
+                None => return Err(ProtocolError::InvalidState),
+            };
+            if let Err(error) = write_result {
+                return Err(self.finish_error(error));
+            }
+        }
+
+        Ok(Some(event))
+    }
+
+    /// Write the result for one outstanding invocation through the worker's
+    /// owned transport. A write failure revokes pending authority and shuts
+    /// down the worker.
+    pub fn complete_until(
+        &mut self,
+        sequence: u64,
+        outcome: InvocationOutcome,
+        deadline: Instant,
+    ) -> Result<(), ProtocolError> {
+        let frame = match self.dispatcher.complete(sequence, outcome) {
+            Ok(frame) => frame,
+            Err(error) => return Err(self.finish_error(error)),
+        };
+        let write_result = match self.transport.as_mut() {
+            Some(transport) => write_worker_frame(transport, &frame, deadline),
+            None => return Err(ProtocolError::InvalidState),
+        };
+        if let Err(error) = write_result {
+            return Err(self.finish_error(error));
+        }
+        Ok(())
+    }
+
+    /// Revoke every pending invocation, request non-blocking process-tree
+    /// termination, and wait only until the supplied reap deadline.
+    pub fn shutdown_until(&mut self, deadline: Instant) -> Result<(), ProtocolError> {
+        self.dispatcher.close();
+        let Some(mut transport) = self.transport.take() else {
+            return Ok(());
+        };
+        let policy_deadline = Instant::now()
+            + Duration::from_millis(
+                self.dispatcher
+                    .approved_policy()
+                    .forced_termination_reap_deadline_ms,
+            );
+        transport.request_termination();
+        transport
+            .reap_until(deadline.min(policy_deadline))
+            .map_err(|error| ProtocolError::WorkerTerminationFailed(error.kind()))
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.dispatcher.is_closed()
+    }
+
+    fn stop_with_default_deadline(&mut self) -> Result<(), ProtocolError> {
+        let timeout = Duration::from_millis(
+            self.dispatcher
+                .approved_policy()
+                .forced_termination_reap_deadline_ms,
+        );
+        self.shutdown_until(Instant::now() + timeout)
+    }
+
+    fn finish_error(&mut self, error: ProtocolError) -> ProtocolError {
+        match self.stop_with_default_deadline() {
+            Ok(()) => error,
+            Err(termination_error) => termination_error,
+        }
+    }
+}
+
+impl<T: WorkerTransport> Drop for WorkerSession<T> {
+    fn drop(&mut self) {
+        let _ = self.stop_with_default_deadline();
+    }
+}
+
+fn write_worker_frame<T: WorkerTransport>(
+    transport: &mut T,
+    frame: &[u8],
+    deadline: Instant,
+) -> Result<(), ProtocolError> {
+    if Instant::now() >= deadline {
+        return Err(ProtocolError::WriteDeadlineExceeded);
+    }
+    transport
+        .write_with_deadline(frame, deadline)
+        .map_err(|error| ProtocolError::IoFailure(error.kind()))?;
+    if Instant::now() >= deadline {
+        return Err(ProtocolError::WriteDeadlineExceeded);
+    }
+    Ok(())
+}
+
+fn validate_dispatch_config(
+    challenge: impl Into<String>,
+    granted_capabilities: impl IntoIterator<Item = String>,
+) -> Result<(String, BTreeSet<String>), ProtocolError> {
+    let challenge = challenge.into();
+    if !valid_sha256(&challenge) {
+        return Err(ProtocolError::InvalidChallenge);
+    }
+    let granted_capabilities: BTreeSet<String> = granted_capabilities.into_iter().collect();
+    if granted_capabilities
+        .iter()
+        .any(|capability| !valid_capability(capability))
+    {
+        return Err(ProtocolError::InvalidCapability);
+    }
+    Ok((challenge, granted_capabilities))
 }
 
 pub fn encode_worker_frame(message: &WorkerFrame) -> Result<Vec<u8>, ProtocolError> {
@@ -768,14 +958,16 @@ fn valid_sha256(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use std::io::Read;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
     use std::time::Duration;
 
     use serde::ser::SerializeSeq;
     use serde_json::json;
 
     use super::*;
-    use crate::worker_admission::synthetic_test_token;
+    use crate::worker_admission::{synthetic_test_token, synthetic_test_token_with_transport};
 
     const CHALLENGE: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const DIGEST: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -789,6 +981,61 @@ mod tests {
             _deadline: Instant,
         ) -> io::Result<usize> {
             self.0.read(buffer)
+        }
+    }
+
+    #[derive(Default)]
+    struct FixtureTransport {
+        incoming: VecDeque<u8>,
+        outgoing: Vec<u8>,
+        timeout_reads: bool,
+        termination_requested: Arc<AtomicBool>,
+        reaped: Arc<AtomicBool>,
+        reap_timeout_ms: Arc<AtomicUsize>,
+    }
+
+    impl DeadlineReader for FixtureTransport {
+        fn read_with_deadline(
+            &mut self,
+            buffer: &mut [u8],
+            deadline: Instant,
+        ) -> io::Result<usize> {
+            if self.timeout_reads || Instant::now() >= deadline {
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "fixture deadline"));
+            }
+            let count = buffer.len().min(self.incoming.len());
+            for byte in &mut buffer[..count] {
+                *byte = self.incoming.pop_front().expect("count is bounded by input");
+            }
+            Ok(count)
+        }
+    }
+
+    // Synthetic in-memory transport only; it starts no process and handles no
+    // plugin artifact. Production adapters must satisfy the trait safety contract.
+    unsafe impl WorkerTransport for FixtureTransport {
+        fn write_with_deadline(&mut self, frame: &[u8], deadline: Instant) -> io::Result<()> {
+            if Instant::now() >= deadline {
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "fixture deadline"));
+            }
+            self.outgoing.extend_from_slice(frame);
+            Ok(())
+        }
+
+        fn request_termination(&mut self) {
+            self.termination_requested.store(true, Ordering::SeqCst);
+        }
+
+        fn reap_until(&mut self, deadline: Instant) -> io::Result<()> {
+            if Instant::now() >= deadline {
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "fixture reap deadline"));
+            }
+            self.reap_timeout_ms.store(
+                deadline.saturating_duration_since(Instant::now()).as_millis() as usize,
+                Ordering::SeqCst,
+            );
+            self.reaped.store(true, Ordering::SeqCst);
+            Ok(())
         }
     }
 
@@ -827,6 +1074,15 @@ mod tests {
         dispatcher_for(provenance())
     }
 
+    fn fixture_worker_session(transport: FixtureTransport) -> WorkerSession<FixtureTransport> {
+        WorkerSession::new(
+            synthetic_test_token_with_transport(provenance(), transport),
+            CHALLENGE,
+            ["memory.read".to_string()],
+        )
+        .unwrap()
+    }
+
     fn hello() -> Vec<u8> {
         encode_worker_frame(&WorkerFrame::Hello {
             protocol_version: PROTOCOL_VERSION,
@@ -843,6 +1099,120 @@ mod tests {
             payload,
         })
         .unwrap()
+    }
+
+    #[test]
+    fn worker_session_reads_and_writes_only_on_its_assessed_transport() {
+        let mut incoming = hello();
+        incoming.extend(invoke(1, "memory.read", json!({ "key": "fixture" })));
+        let termination_requested = Arc::new(AtomicBool::new(false));
+        let reaped = Arc::new(AtomicBool::new(false));
+        let reap_timeout_ms = Arc::new(AtomicUsize::new(0));
+        let transport = FixtureTransport {
+            incoming: incoming.into(),
+            termination_requested: Arc::clone(&termination_requested),
+            reaped: Arc::clone(&reaped),
+            reap_timeout_ms: Arc::clone(&reap_timeout_ms),
+            ..FixtureTransport::default()
+        };
+        let mut session = fixture_worker_session(transport);
+        let deadline = Instant::now() + Duration::from_secs(1);
+
+        assert_eq!(
+            session.receive_until(deadline),
+            Ok(Some(DispatchEvent::Ready)),
+        );
+        let invocation = invocation(session.receive_until(deadline).unwrap().unwrap());
+        assert_eq!(invocation.sequence(), 1);
+        assert_eq!(invocation.provenance(), Some(&provenance()));
+        session
+            .complete_until(
+                invocation.sequence(),
+                InvocationOutcome::Success(json!({ "value": "fixture" })),
+                deadline,
+            )
+            .unwrap();
+
+        let output = &session.transport.as_ref().unwrap().outgoing;
+        let ready_frame_length = FRAME_HEADER_BYTES
+            + u32::from_be_bytes(output[..FRAME_HEADER_BYTES].try_into().unwrap()) as usize;
+        assert_eq!(
+            decode_host_frame(&output[..ready_frame_length]).unwrap(),
+            HostFrame::Ready {
+                protocol_version: PROTOCOL_VERSION,
+            },
+        );
+        assert_eq!(
+            decode_host_frame(&output[ready_frame_length..]).unwrap(),
+            HostFrame::InvocationSucceeded {
+                protocol_version: PROTOCOL_VERSION,
+                sequence: 1,
+                result: json!({ "value": "fixture" }),
+            },
+        );
+
+        session
+            .shutdown_until(Instant::now() + Duration::from_secs(60))
+            .unwrap();
+        assert!(termination_requested.load(Ordering::SeqCst));
+        assert!(reaped.load(Ordering::SeqCst));
+        assert!(reap_timeout_ms.load(Ordering::SeqCst) <= 2_000);
+    }
+
+    #[test]
+    fn worker_session_terminates_and_reaps_after_a_read_deadline() {
+        let termination_requested = Arc::new(AtomicBool::new(false));
+        let reaped = Arc::new(AtomicBool::new(false));
+        let reap_timeout_ms = Arc::new(AtomicUsize::new(0));
+        let transport = FixtureTransport {
+            timeout_reads: true,
+            termination_requested: Arc::clone(&termination_requested),
+            reaped: Arc::clone(&reaped),
+            reap_timeout_ms: Arc::clone(&reap_timeout_ms),
+            ..FixtureTransport::default()
+        };
+        let mut session = fixture_worker_session(transport);
+
+        assert_eq!(
+            session.receive_until(Instant::now() + Duration::from_secs(1)),
+            Err(ProtocolError::ReadDeadlineExceeded),
+        );
+        assert!(session.is_closed());
+        assert!(termination_requested.load(Ordering::SeqCst));
+        assert!(reaped.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn worker_session_terminates_after_a_response_write_deadline() {
+        let mut incoming = hello();
+        incoming.extend(invoke(1, "memory.read", json!({ "key": "fixture" })));
+        let termination_requested = Arc::new(AtomicBool::new(false));
+        let reaped = Arc::new(AtomicBool::new(false));
+        let transport = FixtureTransport {
+            incoming: incoming.into(),
+            termination_requested: Arc::clone(&termination_requested),
+            reaped: Arc::clone(&reaped),
+            ..FixtureTransport::default()
+        };
+        let mut session = fixture_worker_session(transport);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        assert_eq!(
+            session.receive_until(deadline),
+            Ok(Some(DispatchEvent::Ready)),
+        );
+        let invocation = invocation(session.receive_until(deadline).unwrap().unwrap());
+
+        assert_eq!(
+            session.complete_until(
+                invocation.sequence(),
+                InvocationOutcome::Success(json!({ "value": "fixture" })),
+                Instant::now(),
+            ),
+            Err(ProtocolError::WriteDeadlineExceeded),
+        );
+        assert!(session.is_closed());
+        assert!(termination_requested.load(Ordering::SeqCst));
+        assert!(reaped.load(Ordering::SeqCst));
     }
 
     fn invocation(event: DispatchEvent) -> AuthorizedInvocation {
