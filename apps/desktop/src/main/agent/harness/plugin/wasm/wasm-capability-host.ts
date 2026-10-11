@@ -79,7 +79,11 @@ function snapshotWasmArtifact(wasmBytes: Uint8Array): Uint8Array {
 
 function assertNoInProcessWasmTimeout(options: WasmInstanceOptions): void {
   const timeoutMs = options.timeoutMs;
-  if (timeoutMs !== undefined && timeoutMs > 0) {
+  if (timeoutMs === undefined) return;
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
+    throw new RangeError("WASM timeoutMs must be a finite non-negative number.");
+  }
+  if (timeoutMs > 0) {
     throw new Error(IN_PROCESS_WASM_TIMEOUT_ERROR);
   }
 }
@@ -254,7 +258,8 @@ export class WasmCapabilityHost {
   /**
    * Creates a WASM instance with fuel metering. WASI imports stay disabled until the host
    * has a grant-backed policy for imports, environment, and preopens. This in-process
-   * factory cannot enforce a timeout, so positive `timeoutMs` values are rejected.
+   * factory cannot enforce a timeout, so positive values are rejected; invalid values
+   * are rejected before compilation.
    */
   public async createInstance(
     wasmBytes: Uint8Array,
@@ -510,7 +515,8 @@ export class WasmCapabilityHost {
 
   /**
    * Executes a trusted in-process WASM capability with fuel and memory accounting.
-   * Positive `timeoutMs` values are rejected because this API cannot preempt execution.
+   * Positive `timeoutMs` values are rejected because this API cannot preempt execution;
+   * invalid values are rejected before compilation.
    */
   public async executeWasm<TIn = unknown, TOut = unknown>(
     wasmBytes: Uint8Array,

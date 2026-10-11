@@ -1106,9 +1106,21 @@ describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
       }
     });
 
+    it("allows a zero timeout value because it requests no deadline", async () => {
+      const host = new WasmCapabilityHost();
+      const { instance } = await host.createInstance(buildAddModule(), { timeoutMs: 0 });
+      try {
+        expect(instance).toBeDefined();
+      } finally {
+        instance.dispose();
+      }
+    });
+
     it.each([
       -1,
       Number.NaN,
+      Number.POSITIVE_INFINITY,
+      "5" as unknown as number,
     ])("rejects invalid timeout value %s before compiling a module", async (timeoutMs) => {
       const host = new WasmCapabilityHost();
       const compile = vi.spyOn(WebAssembly, "compile");
