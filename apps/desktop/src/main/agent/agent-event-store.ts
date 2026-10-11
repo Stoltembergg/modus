@@ -6,6 +6,7 @@ import {
   createAgentEventAccumulator,
   foldAgentEvents,
   MAX_AGENT_EVENT_PAGE_SIZE,
+  MAX_RUN_TOOL_EVIDENCE_PAGE_BYTES,
   type AgentEventItem as SharedAgentEventItem,
 } from "../../shared/agent-events";
 import type {
@@ -1673,9 +1674,12 @@ function listAgentEventPageInternal(
     throw new RangeError("Agent event snapshot cursor must be a non-negative safe integer.");
   }
 
-  const rows = runId
-    ? listAgentRunToolEventRows(sessionId, runId, afterCursor ?? 0, snapshotCursor, limit + 1)
-    : direction === "forward"
+  const runToolPage = runId
+    ? listAgentRunToolEventRows(sessionId, runId, afterCursor ?? 0, snapshotCursor, limit)
+    : undefined;
+  const rows =
+    runToolPage?.rows ??
+    (direction === "forward"
       ? (db
           .prepare(
             `select id, payload_json, created_at, rowid as event_cursor
@@ -1703,9 +1707,9 @@ function listAgentEventPageInternal(
                order by rowid desc
                limit ?`,
             )
-            .all(sessionId, beforeCursor, snapshotCursor, limit + 1) as AgentEventRow[]);
-  const hasMore = rows.length > limit;
-  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+            .all(sessionId, beforeCursor, snapshotCursor, limit + 1) as AgentEventRow[]));
+  const hasMore = runToolPage?.hasMore ?? rows.length > limit;
+  const pageRows = runToolPage ? rows : hasMore ? rows.slice(0, limit) : rows;
   if (direction === "backward") pageRows.reverse();
   const parsedEvents = pageRows.map(parseAgentEventRow);
   const expandedStreamEvents =
@@ -2004,22 +2008,74 @@ function listAgentRunToolEventRows(
   runId: string,
   afterCursor: number,
   snapshotCursor: number,
-  limit: number,
-): AgentEventRow[] {
-  const range = getAgentRunEventRange(sessionId, runId, snapshotCursor);
+  pageLimit: number,
+): { rows: AgentEventRow[]; hasMore: boolean } {
   const db = getDatabase();
-  return db
-    .prepare(
-      `select id, payload_json, created_at, rowid as event_cursor
-       from agent_events
-       where session_id = ? and rowid >= ? and rowid <= ? and rowid > ?
-         and type in (
-           'run.started', 'run.completed', 'run.failed', 'run.blocked', 'run.cancelled',
-           'tool.started', 'tool.output', 'tool.ended'
-         )
-       order by rowid asc limit ?`,
-    )
-    .all(sessionId, range.startCursor, range.endCursor, afterCursor, limit) as AgentEventRow[];
+  db.exec("savepoint run_tool_event_page_read");
+  try {
+    const range = getAgentRunEventRange(sessionId, runId, snapshotCursor);
+    const pageSize = db
+      .prepare(
+        `select coalesce(sum(payload_bytes), 0) as payload_bytes
+         from (
+           select length(cast(payload_json as blob)) as payload_bytes
+           from agent_events
+           where session_id = ? and rowid >= ? and rowid <= ? and rowid > ?
+             and type in (
+               'run.started', 'run.completed', 'run.failed', 'run.blocked', 'run.cancelled',
+               'tool.started', 'tool.output', 'tool.ended'
+             )
+           order by rowid asc limit ?
+         )`,
+      )
+      .get(sessionId, range.startCursor, range.endCursor, afterCursor, pageLimit) as {
+      payload_bytes: number;
+    };
+    if (
+      !Number.isSafeInteger(pageSize.payload_bytes) ||
+      pageSize.payload_bytes > MAX_RUN_TOOL_EVIDENCE_PAGE_BYTES
+    ) {
+      throw new RangeError("Run tool evidence page exceeds the safe transfer limit.");
+    }
+    const hasMore = Boolean(
+      db
+        .prepare(
+          `select 1 as found
+           from agent_events
+           where session_id = ? and rowid >= ? and rowid <= ? and rowid > ?
+             and type in (
+               'run.started', 'run.completed', 'run.failed', 'run.blocked', 'run.cancelled',
+               'tool.started', 'tool.output', 'tool.ended'
+             )
+           order by rowid asc limit 1 offset ?`,
+        )
+        .get(sessionId, range.startCursor, range.endCursor, afterCursor, pageLimit),
+    );
+    const rows = db
+      .prepare(
+        `select id, payload_json, created_at, rowid as event_cursor
+         from agent_events
+         where session_id = ? and rowid >= ? and rowid <= ? and rowid > ?
+           and type in (
+             'run.started', 'run.completed', 'run.failed', 'run.blocked', 'run.cancelled',
+             'tool.started', 'tool.output', 'tool.ended'
+           )
+         order by rowid asc limit ?`,
+      )
+      .all(
+        sessionId,
+        range.startCursor,
+        range.endCursor,
+        afterCursor,
+        pageLimit,
+      ) as AgentEventRow[];
+    db.exec("release savepoint run_tool_event_page_read");
+    return { rows, hasMore };
+  } catch (error) {
+    db.exec("rollback to savepoint run_tool_event_page_read");
+    db.exec("release savepoint run_tool_event_page_read");
+    throw error;
+  }
 }
 
 function listAgentRunAssistantMessageRows(

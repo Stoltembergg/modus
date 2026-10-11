@@ -1,3 +1,4 @@
+import { MAX_RUN_TOOL_EVIDENCE_PAGE_BYTES } from "../../../../shared/agent-events";
 import type { AgentEventItem } from "../agent/agentEventHub";
 
 export type RunSourceKind = "file" | "url" | "documentation" | "github" | "connection";
@@ -57,7 +58,7 @@ const MAX_ACTIVE_TOOL_CALLS = 256;
 const MAX_ARGUMENT_SCAN_BYTES_PER_CALL = 256 * 1024;
 const MAX_ARGUMENT_SCAN_NODES_PER_CALL = 16_384;
 const MAX_ARGUMENT_SCAN_DEPTH = 64;
-const MAX_TOTAL_SOURCE_SCAN_BYTES = 8 * 1024 * 1024;
+const MAX_TOTAL_SOURCE_SCAN_BYTES = MAX_RUN_TOOL_EVIDENCE_PAGE_BYTES;
 const MAX_ACTIVE_ARGUMENT_REFERENCE_BYTES = 256 * 1024;
 const MAX_ACTIVE_CALL_METADATA_BYTES = 256 * 1024;
 const MAX_TOOL_IDENTITY_BYTES = 4096;

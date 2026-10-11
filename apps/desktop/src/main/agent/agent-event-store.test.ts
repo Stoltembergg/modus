@@ -2,8 +2,9 @@ import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { constants, DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { MAX_RUN_TOOL_EVIDENCE_PAGE_BYTES } from "../../shared/agent-events";
 import type { HarnessTaskClassification, HarnessTaskState } from "../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
 
@@ -2721,6 +2722,65 @@ fs.renameSync("original-manifest-link", "package.json");
     expect(() => listAgentEventPage(sessionId, { runId: "missing-run", limit: 20 })).toThrow(
       /run start.*not found/i,
     );
+  });
+
+  it("rejects an oversized run event page without changing persisted output", () => {
+    const sessionId = `oversized-run-event-page-${crypto.randomUUID()}`;
+    const runId = `oversized-run-${crypto.randomUUID()}`;
+    const output = `safe-synthetic-output:${"x".repeat(MAX_RUN_TOOL_EVIDENCE_PAGE_BYTES + 1)}`;
+    insertSession(sessionId);
+    recordAgentEvent({ type: "run.started", sessionId, runId, delivery: "normal" });
+    recordAgentEvent({ type: "tool.output", sessionId, toolCallId: "large-output", output });
+
+    expect(() => listAgentEventPage(sessionId, { runId })).toThrow(
+      /run tool evidence page exceeds the safe transfer limit/i,
+    );
+
+    const persisted = getDatabase()
+      .prepare(
+        "select json_extract(payload_json, '$.output') as output from agent_events where session_id = ? and type = 'tool.output'",
+      )
+      .get(sessionId) as { output: string } | undefined;
+    expect(persisted?.output).toHaveLength(output.length);
+    expect(persisted?.output.startsWith("safe-synthetic-output:")).toBe(true);
+    expect(persisted?.output.slice(-32)).toBe(output.slice(-32));
+  });
+
+  it("checks and materializes run payloads within one SQLite read snapshot", () => {
+    const sessionId = `run-event-page-snapshot-${crypto.randomUUID()}`;
+    const runId = `snapshot-run-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    recordAgentEvent({ type: "run.started", sessionId, runId, delivery: "normal" });
+    recordAgentEvent({
+      type: "tool.output",
+      sessionId,
+      toolCallId: "snapshot-output",
+      output: "safe",
+    });
+
+    const db = getDatabase();
+    expect(db.isTransaction).toBe(false);
+    const readTransactionStates: boolean[] = [];
+    db.setAuthorizer((actionCode, tableName, columnName) => {
+      if (
+        actionCode === constants.SQLITE_READ &&
+        tableName === "agent_events" &&
+        columnName === "payload_json"
+      ) {
+        readTransactionStates.push(db.isTransaction);
+      }
+      return constants.SQLITE_OK;
+    });
+
+    try {
+      expect(listAgentEventPage(sessionId, { runId }).events).toHaveLength(2);
+    } finally {
+      db.setAuthorizer(null);
+    }
+
+    expect(readTransactionStates.length).toBeGreaterThan(0);
+    expect(readTransactionStates.every(Boolean)).toBe(true);
+    expect(db.isTransaction).toBe(false);
   });
 
   it("fails closed when scoped run events overlap another run in the same session", () => {

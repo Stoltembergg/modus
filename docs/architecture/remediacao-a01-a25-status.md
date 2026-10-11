@@ -1922,7 +1922,7 @@ cancellation follow-up above.
 | A19 | Prior A21.4 implementation preserved | Spill authorization, persistence, quotas, and recovery. |
 | A20 | Partially mitigated; same-connection mutation detection and reflective state encapsulation | Audit events and checkpoints persist in SQLite; immutable snapshots, transactional retention, append-time verification on audit revision changes, and checkpoint comparisons detect ordinary record changes through the same or another connection. The logger's database handle and chain state, plus the fail-closed facade's logger reference, now use ECMAScript `#private`; this prevents ordinary property reflection only. No independent signing key or database access boundary exists, and public logger APIs remain available to code holding a reference. |
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |
-| A22 | Partially mitigated; productive event reads and renderer source lookups are paged, bounded, and fail closed | Cursor-page reads drive IPC, timeline/history, source lookup and Pi output; the old `agent:list-events` bridge endpoint is removed. Collector-local budgets cover active call identities, argument traversal/references, unfinished external-tool output, and retained source metadata; ambiguous active tool-call IDs across runs invalidate attribution. Overflow is sticky: complete lookup fails, the main-chat hook marks the run unavailable, the group hook exposes unavailable status, and synchronous timeline rendering preserves the answer while marking sources unavailable. Renderer lookups admit at most four active loads and 256 queued loads; releasing the last view stops pagination after any already in-flight page returns. RED/GREEN, review, and local checks are recorded below. Main-process event-page materialization, a single IPC payload, renderer heap/RSS, and the existing 24-source display cap remain unbounded or lossy, so A22 remains partial. The `FastVectorDistance` timing failure from CI run `38100554455` is documented below without a pre-existing or solely environmental classification. |
+| A22 | Partially mitigated; productive event reads and renderer source lookups are paged, bounded, and fail closed | Cursor-page reads drive IPC, timeline/history, source lookup and Pi output; the old `agent:list-events` bridge endpoint is removed. Collector-local budgets cover active call identities, argument traversal/references, unfinished external-tool output, and retained source metadata; ambiguous active tool-call IDs across runs invalidate attribution. Overflow is sticky: complete lookup fails, the main-chat hook marks the run unavailable, the group hook exposes unavailable status, and synchronous timeline rendering preserves the answer while marking sources unavailable. Renderer lookups admit at most four active loads and 256 queued loads; releasing the last view stops pagination after any already in-flight page returns. Run-scoped tool-evidence event pages now preflight serialized `payload_json` under a SQLite savepoint and reject pages above 8 MiB before returning payloads; the renderer uses the same limit. This does not bound assistant-message pages, non-run event pages, per-event SQLite/JSON parsing allocations, aggregate page requests, renderer heap/RSS, or the existing 24-source display cap, so A22 remains partial. RED/GREEN, review, and local checks are recorded below. CI timing failures are recorded without a pre-existing or solely environmental classification. |
 | A23 | Mitigated; integrated checks pass | Synthetic capability outputs and the generic core `status: ok` fallback now fail explicitly with `CapabilityUnavailableError`; stale declared grants are reconciled by exact host identity/version; separate Pi runtime services, A16 selection, and A17 evidence flows are preserved. Independent review found no blocker. Workflow `38081920060` passed the relevant feature jobs, Supabase pgTAP (20 files/1,041 tests), containment, compile-only sandbox and Windows/macOS packaging. The same run had one unrelated-to-A23 global Vitest timing failure, without a baseline classification. |
 | A24 | Partially mitigated | Compiled-module cache has LRU entry/source-byte caps, hashes namespaces up to 256 UTF-16 code units, and bypasses cache retention plus error-name retention for longer namespaces. Cache counters do not measure native compiled memory or transient compile memory. A05 supplies measured failure metrics. WASI remains denied and stdio capture is unavailable. |
 | A25 | Mitigated; prior fix preserved and revalidated | `allow-workspace` requires workspace+tool identity and lookup keys include both plus action/target; the Pi runtime supplies persisted host workspace identity across worktree cwd changes. Unknown tools are blocked before permission prompting and are not read-only safe. Safe focused validation: 52 permission-store/permission-extension/tool-registry tests and one productive Pi runtime workspace-scope test passed. A two-workspace synthetic store test passes; external tool/plugin execution remains disabled. |
@@ -2704,3 +2704,44 @@ not leave scheduler slots or pending promises for later tests.
   macOS packaging run `38103304292` both completed successfully. The A22 test
   follow-up itself has not yet been published, so this CI does not validate that
   test-only change.
+
+### A22 run-scoped tool-evidence page payload cap
+
+Run-scoped tool-evidence pages now preflight the exact `payload_json` byte sum
+for the requested page before selecting payloads. The byte check, run-boundary
+queries, metadata-only `hasMore` query, and payload selection run inside one
+SQLite savepoint/read snapshot. The sentinel query selects only `1`; it does not
+materialize a `limit + 1` payload. Pages above the shared **8 MiB** limit throw
+and flow through the existing unavailable-source path. The event remains
+unchanged in SQLite, and renderer source scanning uses the same shared limit.
+
+- RED/GREEN: the oversized synthetic tool output initially returned instead of
+  rejecting; after the limit was added it is rejected while the stored output
+  length, prefix, and suffix remain intact. A new SQLite-authorizer regression
+  then failed because payload reads were outside a read transaction; it passes
+  after the savepoint wraps range discovery, preflight, pagination metadata,
+  and page materialization. The final focused run passed **108/108 tests across
+  five files** (`agent-event-store`, source collector, source lookup, timeline,
+  and Agent Group working status). Desktop TypeScript typecheck passed; targeted
+  Biome checked all four changed source/test files without fixes, and
+  `git diff --check` passed.
+- Independent static review found no blocker. It confirmed the savepoint spans
+  run-boundary discovery, byte preflight, `hasMore`, and payload selection; error
+  paths roll back and release it, while success releases it once. Query filters,
+  ordering, and the last-returned-row cursor match. Pagination across separate
+  requests still assumes append-only history; external edits/deletes during
+  pagination are not frozen by a page-local snapshot. The page limit counts
+  serialized `payload_json` bytes only; it does not include IPC envelope or
+  JavaScript object overhead. SQLite still evaluates stored values to measure
+  their byte lengths. It bounds only run-scoped tool-evidence pages, not
+  assistant-message pages, non-run event pages, aggregate page requests,
+  renderer heap, or process RSS. A22 remains partial.
+- The last official CI run on published commit `e6ff0e28e49871226ace1f061564448d9cad19db`
+  (`38103920154`) completed with its global Vitest job failing only the
+  unchanged `FastVectorDistance` assertion at **0.10797100000002047 ms** against
+  `< 0.1 ms`; **4,673 passed, 8 skipped, and 1 failed across 415 files**. We do
+  not classify this as pre-existing or solely environmental. Supabase pgTAP,
+  Biome/typecheck, the safe protocol and containment jobs, compile-only sandbox,
+  PTY cancellation, and Verifier-First passed. Windows packaging run
+  `38103920147` and macOS packaging run `38103920146` both succeeded. This CI
+  predates the current uncommitted A22 page cap.
