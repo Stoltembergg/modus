@@ -1768,12 +1768,12 @@ function listBoundedAgentEventRows(
                  where session_id = ? and rowid < ? and rowid <= ?
                  order by rowid desc limit ?`,
               )
-            .all(
-              sessionId,
-              beforeCursor,
-              snapshotCursor,
-              pageLimit + 1,
-            ) as AgentEventPageCandidate[]);
+              .all(
+                sessionId,
+                beforeCursor,
+                snapshotCursor,
+                pageLimit + 1,
+              ) as AgentEventPageCandidate[]);
 
     const selectedCursors: number[] = [];
     let totalPayloadBytes = 0;
