@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEventItem,
@@ -13,7 +13,86 @@ afterEach(() => {
   Object.assign(window, { modus: undefined });
 });
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function emptyPage(snapshotCursor = 0): AgentEventPage {
+  return {
+    events: [],
+    summaryEvents: [],
+    activityEvents: [],
+    snapshotCursor,
+    hasMore: false,
+  };
+}
+
 describe("useRunSources", () => {
+  it("limits concurrent event-page requests across visible run collections", async () => {
+    let active = 0;
+    let maximumActive = 0;
+    const pendingPages: Array<ReturnType<typeof deferred<AgentEventPage>>> = [];
+    const listEventPage = vi.fn((_sessionId: string, _options: AgentEventPageOptions) => {
+      active++;
+      maximumActive = Math.max(maximumActive, active);
+      const pending = deferred<AgentEventPage>();
+      pendingPages.push(pending);
+      return pending.promise.finally(() => {
+        active--;
+      });
+    });
+    Object.assign(window, { modus: { agent: { listEventPage } } });
+
+    const first = renderHook(() => useRunSourcesForRuns("main-session", ["a", "b", "c", "d"]));
+    const second = renderHook(() => useRunSourcesForRuns("main-session", ["e", "f", "g", "h"]));
+
+    await waitFor(() => expect(listEventPage).toHaveBeenCalledTimes(4));
+    expect(maximumActive).toBe(4);
+    expect(pendingPages).toHaveLength(4);
+
+    await act(async () => {
+      for (const pending of pendingPages.splice(0)) pending.resolve(emptyPage());
+    });
+    await waitFor(() => expect(listEventPage).toHaveBeenCalledTimes(8));
+
+    await act(async () => {
+      for (const pending of pendingPages.splice(0)) pending.resolve(emptyPage());
+    });
+    await waitFor(() => {
+      expect(first.result.current.loadingRunIds.size).toBe(0);
+      expect(second.result.current.loadingRunIds.size).toBe(0);
+    });
+    expect(maximumActive).toBe(4);
+    expect(first.result.current.failedRunIds.size).toBe(0);
+    expect(second.result.current.failedRunIds.size).toBe(0);
+  });
+
+  it("stops paging an in-flight source lookup after its last view unmounts", async () => {
+    const firstPage = deferred<AgentEventPage>();
+    const listEventPage = vi.fn().mockReturnValue(firstPage.promise);
+    Object.assign(window, { modus: { agent: { listEventPage } } });
+
+    const hook = renderHook(() => useRunSources("session-cancel", "run-cancel", true));
+    await waitFor(() => expect(listEventPage).toHaveBeenCalledTimes(1));
+    hook.unmount();
+
+    await act(async () => {
+      firstPage.resolve({
+        ...emptyPage(2),
+        nextCursor: 2,
+        hasMore: true,
+      });
+      await firstPage.promise;
+    });
+    await Promise.resolve();
+
+    expect(listEventPage).toHaveBeenCalledTimes(1);
+  });
+
   it("loads only tool activity from the requested run through paged IPC", async () => {
     const events: AgentEventItem[] = [
       {

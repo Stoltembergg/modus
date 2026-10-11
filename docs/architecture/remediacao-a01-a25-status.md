@@ -1909,7 +1909,7 @@ cancellation follow-up above.
 | A19 | Prior A21.4 implementation preserved | Spill authorization, persistence, quotas, and recovery. |
 | A20 | Partially mitigated; same-connection mutation detection and reflective state encapsulation | Audit events and checkpoints persist in SQLite; immutable snapshots, transactional retention, append-time verification on audit revision changes, and checkpoint comparisons detect ordinary record changes through the same or another connection. The logger's database handle and chain state, plus the fail-closed facade's logger reference, now use ECMAScript `#private`; this prevents ordinary property reflection only. No independent signing key or database access boundary exists, and public logger APIs remain available to code holding a reference. |
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |
-| A22 | Partially mitigated; productive event reads are paged and renderer source collection now fails closed at bounded collector-local budgets | Cursor-page reads drive IPC, timeline/history, source lookup and Pi output; the old `agent:list-events` bridge endpoint is removed. This increment bounds active call identities, argument traversal/references, unfinished external-tool output, and retained source metadata; ambiguous active tool-call IDs across runs now invalidate source attribution. Overflow is sticky: complete lookup fails, the main-chat hook marks the run failed, the group hook exposes unavailable status, and synchronous timeline rendering preserves the answer while marking sources unavailable. RED/GREEN and local checks are recorded below. This does not bound event-page materialization/IPC payload size or total renderer heap, and the existing 24-source display cap can omit later references; A22 remains partial. The `FastVectorDistance` timing failure from CI run `38100554455` is documented in the latest validation section and is not classified as pre-existing or solely environmental. |
+| A22 | Partially mitigated; productive event reads and renderer source lookups are paged, bounded, and fail closed | Cursor-page reads drive IPC, timeline/history, source lookup and Pi output; the old `agent:list-events` bridge endpoint is removed. Collector-local budgets cover active call identities, argument traversal/references, unfinished external-tool output, and retained source metadata; ambiguous active tool-call IDs across runs invalidate attribution. Overflow is sticky: complete lookup fails, the main-chat hook marks the run unavailable, the group hook exposes unavailable status, and synchronous timeline rendering preserves the answer while marking sources unavailable. Renderer lookups admit at most four active loads and 256 queued loads; releasing the last view stops pagination after any already in-flight page returns. RED/GREEN, review, and local checks are recorded below. Main-process event-page materialization, a single IPC payload, renderer heap/RSS, and the existing 24-source display cap remain unbounded or lossy, so A22 remains partial. The `FastVectorDistance` timing failure from CI run `38100554455` is documented below without a pre-existing or solely environmental classification. |
 | A23 | Mitigated; integrated checks pass | Synthetic capability outputs and the generic core `status: ok` fallback now fail explicitly with `CapabilityUnavailableError`; stale declared grants are reconciled by exact host identity/version; separate Pi runtime services, A16 selection, and A17 evidence flows are preserved. Independent review found no blocker. Workflow `38081920060` passed the relevant feature jobs, Supabase pgTAP (20 files/1,041 tests), containment, compile-only sandbox and Windows/macOS packaging. The same run had one unrelated-to-A23 global Vitest timing failure, without a baseline classification. |
 | A24 | Partially mitigated | Compiled-module cache has LRU entry/source-byte caps and hashes caller namespaces; cache counters do not measure native compiled memory. A05 supplies measured failure metrics. WASI remains denied and stdio capture is unavailable. |
 | A25 | Mitigated; prior fix preserved and revalidated | `allow-workspace` requires workspace+tool identity and lookup keys include both plus action/target; the Pi runtime supplies persisted host workspace identity across worktree cwd changes. Unknown tools are blocked before permission prompting and are not read-only safe. Safe focused validation: 52 permission-store/permission-extension/tool-registry tests and one productive Pi runtime workspace-scope test passed. A two-workspace synthetic store test passes; external tool/plugin execution remains disabled. |
@@ -2609,3 +2609,41 @@ fixtures, PTY cancellation, Verifier-First, sandbox compile-only, and safe
 containment on macOS and Windows. Windows packaging run `38100554454` and macOS
 packaging run `38100554439` both succeeded. A fresh CI run is required for the
 A22 working-tree changes after publication.
+
+The follow-up for the published source-collector commit `6dab9f0` completed CI
+workflow `38102378227` successfully. The global Vitest job passed **4,666 tests
+across 415 files, with 8 skipped**; Biome and desktop typecheck passed. Supabase
+pgTAP passed **1,041 tests across 20 files**. Synthetic protocol fixtures,
+compile-only sandbox checks, PTY cancellation, Verifier-First regressions, and
+safe-filtered Ubuntu/macOS/Windows containment jobs passed. No probe ran. At
+this status snapshot, Windows and macOS packaging workflows
+`38102378241`/`38102378214` were still in progress. These checks validate
+`6dab9f0`, not the uncommitted aggregate lookup follow-up below.
+
+### A22 aggregate lookup and view-release follow-up
+
+The renderer source loader now admits at most four active run lookups across
+main-chat and Agent Group views, and bounds queued lookups at 256. A full queue
+marks excess source history unavailable instead of creating more page work.
+Each view subscribes to a deduplicated run lookup. Releasing its last subscriber
+removes queued work immediately; if a page IPC request is already in flight,
+the current response is discarded and no subsequent page is requested. The
+bridge has no abort signal, so the one active page request itself cannot be
+preempted from the renderer.
+
+- RED: a synthetic two-hook fixture observed eight simultaneous page calls
+  before the limit, against the required four, and an unmounted paged lookup
+  requested a second page after its first page returned. GREEN: both targeted
+  regressions pass; `useRunSources.test.tsx` passed **10/10**, and the full
+  focused source/timeline/Agent Group suite passed **88/88** across four files.
+  Desktop typecheck and Biome on the two changed files passed; `git diff
+  --check` passed.
+- Independent static review found no blocker in subscriber counting,
+  deduplication, queue admission, or rejection handling. It confirmed three
+  residuals: an in-flight IPC page cannot be aborted; replacing the requested
+  run set can cause one duplicate page request while an older request drains;
+  and the work budget is not cumulative across all runs/pages over time. The
+  queue bound limits pending jobs, not the total size of the requested run-id
+  set. This increment also does not bound main-process event-page
+  materialization, a single IPC response size, JavaScript heap/RSS, or the UI's
+  existing source display cap. A22 remains partial.
