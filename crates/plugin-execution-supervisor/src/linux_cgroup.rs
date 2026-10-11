@@ -1,8 +1,10 @@
 use std::collections::HashSet;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Component, Path, PathBuf};
-use std::process::Child;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
@@ -13,6 +15,7 @@ use modus_plugin_execution_protocol::resource_policy::ResourcePolicy;
 const REQUIRED_CONTROLLERS: [&str; 3] = ["cpu", "memory", "pids"];
 const CPU_PERIOD_MICROS: u64 = 100_000;
 const BASIS_POINTS_PER_CORE: u64 = 10_000;
+const WORKER_BOOTSTRAP_CHALLENGE_ENV: &str = "MODUS_WORKER_BOOTSTRAP_CHALLENGE";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct WorkerCgroupIdentity {
@@ -62,7 +65,7 @@ pub(super) enum CgroupV2Error {
     ControllerUnavailable,
     InvalidPolicy,
     LimitApplyFailed,
-    ProcessAssociationFailed,
+    ProcessPlacementVerificationFailed,
     IdentityMismatch,
     CleanupFailed,
 }
@@ -73,6 +76,7 @@ pub(super) trait CgroupV2Fs: Send + Sync {
     fn create_dir(&self, path: &Path) -> io::Result<()>;
     fn remove_dir(&self, path: &Path) -> io::Result<()>;
     fn child_directories(&self, path: &Path) -> io::Result<Vec<PathBuf>>;
+    fn open_directory(&self, path: &Path) -> io::Result<OwnedFd>;
 }
 
 struct SystemCgroupV2Fs;
@@ -106,6 +110,16 @@ impl CgroupV2Fs for SystemCgroupV2Fs {
                 Err(error) => Some(Err(error)),
             })
             .collect()
+    }
+
+    fn open_directory(&self, path: &Path) -> io::Result<OwnedFd> {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
+            .open(path)
+            .map(Into::into)
     }
 }
 
@@ -164,8 +178,19 @@ impl LinuxCgroupV2 {
             return Err(error);
         }
 
+        let cgroup_fd = match self.fs.open_directory(&path) {
+            Ok(fd) => fd,
+            Err(_) => {
+                return if remove_empty_group(self.fs.as_ref(), &path).is_ok() {
+                    Err(CgroupV2Error::DelegationUnavailable)
+                } else {
+                    Err(CgroupV2Error::CleanupFailed)
+                };
+            }
+        };
         Ok(WorkerCgroupLease {
             fs: Arc::clone(&self.fs),
+            cgroup_fd,
             path,
             identity,
             process_id: None,
@@ -266,6 +291,7 @@ impl LinuxCgroupV2 {
 
 pub(super) struct WorkerCgroupLease {
     fs: Arc<dyn CgroupV2Fs>,
+    cgroup_fd: OwnedFd,
     path: PathBuf,
     identity: WorkerCgroupIdentity,
     process_id: Option<u32>,
@@ -282,7 +308,7 @@ impl WorkerCgroupLease {
         self.process_id
     }
 
-    pub(super) fn attach_process(
+    pub(super) fn verify_atomic_placement(
         &mut self,
         identity: &WorkerCgroupIdentity,
         process_id: u32,
@@ -296,28 +322,29 @@ impl WorkerCgroupLease {
         }
         self.process_id = Some(process_id);
         let process_file = self.path.join("cgroup.procs");
-        self.fs
-            .write_text(&process_file, &process_id.to_string())
-            .map_err(|_| CgroupV2Error::ProcessAssociationFailed)?;
         let processes = self
             .fs
             .read_text(&process_file)
-            .map_err(|_| CgroupV2Error::ProcessAssociationFailed)?;
+            .map_err(|_| CgroupV2Error::ProcessPlacementVerificationFailed)?;
         let populated = self
             .fs
             .read_text(&self.path.join("cgroup.events"))
-            .map_err(|_| CgroupV2Error::ProcessAssociationFailed)?;
+            .map_err(|_| CgroupV2Error::ProcessPlacementVerificationFailed)?;
         let task_count = self
             .fs
             .read_text(&self.path.join("pids.current"))
-            .map_err(|_| CgroupV2Error::ProcessAssociationFailed)?;
+            .map_err(|_| CgroupV2Error::ProcessPlacementVerificationFailed)?;
         if parse_pids(&processes) != [process_id]
             || parse_populated(&populated) != Some(true)
             || task_count.trim() != "1"
         {
-            return Err(CgroupV2Error::ProcessAssociationFailed);
+            return Err(CgroupV2Error::ProcessPlacementVerificationFailed);
         }
         Ok(())
+    }
+
+    fn cgroup_fd(&self) -> RawFd {
+        self.cgroup_fd.as_raw_fd()
     }
 
     pub(super) fn cleanup(&mut self) -> Result<(), CgroupV2Error> {
@@ -335,7 +362,7 @@ pub(super) trait WorkerTerminator {
     fn terminate_and_reap(&mut self, deadline: Instant) -> Result<(), ()>;
 }
 
-impl WorkerTerminator for Child {
+impl WorkerTerminator for LinuxWorkerProcess {
     fn process_id(&self) -> u32 {
         self.id()
     }
@@ -343,6 +370,245 @@ impl WorkerTerminator for Child {
     fn terminate_and_reap(&mut self, deadline: Instant) -> Result<(), ()> {
         terminate_child_and_reap(self, deadline).map_err(|_| ())
     }
+}
+
+pub(super) struct LinuxWorkerProcess {
+    pid: libc::pid_t,
+    stdin: Option<File>,
+    stdout: Option<File>,
+    reaped: bool,
+}
+
+impl LinuxWorkerProcess {
+    pub(super) fn id(&self) -> u32 {
+        self.pid as u32
+    }
+
+    pub(super) fn stdin(&mut self) -> Option<File> {
+        self.stdin.take()
+    }
+
+    pub(super) fn stdout(&mut self) -> Option<File> {
+        self.stdout.take()
+    }
+
+    pub(super) fn try_wait(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
+        if self.reaped {
+            return Ok(None);
+        }
+        loop {
+            let mut status = 0;
+            // SAFETY: `pid` is the direct child returned by clone3 and `status`
+            // points to writable storage for waitpid's result.
+            let result = unsafe { libc::waitpid(self.pid, &mut status, libc::WNOHANG) };
+            if result == 0 {
+                return Ok(None);
+            }
+            if result == self.pid {
+                self.reaped = true;
+                return Ok(Some(std::process::ExitStatus::from_raw(status)));
+            }
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::Interrupted {
+                return Err(error);
+            }
+        }
+    }
+
+    pub(super) fn kill(&mut self) -> io::Result<()> {
+        if self.reaped {
+            return Ok(());
+        }
+        // SAFETY: `pid` is owned by this handle and SIGKILL has no pointer arguments.
+        if unsafe { libc::kill(self.pid, libc::SIGKILL) } == 0 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    }
+}
+
+pub(super) trait Clone3Invoker {
+    fn clone3(&mut self, args: &libc::clone_args) -> io::Result<libc::pid_t>;
+}
+
+struct SystemClone3Invoker;
+
+impl Clone3Invoker for SystemClone3Invoker {
+    fn clone3(&mut self, args: &libc::clone_args) -> io::Result<libc::pid_t> {
+        // SAFETY: args follows the kernel clone_args ABI and remains alive for
+        // the duration of the syscall. The child immediately execs using only
+        // prebuilt argv/envp and async-signal-safe syscalls.
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_clone3,
+                args as *const libc::clone_args,
+                std::mem::size_of::<libc::clone_args>(),
+            )
+        };
+        if result < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(result as libc::pid_t)
+        }
+    }
+}
+
+fn build_clone_args(cgroup_fd: RawFd) -> libc::clone_args {
+    libc::clone_args {
+        flags: libc::CLONE_INTO_CGROUP as u64,
+        pidfd: 0,
+        child_tid: 0,
+        parent_tid: 0,
+        exit_signal: libc::SIGCHLD as u64,
+        stack: 0,
+        stack_size: 0,
+        tls: 0,
+        set_tid: 0,
+        set_tid_size: 0,
+        cgroup: cgroup_fd as u64,
+    }
+}
+
+pub(super) fn launch_worker_in_cgroup(
+    group: &WorkerCgroupLease,
+    executable: &Path,
+    challenge: &str,
+) -> io::Result<LinuxWorkerProcess> {
+    launch_worker_in_cgroup_with(group, executable, challenge, &mut SystemClone3Invoker)
+}
+
+fn launch_worker_in_cgroup_with(
+    group: &WorkerCgroupLease,
+    executable: &Path,
+    challenge: &str,
+    invoker: &mut impl Clone3Invoker,
+) -> io::Result<LinuxWorkerProcess> {
+    let executable = std::ffi::CString::new(executable.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid worker path"))?;
+    let challenge = std::ffi::CString::new(format!("{WORKER_BOOTSTRAP_CHALLENGE_ENV}={challenge}"))
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid worker challenge"))?;
+    let argv = [executable.as_ptr(), std::ptr::null()];
+    let envp = [challenge.as_ptr(), std::ptr::null()];
+    let stdin_pipe = create_pipe()?;
+    let stdout_pipe = create_pipe()?;
+    let null_stderr = open_null_stderr()?;
+    let stdin_read = stdin_pipe[0].as_raw_fd();
+    let stdin_write = stdin_pipe[1].as_raw_fd();
+    let stdout_read = stdout_pipe[0].as_raw_fd();
+    let stdout_write = stdout_pipe[1].as_raw_fd();
+    let stderr_fd = null_stderr.as_raw_fd();
+    let cgroup_fd = group.cgroup_fd();
+    let descriptors = [
+        stdin_read,
+        stdin_write,
+        stdout_read,
+        stdout_write,
+        stderr_fd,
+        cgroup_fd,
+    ];
+    if descriptors.iter().any(|fd| *fd <= libc::STDERR_FILENO) {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "standard descriptors must be open before worker launch",
+        ));
+    }
+    let clone_args = build_clone_args(cgroup_fd);
+    let pid = invoker.clone3(&clone_args)?;
+    if pid == 0 {
+        // This branch runs in the child after clone3. Avoid Rust allocation,
+        // locks, or destructors: only use async-signal-safe libc operations.
+        unsafe {
+            exec_worker_child(
+                stdin_read,
+                stdin_write,
+                stdout_read,
+                stdout_write,
+                stderr_fd,
+                cgroup_fd,
+                executable.as_ptr(),
+                argv.as_ptr(),
+                envp.as_ptr(),
+            )
+        }
+    }
+    let [stdin_read, stdin_write] = stdin_pipe;
+    let [stdout_read, stdout_write] = stdout_pipe;
+    drop(stdin_read);
+    drop(stdout_write);
+    drop(null_stderr);
+    Ok(LinuxWorkerProcess {
+        pid,
+        stdin: Some(File::from(stdin_write)),
+        stdout: Some(File::from(stdout_read)),
+        reaped: false,
+    })
+}
+
+fn create_pipe() -> io::Result<[OwnedFd; 2]> {
+    let mut descriptors = [-1; 2];
+    // SAFETY: descriptors points to two writable integers and pipe2 initializes them.
+    if unsafe { libc::pipe2(descriptors.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: both descriptors were returned by pipe2 and are uniquely owned here.
+    Ok(unsafe {
+        [
+            OwnedFd::from_raw_fd(descriptors[0]),
+            OwnedFd::from_raw_fd(descriptors[1]),
+        ]
+    })
+}
+
+fn open_null_stderr() -> io::Result<OwnedFd> {
+    let path = c"/dev/null";
+    // SAFETY: the path is a static, NUL-terminated C string.
+    let fd = unsafe { libc::open(path.as_ptr(), libc::O_WRONLY | libc::O_CLOEXEC) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: open returned a new descriptor owned by the caller.
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
+unsafe fn exec_worker_child(
+    stdin_read: RawFd,
+    stdin_write: RawFd,
+    stdout_read: RawFd,
+    stdout_write: RawFd,
+    stderr_fd: RawFd,
+    cgroup_fd: RawFd,
+    executable: *const libc::c_char,
+    argv: *const *const libc::c_char,
+    envp: *const *const libc::c_char,
+) -> ! {
+    // SAFETY: these descriptors are open and their source values are above 2.
+    if unsafe { libc::dup2(stdin_read, libc::STDIN_FILENO) } < 0 {
+        unsafe { libc::_exit(126) };
+    }
+    // SAFETY: these descriptors are open and their source values are above 2.
+    if unsafe { libc::dup2(stdout_write, libc::STDOUT_FILENO) } < 0 {
+        unsafe { libc::_exit(126) };
+    }
+    // SAFETY: these descriptors are open and their source values are above 2.
+    if unsafe { libc::dup2(stderr_fd, libc::STDERR_FILENO) } < 0 {
+        unsafe { libc::_exit(126) };
+    }
+    // SAFETY: these are launch-owned descriptors and none is 0, 1, or 2.
+    unsafe { libc::close(stdin_read) };
+    unsafe { libc::close(stdin_write) };
+    unsafe { libc::close(stdout_read) };
+    unsafe { libc::close(stdout_write) };
+    unsafe { libc::close(stderr_fd) };
+    unsafe { libc::close(cgroup_fd) };
+    // SAFETY: argv/envp and C strings were fully built before clone3.
+    unsafe { libc::execve(executable, argv, envp) };
+    // SAFETY: execve only returns on failure; _exit avoids running inherited Rust state.
+    unsafe { libc::_exit(127) }
 }
 
 pub(super) fn terminate_worker_and_cleanup<T: WorkerTerminator>(
@@ -362,7 +628,10 @@ pub(super) fn terminate_worker_and_cleanup<T: WorkerTerminator>(
     group.cleanup()
 }
 
-fn terminate_child_and_reap(child: &mut Child, deadline: Instant) -> Result<(), CgroupV2Error> {
+fn terminate_child_and_reap(
+    child: &mut LinuxWorkerProcess,
+    deadline: Instant,
+) -> Result<(), CgroupV2Error> {
     match child.try_wait() {
         Ok(Some(_)) => Ok(()),
         Ok(None) => {
@@ -594,17 +863,58 @@ fn unescape_mount_path(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CgroupV2Error, CgroupV2Fs, LinuxCgroupV2, WorkerCgroupIdentity,
-        map_current_cgroup_to_mount, terminate_worker_and_cleanup,
+        CgroupV2Error, CgroupV2Fs, Clone3Invoker, LinuxCgroupV2, WorkerCgroupIdentity,
+        build_clone_args, launch_worker_in_cgroup_with, map_current_cgroup_to_mount,
+        terminate_worker_and_cleanup,
     };
     use crate::REQUIRED_POLICY;
     use std::collections::{HashMap, HashSet};
     use std::io;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
     const ROOT: &str = "/fixture/delegated";
+
+    #[test]
+    fn clone3_args_request_atomic_cgroup_placement_and_sigchld() {
+        let args = build_clone_args(73);
+
+        assert_eq!(std::mem::size_of::<libc::clone_args>(), 88);
+        assert_eq!(args.flags, libc::CLONE_INTO_CGROUP as u64);
+        assert_eq!(args.cgroup, 73);
+        assert_eq!(args.exit_signal, libc::SIGCHLD as u64);
+        assert_eq!(args.pidfd, 0);
+        assert_eq!(args.stack, 0);
+        assert_eq!(args.stack_size, 0);
+        assert_eq!(args.child_tid, 0);
+        assert_eq!(args.parent_tid, 0);
+        assert_eq!(args.tls, 0);
+        assert_eq!(args.set_tid, 0);
+        assert_eq!(args.set_tid_size, 0);
+    }
+
+    struct FakeClone3 {
+        calls: usize,
+        result: Result<libc::pid_t, i32>,
+        observed: Option<(u64, u64, u64)>,
+        placement: Option<(Arc<FakeCgroupFs>, PathBuf)>,
+    }
+
+    impl Clone3Invoker for FakeClone3 {
+        fn clone3(&mut self, args: &libc::clone_args) -> io::Result<libc::pid_t> {
+            self.calls += 1;
+            self.observed = Some((args.flags, args.cgroup, args.exit_signal));
+            let pid = self.result.map_err(io::Error::from_raw_os_error)?;
+            if pid > 0 {
+                if let Some((fs, path)) = &self.placement {
+                    fs.kernel_places_worker(path, pid as u32);
+                }
+            }
+            Ok(pid)
+        }
+    }
 
     #[derive(Default)]
     struct FakeCgroupFs {
@@ -614,6 +924,7 @@ mod tests {
         fail_removals: Mutex<HashSet<PathBuf>>,
         fail_create: Mutex<bool>,
         rewrite_after_write: Mutex<HashMap<PathBuf, String>>,
+        cgroup_procs_write_attempts: AtomicUsize,
     }
 
     impl FakeCgroupFs {
@@ -669,6 +980,12 @@ mod tests {
             self.insert(&group.join("cgroup.events"), "populated 0\n");
             self.insert(&group.join("pids.current"), "0\n");
         }
+
+        fn kernel_places_worker(&self, group: &Path, pid: u32) {
+            self.insert(&group.join("cgroup.procs"), &format!("{pid}\n"));
+            self.insert(&group.join("cgroup.events"), "populated 1\n");
+            self.insert(&group.join("pids.current"), "1\n");
+        }
     }
 
     impl CgroupV2Fs for FakeCgroupFs {
@@ -682,28 +999,24 @@ mod tests {
         }
 
         fn write_text(&self, path: &Path, contents: &str) -> io::Result<()> {
+            if path.file_name().is_some_and(|name| name == "cgroup.procs") {
+                self.cgroup_procs_write_attempts
+                    .fetch_add(1, Ordering::SeqCst);
+            }
             if self.fail_writes.lock().unwrap().contains(path) {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
                     "fixture denied",
                 ));
             }
-            if path.file_name().is_some_and(|name| name == "cgroup.procs") {
-                self.insert(path, &format!("{contents}\n"));
-                if let Some(group) = path.parent() {
-                    self.insert(&group.join("cgroup.events"), "populated 1\n");
-                    self.insert(&group.join("pids.current"), "1\n");
-                }
-            } else {
-                let readback = self
-                    .rewrite_after_write
-                    .lock()
-                    .unwrap()
-                    .get(path)
-                    .cloned()
-                    .unwrap_or_else(|| contents.to_owned());
-                self.insert(path, &readback);
-            }
+            let readback = self
+                .rewrite_after_write
+                .lock()
+                .unwrap()
+                .get(path)
+                .cloned()
+                .unwrap_or_else(|| contents.to_owned());
+            self.insert(path, &readback);
             Ok(())
         }
 
@@ -760,6 +1073,14 @@ mod tests {
                 .cloned()
                 .collect())
         }
+
+        fn open_directory(&self, _path: &Path) -> io::Result<std::os::fd::OwnedFd> {
+            use std::os::fd::{FromRawFd, IntoRawFd};
+
+            let file = std::fs::File::open("/dev/null")?;
+            // SAFETY: file owns the descriptor and is converted exactly once.
+            Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(file.into_raw_fd()) })
+        }
     }
 
     fn identity(generation: u64) -> WorkerCgroupIdentity {
@@ -811,7 +1132,77 @@ mod tests {
     }
 
     #[test]
-    fn applies_accounted_memory_cpu_quota_and_process_limits_before_association() {
+    fn mocked_clone3_receives_prepared_cgroup_and_no_unsafe_fallback_occurs() {
+        let fs = FakeCgroupFs::delegated();
+        let group = adapter(&fs)
+            .prepare_worker(identity(14), REQUIRED_POLICY)
+            .unwrap();
+        let mut invoker = FakeClone3 {
+            calls: 0,
+            result: Err(libc::ENOSYS),
+            observed: None,
+            placement: None,
+        };
+
+        let result = launch_worker_in_cgroup_with(
+            &group,
+            Path::new("/bundled/modus-plugin-worker"),
+            "synthetic-challenge",
+            &mut invoker,
+        );
+
+        assert_eq!(result.err().unwrap().raw_os_error(), Some(libc::ENOSYS));
+        assert_eq!(invoker.calls, 1);
+        assert_eq!(
+            invoker.observed,
+            Some((
+                libc::CLONE_INTO_CGROUP as u64,
+                group.cgroup_fd() as u64,
+                libc::SIGCHLD as u64
+            ))
+        );
+        assert!(fs.contents(&group.path().join("cgroup.procs")).is_empty());
+        assert_eq!(fs.cgroup_procs_write_attempts.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn mocked_atomic_creation_is_verified_as_already_in_the_prepared_cgroup() {
+        let fs = FakeCgroupFs::delegated();
+        let identity = identity(15);
+        let mut group = adapter(&fs)
+            .prepare_worker(identity.clone(), REQUIRED_POLICY)
+            .unwrap();
+        let mut invoker = FakeClone3 {
+            calls: 0,
+            result: Ok(5151),
+            observed: None,
+            placement: Some((fs.clone(), group.path().to_path_buf())),
+        };
+
+        let mut process = launch_worker_in_cgroup_with(
+            &group,
+            Path::new("/bundled/modus-plugin-worker"),
+            "synthetic-challenge",
+            &mut invoker,
+        )
+        .unwrap();
+        group
+            .verify_atomic_placement(&identity, process.id())
+            .unwrap();
+
+        assert_eq!(process.id(), 5151);
+        assert_eq!(invoker.calls, 1);
+        assert_eq!(fs.contents(&group.path().join("cgroup.procs")), "5151\n");
+        assert_eq!(fs.cgroup_procs_write_attempts.load(Ordering::SeqCst), 0);
+        drop(process.stdin());
+        drop(process.stdout());
+        drop(process);
+        fs.set_worker_empty(group.path());
+        group.cleanup().unwrap();
+    }
+
+    #[test]
+    fn prepares_controls_before_verifying_kernel_placed_worker() {
         let fs = FakeCgroupFs::delegated();
         let mut group = adapter(&fs)
             .prepare_worker(identity(9), REQUIRED_POLICY)
@@ -823,7 +1214,8 @@ mod tests {
         assert_eq!(fs.contents(&group.path().join("pids.max")), "1");
         assert!(fs.contents(&group.path().join("cgroup.procs")).is_empty());
 
-        group.attach_process(&identity(9), 4242).unwrap();
+        fs.kernel_places_worker(group.path(), 4242);
+        group.verify_atomic_placement(&identity(9), 4242).unwrap();
         assert_eq!(group.process_id(), Some(4242));
         assert_eq!(fs.contents(&group.path().join("cgroup.procs")), "4242\n");
         assert_eq!(
@@ -909,13 +1301,13 @@ mod tests {
     }
 
     #[test]
-    fn rejects_identity_or_generation_mismatch_before_moving_a_process() {
+    fn rejects_identity_or_generation_mismatch_without_writing_cgroup_procs() {
         let fs = FakeCgroupFs::delegated();
         let mut group = adapter(&fs)
             .prepare_worker(identity(4), REQUIRED_POLICY)
             .unwrap();
         assert_eq!(
-            group.attach_process(&identity(5), 4242),
+            group.verify_atomic_placement(&identity(5), 4242),
             Err(CgroupV2Error::IdentityMismatch)
         );
         assert!(fs.contents(&group.path().join("cgroup.procs")).is_empty());
@@ -957,12 +1349,28 @@ mod tests {
     }
 
     #[test]
+    fn rejects_a_worker_missing_from_the_cgroup_after_mocked_clone3() {
+        let fs = FakeCgroupFs::delegated();
+        let identity = identity(16);
+        let mut group = adapter(&fs)
+            .prepare_worker(identity.clone(), REQUIRED_POLICY)
+            .unwrap();
+
+        assert_eq!(
+            group.verify_atomic_placement(&identity, 6161),
+            Err(CgroupV2Error::ProcessPlacementVerificationFailed)
+        );
+        assert_eq!(fs.cgroup_procs_write_attempts.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
     fn refuses_cleanup_until_the_process_is_confirmed_reaped_then_removes_idempotently() {
         let fs = FakeCgroupFs::delegated();
         let mut group = adapter(&fs)
             .prepare_worker(identity(2), REQUIRED_POLICY)
             .unwrap();
-        group.attach_process(&identity(2), 4242).unwrap();
+        fs.kernel_places_worker(group.path(), 4242);
+        group.verify_atomic_placement(&identity(2), 4242).unwrap();
         assert_eq!(group.cleanup(), Err(CgroupV2Error::CleanupFailed));
         assert!(fs.directories.lock().unwrap().contains(group.path()));
 
@@ -989,7 +1397,8 @@ mod tests {
         let mut group = adapter(&fs)
             .prepare_worker(identity(6), REQUIRED_POLICY)
             .unwrap();
-        group.attach_process(&identity(6), 4242).unwrap();
+        fs.kernel_places_worker(group.path(), 4242);
+        group.verify_atomic_placement(&identity(6), 4242).unwrap();
         let mut process = FixtureProcess {
             pid: 4242,
             reaped: false,
@@ -1008,7 +1417,8 @@ mod tests {
         let mut group = adapter(&fs)
             .prepare_worker(identity(8), REQUIRED_POLICY)
             .unwrap();
-        group.attach_process(&identity(8), 5252).unwrap();
+        fs.kernel_places_worker(group.path(), 5252);
+        group.verify_atomic_placement(&identity(8), 5252).unwrap();
         let mut process = FixtureProcess {
             pid: 5252,
             reaped: false,
@@ -1054,8 +1464,9 @@ mod tests {
                     CgroupV2Error::CleanupFailed => crate::WorkerBootstrapFailure::CleanupFailed,
                     _ => crate::WorkerBootstrapFailure::CgroupUnavailable,
                 })?;
+            fs.kernel_places_worker(group.path(), 4242);
             group
-                .attach_process(&identity, 4242)
+                .verify_atomic_placement(&identity, 4242)
                 .map_err(|_| crate::WorkerBootstrapFailure::CgroupUnavailable)?;
             fs.set_worker_empty(group.path());
             group

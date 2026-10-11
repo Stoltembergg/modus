@@ -12,8 +12,8 @@ use std::time::Instant;
 
 #[cfg(target_os = "linux")]
 use linux_cgroup::{
-    CgroupV2Error, LinuxCgroupV2, WorkerCgroupIdentity, WorkerCgroupLease,
-    terminate_worker_and_cleanup,
+    CgroupV2Error, LinuxCgroupV2, LinuxWorkerProcess, WorkerCgroupIdentity, WorkerCgroupLease,
+    launch_worker_in_cgroup, terminate_worker_and_cleanup,
 };
 #[cfg(target_os = "linux")]
 use std::fs::{self, File};
@@ -21,8 +21,6 @@ use std::fs::{self, File};
 use std::io::Read;
 #[cfg(target_os = "linux")]
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "linux")]
-use std::process::{Child, Command, Stdio};
 #[cfg(target_os = "linux")]
 use std::sync::mpsc;
 #[cfg(target_os = "linux")]
@@ -50,8 +48,6 @@ pub const MAX_SUPERVISOR_RESPONSE_BYTES: usize = MAX_IPC_FRAME_BYTES - 4;
 #[cfg(target_os = "linux")]
 const TRUSTED_WORKER_EXECUTABLE: &str = "modus-plugin-worker";
 #[cfg(target_os = "linux")]
-const WORKER_BOOTSTRAP_CHALLENGE_ENV: &str = "MODUS_WORKER_BOOTSTRAP_CHALLENGE";
-#[cfg(target_os = "linux")]
 const WORKER_BOOTSTRAP_TIMEOUT: Duration =
     Duration::from_millis(APPROVED_RESOURCE_POLICY.handshake_timeout_ms);
 
@@ -62,6 +58,7 @@ enum WorkerBootstrapFailure {
     BinaryUnavailable,
     BinaryIdentityInvalid,
     CgroupUnavailable,
+    PreExecLaunchFailed,
     StartFailed,
     HandshakeFailed,
     TimedOut,
@@ -76,6 +73,7 @@ impl WorkerBootstrapFailure {
             Self::BinaryUnavailable => "bundled worker binary is unavailable",
             Self::BinaryIdentityInvalid => "bundled worker identity is invalid",
             Self::CgroupUnavailable => "required delegated cgroup v2 controls are unavailable",
+            Self::PreExecLaunchFailed => "atomic worker launch inside the prepared cgroup failed",
             Self::StartFailed => "bundled worker failed to start",
             Self::HandshakeFailed => "bundled worker handshake failed",
             Self::TimedOut => "bundled worker bootstrap timed out",
@@ -372,24 +370,20 @@ fn bootstrap_linux_worker(provenance: &HostProvenance) -> Result<(), WorkerBoots
     let mut cgroup = cgroup_manager
         .prepare_worker(identity.clone(), REQUIRED_POLICY)
         .map_err(map_cgroup_failure)?;
-    let child = Command::new(worker_path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .env_clear()
-        .env(WORKER_BOOTSTRAP_CHALLENGE_ENV, &challenge)
-        .spawn();
-    let mut child = match child {
+    let mut child = match launch_worker_in_cgroup(&cgroup, &worker_path, &challenge) {
         Ok(child) => child,
         Err(_) => {
             return Err(cleanup_unstarted_cgroup(
                 &mut cgroup,
-                WorkerBootstrapFailure::StartFailed,
+                WorkerBootstrapFailure::PreExecLaunchFailed,
             ));
         }
     };
 
-    if cgroup.attach_process(&identity, child.id()).is_err() {
+    if cgroup
+        .verify_atomic_placement(&identity, child.id())
+        .is_err()
+    {
         return Err(cleanup_worker_after_error(
             &mut child,
             &mut cgroup,
@@ -397,7 +391,7 @@ fn bootstrap_linux_worker(provenance: &HostProvenance) -> Result<(), WorkerBoots
         ));
     }
 
-    let input = match child.stdin.take() {
+    let input = match child.stdin() {
         Some(input) => input,
         None => {
             return Err(cleanup_worker_after_error(
@@ -407,7 +401,7 @@ fn bootstrap_linux_worker(provenance: &HostProvenance) -> Result<(), WorkerBoots
             ));
         }
     };
-    let output = match child.stdout.take() {
+    let output = match child.stdout() {
         Some(output) => output,
         None => {
             drop(input);
@@ -539,7 +533,7 @@ fn cleanup_unstarted_cgroup(
 
 #[cfg(target_os = "linux")]
 fn cleanup_worker_after_error(
-    child: &mut Child,
+    child: &mut LinuxWorkerProcess,
     group: &mut WorkerCgroupLease,
     failure: WorkerBootstrapFailure,
 ) -> WorkerBootstrapFailure {
@@ -651,7 +645,7 @@ fn read_bounded_worker_frame<R: Read>(mut reader: R) -> Result<Vec<u8>, Protocol
 
 #[cfg(target_os = "linux")]
 fn wait_for_worker_exit(
-    child: &mut Child,
+    child: &mut LinuxWorkerProcess,
     deadline: Instant,
 ) -> Result<std::process::ExitStatus, WorkerBootstrapFailure> {
     loop {
@@ -1287,6 +1281,29 @@ mod tests {
             WorkerInvocationResponse::Denied { reason, .. }
                 if reason.contains("bootstrap timed out") && reason.contains("admission is denied")
         ));
+
+        let mut launch_input = invocation_command(
+            "request-pre-exec-launch",
+            "session-pre-exec-launch",
+            "workspace-pre-exec-launch",
+            "run-pre-exec-launch",
+        );
+        launch_input.push(b'\n');
+        let mut launch_output = Vec::new();
+        serve_supervisor_with_bootstrap(&launch_input[..], &mut launch_output, |_| {
+            Err(WorkerBootstrapFailure::PreExecLaunchFailed)
+        })
+        .unwrap();
+        assert!(
+            launch_output
+                .windows(b"atomic worker launch inside the prepared cgroup failed".len())
+                .any(|window| window == b"atomic worker launch inside the prepared cgroup failed")
+        );
+        assert!(
+            launch_output
+                .windows(b"admission is denied".len())
+                .any(|window| window == b"admission is denied")
+        );
 
         let mut cleanup_input = invocation_command(
             "request-cleanup",

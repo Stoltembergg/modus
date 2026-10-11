@@ -79,7 +79,7 @@ Platform split for the next executor tranche:
 
 | Platform | Existing component | Verified gap | Admission state |
 |---|---|---|---|
-| Linux | `plugin-sandbox-probe/src/platform/linux.rs` remains read-only; the Rust supervisor's `linux_cgroup.rs` now applies and reads back `memory.max`, `cpu.max`, and `pids.max` for the bundled inert worker when those controllers are already delegated. | The runtime verifies configured limits, task membership, and cleanup; it does not measure actual memory consumption, and `memory.max` is not RSS. Namespaces, seccomp/Landlock, descriptor policy, process-tree control, and full `PlatformAssessment` are absent. Placement occurs immediately after trusted worker start; no plugin artifact is transferred. | External worker denied. The adapter fails closed unless the current cgroup already exposes the required controllers. Enforcement is not validated on this read-only host. Full controls and assessment remain required before admission. |
+| Linux | `plugin-sandbox-probe/src/platform/linux.rs` remains read-only; the Rust supervisor's `linux_cgroup.rs` applies and reads back `memory.max`, `cpu.max`, and `pids.max`, then requests worker creation with `clone3(CLONE_INTO_CGROUP)`. | The runtime verifies configured limits, task membership, and cleanup; it does not measure actual memory consumption, and `memory.max` is not RSS. Synthetic tests verify the atomic-placement syscall contract, but no real kernel placement was run. Namespaces, seccomp/Landlock, descriptor policy, process-tree control, and full `PlatformAssessment` are absent. No plugin artifact is transferred. | External worker denied. The adapter fails closed unless controllers are delegated and atomic launch succeeds. Kernel enforcement is not validated on this read-only host. Full controls and assessment remain required before admission. |
 | Windows | `plugin-sandbox-probe/src/platform/windows.rs` reports diagnostic Job Object and process-tree evidence. | Job memory limits constrain commit rather than strict RSS; no tamper-resistant general kernel-handle cap of 64; diagnostic tree handling is not an integrated worker lifecycle supervisor. | External worker denied. A production adapter must enforce the exact RSS and handle ceilings, own the process tree, and meet the termination/reap deadline before admission. |
 | macOS | No process-isolation adapter is present. | No supported mechanism has been implemented and reviewed against the full shared policy. | External worker denied. The adapter must meet every shared limit and preemptible process-tree cleanup before admission. |
 
@@ -3461,3 +3461,35 @@ denial; strict CPU, RSS, descriptor, and process-tree limits; bounded
 termination/reap evidence; and a reviewed host-owned artifact resolver and
 post-admission transfer contract. The worker does not execute external code.
 External plugins remain blocked, and no isolation claim is made.
+
+### A01–A04 Marco 3.2 — pre-exec Linux cgroup placement
+
+This update supersedes earlier Marco 3.0/3.1 statements that worker placement
+followed `exec` or that pre-exec cgroup placement was wholly absent.
+
+The late `Command::spawn` then `cgroup.procs` write has been removed. The Linux
+supervisor now prepares and reads back the existing cgroup limits, opens that
+group directory, and passes its descriptor to `clone3(CLONE_INTO_CGROUP)`.
+This places the child in the configured cgroup before it executes the worker's
+first instruction. The child then connects the existing stdin/stdout bootstrap
+transport and executes only the fixed bundled worker. The host retains the PID,
+generation, handshake, cancellation, wait, and cleanup ownership. A read-only
+membership check follows creation; it cannot move a process. Kernel, syscall,
+permission, pipe, verification, or cleanup failures deny the request, with no
+`spawn` or late-association fallback. No artifact bytes are accepted or sent.
+
+The launcher requires Linux `clone3` with `CLONE_INTO_CGROUP` (Linux 5.7+), a
+usable cgroup v2 directory descriptor, delegated controllers, and permission to
+create the child there. Missing or blocked syscall support, including seccomp
+or permission denial, fails closed. Synthetic syscall mocks verify the request
+and failure path, but this environment did not create a worker or modify a real
+cgroup; actual kernel placement is therefore not yet proven.
+
+The approved `pids.max = 1` is unchanged. The current inert worker's entrypoint
+and protocol path are single-threaded and spawn no child process, so the one-task
+limit is compatible with this worker. It also prevents that process from
+creating threads or child processes; any future worker implementation that
+needs either must be reviewed against the policy before admission. `memory.max`
+still accounts cgroup-charged memory rather than strict RSS. Neither setting
+proves the remaining required isolation controls. External plugin admission
+remains disabled and denied.
