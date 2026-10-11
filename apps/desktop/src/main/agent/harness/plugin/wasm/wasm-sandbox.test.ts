@@ -970,7 +970,7 @@ describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
     it("validates the same byte snapshot that was compiled", async () => {
       const host = new WasmCapabilityHost({ maxMemoryPagesPerInstance: 2 });
       const bytes = buildMemoryModule(1, 3);
-      const originalCompile = host.compileModule.bind(host);
+      const originalCompile = WebAssembly.compile.bind(WebAssembly);
       let signalCompiled: () => void = () => {};
       let continueCompile: () => void = () => {};
       const compiled = new Promise<void>((resolve) => {
@@ -980,31 +980,32 @@ describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
         continueCompile = resolve;
       });
 
-      vi.spyOn(host, "compileModule").mockImplementation(async (input, cacheKey) => {
-        const module = await originalCompile(input, cacheKey);
+      const compileSpy = vi.spyOn(WebAssembly, "compile").mockImplementation(async (input) => {
+        const module = await originalCompile(input);
         signalCompiled();
         await continueCompilation;
         return module;
       });
 
       const pendingInstance = host.createInstance(bytes);
-      await compiled;
-      const memorySection = bytes.findIndex(
-        (_, index) =>
-          bytes[index] === 0x05 &&
-          bytes[index + 1] === 0x04 &&
-          bytes[index + 2] === 0x01 &&
-          bytes[index + 3] === 0x01 &&
-          bytes[index + 4] === 0x01 &&
-          bytes[index + 5] === 0x03,
-      );
-      expect(memorySection).toBeGreaterThanOrEqual(0);
-      bytes[memorySection + 5] = 0x02;
-      continueCompile();
-
       try {
+        await compiled;
+        const memorySection = bytes.findIndex(
+          (_, index) =>
+            bytes[index] === 0x05 &&
+            bytes[index + 1] === 0x04 &&
+            bytes[index + 2] === 0x01 &&
+            bytes[index + 3] === 0x01 &&
+            bytes[index + 4] === 0x01 &&
+            bytes[index + 5] === 0x03,
+        );
+        expect(memorySection).toBeGreaterThanOrEqual(0);
+        bytes[memorySection + 5] = 0x02;
+        continueCompile();
         await expect(pendingInstance).rejects.toThrow(WasmMemoryPolicyError);
       } finally {
+        continueCompile();
+        compileSpy.mockRestore();
         const created = await pendingInstance.catch(() => undefined);
         created?.instance.dispose();
       }
