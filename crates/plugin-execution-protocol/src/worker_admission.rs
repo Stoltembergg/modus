@@ -25,15 +25,25 @@
 //!
 //! ```compile_fail
 //! use modus_plugin_execution_protocol::worker_admission::AdmissionAssessmentToken;
+//! use modus_plugin_execution_protocol::worker_admission::WorkerTransport;
 //! fn require_clone<T: Clone>() {}
-//! fn main() { require_clone::<AdmissionAssessmentToken<()>>(); }
+//! fn assert_token_cloneable<T: WorkerTransport>() {
+//!     require_clone::<AdmissionAssessmentToken<T>>();
+//! }
 //! ```
 //!
 //! ```compile_fail
-//! use modus_plugin_execution_protocol::{Dispatcher, worker_admission::AdmissionAssessmentToken};
-//! fn dispatch_twice(token: AdmissionAssessmentToken<()>) {
-//!     let _ = Dispatcher::new(token, "a".repeat(64), Vec::<String>::new());
-//!     let _ = Dispatcher::new(token, "a".repeat(64), Vec::<String>::new());
+//! use modus_plugin_execution_protocol::WorkerSession;
+//! use modus_plugin_execution_protocol::worker_admission::{
+//!     AdmissionAssessmentToken, HostAuthorization, WorkerTransport,
+//! };
+//! fn consume_twice<T: WorkerTransport>(
+//!     token: AdmissionAssessmentToken<T>,
+//!     authorization_one: HostAuthorization,
+//!     authorization_two: HostAuthorization,
+//! ) {
+//!     let _ = WorkerSession::new(token, authorization_one, "a".repeat(64));
+//!     let _ = WorkerSession::new(token, authorization_two, "a".repeat(64));
 //! }
 //! ```
 //!

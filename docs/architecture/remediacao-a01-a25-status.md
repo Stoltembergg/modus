@@ -273,7 +273,11 @@ macOS. The trusted in-process Harness/plugin path is unchanged.
   and adds cleanup-failure regressions. Independent review found the retry-budget
   reset and hidden constructor-cleanup failure; the implementation now stores
   the first deadline and reports cleanup failure explicitly. Follow-up review
-  and green CI are pending.
+  approved those scoped fixes. It also found that two compile-fail examples
+  no longer reached the invariant they intended to test after the new transport
+  bound; those examples now use generic transport bounds and the public
+  consuming `WorkerSession::new` API. Remote green CI for the current head is
+  pending.
 - Remaining A01–A04 proof gaps: no platform implementation of the unsafe
   adapter, no OS policy attestation, no artifact-transfer boundary, no actual
   permission-broker caller and no production lifecycle integration. Do not
