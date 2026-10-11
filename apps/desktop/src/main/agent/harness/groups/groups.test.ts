@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as agentGroupStore from "../../../groups/group-store";
 import {
   groupMailboxAckTool,
@@ -100,6 +100,17 @@ describe("Phase 6: Groups Mailbox & Optimistic Revision", () => {
   });
 
   describe("6.1 Group Mailbox Durability & Lifecycle", () => {
+    // Fixtures use fixed 2026-10 timestamps while reads run lazy retention
+    // cleanup against Date.now(); pin the clock so they never age out.
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(Date.parse("2026-10-07T00:00:00Z"));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
     it("sends and receives 1-to-1 direct messages", () => {
       const mailbox = installTestMailbox();
       const id1 = mailbox.send({
@@ -998,6 +1009,13 @@ describe("Phase 6: Groups Mailbox & Optimistic Revision", () => {
     });
 
     it("caps legacy inboxes beyond the former 20,000-row hydration limit", () => {
+      // The seeded rows are dated 2026-10-10; keep them inside the retention
+      // window regardless of the real date.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(Date.parse("2026-10-11T00:00:00Z"));
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
       const db = new DatabaseSync(":memory:");
       db.exec(mailboxTable);
       db.exec(mailboxAckTable);
