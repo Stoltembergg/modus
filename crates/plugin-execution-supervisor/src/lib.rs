@@ -10,8 +10,8 @@ use std::time::Instant;
 
 use modus_plugin_execution_protocol::resource_policy::APPROVED_RESOURCE_POLICY;
 use modus_plugin_execution_protocol::worker_admission::{
-    AdmissionAssessmentToken, AssessedWorker, EnforcementControl, HostAuthorization,
-    PluginHostcallRateLimiterRegistry, WorkerTransport,
+    AdmissionAssessmentToken, AdmissionError, AssessedWorker, EnforcementControl,
+    HostAuthorization, PluginHostcallRateLimiterRegistry, WorkerTransport,
 };
 use modus_plugin_execution_protocol::{
     HostProvenance, HostTrustLevel, InvocationOutcome, ProtocolError, WorkerSession,
@@ -73,6 +73,29 @@ pub enum SupervisorRequestError {
     InvalidIdentity,
     InvalidPayload,
     ResponseTooLarge,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WorkerExecutionError {
+    Admission(AdmissionError),
+    Protocol(ProtocolError),
+}
+
+impl std::fmt::Display for WorkerExecutionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Admission(error) => write!(formatter, "worker admission failed: {error:?}"),
+            Self::Protocol(error) => write!(formatter, "worker protocol failed: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for WorkerExecutionError {}
+
+impl From<ProtocolError> for WorkerExecutionError {
+    fn from(error: ProtocolError) -> Self {
+        Self::Protocol(error)
+    }
 }
 
 impl std::fmt::Display for SupervisorRequestError {
@@ -145,8 +168,9 @@ pub fn execute_assessed_worker<T: WorkerTransport>(
     payload: Value,
     deadline: Instant,
     broker: impl FnMut(modus_plugin_execution_protocol::AuthorizedInvocation) -> InvocationOutcome,
-) -> Result<InvocationOutcome, ProtocolError> {
-    let admission = AdmissionAssessmentToken::validate(assessed_worker, provenance.clone())?;
+) -> Result<InvocationOutcome, WorkerExecutionError> {
+    let admission = AdmissionAssessmentToken::validate(assessed_worker, provenance.clone())
+        .map_err(WorkerExecutionError::Admission)?;
     // SAFETY: This entry point receives grants from the host permission broker
     // and a runtime-owned rate limiter registry; worker input cannot modify either.
     let authorization = unsafe {
