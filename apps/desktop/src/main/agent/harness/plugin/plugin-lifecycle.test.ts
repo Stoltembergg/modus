@@ -93,6 +93,87 @@ describe("Fase 11 — Plugin Lifecycle & State Storage", () => {
     store.close();
   });
 
+  it("keeps lifecycle-owned state and unlocked helpers in ECMAScript private slots", () => {
+    const serviceKeys = Reflect.ownKeys(service);
+    for (const key of [
+      "store",
+      "dependencyGraph",
+      "versionManager",
+      "safeModeManager",
+      "recoveryManager",
+      "autoRollbackManager",
+      "lifecycleQueues",
+    ]) {
+      expect(serviceKeys).not.toContain(key);
+    }
+
+    const serviceMethods = Reflect.ownKeys(PluginLifecycleService.prototype);
+    for (const method of [
+      "withLifecycleLock",
+      "allowedTrustLevels",
+      "assertTrustAllowedBySafeMode",
+      "markSafeModePluginRestoredUnlocked",
+      "finishSafeModeExitUnlocked",
+      "restoreAfterSafeModeUnlocked",
+      "assertDependentCapabilitiesCompatible",
+      "installUnlocked",
+      "enableUnlocked",
+      "disableUnlocked",
+      "upgradeUnlocked",
+      "restoreLoaderVersion",
+      "releaseQuarantineAfterDurableEnable",
+      "downgradeUnlocked",
+      "uninstallUnlocked",
+      "syncOnStartupUnlocked",
+    ]) {
+      expect(serviceMethods).not.toContain(method);
+    }
+
+    expect(service.getStore()).toBe(store);
+    const storeKeys = Reflect.ownKeys(store);
+    expect(storeKeys).not.toContain("db");
+    expect(storeKeys).not.toContain("inTransaction");
+    expect(Reflect.ownKeys(PluginStateStore.prototype)).not.toContain("initSchema");
+    expect(store.getDatabase()).toBe(db);
+
+    const graph = service.getDependencyGraph();
+    const graphKeys = Reflect.ownKeys(graph);
+    expect(graphKeys).not.toContain("nodes");
+    expect(graphKeys).not.toContain("capabilityProviders");
+    expect(Reflect.ownKeys(Object.getPrototypeOf(graph))).not.toContain("recomputeAllLinks");
+  });
+
+  it("keeps manager-owned lifecycle references and Safe Mode state out of reflection", () => {
+    const managerFields = [
+      [service.getVersionManager(), ["service", "store", "backups"]],
+      [
+        service.getSafeModeManager(),
+        [
+          "service",
+          "active",
+          "currentLevel",
+          "previouslyEnabledPlugins",
+          "safeModeDisabledPlugins",
+        ],
+      ],
+      [
+        service.getRecoveryManager(),
+        ["service", "versionManager", "registry", "graph", "healthMonitor"],
+      ],
+      [service.getAutoRollbackManager(), ["service", "versionManager", "healthMonitor"]],
+    ] as const;
+
+    for (const [manager, fields] of managerFields) {
+      const ownKeys = Reflect.ownKeys(manager);
+      for (const field of fields) {
+        expect(ownKeys).not.toContain(field);
+      }
+    }
+    expect(Reflect.ownKeys(Object.getPrototypeOf(service.getRecoveryManager()))).not.toContain(
+      "generateRecommendations",
+    );
+  });
+
   describe("11.1 - Plugin State Storage (SQLite) & ACID Transactions", () => {
     it("creates all tables defined in Fase 11 schema", () => {
       const tables = db

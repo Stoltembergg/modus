@@ -15,8 +15,8 @@ import {
 import type { PluginManifestInput } from "./plugin-types";
 
 export class DependencyGraph {
-  private nodes = new Map<string, DependencyNode>();
-  private capabilityProviders = new Map<string, string>(); // capability -> pluginId
+  #nodes = new Map<string, DependencyNode>();
+  #capabilityProviders = new Map<string, string>(); // capability -> pluginId
 
   constructor() {}
 
@@ -24,7 +24,7 @@ export class DependencyGraph {
    * Adds or updates a plugin node in the graph, linking dependencies and dependents.
    */
   public addPlugin(manifest: PluginManifestInput): void {
-    const previousNode = this.nodes.get(manifest.id);
+    const previousNode = this.#nodes.get(manifest.id);
     const previousNodeSnapshot = previousNode
       ? {
           ...previousNode,
@@ -35,14 +35,14 @@ export class DependencyGraph {
           dependents: [...previousNode.dependents],
         }
       : undefined;
-    const previousCapabilityProviders = new Map(this.capabilityProviders);
+    const previousCapabilityProviders = new Map(this.#capabilityProviders);
     const provides = manifest.provides.map((p) => p.capability);
     const requiresCaps = (manifest.requires.capabilities ?? []).map((c) => c.capability);
     const requiresPlugins = manifest.requires.plugins ?? [];
 
     // Register capability provisions
     for (const cap of provides) {
-      this.capabilityProviders.set(cap, manifest.id);
+      this.#capabilityProviders.set(cap, manifest.id);
     }
 
     const node: DependencyNode = {
@@ -55,23 +55,23 @@ export class DependencyGraph {
       dependents: [],
     };
 
-    this.nodes.set(manifest.id, node);
-    this.recomputeAllLinks();
+    this.#nodes.set(manifest.id, node);
+    this.#recomputeAllLinks();
 
     const cycle = this.findCycles()[0];
     if (cycle) {
-      if (previousNodeSnapshot) this.nodes.set(manifest.id, previousNodeSnapshot);
-      else this.nodes.delete(manifest.id);
-      this.capabilityProviders = previousCapabilityProviders;
-      this.recomputeAllLinks();
+      if (previousNodeSnapshot) this.#nodes.set(manifest.id, previousNodeSnapshot);
+      else this.#nodes.delete(manifest.id);
+      this.#capabilityProviders = previousCapabilityProviders;
+      this.#recomputeAllLinks();
       throw new CircularDependencyError(cycle);
     }
   }
 
   public assertCanAddPlugin(manifest: PluginManifestInput): void {
     const candidate = new DependencyGraph();
-    candidate.nodes = new Map(
-      Array.from(this.nodes, ([id, node]) => [
+    candidate.#nodes = new Map(
+      Array.from(this.#nodes, ([id, node]) => [
         id,
         {
           ...node,
@@ -83,7 +83,7 @@ export class DependencyGraph {
         },
       ]),
     );
-    candidate.capabilityProviders = new Map(this.capabilityProviders);
+    candidate.#capabilityProviders = new Map(this.#capabilityProviders);
     candidate.addPlugin(manifest);
   }
 
@@ -91,40 +91,40 @@ export class DependencyGraph {
    * Removes a plugin from the graph and cleans up dependent links.
    */
   public removePlugin(pluginId: string): void {
-    const node = this.nodes.get(pluginId);
+    const node = this.#nodes.get(pluginId);
     if (!node) return;
 
     for (const cap of node.provides) {
-      if (this.capabilityProviders.get(cap) === pluginId) {
-        this.capabilityProviders.delete(cap);
+      if (this.#capabilityProviders.get(cap) === pluginId) {
+        this.#capabilityProviders.delete(cap);
       }
     }
 
-    this.nodes.delete(pluginId);
-    this.recomputeAllLinks();
+    this.#nodes.delete(pluginId);
+    this.#recomputeAllLinks();
   }
 
   public getPlugin(pluginId: string): DependencyNode | undefined {
-    return this.nodes.get(pluginId);
+    return this.#nodes.get(pluginId);
   }
 
   public getAllPlugins(): DependencyNode[] {
-    return Array.from(this.nodes.values());
+    return Array.from(this.#nodes.values());
   }
 
   /**
    * Clears and rebuilds the dependency graph from an array of manifests.
    */
   public rebuild(manifests: PluginManifestInput[]): void {
-    this.nodes.clear();
-    this.capabilityProviders.clear();
+    this.#nodes.clear();
+    this.#capabilityProviders.clear();
 
     for (const manifest of manifests) {
       const provides = manifest.provides.map((p) => p.capability);
       for (const cap of provides) {
-        this.capabilityProviders.set(cap, manifest.id);
+        this.#capabilityProviders.set(cap, manifest.id);
       }
-      this.nodes.set(manifest.id, {
+      this.#nodes.set(manifest.id, {
         pluginId: manifest.id,
         version: manifest.version,
         provides,
@@ -135,33 +135,33 @@ export class DependencyGraph {
       });
     }
 
-    this.recomputeAllLinks();
+    this.#recomputeAllLinks();
   }
 
   /**
    * Recomputes all incoming (dependents) and outgoing (dependencies) edges.
    */
-  private recomputeAllLinks(): void {
+  #recomputeAllLinks(): void {
     // Reset edges
-    for (const node of this.nodes.values()) {
+    for (const node of this.#nodes.values()) {
       node.dependencies = [];
       node.dependents = [];
     }
 
-    for (const [id, node] of this.nodes.entries()) {
+    for (const [id, node] of this.#nodes.entries()) {
       const deps = new Set<string>();
 
       // Direct plugin requirements
       for (const reqPlugin of node.requiresPlugins) {
-        if (this.nodes.has(reqPlugin)) {
+        if (this.#nodes.has(reqPlugin)) {
           deps.add(reqPlugin);
         }
       }
 
       // Capability requirements mapped to provider plugins
       for (const reqCap of node.requiresCapabilities) {
-        const providerId = this.capabilityProviders.get(reqCap);
-        if (providerId && this.nodes.has(providerId)) {
+        const providerId = this.#capabilityProviders.get(reqCap);
+        if (providerId && this.#nodes.has(providerId)) {
           deps.add(providerId);
         }
       }
@@ -170,7 +170,7 @@ export class DependencyGraph {
 
       // Link reverse (dependents)
       for (const depId of node.dependencies) {
-        const depNode = this.nodes.get(depId);
+        const depNode = this.#nodes.get(depId);
         if (depNode && !depNode.dependents.includes(id)) {
           depNode.dependents.push(id);
         }
@@ -182,7 +182,7 @@ export class DependencyGraph {
    * Calculates the full blast radius of modifying or removing a plugin.
    */
   public calculateBlastRadius(pluginId: string): BlastRadius {
-    const node = this.nodes.get(pluginId);
+    const node = this.#nodes.get(pluginId);
     if (!node) {
       return {
         targetPluginId: pluginId,
@@ -207,7 +207,7 @@ export class DependencyGraph {
 
     while (queue.length > 0) {
       const current = queue.shift()!;
-      const currentNode = this.nodes.get(current.id);
+      const currentNode = this.#nodes.get(current.id);
       if (!currentNode) continue;
 
       for (const nextDep of currentNode.dependents) {
@@ -274,7 +274,7 @@ export class DependencyGraph {
       recStack.set(pluginId, currentPath.length);
       currentPath.push(pluginId);
 
-      const node = this.nodes.get(pluginId);
+      const node = this.#nodes.get(pluginId);
       if (node) {
         for (const depId of node.dependencies) {
           if (!visited.has(depId)) {
@@ -293,7 +293,7 @@ export class DependencyGraph {
       recStack.delete(pluginId);
     };
 
-    for (const pluginId of this.nodes.keys()) {
+    for (const pluginId of this.#nodes.keys()) {
       if (!visited.has(pluginId)) {
         dfs(pluginId);
       }
@@ -321,7 +321,7 @@ export class DependencyGraph {
 
     const dfs = (id: string) => {
       visited.add(id);
-      const node = this.nodes.get(id);
+      const node = this.#nodes.get(id);
       if (node) {
         for (const dep of node.dependencies) {
           if (!visited.has(dep)) {
@@ -332,7 +332,7 @@ export class DependencyGraph {
       order.push(id);
     };
 
-    for (const id of this.nodes.keys()) {
+    for (const id of this.#nodes.keys()) {
       if (!visited.has(id)) {
         dfs(id);
       }
@@ -358,14 +358,14 @@ export class DependencyGraph {
     const visit = (pluginId: string): void => {
       if (visited.has(pluginId) || excludedPluginIds.has(pluginId)) return;
       visited.add(pluginId);
-      const node = this.nodes.get(pluginId);
+      const node = this.#nodes.get(pluginId);
       for (const dependencyId of node?.dependencies ?? []) {
         visit(dependencyId);
       }
       order.push(pluginId);
     };
 
-    for (const pluginId of this.nodes.keys()) visit(pluginId);
+    for (const pluginId of this.#nodes.keys()) visit(pluginId);
     return order;
   }
 
@@ -375,11 +375,11 @@ export class DependencyGraph {
   public visualize(): string {
     const lines: string[] = [];
 
-    if (this.nodes.size === 0) {
+    if (this.#nodes.size === 0) {
       return "(empty dependency graph)";
     }
 
-    for (const [id, node] of this.nodes.entries()) {
+    for (const [id, node] of this.#nodes.entries()) {
       lines.push(`${id}@${node.version}`);
       if (node.provides.length > 0) {
         lines.push(`  provides: ${node.provides.join(", ")}`);

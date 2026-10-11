@@ -9,13 +9,13 @@ import type { PluginStateStore } from "./plugin-state-store";
 import { PluginLifecycleError } from "./plugin-types";
 
 export class PluginVersionManager {
-  private service: PluginLifecycleService;
-  private store: PluginStateStore;
-  private backups: Map<string, PluginBackup> = new Map();
+  #service: PluginLifecycleService;
+  #store: PluginStateStore;
+  #backups: Map<string, PluginBackup> = new Map();
 
   constructor(service: PluginLifecycleService, store: PluginStateStore) {
-    this.service = service;
-    this.store = store;
+    this.#service = service;
+    this.#store = store;
   }
 
   /**
@@ -26,7 +26,7 @@ export class PluginVersionManager {
     version?: string,
     customConfig?: Record<string, unknown>,
   ): Promise<PluginBackup> {
-    const pluginRecord = this.store.getPlugin(pluginId);
+    const pluginRecord = this.#store.getPlugin(pluginId);
     const targetVersion = version ?? pluginRecord?.version;
 
     if (!targetVersion) {
@@ -35,7 +35,7 @@ export class PluginVersionManager {
       );
     }
 
-    const manifest = this.service.resolveManifest(pluginId, targetVersion);
+    const manifest = this.#service.resolveManifest(pluginId, targetVersion);
     if (!manifest) {
       throw new PluginLifecycleError(
         `Cannot preserve version for '${pluginId}': manifest for version ${targetVersion} is not available in the host catalog`,
@@ -54,10 +54,10 @@ export class PluginVersionManager {
     };
 
     const key = `${pluginId}@${targetVersion}`;
-    this.backups.set(key, backup);
+    this.#backups.set(key, backup);
 
     // Ensure version record exists in durable SQLite storage
-    this.store.saveVersion(pluginId, targetVersion, resolvedManifest, now);
+    this.#store.saveVersion(pluginId, targetVersion, resolvedManifest, now);
 
     return backup;
   }
@@ -67,13 +67,13 @@ export class PluginVersionManager {
    */
   public async loadBackup(pluginId: string, version: string): Promise<PluginBackup | null> {
     const key = `${pluginId}@${version}`;
-    const cached = this.backups.get(key);
+    const cached = this.#backups.get(key);
     if (cached) return cached;
 
-    const verRecord = this.store.getVersion(pluginId, version);
+    const verRecord = this.#store.getVersion(pluginId, version);
     if (!verRecord) return null;
 
-    const pluginRecord = this.store.getPlugin(pluginId);
+    const pluginRecord = this.#store.getPlugin(pluginId);
     const backup: PluginBackup = {
       pluginId,
       version,
@@ -82,7 +82,7 @@ export class PluginVersionManager {
       preservedAt: verRecord.installed_at,
     };
 
-    this.backups.set(key, backup);
+    this.#backups.set(key, backup);
     return backup;
   }
 
@@ -90,7 +90,7 @@ export class PluginVersionManager {
    * Rolls back a plugin to a target version.
    */
   public async rollback(pluginId: string, targetVersion: string): Promise<void> {
-    if (!this.service.resolveManifest(pluginId, targetVersion)) {
+    if (!this.#service.resolveManifest(pluginId, targetVersion)) {
       throw new PluginLifecycleError(
         `Cannot rollback untrusted or unavailable version ${pluginId}@${targetVersion}`,
       );
@@ -103,19 +103,19 @@ export class PluginVersionManager {
     }
 
     // Execute transactional downgrade
-    if (!this.service.resolveManifest(pluginId, targetVersion)) {
+    if (!this.#service.resolveManifest(pluginId, targetVersion)) {
       throw new PluginLifecycleError(
         `Cannot rollback untrusted or unavailable version ${pluginId}@${targetVersion}`,
       );
     }
-    await this.service.downgrade(pluginId, targetVersion);
+    await this.#service.downgrade(pluginId, targetVersion);
   }
 
   /**
    * Lists all preserved versions for a plugin, ordered latest first.
    */
   public async listVersions(pluginId: string): Promise<PluginBackup[]> {
-    const dbVersions = this.store.getVersions(pluginId);
+    const dbVersions = this.#store.getVersions(pluginId);
     const results: PluginBackup[] = [];
     const seen = new Set<string>();
 
@@ -130,7 +130,7 @@ export class PluginVersionManager {
       });
     }
 
-    for (const [key, b] of this.backups.entries()) {
+    for (const [key, b] of this.#backups.entries()) {
       if (b.pluginId === pluginId && !seen.has(b.version)) {
         results.push(b);
       }

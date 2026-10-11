@@ -16,11 +16,11 @@ import type {
 import type { PluginVersionManager } from "./version-manager";
 
 export class PluginRecoveryManager {
-  private service: PluginLifecycleService;
-  private versionManager: PluginVersionManager;
-  private registry: CapabilityRegistry;
-  private graph: DependencyGraph;
-  private healthMonitor?: PluginHealthMonitor | undefined;
+  #service: PluginLifecycleService;
+  #versionManager: PluginVersionManager;
+  #registry: CapabilityRegistry;
+  #graph: DependencyGraph;
+  #healthMonitor?: PluginHealthMonitor | undefined;
 
   constructor(
     service: PluginLifecycleService,
@@ -29,11 +29,11 @@ export class PluginRecoveryManager {
     graph: DependencyGraph,
     healthMonitor?: PluginHealthMonitor,
   ) {
-    this.service = service;
-    this.versionManager = versionManager;
-    this.registry = registry;
-    this.graph = graph;
-    this.healthMonitor = healthMonitor;
+    this.#service = service;
+    this.#versionManager = versionManager;
+    this.#registry = registry;
+    this.#graph = graph;
+    this.#healthMonitor = healthMonitor;
   }
 
   /**
@@ -41,12 +41,12 @@ export class PluginRecoveryManager {
    */
   public async diagnose(): Promise<DiagnosisReport> {
     const issues: PluginDiagnosisIssue[] = [];
-    const plugins = await this.service.list();
+    const plugins = await this.#service.list();
 
     // 1. Check for plugins in error state
     for (const p of plugins) {
       if (p.state === "error") {
-        const events = this.service.getStore().getEvents(p.id, 5);
+        const events = this.#service.getStore().getEvents(p.id, 5);
         const lastErrorEvent = events.find((e) => e.event_type.includes("error"));
         const errorDetail =
           (lastErrorEvent?.details?.["error"] as string) ?? "Plugin in error state";
@@ -64,14 +64,14 @@ export class PluginRecoveryManager {
     // 2. Check for missing dependencies for enabled plugins
     for (const p of plugins) {
       if (p.state === "enabled") {
-        const manifest = this.service.resolveManifest(p.id, p.version);
+        const manifest = this.#service.resolveManifest(p.id, p.version);
         if (manifest?.requires) {
           const missing: string[] = [];
 
           // Missing required plugins
           if (manifest.requires.plugins) {
             for (const requiredPluginId of manifest.requires.plugins) {
-              const reqRecord = this.service.getStore().getPlugin(requiredPluginId);
+              const reqRecord = this.#service.getStore().getPlugin(requiredPluginId);
               if (!reqRecord || reqRecord.state === "disabled" || reqRecord.state === "error") {
                 missing.push(`plugin:${requiredPluginId}`);
               }
@@ -81,7 +81,7 @@ export class PluginRecoveryManager {
           // Missing required capabilities
           if (manifest.requires.capabilities) {
             for (const reqCap of manifest.requires.capabilities) {
-              const provider = this.registry.getActiveProvider(reqCap.capability);
+              const provider = this.#registry.getActiveProvider(reqCap.capability);
               if (!provider) {
                 missing.push(`capability:${reqCap.capability}`);
               }
@@ -102,8 +102,8 @@ export class PluginRecoveryManager {
     }
 
     // 3. Check for circular dependencies
-    if (this.graph.hasCycles()) {
-      const cycles = this.graph.findCycles();
+    if (this.#graph.hasCycles()) {
+      const cycles = this.#graph.findCycles();
       for (const cycle of cycles) {
         issues.push({
           type: "circular_dependency",
@@ -116,10 +116,10 @@ export class PluginRecoveryManager {
     }
 
     // 4. Check for high failure rate via health monitor
-    if (this.healthMonitor) {
+    if (this.#healthMonitor) {
       for (const p of plugins) {
         if (p.state === "enabled") {
-          const health = this.healthMonitor.getHealth(p.id);
+          const health = this.#healthMonitor.getHealth(p.id);
           if (health.totalCalls > 0 && health.errorRate > 0.5) {
             issues.push({
               type: "high_failure_rate",
@@ -135,7 +135,7 @@ export class PluginRecoveryManager {
       }
     }
 
-    const recommendations = this.generateRecommendations(issues);
+    const recommendations = this.#generateRecommendations(issues);
 
     return {
       healthy: issues.length === 0,
@@ -163,15 +163,15 @@ export class PluginRecoveryManager {
     for (const issue of diagnosis.issues) {
       switch (issue.recommendation) {
         case "rollback_or_disable": {
-          const plugin = this.service.getStore().getPlugin(issue.pluginId);
+          const plugin = this.#service.getStore().getPlugin(issue.pluginId);
           const currentVersion = plugin?.version;
-          const versions = await this.versionManager.listVersions(issue.pluginId);
+          const versions = await this.#versionManager.listVersions(issue.pluginId);
           const candidates = versions.filter((v) => v.version !== currentVersion);
 
           if (candidates.length > 0 && candidates[0]) {
             const targetVersion = candidates[0].version;
             try {
-              await this.versionManager.rollback(issue.pluginId, targetVersion);
+              await this.#versionManager.rollback(issue.pluginId, targetVersion);
               actions.push({
                 pluginId: issue.pluginId,
                 issueType: issue.type,
@@ -180,7 +180,7 @@ export class PluginRecoveryManager {
                 details: `Rolled back to previous version ${targetVersion}`,
               });
             } catch (err) {
-              await this.service.disable(issue.pluginId).catch(() => undefined);
+              await this.#service.disable(issue.pluginId).catch(() => undefined);
               actions.push({
                 pluginId: issue.pluginId,
                 issueType: issue.type,
@@ -189,7 +189,7 @@ export class PluginRecoveryManager {
               });
             }
           } else {
-            await this.service.disable(issue.pluginId).catch(() => undefined);
+            await this.#service.disable(issue.pluginId).catch(() => undefined);
             actions.push({
               pluginId: issue.pluginId,
               issueType: issue.type,
@@ -202,7 +202,7 @@ export class PluginRecoveryManager {
 
         case "remove_one": {
           // Circular dependency: disable the identified plugin to break the cycle
-          await this.service.disable(issue.pluginId).catch(() => undefined);
+          await this.#service.disable(issue.pluginId).catch(() => undefined);
           actions.push({
             pluginId: issue.pluginId,
             issueType: issue.type,
@@ -214,7 +214,7 @@ export class PluginRecoveryManager {
 
         case "install_dependencies": {
           // Disable dependent plugin temporarily until dependencies are resolved
-          await this.service.disable(issue.pluginId).catch(() => undefined);
+          await this.#service.disable(issue.pluginId).catch(() => undefined);
           actions.push({
             pluginId: issue.pluginId,
             issueType: issue.type,
@@ -225,7 +225,7 @@ export class PluginRecoveryManager {
         }
 
         case "disable": {
-          await this.service.disable(issue.pluginId).catch(() => undefined);
+          await this.#service.disable(issue.pluginId).catch(() => undefined);
           actions.push({
             pluginId: issue.pluginId,
             issueType: issue.type,
@@ -246,7 +246,7 @@ export class PluginRecoveryManager {
     };
   }
 
-  private generateRecommendations(issues: PluginDiagnosisIssue[]): string[] {
+  #generateRecommendations(issues: PluginDiagnosisIssue[]): string[] {
     const list: string[] = [];
     for (const issue of issues) {
       if (issue.recommendation === "rollback_or_disable") {

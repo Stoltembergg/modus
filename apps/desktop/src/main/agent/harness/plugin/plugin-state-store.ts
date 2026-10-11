@@ -59,24 +59,24 @@ export interface PluginEventRecord {
 }
 
 export class PluginStateStore {
-  private db: DatabaseSync;
-  private inTransaction = false;
+  #db: DatabaseSync;
+  #inTransaction = false;
 
   constructor(dbOrPath?: DatabaseSync | string) {
     if (typeof dbOrPath === "string") {
-      this.db = new DatabaseSync(dbOrPath);
+      this.#db = new DatabaseSync(dbOrPath);
     } else {
-      this.db = dbOrPath ?? new DatabaseSync(":memory:");
+      this.#db = dbOrPath ?? new DatabaseSync(":memory:");
     }
     // The schema declares FOREIGN KEYs: enforce them (node:sqlite leaves
     // foreign_keys OFF by default). All multi-table writes delete children
     // before parents, so this only forbids orphan rows, never legit flows.
-    this.db.exec("PRAGMA foreign_keys = ON");
-    this.initSchema();
+    this.#db.exec("PRAGMA foreign_keys = ON");
+    this.#initSchema();
   }
 
-  private initSchema(): void {
-    this.db.exec(`
+  #initSchema(): void {
+    this.#db.exec(`
       CREATE TABLE IF NOT EXISTS plugins (
         id TEXT PRIMARY KEY,
         version TEXT NOT NULL,
@@ -141,12 +141,12 @@ export class PluginStateStore {
   }
 
   public getDatabase(): DatabaseSync {
-    return this.db;
+    return this.#db;
   }
 
   public getSafeModeState(): PersistedSafeModeState {
     try {
-      const row = this.db
+      const row = this.#db
         .prepare(
           "SELECT level, previously_enabled_json, disabled_plugins_json FROM plugin_safe_mode WHERE singleton = 1",
         )
@@ -180,7 +180,7 @@ export class PluginStateStore {
   }
 
   public setSafeModeState(state: PersistedSafeModeState): void {
-    this.db
+    this.#db
       .prepare(
         `INSERT INTO plugin_safe_mode (
           singleton, level, previously_enabled_json, disabled_plugins_json
@@ -198,7 +198,7 @@ export class PluginStateStore {
   }
 
   public getPluginUninstallTombstone(pluginId: string): PluginUninstallTombstone | null {
-    const row = this.db
+    const row = this.#db
       .prepare(
         "SELECT plugin_id, version, uninstalled_at FROM plugin_uninstall_tombstones WHERE plugin_id = ?",
       )
@@ -212,7 +212,7 @@ export class PluginStateStore {
   }
 
   public listPluginUninstallTombstones(): PluginUninstallTombstone[] {
-    const rows = this.db
+    const rows = this.#db
       .prepare(
         "SELECT plugin_id, version, uninstalled_at FROM plugin_uninstall_tombstones ORDER BY plugin_id",
       )
@@ -225,7 +225,7 @@ export class PluginStateStore {
   }
 
   public savePluginUninstallTombstone(tombstone: PluginUninstallTombstone): void {
-    this.db
+    this.#db
       .prepare(
         `INSERT INTO plugin_uninstall_tombstones (plugin_id, version, uninstalled_at)
         VALUES (?, ?, ?)
@@ -237,12 +237,12 @@ export class PluginStateStore {
   }
 
   public deletePluginUninstallTombstone(pluginId: string): void {
-    this.db.prepare("DELETE FROM plugin_uninstall_tombstones WHERE plugin_id = ?").run(pluginId);
+    this.#db.prepare("DELETE FROM plugin_uninstall_tombstones WHERE plugin_id = ?").run(pluginId);
   }
 
   public close(): void {
     try {
-      this.db.close();
+      this.#db.close();
     } catch {
       // Ignore if already closed
     }
@@ -252,41 +252,41 @@ export class PluginStateStore {
    * Re-entrant transaction wrapper (synchronous bodies only).
    */
   public transaction<T>(fn: () => T): T {
-    if (this.inTransaction) {
+    if (this.#inTransaction) {
       return fn();
     }
-    this.inTransaction = true;
-    this.db.exec("BEGIN TRANSACTION");
+    this.#inTransaction = true;
+    this.#db.exec("BEGIN TRANSACTION");
     try {
       const result = fn();
       if (result instanceof Promise) {
         // An async body would COMMIT before its statements run and lose
         // atomicity silently: roll back and refuse loudly instead.
         try {
-          this.db.exec("ROLLBACK");
+          this.#db.exec("ROLLBACK");
         } catch {
           // Ignored
         }
         throw new Error("PluginStateStore.transaction() does not support async callbacks");
       }
-      this.db.exec("COMMIT");
+      this.#db.exec("COMMIT");
       return result;
     } catch (err) {
       try {
-        this.db.exec("ROLLBACK");
+        this.#db.exec("ROLLBACK");
       } catch {
         // Ignore rollback failure
       }
       throw err;
     } finally {
-      this.inTransaction = false;
+      this.#inTransaction = false;
     }
   }
 
   // --- Plugins ---
 
   public savePlugin(record: PluginRecord): void {
-    const stmt = this.db.prepare(`
+    const stmt = this.#db.prepare(`
       INSERT INTO plugins (id, version, state, trust_level, installed_at, last_enabled, config)
       VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
@@ -310,7 +310,7 @@ export class PluginStateStore {
   }
 
   public getPlugin(id: string): PluginRecord | null {
-    const stmt = this.db.prepare("SELECT * FROM plugins WHERE id = ?");
+    const stmt = this.#db.prepare("SELECT * FROM plugins WHERE id = ?");
     const row = stmt.get(id) as Record<string, unknown> | undefined;
     if (!row) return null;
 
@@ -330,7 +330,7 @@ export class PluginStateStore {
       ? "SELECT * FROM plugins WHERE state = 'enabled' ORDER BY id ASC"
       : "SELECT * FROM plugins ORDER BY id ASC";
 
-    const rows = this.db.prepare(query).all() as Array<Record<string, unknown>>;
+    const rows = this.#db.prepare(query).all() as Array<Record<string, unknown>>;
     return rows.map((row) => ({
       id: row.id as string,
       version: row.version as string,
@@ -343,17 +343,17 @@ export class PluginStateStore {
   }
 
   public updatePluginState(id: string, state: PersistentPluginState): void {
-    const stmt = this.db.prepare("UPDATE plugins SET state = ? WHERE id = ?");
+    const stmt = this.#db.prepare("UPDATE plugins SET state = ? WHERE id = ?");
     stmt.run(state, id);
   }
 
   public updatePluginLastEnabled(id: string, timestamp: string): void {
-    const stmt = this.db.prepare("UPDATE plugins SET last_enabled = ? WHERE id = ?");
+    const stmt = this.#db.prepare("UPDATE plugins SET last_enabled = ? WHERE id = ?");
     stmt.run(timestamp, id);
   }
 
   public deletePlugin(id: string): void {
-    const stmt = this.db.prepare("DELETE FROM plugins WHERE id = ?");
+    const stmt = this.#db.prepare("DELETE FROM plugins WHERE id = ?");
     stmt.run(id);
   }
 
@@ -365,7 +365,7 @@ export class PluginStateStore {
     manifest: PluginManifestInput,
     installedAt?: string,
   ): void {
-    const stmt = this.db.prepare(`
+    const stmt = this.#db.prepare(`
       INSERT INTO plugin_versions (plugin_id, version, manifest_json, installed_at)
       VALUES (?, ?, ?, ?)
       ON CONFLICT(plugin_id, version) DO UPDATE SET
@@ -377,7 +377,7 @@ export class PluginStateStore {
   }
 
   public getVersion(pluginId: string, version: string): PluginVersionRecord | null {
-    const stmt = this.db.prepare(
+    const stmt = this.#db.prepare(
       "SELECT * FROM plugin_versions WHERE plugin_id = ? AND version = ?",
     );
     const row = stmt.get(pluginId, version) as Record<string, unknown> | undefined;
@@ -392,7 +392,7 @@ export class PluginStateStore {
   }
 
   public getVersions(pluginId: string): PluginVersionRecord[] {
-    const stmt = this.db.prepare(
+    const stmt = this.#db.prepare(
       "SELECT * FROM plugin_versions WHERE plugin_id = ? ORDER BY installed_at DESC, rowid DESC",
     );
     const rows = stmt.all(pluginId) as Array<Record<string, unknown>>;
@@ -410,10 +410,10 @@ export class PluginStateStore {
     pluginId: string,
     caps: Array<{ capability: string; apiVersion: string }>,
   ): void {
-    const delStmt = this.db.prepare("DELETE FROM plugin_capabilities WHERE plugin_id = ?");
+    const delStmt = this.#db.prepare("DELETE FROM plugin_capabilities WHERE plugin_id = ?");
     delStmt.run(pluginId);
 
-    const insStmt = this.db.prepare(`
+    const insStmt = this.#db.prepare(`
       INSERT INTO plugin_capabilities (plugin_id, capability_id, api_version)
       VALUES (?, ?, ?)
     `);
@@ -424,7 +424,7 @@ export class PluginStateStore {
   }
 
   public getCapabilities(pluginId: string): PluginCapabilityRecord[] {
-    const stmt = this.db.prepare(
+    const stmt = this.#db.prepare(
       "SELECT * FROM plugin_capabilities WHERE plugin_id = ? ORDER BY capability_id ASC",
     );
     const rows = stmt.all(pluginId) as Array<Record<string, unknown>>;
@@ -438,7 +438,7 @@ export class PluginStateStore {
   // --- Plugin Permissions ---
 
   public savePermissions(pluginId: string, permissions: unknown): void {
-    const stmt = this.db.prepare(`
+    const stmt = this.#db.prepare(`
       INSERT INTO plugin_permissions (plugin_id, permissions_json)
       VALUES (?, ?)
       ON CONFLICT(plugin_id) DO UPDATE SET
@@ -448,7 +448,7 @@ export class PluginStateStore {
   }
 
   public getPermissions(pluginId: string): unknown | null {
-    const stmt = this.db.prepare(
+    const stmt = this.#db.prepare(
       "SELECT permissions_json FROM plugin_permissions WHERE plugin_id = ?",
     );
     const row = stmt.get(pluginId) as { permissions_json: string } | undefined;
@@ -464,7 +464,7 @@ export class PluginStateStore {
     details?: Record<string, unknown> | null,
   ): PluginEventRecord {
     const now = new Date().toISOString();
-    const stmt = this.db.prepare(`
+    const stmt = this.#db.prepare(`
       INSERT INTO plugin_events (plugin_id, event_type, timestamp, details_json)
       VALUES (?, ?, ?, ?)
     `);
@@ -481,7 +481,7 @@ export class PluginStateStore {
   }
 
   public getEvents(pluginId: string, limit = 50): PluginEventRecord[] {
-    const stmt = this.db.prepare(`
+    const stmt = this.#db.prepare(`
       SELECT * FROM plugin_events WHERE plugin_id = ? ORDER BY id DESC LIMIT ?
     `);
     const rows = stmt.all(pluginId, limit) as Array<Record<string, unknown>>;

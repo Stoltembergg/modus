@@ -666,6 +666,29 @@ also observes the six host-catalog loads through the loader prototype.
   restores the prototype spy in `finally`; one low-risk maintenance caveat is
   that a future constructor-created kernel registering first could change which
   instance the helper captures.
+- A13 lifecycle follow-up: the lifecycle service, SQLite state store, and
+  dependency graph also used erased TypeScript `private` declarations for
+  store/graph/manager references, the per-store transition queue, unlocked
+  transition helpers, the SQLite handle/transaction flag, and graph maps.
+  The manager getters also returned Version, Safe Mode, Recovery, and
+  AutoRollback instances whose own fields exposed the service/store/registry,
+  graph, version manager, health monitor, backup cache, and in-memory Safe
+  Mode state; Recovery's recommendation helper was reflectable as well. RED
+  first reproduced the service `store` property and then a manager's `service`
+  property. These service, store, graph, and manager-owned slots/helpers now
+  use ECMAScript-private syntax. The lifecycle, dependency, and rollback
+  suites passed **110/110**, and desktop typecheck passed. Targeted Biome exited
+  0 with **8 warnings and 2 infos** in the eight selected files; no fixes or
+  rule changes were applied. `git diff --check` passed. Public compatibility
+  getters for the store, graph, database, and four managers remain and are
+  asserted to preserve identity where relevant. The manager instances retain
+  their operational public APIs. This is reflective encapsulation only: code
+  holding those public references can call public operations and the store,
+  database, and graph getters still expose mutable objects, including live
+  graph nodes. Independent review found no behavior/API blocker and confirmed
+  the manager field chain is closed; it did not execute tests or probes. The
+  change creates neither an in-process trust boundary nor an OS boundary.
+  Remote CI for the expanded follow-up is pending.
 - Residual: ECMAScript-private fields narrow accidental same-process access,
   but do not establish a same-process trust boundary. Plugin trace snapshots remain private when
   `MODUS_OBSERVABILITY=false`. External consumers that depended on removed
@@ -1850,7 +1873,7 @@ cancellation follow-up above.
 | A10 | Mitigated for host-catalog plugins; legacy activation blocked | Startup uses exact host-catalog versions, opens the durable store before deferred activation, reconciles disabled/tombstoned state, and restores dependency order. `MODUS_PLUGINS` now requires `MODUS_PLUGIN_LIFECYCLE`; no direct bootstrap path remains. External artifact identity and crash-consistent package deployment remain unavailable. |
 | A11 | Mitigated | Disable transaction rollback restores runtime or leaves provider quarantined; broader crash atomicity remains unproven. |
 | A12 | Mitigated | Per-store lifecycle queue serializes shared DB/graph operations; stress/fault injection beyond targeted tests remains open. |
-| A13 | Mitigated; plugin internals encapsulated | Persisted Safe Mode policy is service-derived; transitions are validated before reload and restoration retains quarantine. Runtime registry, loader, store/service, managers, startup promises, and HarnessKernel are ECMAScript-private; no in-repository production caller used the removed getters. This does not create a process isolation boundary. Storage corruption/power-loss proof and a read-only diagnostics API remain open. |
+| A13 | Mitigated; reflective encapsulation extended | Persisted Safe Mode policy is service-derived; transitions are validated before reload and restoration retains quarantine. Runtime registry, loader, lifecycle-owned state/unlocked helpers, manager-owned references/state, startup promises, and HarnessKernel use ECMAScript-private slots/methods. Public store, graph, database, and manager getters/APIs remain, including mutable references; this does not create an in-process or OS boundary. Storage corruption/power-loss proof and a read-only diagnostics API remain open. |
 | A14 | Mitigated | SemVer constraints, active-provider checks, cycle preflight/recovery, and dependent suspension are covered; an OS boundary remains absent. |
 | A15 | Partially mitigated | Pi cancellation propagates to terminal/app launches and the trusted CodeGraph CLI; active root-run agent processes are selected by session+run and cancelled, and cancellation telemetry is distinct. App cancellation preserves cleanup errors and refuses to signal an exited tracked leader. UI reports unconfirmed stop outcomes in workspace/session/process scope with an explicit dismiss action. CodeGraph abort/timeout now waits for the shared process-ops result; Windows taskkill is time-bounded. POSIX confirms the original process group; Windows confirms the leader PID after a tree-termination request. Escaped descendants, PID/PGID reuse races without stable OS handles, non-cooperative in-process work, and hard OS preemption remain unproven. |
 | A16 | Prior fix preserved | Explicit user-selected model identity and provider. |
@@ -2473,3 +2496,17 @@ containment checks on Ubuntu/Windows/macOS, IPC protocol fixtures,
 compile-only sandbox, Verifier-First, and PTY cancellation passed. The Windows
 and macOS package workflows for that head were still running when this note
 was written; no probes ran, and the PR remained Draft.
+
+The next full run `38099517953` on `c08e3ca8c13d849c0cec8626ea63eb6ebe60f04e`
+passed Biome/typecheck and all non-timing feature jobs except the macOS
+containment test group. Global Vitest recorded **4,653 passed, 8 skipped,
+1 failed across 415 files**: `FastVectorDistance` measured **0.110467 ms**
+against its unchanged `<0.1 ms` assertion. The macOS group recorded
+**303 passed, 7 skipped, 1 failed** and hit the same assertion at **0.290708
+ms**; Ubuntu and Windows containment groups passed. Supabase pgTAP passed
+**1,041 tests across 20 files**; Verifier-First, safe IPC fixtures,
+compile-only sandbox, and PTY cancellation passed. Windows and macOS package
+jobs were still running at the time of this snapshot. This is additional
+reproducibility evidence for the timing-sensitive assertion, but it does not
+establish a baseline or an exclusively environmental cause; its code and
+threshold remain untouched.

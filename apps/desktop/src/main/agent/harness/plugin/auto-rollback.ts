@@ -21,18 +21,18 @@ export interface WatchUpdateOptions {
 }
 
 export class AutoRollbackManager {
-  private service: PluginLifecycleService;
-  private versionManager: PluginVersionManager;
-  private healthMonitor?: PluginHealthMonitor | undefined;
+  #service: PluginLifecycleService;
+  #versionManager: PluginVersionManager;
+  #healthMonitor?: PluginHealthMonitor | undefined;
 
   constructor(
     service: PluginLifecycleService,
     versionManager: PluginVersionManager,
     healthMonitor?: PluginHealthMonitor,
   ) {
-    this.service = service;
-    this.versionManager = versionManager;
-    this.healthMonitor = healthMonitor;
+    this.#service = service;
+    this.#versionManager = versionManager;
+    this.#healthMonitor = healthMonitor;
   }
 
   /**
@@ -44,22 +44,22 @@ export class AutoRollbackManager {
     newManifest: PluginManifest,
     options?: WatchUpdateOptions,
   ): Promise<void> {
-    const pluginRecord = this.service.getStore().getPlugin(pluginId);
+    const pluginRecord = this.#service.getStore().getPlugin(pluginId);
     const previousVersion = pluginRecord?.version;
     const threshold = options?.threshold ?? 0.5;
 
     // 1. Preserve current active version before upgrading
     if (previousVersion) {
-      await this.versionManager.preserveVersion(pluginId, previousVersion);
+      await this.#versionManager.preserveVersion(pluginId, previousVersion);
     }
 
     // 2. Perform the upgrade
     try {
-      await this.service.upgrade(newManifest);
+      await this.#service.upgrade(newManifest);
     } catch (err) {
       if (previousVersion) {
         try {
-          await this.versionManager.rollback(pluginId, previousVersion);
+          await this.#versionManager.rollback(pluginId, previousVersion);
         } catch {
           // Best effort rollback
         }
@@ -81,8 +81,8 @@ export class AutoRollbackManager {
           checkResult.message ??
           `Post-upgrade health check reported failure (errorRate: ${observedErrorRate})`;
       }
-    } else if (this.healthMonitor) {
-      const health = this.healthMonitor.getHealth(pluginId);
+    } else if (this.#healthMonitor) {
+      const health = this.#healthMonitor.getHealth(pluginId);
       observedErrorRate = health.errorRate;
       if (health.status === "failing" || health.errorRate > threshold) {
         isFailing = true;
@@ -92,7 +92,7 @@ export class AutoRollbackManager {
 
     if (isFailing && previousVersion) {
       // 4. Trigger Automatic Rollback
-      await this.versionManager.rollback(pluginId, previousVersion);
+      await this.#versionManager.rollback(pluginId, previousVersion);
 
       throw new UpdateFailedError(
         `Update of '${pluginId}' to ${newManifest.version} failed post-upgrade health check (${failureReason}). Automatically rolled back to ${previousVersion}.`,
