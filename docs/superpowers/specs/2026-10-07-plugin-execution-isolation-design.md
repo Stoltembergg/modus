@@ -1,7 +1,17 @@
 # Executor isolado para plugins não confiáveis
 
-**Status:** baseline arquitetural aprovado pelo usuário em 2026-10-07; implementação autorizada, começando por provas de viabilidade.  
+**Status:** baseline arquitetural aprovado em 2026-10-07; atualização de 2026-10-11 mantém a execução externa NO-GO enquanto os gates por plataforma não forem satisfeitos.
 **Escopo:** remediação futura de A01–A04. Este documento não afirma que qualquer achado foi fechado.
+
+**Adenda da missão atual (2026-10-11):** a autorização A01–A25 permite avançar
+lanes de implementação Windows, Linux e macOS independentemente; uma plataforma
+não espera que outra conclua probes. Isso não autoriza probes, cenários de
+enforcement, root-resume ou execução de código externo não confiável. Cada
+adapter continua NO-GO para execução externa até aplicar e validar todos os
+limites já aprovados naquela plataforma. Não altere quotas para contornar
+limitações locais. Os Guardian Tasks 5–7 e Checkpoints 2–3 continuam bloqueados.
+Commits e publicação são permitidos somente na PR #191 mantida como Draft; não
+fazer merge na `main`.
 
 ## Invariantes
 
@@ -38,12 +48,25 @@ Imports WASM são somente funções `modus:host` allowlisted de capabilities con
 ## Adapters e gate de viabilidade
 
 - **Windows:** launcher nativo com token restrito/AppContainer sem capability de rede e handles herdados minimizados; criar suspenso, associar a Job Object com kill-on-close, sem breakaway, limites de processos/memória/CPU e só então retomar. Job Object sozinho não restringe filesystem/rede. Pesquisa oficial encontrou hard CPU-rate e limite de processos, mas memória do Job é committed memory (não RSS) e não há quota pública documentada de quantidade de handles. O `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` limita herança, não handles criados depois. Portanto os tetos estritos de 256 MiB RSS e 64 handles permanecem NO-GO até outro mecanismo suportado ser demonstrado.
-- **macOS:** XPC em `Host.app/Contents/XPCServices/<Service>.xpc` continua candidato apenas para isolamento de acesso ambiente; **XPC sozinho está NO-GO no contrato atual**. Pesquisa Apple não documenta CPU-rate, orçamento de CPU por serviço, RSS/VA rígido, processos por serviço ou deadline XPC: `RLIMIT_CPU` é acumulado/sinalizado, `RLIMIT_RSS` é advisory e `RLIMIT_NPROC` é por UID. `NSXPCConnection.invalidate()` não mata o serviço; PID sinalizável não o torna filho waitable. Antes de qualquer probe XPC, identificar mecanismo macOS suportado que aplique cada quota obrigatória antes dos bytes do guest e permita confirmar ausência de execução. Não substituir limites por fuel, memória máxima de guest, watchdog, telemetria ou `RLIMIT_CPU`; não relaxar a política. O serviço pode ser encerrado pelo `launchd` quando ocioso e relançado após crash/conexão; toda conexão nova exige reautorização e geração/estado novos. Sem mecanismo compatível identificado e demonstrado, macOS permanece NO-GO e a tranche não avança ao runner/integração multiplataforma. Ad-hoc signing é somente prova local/CI, não evidência de distribuição.
+- **macOS:** XPC em `Host.app/Contents/XPCServices/<Service>.xpc` continua candidato apenas para isolamento de acesso ambiente; **XPC sozinho está NO-GO no contrato atual**. Pesquisa Apple não documenta CPU-rate, orçamento de CPU por serviço, RSS/VA rígido, processos por serviço ou deadline XPC: `RLIMIT_CPU` é acumulado/sinalizado, `RLIMIT_RSS` é advisory e `RLIMIT_NPROC` é por UID. `NSXPCConnection.invalidate()` não mata o serviço; PID sinalizável não o torna filho waitable. Antes de qualquer probe XPC, identificar mecanismo macOS suportado que aplique cada quota obrigatória antes dos bytes do guest e permita confirmar ausência de execução. Não substituir limites por fuel, memória máxima de guest, watchdog, telemetria ou `RLIMIT_CPU`; não relaxar a política. O serviço pode ser encerrado pelo `launchd` quando ocioso e relançado após crash/conexão; toda conexão nova exige reautorização e geração/estado novos. Sem mecanismo compatível implementado e provado, macOS permanece NO-GO para execução externa; isso não impede source work seguro e sintético no lane macOS, nem exige que Linux/Windows aguardem. Ad-hoc signing é somente prova local/CI, não evidência de distribuição.
 - **Linux:** namespaces compatíveis, `no_new_privs`, seccomp e Landlock; cgroup v2 para CPU/memória/processos quando realmente disponível. Pesquisa oficial encontrou `cpu.max`, `pids.max`, `cgroup.kill` e `RLIMIT_NOFILE`; `memory.max` é limite hard para memória cobrada pelo cgroup, não uma quota RSS-only. Não tratar como equivalente ao requisito explícito de 256 MiB RSS sem decisão do usuário. Kernel/permissões/delegação ausentes significam NO-GO, sem fallback.
 
-**Autorização de execução atual (2026-10-10):** esta missão autoriza implementação e verificações sintéticas seguras, mas não autoriza probes, cenários de enforcement, execução de plugins não confiáveis ou retomada de processos root. As observações exploratórias anteriores de Windows e Linux continuam sendo apenas diagnóstico; não satisfazem quotas nem fecham A01–A04. macOS permanece NO-GO. Plugins de origem externa ficam bloqueados em todas as plataformas enquanto um adapter não comprovar cada controle aprovado. Os limites e critérios de segurança permanecem inalterados.
+**Autorização atual (2026-10-11):** a missão autoriza implementação A01–A25,
+verificações sintéticas seguras, commits e publicação na PR #191 Draft. Não
+autoriza probes, cenários de enforcement, execução de plugins não confiáveis,
+root-resume, Guardian Tasks 5–7, Checkpoints 2–3, nem merge. As observações
+exploratórias anteriores de Windows e Linux continuam sendo apenas diagnóstico;
+não satisfazem quotas nem fecham A01–A04. Windows, Linux e macOS são avaliados
+independentemente, mas execução externa permanece bloqueada em cada plataforma
+até que todos os controles aprovados estejam implementados e validados com
+autorização específica para as provas restritas. Limites e critérios de
+segurança permanecem inalterados.
 
-O deliverable exploratório é prova de viabilidade, não runner de produção: processo benigno de probe lançado sob cada política, canários controlados para ambiente/arquivo/rede/processo filho, limites e kill/reap. Registrar versões, política aplicada, recursos medidos e resultado real de cada runner. Um SO não prova outro.
+O deliverable exploratório descrito abaixo é um futuro plano de validação, não
+um runner de produção e não está autorizado nesta missão: processo benigno de
+probe lançado sob cada política, canários controlados para ambiente/arquivo/
+rede/processo filho, limites e kill/reap. Requer autorização específica antes
+de execução. Um SO não prova outro.
 
 ## Threat model e provas adversariais
 
@@ -57,7 +80,7 @@ Reutilizar e integrar: `apps/desktop/src/main/agent/harness/capability/capabilit
 
 Conter como trusted/test-only, sem caminho externo: `harness/plugin/plugin-isolation-host.ts`, `harness/plugin/wasm/wasm-capability-host.ts` e `wasi-sandbox.ts`.
 
-Novos componentes após o gate: `plugin-execution-host.ts`, `plugin-execution-protocol.ts`, `plugin-artifact-authorizer.ts`, `plugin-capability-broker.ts`, `plugin-sandbox-ops.ts` e `crates/plugin-runner/` com executor/protocolo/adapters. Arquivos de probe e helper macOS só são mantidos se forem necessários como regressão durável. Alterar schema de persistência apenas se for indispensável para digest/origem imutáveis.
+Novos componentes podem ser implementados antes dos gates de execução: `plugin-execution-host.ts`, `plugin-execution-protocol.ts`, `plugin-artifact-authorizer.ts`, `plugin-capability-broker.ts`, `plugin-sandbox-ops.ts` e `crates/plugin-runner/` com executor/protocolo/adapters. O código de produção deve manter despacho externo desconectado enquanto a plataforma não satisfizer integralmente o contrato. Arquivos de probe e helper macOS só são mantidos se forem necessários como regressão durável; probes e fixtures que retomem processos continuam bloqueados sem autorização específica. Alterar schema de persistência apenas se for indispensável para digest/origem imutáveis.
 
 ## Critérios de fechamento
 
@@ -74,7 +97,7 @@ A05–A06 para WASM/WASI legado in-process; A07–A09 (filesystem junction/TOCTO
 
 ## Adenda — Prova real de enforcement do probe Windows (não produção)
 
-**Autorização histórica (substituída pela missão de 2026-10-10):** o usuário aprovou um supervisor Rust para provar quotas Windows em worker descartável. A autorização ativa não permite probes ou cenários de enforcement. Esta adenda não autoriza runner de produção, integração ao loader, execução de artefatos WASM, reabertura de plugins, alteração de quotas, nem fechamento de A01–A04. Gate externo continua fechado e macOS continua NO-GO. O escopo Linux só poderá avançar depois que todos os oito casos Windows passarem; não presumir equivalência de mecanismos. Os oito casos não podem ser executados até que o usuário autorize especificamente esses testes.
+**Autorização histórica (substituída em 2026-10-11):** o usuário aprovou um supervisor Rust para provar quotas Windows em worker descartável. A autorização atual não permite probes ou cenários de enforcement. Esta adenda não autoriza runner de produção, integração ao loader, execução de artefatos WASM, reabertura de plugins, alteração de quotas, nem fechamento de A01–A04. Gate externo continua fechado. Trabalho seguro de implementação Linux não depende dos resultados Windows; nenhum dos oito cenários pode ser executado sem autorização específica.
 
 ### Worker e lançamento
 
@@ -103,6 +126,16 @@ Versão de relatório do probe passa a `schema_version: 2`. Registrar exatamente
 
 Deadlines de cada cenário incluem criação/handshake/challenge/cleanup. Cancel cooperativo tem no máximo 100 ms; encerramento forçado e reap até 2 s. Se processo já estiver em Job pai e o limite/denominador efetivo não puder ser determinado, não alegar enforcement. O Job objeto não restringe sozinho filesystem/rede, e este probe mede quotas/process lifecycle apenas.
 
-### Gate Windows → Linux
+### Regra histórica Windows → Linux (substituída em 2026-10-11)
 
-Implementar e executar as provas Windows primeiro. Se qualquer caso for `failed`/`not_tested`, ou não houver reap confirmado, Windows fica NO-GO e o lane de execução Linux não começa. A pesquisa atual prevê dois bloqueios inevitáveis sem novo mecanismo suportado: RSS rígido e quota geral de 64 handles. Qualquer revisão desses requisitos precisa de aprovação explícita do usuário; não reinterpretar commit ou working-set como RSS. Mesmo se oito casos passarem no futuro, isso não fecha A01–A04 nem abre plugins externos.
+Esta sequência foi substituída: trabalho de implementação por plataforma pode
+avançar sem esperar outra plataforma. O texto histórico abaixo não é uma
+autorização para executar probes; a autorização atual continua proibindo-os.
+Windows, Linux e macOS permanecem gates independentes. A pesquisa atual ainda
+registra lacunas para RSS rígido e quota geral de 64 handles em Windows, RSS em
+Linux e vários limites em macOS. Não reinterpretar commit, working-set ou
+telemetria como enforcement. Nenhum resultado hipotético abre plugins externos
+ou fecha A01–A04 automaticamente.
+
+> Histórico: a ordem original exigia executar provas Windows antes de começar
+> o lane Linux. Essa dependência não se aplica à missão atual.

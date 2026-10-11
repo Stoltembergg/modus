@@ -2336,10 +2336,19 @@ explicit failure instead of an ignored or false timeout guarantee.
   formatting changes. The one `noUnusedVariables` warning for the existing
   `TIn` type parameter is unchanged in the pre-change file. Independent
   follow-up review approved both guard points; it found no blocker and noted
-  that there are no productive positive-timeout callers. Remote CI for this
-  follow-up is pending. A05 remains partial because non-cooperative in-process
-  work is not preemptible, external plugin execution must stay blocked, and
-  platform process containment/reap guarantees have not been proven.
+  that there are no productive positive-timeout callers. Remote workflow
+  `38105345782` passed Biome/typecheck and global Vitest (**415 files passed;
+  4,678 passed, 8 skipped; 125.34s**), as well as pgTAP/Deno, Verifier-First,
+  safe-filtered containment on Ubuntu/Windows/macOS, synthetic IPC, sandbox
+  compile-only, and PTY cancellation. The retry followed a separate run where
+  the unchanged FastVectorDistance timing assertion failed; this later success
+  establishes that this workflow passed, but does not classify the earlier
+  failure as pre-existing or solely environmental. Windows x64 packaging run
+  `38105345842` and macOS x64/arm64 packaging run `38105345926` completed
+  successfully. A05 remains partial
+  because non-cooperative in-process work is not
+  preemptible, external plugin execution must stay blocked, and platform
+  process containment/reap guarantees have not been proven.
 
 #### Remote CI on `a1a4e35` before the `pkexec`/`run0` follow-up
 
@@ -2799,3 +2808,12 @@ unchanged in SQLite, and renderer source scanning uses the same shared limit.
   `38104705086` and Windows package `38104705094` both succeeded. The benchmark
   and threshold remain unchanged; these failures are not classified as
   pre-existing or solely environmental.
+- Workflow `38105345782` on `1a426f803b199158f73993041d7aaff48da4aee6` then
+  passed the global suite (**415 files, 4,678 passed, 8 skipped; 125.34s**)
+  and the Supabase pgTAP/Deno job, including renewal test 22. The unchanged
+  FastVectorDistance timing assertion passed in this run. This records the
+  successful workflow without attributing the earlier failures to baseline or
+  environment. Safe-filtered containment, compile-only sandbox, synthetic IPC,
+  PTY cancellation, Verifier-First, Biome, and typecheck jobs also passed. At
+  this update, Windows x64 packaging `38105345842` and macOS x64/arm64
+  packaging `38105345926` also completed successfully.
