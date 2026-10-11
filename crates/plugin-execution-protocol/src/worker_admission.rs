@@ -257,9 +257,8 @@ impl<T: WorkerTransport> Drop for AdmissionAssessmentToken<T> {
 }
 
 fn cleanup_deadline() -> Instant {
-    Instant::now() + Duration::from_millis(
-        APPROVED_RESOURCE_POLICY.forced_termination_reap_deadline_ms,
-    )
+    Instant::now()
+        + Duration::from_millis(APPROVED_RESOURCE_POLICY.forced_termination_reap_deadline_ms)
 }
 
 fn request_and_reap<T: WorkerTransport>(
@@ -325,11 +324,7 @@ mod tests {
         provenance_for_scope("session-fixture", "workspace-fixture", "run-fixture")
     }
 
-    fn provenance_for_scope(
-        session_id: &str,
-        workspace_id: &str,
-        run_id: &str,
-    ) -> HostProvenance {
+    fn provenance_for_scope(session_id: &str, workspace_id: &str, run_id: &str) -> HostProvenance {
         HostProvenance::from_host_catalog(
             "fixture/plugin",
             "1.0.0",
@@ -360,11 +355,7 @@ mod tests {
     #[test]
     fn issues_a_one_use_token_only_for_complete_synthetic_controls() {
         let provenance = provenance();
-        let worker = assessed_worker(
-            provenance.clone(),
-            APPROVED_RESOURCE_POLICY,
-            all_controls(),
-        );
+        let worker = assessed_worker(provenance.clone(), APPROVED_RESOURCE_POLICY, all_controls());
 
         let token = AdmissionAssessmentToken::validate(worker, provenance.clone()).unwrap();
 
@@ -377,11 +368,7 @@ mod tests {
         let provenance = provenance();
         for missing_control in all_controls() {
             let controls = all_controls().filter(|control| *control != missing_control);
-            let worker = assessed_worker(
-                provenance.clone(),
-                APPROVED_RESOURCE_POLICY,
-                controls,
-            );
+            let worker = assessed_worker(provenance.clone(), APPROVED_RESOURCE_POLICY, controls);
 
             assert!(matches!(
                 AdmissionAssessmentToken::validate(worker, provenance.clone()),

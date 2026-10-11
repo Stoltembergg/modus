@@ -657,10 +657,15 @@ impl<T: WorkerTransport> WorkerSession<T> {
                     .approved_policy()
                     .forced_termination_reap_deadline_ms,
             );
+        let reap_deadline = deadline.min(policy_deadline);
         transport.request_termination();
-        transport
-            .reap_until(deadline.min(policy_deadline))
-            .map_err(|error| ProtocolError::WorkerTerminationFailed(error.kind()))
+        match transport.reap_until(reap_deadline) {
+            Err(error) => Err(ProtocolError::WorkerTerminationFailed(error.kind())),
+            Ok(()) if Instant::now() >= reap_deadline => Err(
+                ProtocolError::WorkerTerminationFailed(io::ErrorKind::TimedOut),
+            ),
+            Ok(()) => Ok(()),
+        }
     }
 
     pub fn is_closed(&self) -> bool {
@@ -957,10 +962,10 @@ fn valid_sha256(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Read;
     use std::collections::VecDeque;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::io::Read;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
 
     use serde::ser::SerializeSeq;
@@ -1005,7 +1010,10 @@ mod tests {
             }
             let count = buffer.len().min(self.incoming.len());
             for byte in &mut buffer[..count] {
-                *byte = self.incoming.pop_front().expect("count is bounded by input");
+                *byte = self
+                    .incoming
+                    .pop_front()
+                    .expect("count is bounded by input");
             }
             Ok(count)
         }
@@ -1028,10 +1036,15 @@ mod tests {
 
         fn reap_until(&mut self, deadline: Instant) -> io::Result<()> {
             if Instant::now() >= deadline {
-                return Err(io::Error::new(io::ErrorKind::TimedOut, "fixture reap deadline"));
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "fixture reap deadline",
+                ));
             }
             self.reap_timeout_ms.store(
-                deadline.saturating_duration_since(Instant::now()).as_millis() as usize,
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis() as usize,
                 Ordering::SeqCst,
             );
             self.reaped.store(true, Ordering::SeqCst);
