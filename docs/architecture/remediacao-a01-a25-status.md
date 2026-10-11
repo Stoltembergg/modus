@@ -229,20 +229,28 @@ and does not change the trusted Harness/plugin path.
 The next shared-layer increment pairs `PlatformAssessment` with the exact
 `WorkerTransport` in `AssessedWorker<T>`, consumes that pair into a
 non-cloneable `AdmissionAssessmentToken<T>`, and consumes the token into
-`WorkerSession<T>`. The low-level `Dispatcher` is private. A production caller
-cannot pass a different reader or raw frame between calls: handshake, worker
-ingress, host responses, and shutdown all use the transport owned by the same
-session. Protocol/I/O/EOF/read-deadline/write-deadline failures revoke pending
-invocations and request worker-tree termination. Reap deadlines are clamped to
-the approved forced-reap ceiling, including explicit shutdown requests.
+`WorkerSession<T>`. The low-level `Dispatcher` is private. Capability grants
+are carried by a one-use `HostAuthorization`, created by the permission-broker
+adapter and matched against the same plugin/artifact/session/workspace/run/
+generation provenance before the session is built. A production caller cannot
+pass a different reader or raw frame between calls: handshake, worker ingress,
+host responses, and shutdown all use the transport owned by the same session.
+Read/write deadlines are clipped to the approved handshake, execution, and
+broker budgets. Protocol/I/O/EOF/deadline failures revoke pending invocations
+and request worker-tree termination. Reap deadlines are clamped to the
+approved lifecycle and forced-reap ceilings. Failed reaps retain the transport
+and failure state for a bounded retry; a later shutdown cannot report success
+until a reap returns before its deadline.
 
-The platform bridge is deliberately `unsafe`: its implementer must bind the
-transport to the assessed process, install and inspect controls before sending
-artifact bytes, honor absolute I/O deadlines, terminate the full process tree,
-and reap it within the supplied deadline. The API cannot prove those adapter
-obligations. No platform adapter implements this contract and there is still
-no productive desktop caller, so no external execution is admitted on Windows,
-Linux, or macOS. The trusted in-process Harness/plugin path is unchanged.
+The platform bridge and permission-broker authorization constructor are
+deliberately `unsafe`: adapter code must bind the transport to the assessed
+process and install/inspect controls before artifact transfer; broker code must
+provide the current grant set for that exact provenance. The bridge must honor
+absolute I/O deadlines, terminate the full process tree, and reap it within
+the supplied deadline. The API cannot prove either set of host obligations.
+No platform adapter, broker adapter, or productive desktop caller implements
+these contracts, so no external execution is admitted on Windows, Linux, or
+macOS. The trusted in-process Harness/plugin path is unchanged.
 
 - RED: CI run `38111004484`, job `114386372023`, passed the protocol
   `rustfmt --check`, then failed compiling the new external-runtime fixture:
@@ -251,12 +259,13 @@ Linux, or macOS. The trusted in-process Harness/plugin path is unchanged.
   process or executing plugin code.
 - GREEN: pending remote CI for the implementation commit. Safe integration
   fixtures exercise handshake, invocation, response on the owned endpoint,
-  explicit shutdown, read timeout and termination/reap; unit fixtures also
-  exercise write timeout and reap-deadline clamping. The most recent
-  independent review of the previous assessment-only API does not cover this
-  transport-owning increment; a new review is pending.
+  deadline budgets, explicit shutdown, read/write timeouts, provenance-bound
+  authorization, and termination/reap; unit fixtures also exercise a failed
+  reap followed by a successful retry. Independent review found the failed
+  reap-state and caller-controlled deadline issues; both are being corrected
+  before this increment is accepted. A follow-up review is pending.
 - Remaining A01–A04 proof gaps: no platform implementation of the unsafe
-  adapter, no OS policy attestation, no artifact-transfer boundary, no
+  adapter, no OS policy attestation, no artifact-transfer boundary, no actual
   permission-broker caller and no production lifecycle integration. Do not
   interpret the synthetic assessment controls as proof of confinement.
 

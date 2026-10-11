@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use modus_plugin_execution_protocol::resource_policy::APPROVED_RESOURCE_POLICY;
 use modus_plugin_execution_protocol::worker_admission::{
-    AdmissionAssessmentToken, AssessedWorker, EnforcementControl, PlatformAssessment,
-    WorkerTransport,
+    AdmissionAssessmentToken, AssessedWorker, EnforcementControl, HostAuthorization,
+    PlatformAssessment, WorkerTransport,
 };
 use modus_plugin_execution_protocol::{
     DispatchEvent, HostFrame, HostProvenance, HostTrustLevel, InvocationOutcome, PROTOCOL_VERSION,
@@ -22,10 +22,16 @@ struct FixtureTransport {
     outgoing: Arc<Mutex<Vec<u8>>>,
     terminated: Arc<AtomicBool>,
     reaped: Arc<AtomicBool>,
+    read_deadlines_ms: Arc<Mutex<Vec<u128>>>,
+    write_deadlines_ms: Arc<Mutex<Vec<u128>>>,
 }
 
 impl modus_plugin_execution_protocol::DeadlineReader for FixtureTransport {
     fn read_with_deadline(&mut self, buffer: &mut [u8], deadline: Instant) -> io::Result<usize> {
+        self.read_deadlines_ms
+            .lock()
+            .unwrap()
+            .push(deadline.saturating_duration_since(Instant::now()).as_millis());
         if Instant::now() >= deadline {
             return Err(io::Error::new(io::ErrorKind::TimedOut, "fixture deadline"));
         }
@@ -39,6 +45,10 @@ impl modus_plugin_execution_protocol::DeadlineReader for FixtureTransport {
 
 unsafe impl WorkerTransport for FixtureTransport {
     fn write_with_deadline(&mut self, frame: &[u8], deadline: Instant) -> io::Result<()> {
+        self.write_deadlines_ms
+            .lock()
+            .unwrap()
+            .push(deadline.saturating_duration_since(Instant::now()).as_millis());
         if Instant::now() >= deadline {
             return Err(io::Error::new(io::ErrorKind::TimedOut, "fixture deadline"));
         }
@@ -84,16 +94,22 @@ fn session(
     Arc<Mutex<Vec<u8>>>,
     Arc<AtomicBool>,
     Arc<AtomicBool>,
+    Arc<Mutex<Vec<u128>>>,
+    Arc<Mutex<Vec<u128>>>,
 ) {
     let provenance = provenance();
     let outgoing = Arc::new(Mutex::new(Vec::new()));
     let terminated = Arc::new(AtomicBool::new(false));
     let reaped = Arc::new(AtomicBool::new(false));
+    let read_deadlines_ms = Arc::new(Mutex::new(Vec::new()));
+    let write_deadlines_ms = Arc::new(Mutex::new(Vec::new()));
     let transport = FixtureTransport {
         incoming: input.into(),
         outgoing: Arc::clone(&outgoing),
         terminated: Arc::clone(&terminated),
         reaped: Arc::clone(&reaped),
+        read_deadlines_ms: Arc::clone(&read_deadlines_ms),
+        write_deadlines_ms: Arc::clone(&write_deadlines_ms),
     };
     let controls = [
         EnforcementControl::ArtifactLimitBeforeParsing,
@@ -113,8 +129,21 @@ fn session(
     };
     let worker = unsafe { AssessedWorker::from_adapter(assessment, transport) };
     let token = AdmissionAssessmentToken::validate(worker, provenance).unwrap();
-    let session = WorkerSession::new(token, CHALLENGE, ["memory.read".to_owned()]).unwrap();
-    (session, outgoing, terminated, reaped)
+    let authorization = unsafe {
+        HostAuthorization::from_permission_broker(
+            provenance(),
+            ["memory.read".to_owned()],
+        )
+    };
+    let session = WorkerSession::new(token, authorization, CHALLENGE).unwrap();
+    (
+        session,
+        outgoing,
+        terminated,
+        reaped,
+        read_deadlines_ms,
+        write_deadlines_ms,
+    )
 }
 
 fn append_frame(buffer: &mut Vec<u8>, frame: WorkerFrame) {
@@ -141,8 +170,8 @@ fn runtime_session_keeps_handshake_invocation_and_response_on_assessed_transport
         },
     );
 
-    let (mut session, outgoing, terminated, reaped) = session(input);
-    let deadline = Instant::now() + Duration::from_secs(1);
+    let (mut session, outgoing, terminated, reaped, read_deadlines, write_deadlines) = session(input);
+    let deadline = Instant::now() + Duration::from_secs(60);
     assert_eq!(
         session.receive_until(deadline),
         Ok(Some(DispatchEvent::Ready))
@@ -160,6 +189,17 @@ fn runtime_session_keeps_handshake_invocation_and_response_on_assessed_transport
             deadline,
         )
         .unwrap();
+
+    let read_deadlines = read_deadlines.lock().unwrap();
+    assert!(read_deadlines.len() >= 4);
+    assert!(read_deadlines[..2].iter().all(|remaining| *remaining <= 2_000));
+    assert!(read_deadlines[2..].iter().all(|remaining| *remaining <= 10_000));
+    let write_deadlines = write_deadlines.lock().unwrap();
+    assert!(write_deadlines.len() >= 2);
+    assert!(write_deadlines[0] <= 2_000);
+    assert!(write_deadlines[1] <= 5_000);
+    drop(write_deadlines);
+    drop(read_deadlines);
 
     let output = outgoing.lock().unwrap();
     let ready_length = 4 + u32::from_be_bytes(output[..4].try_into().unwrap()) as usize;

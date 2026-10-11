@@ -246,6 +246,10 @@ impl<T: WorkerTransport> AdmissionAssessmentToken<T> {
                 .expect("admission token is consumed once"),
         )
     }
+
+    pub(crate) fn provenance(&self) -> &HostProvenance {
+        &self.provenance
+    }
 }
 
 impl<T: WorkerTransport> Drop for AdmissionAssessmentToken<T> {
@@ -253,6 +257,37 @@ impl<T: WorkerTransport> Drop for AdmissionAssessmentToken<T> {
         if let Some(transport) = self.transport.as_mut() {
             request_and_reap(transport, cleanup_deadline());
         }
+    }
+}
+
+/// One-use capability grants issued by the host permission broker for one
+/// exact plugin, artifact, session, workspace, run, and generation.
+pub struct HostAuthorization {
+    provenance: HostProvenance,
+    granted_capabilities: BTreeSet<String>,
+}
+
+impl HostAuthorization {
+    /// Bind permission-broker grants to host-resolved worker provenance.
+    ///
+    /// # Safety
+    ///
+    /// The caller must supply the current grant set returned by the host's
+    /// permission broker for this exact provenance. It must not widen grants
+    /// based on worker input or configuration that the broker has not
+    /// approved.
+    pub unsafe fn from_permission_broker(
+        provenance: HostProvenance,
+        granted_capabilities: impl IntoIterator<Item = String>,
+    ) -> Self {
+        Self {
+            provenance,
+            granted_capabilities: granted_capabilities.into_iter().collect(),
+        }
+    }
+
+    pub(crate) fn into_parts(self) -> (HostProvenance, BTreeSet<String>) {
+        (self.provenance, self.granted_capabilities)
     }
 }
 
