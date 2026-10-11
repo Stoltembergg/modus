@@ -2091,7 +2091,7 @@ cancellation follow-up above.
 | A02 | Partially mitigated | The shared policy records approved CPU, memory, time, output, IPC, process, hostcall and concurrency ceilings. `WorkerSession` clips I/O deadlines and uses one shutdown/reap cutoff; termination and reap errors remain observable. The dispatcher reserves the approved rolling one-second hostcall budget before granting an invocation. `PluginHostcallRateLimiterRegistry` shares the budget by host-resolved plugin ID across sessions when the runtime reuses one registry; tests cover cross-session reuse, expiry, isolation, concurrent reservations, and over-budget worker closure/reap. This remains protocol logic: there is no production broker/runtime caller or platform adapter. The 64-hostcalls-per-invocation value is not enforced because the protocol has no invocation boundary. No platform adapter enforces the approved OS resource limits or proves full process-tree termination. External execution remains blocked; enforcement probes were not run. |
 | A03 | Partially mitigated | Chat/review auto-discovery remains blocked. Host catalog lookups, built-in catalog entries, loader results, and capability provider queries expose immutable metadata descriptors without lifecycle/implementation callbacks. `PluginLoader`, `PluginLifecycleService`, and `CapabilityRegistry` keep trust/authorization maps, checkpoints, provenance state, source/executor references, and internal helpers in ECMAScript `#private` fields/methods; unused loader/service registry accessors were removed after callsite search. `CapabilityRegistry.registerCapability` now requires the host-only registration symbol. Exact source references remain within trusted in-process wiring. The shared admission token binds the assessed transport to host provenance, and one-use authorization must match plugin/artifact/session/workspace/run/generation. No production adapter or broker caller exists; the unsafe adapter boundary does not independently prove provenance or isolation. |
 | A04 | Partially mitigated | External Pi extension ingress is disabled for chat and review; the review callsite guard covers loader flags and session creation. Registry provider execution remains dispatched through `CapabilityRegistry.execute`; rollback uses opaque registry-owned checkpoints. Public catalog/registry lookup APIs no longer return implementation references. The shared `WorkerSession` validates exact grants and routes frames through its private dispatcher in safe synthetic tests. Built-ins remain trusted in-process and there is no OS-backed external dispatcher or lifecycle integration. |
-| A05 | Partially mitigated; unpreemptible WASM timeouts now fail closed | Both `WasmCapabilityHost.executeWasm` and its public `createInstance` factory reject positive `timeoutMs` before compilation/instantiation because synchronous in-process WASM cannot be preempted by a JavaScript timer. Trusted in-process calls without a timeout retain their behavior. Memory/callable/fuel-import protections remain; external plugin wiring and blocked enforcement proof remain unavailable. |
+| A05 | Partially mitigated; invalid and unpreemptible WASM timeouts fail closed | `executeWasm` and `createInstance` reject negative, non-finite, and runtime non-number `timeoutMs` values before compilation; positive values remain rejected because synchronous in-process WASM cannot be preempted. `undefined` and zero preserve trusted internal behavior. Memory/callable/fuel-import protections remain; external plugin wiring and blocked enforcement proof remain unavailable. |
 | A06 | Partially mitigated; no-grant WASI denial revalidated | All imported WASI modules are denied before instantiation; exact synthetic tests ran with instantiation asserted unused. Grant-backed env/preopens and host isolation remain unavailable. |
 | A07 | Partially mitigated; FilesystemBroker now fails closed before metadata lookup | All path grants return denial before filesystem metadata or content I/O; `readFile`/`writeFile` audit and throw until a handle-bound executor exists. This is no longer a path-containment proof. No production consumer; scoped safe I/O and OS-handle binding remain open. |
 | A08 | Partially mitigated; NetworkBroker now fails closed | Exact public-domain/IP grants no longer return allow without DNS-pinned connection enforcement. Audit reasons still distinguish protected ranges from ordinary public destinations denied for absent I/O. The broker has no production caller. DNS pinning, redirect enforcement, actual connection control, and production wiring remain open. |
@@ -2108,7 +2108,7 @@ cancellation follow-up above.
 | A19 | Prior A21.4 implementation preserved | Spill authorization, persistence, quotas, and recovery. |
 | A20 | Partially mitigated; same-connection mutation detection and reflective state encapsulation | Audit events and checkpoints persist in SQLite; immutable snapshots, transactional retention, append-time verification on audit revision changes, and checkpoint comparisons detect ordinary record changes through the same or another connection. The logger's database handle and chain state, plus the fail-closed facade's logger reference, now use ECMAScript `#private`; this prevents ordinary property reflection only. No independent signing key or database access boundary exists, and public logger APIs remain available to code holding a reference. |
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |
-| A22 | Partially mitigated; productive event reads and renderer source lookups are paged, bounded, and fail closed | Cursor-page reads drive IPC, timeline/history, source lookup and Pi output; the old `agent:list-events` bridge endpoint is removed. Collector-local budgets cover active call identities, argument traversal/references, unfinished external-tool output, and retained source metadata; ambiguous active tool-call IDs across runs invalidate attribution. Overflow is sticky: complete lookup fails, the main-chat hook marks the run unavailable, the group hook exposes unavailable status, and synchronous timeline rendering preserves the answer while marking sources unavailable. Renderer lookups admit at most four active loads and 256 queued loads; releasing the last view stops pagination after any already in-flight page returns. Run-scoped tool-evidence and assistant-message pages preflight `payload_json` bytes under a SQLite savepoint. Generic pages now select persisted rows under the same 8 MiB payload budget in forward and backward traversal; one indivisible oversized event is returned alone to preserve content. This budget applies to selected persisted rows, not the final expanded IPC response: cross-page stream expansion, synthesized prompt backfill, optional summary/activity events, the IPC envelope, individual event allocations, aggregate requests, renderer heap/RSS, and the existing 24-source display cap remain unbounded. A22 remains partial. RED/GREEN, review, local checks, and current remote CI are recorded below. The prior global run's benchmark timing failure and the current successful run are both recorded without assigning a definitive root cause. |
+| A22 | Partially mitigated; productive event reads and renderer source lookups are paged, bounded, and fail closed | Cursor-page reads drive IPC, timeline/history, source lookup and Pi output; the old `agent:list-events` bridge endpoint is removed. Collector-local budgets cover active call identities, argument traversal/references, unfinished external-tool output, and retained source metadata; ambiguous active tool-call IDs across runs invalidate attribution. Overflow is sticky: complete lookup fails, the main-chat hook marks the run unavailable, the group hook exposes unavailable status, and synchronous timeline rendering preserves the answer while marking sources unavailable. Renderer lookups admit at most four active loads and 256 queued loads; releasing the last view stops pagination after any already in-flight page returns. Run-scoped tool-evidence and assistant-message pages preflight `payload_json` bytes under a SQLite savepoint. Generic pages select persisted rows under the same 8 MiB payload budget in forward and backward traversal; one indivisible oversized event is returned alone. Cross-page stream expansion now preflights external stream rows and falls back to the selected persisted rows when expansion exceeds that budget, leaving later rows reachable via the cursor. This is not a cap on the final IPC response: synthesized prompt backfill, optional summary/activity events, envelope/object overhead, aggregate requests, renderer heap/RSS, and the existing 24-source display cap remain unbounded. A22 remains partial. RED/GREEN, review, local checks, and current remote CI are recorded below. The prior global run's benchmark timing failure and the current successful run are both recorded without assigning a definitive root cause. |
 | A23 | Mitigated; integrated checks pass | Synthetic capability outputs and the generic core `status: ok` fallback now fail explicitly with `CapabilityUnavailableError`; stale declared grants are reconciled by exact host identity/version; separate Pi runtime services, A16 selection, and A17 evidence flows are preserved. Independent review found no blocker. Workflow `38081920060` passed the relevant feature jobs, Supabase pgTAP (20 files/1,041 tests), containment, compile-only sandbox and Windows/macOS packaging. The same run had one unrelated-to-A23 global Vitest timing failure, without a baseline classification. |
 | A24 | Partially mitigated; artifact admission capped, isolated execution unproven | Cache has LRU entry/source-byte caps; namespaces are hashed up to 256 UTF-16 code units and longer ones bypass retention. WASM inputs over the existing 32 MiB limit are rejected using intrinsic view metadata, then hashed and compiled from one fixed snapshot. Cache counters do not measure native compiled memory or compiler overhead. A05 supplies measured failure metrics. WASI remains denied and stdio capture is unavailable; the in-process host is not an OS-isolated executor. |
 | A25 | Mitigated; prior fix preserved and revalidated | `allow-workspace` requires workspace+tool identity and lookup keys include both plus action/target; the Pi runtime supplies persisted host workspace identity across worktree cwd changes. Unknown tools are blocked before permission prompting and are not read-only safe. Safe focused validation: 52 permission-store/permission-extension/tool-registry tests and one productive Pi runtime workspace-scope test passed. A two-workspace synthetic store test passes; external tool/plugin execution remains disabled. |
@@ -3195,3 +3195,58 @@ The next safe implementation step is a host-owned supervisor that binds one
 registry and provenance to a single lifecycle/capability dispatcher, followed
 by platform-specific launchers whose incomplete controls fail closed. A
 platform is not enabled merely because it has a child-process or sandbox probe.
+
+### A05 invalid in-process timeout validation
+
+`assertNoInProcessWasmTimeout` now distinguishes omitted/zero values from
+invalid timeout inputs. It raises `RangeError` for negative, `NaN`, infinite,
+and runtime non-number values before source snapshotting or compilation;
+positive finite timeouts still use the existing fail-closed unsupported-timeout
+error. The synchronous in-process path remains available when no deadline is
+requested. No execution limit or security quota changed.
+
+- RED: before the guard change, the safe `buildAddModule()` factory calls for
+  `timeoutMs=-1` and `NaN` resolved successfully; the targeted Vitest run had
+  **2 failed, 55 skipped**. GREEN on commit `6dc3b5f`: the timeout-focused
+  runtime group passed **7 tests, 53 skipped**, covering positive timeout
+  denial, zero acceptance, and rejection of `-1`, `NaN`, `Infinity`, and a
+  runtime string before `WebAssembly.compile`. Targeted Biome passed with one
+  pre-existing `noUnusedVariables` warning on the unused `TIn` type parameter;
+  that unrelated diagnostic was left unchanged. `git diff --check` passed.
+- Independent read-only review approved the guard and cleanup paths. It
+  confirmed that `executeWasm` and `createInstance` both validate before
+  compilation and that the safe tests dispose unexpected instances and restore
+  spies. Remote CI run `38116365452` passed the complete
+  `typecheck · test · biome` job and pgTAP, protocol fixtures, compile-only
+  sandbox and Verifier-First checks; its filtered Windows containment job also
+  passed. The Ubuntu containment job failed and macOS containment was still
+  queued when this entry was written, so CI for this head is not declared
+  wholly green. Packaging status and the exact unrelated CI failure are
+  pending workflow completion. A05 remains partial: in-process WASM cannot be
+  preempted, there is no productive WASM executor caller, and external
+  execution and platform containment remain unavailable.
+
+### A22 cross-page stream expansion preflight
+
+Before this change, a page with two small persisted rows could expand a
+multi-page assistant stream into a response larger than the existing
+`MAX_RUN_EVENT_PAYLOAD_PAGE_BYTES` budget. The affected reader now measures
+the selected rows plus matching stream rows outside the cursor page using
+SQLite byte lengths before materializing those out-of-page payloads. If the
+expanded source payload would exceed the existing budget, it returns the
+original selected rows; `nextCursor` and `hasMore` remain based on those rows,
+so the remaining stream is still available from subsequent pages. Small
+streams retain the existing complete-stream expansion behavior.
+
+- RED on the baseline before commit `5fbda34`: the fixed fixture returned a
+  serialized response of **9,437,847 bytes**, exceeding the existing
+  **8,388,608-byte** budget. GREEN after the change: **8 focused event-page
+  tests passed, 72 skipped**, covering the overflow fallback, normal
+  cross-page folding, streamed tool results, backwards restoration, and the
+  indivisible-row behavior. Desktop TypeScript typecheck passed;
+  targeted Biome and `git diff --check` passed.
+- Independent read-only review approved the preflight and confirmed that the
+  fallback preserves selected rows and cursor progress. It also confirmed
+  that this does not cap the complete `AgentEventPage`: synthesized prompt
+  backfill and optional summary/activity events remain outside this budget.
+  Remote CI for `5fbda34` is pending. No probe or adversarial scenario ran.
