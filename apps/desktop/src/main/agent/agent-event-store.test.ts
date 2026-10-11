@@ -2522,6 +2522,33 @@ fs.renameSync("original-manifest-link", "package.json");
     ).toEqual(["first ", "second"]);
   });
 
+  it("keeps cross-page stream expansion inside the persisted-row page byte budget", () => {
+    const sessionId = `bounded-stream-expansion-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const messageId = `large-message-${crypto.randomUUID()}`;
+    const chunks = ["a", "b", "c"].map((letter) => letter.repeat(3 * 1024 * 1024));
+    recordAgentEvent({
+      type: "message.started",
+      sessionId,
+      messageId,
+      role: "assistant",
+    });
+    for (const delta of chunks) {
+      recordAgentEvent({ type: "message.delta", sessionId, messageId, delta });
+    }
+
+    const page = listAgentEventPage(sessionId, { limit: 2 });
+    expect(Buffer.byteLength(JSON.stringify(page.events), "utf8")).toBeLessThanOrEqual(
+      MAX_RUN_EVENT_PAYLOAD_PAGE_BYTES,
+    );
+    expect(
+      page.events
+        .filter(({ event }) => event.type === "message.delta")
+        .map(({ event }) => (event.type === "message.delta" ? event.delta : "")),
+    ).toEqual([chunks[0]]);
+    expect(page.hasMore).toBe(true);
+  });
+
   it("reconstructs one assistant answer when its start is the last row of a page", () => {
     const sessionId = `assistant-output-boundary-${crypto.randomUUID()}`;
     insertSession(sessionId);

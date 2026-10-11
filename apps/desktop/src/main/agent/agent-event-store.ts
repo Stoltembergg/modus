@@ -1966,6 +1966,170 @@ function expandAgentEventPageStreams(
     return undefined;
   }
 
+  // Preflight the complete stream rows before materializing them. A bounded
+  // cursor page can point at a message whose earlier or later deltas together
+  // exceed the page budget; in that case preserve this page's original rows
+  // and let the caller continue through the cursor instead of expanding the
+  // entire stream into one oversized response.
+  let expandedPayloadBytes = pageRows.reduce(
+    (total, row) => total + Buffer.byteLength(row.payload_json, "utf8"),
+    0,
+  );
+  if (
+    !Number.isSafeInteger(expandedPayloadBytes) ||
+    expandedPayloadBytes > MAX_RUN_EVENT_PAYLOAD_PAGE_BYTES
+  ) {
+    return undefined;
+  }
+  const additionalStreamPayloadBytes = (
+    types: readonly string[],
+    identityField: "messageId" | "toolCallId",
+    ids: Set<string>,
+  ): number => {
+    if (ids.size === 0) return 0;
+    const typePlaceholders = types.map(() => "?").join(", ");
+    const idPlaceholders = [...ids].map(() => "?").join(", ");
+    const result = db
+      .prepare(
+        `select coalesce(sum(length(cast(payload_json as blob))), 0) as payload_bytes
+         from agent_events
+         where session_id = ? and rowid <= ? and (rowid < ? or rowid > ?)
+           and type in (${typePlaceholders}) and json_valid(payload_json)
+           and json_extract(payload_json, '$.${identityField}') in (${idPlaceholders})`,
+      )
+      .get(sessionId, snapshotCursor, firstCursor, lastCursor, ...types, ...ids) as {
+      payload_bytes: number;
+    };
+    return result.payload_bytes;
+  };
+  const messageStreamBytes = additionalStreamPayloadBytes(
+    [
+      "message.started",
+      "message.delta",
+      "message.completed",
+      "thinking.delta",
+      "thinking.completed",
+    ],
+    "messageId",
+    messageIds,
+  );
+  const toolStreamBytes = additionalStreamPayloadBytes(
+    ["tool.started", "tool.output", "tool.delta", "tool.ended"],
+    "toolCallId",
+    toolCallIds,
+  );
+  if (
+    !Number.isSafeInteger(messageStreamBytes) ||
+    !Number.isSafeInteger(toolStreamBytes) ||
+    messageStreamBytes < 0 ||
+    toolStreamBytes < 0 ||
+    messageStreamBytes > MAX_RUN_EVENT_PAYLOAD_PAGE_BYTES - expandedPayloadBytes
+  ) {
+    return undefined;
+  }
+  expandedPayloadBytes += messageStreamBytes;
+  if (toolStreamBytes > MAX_RUN_EVENT_PAYLOAD_PAGE_BYTES - expandedPayloadBytes) {
+    return undefined;
+  }
+  expandedPayloadBytes += toolStreamBytes;
+
+  const runRowsFrom = `
+    from agent_events as message
+    join agent_events as r
+      on r.session_id = message.session_id
+     and r.type = 'run.started'
+     and r.rowid = (
+       select max(previous.rowid)
+       from agent_events as previous
+       where previous.session_id = message.session_id
+         and previous.type = 'run.started'
+         and previous.rowid < message.rowid
+     )
+     and not exists (
+       select 1
+       from agent_events as terminal
+       where terminal.session_id = message.session_id
+         and terminal.rowid > r.rowid
+         and terminal.rowid < message.rowid
+         and terminal.type in ('run.completed', 'run.failed', 'run.blocked', 'run.cancelled')
+         and json_valid(terminal.payload_json)
+         and json_extract(terminal.payload_json, '$.runId') =
+           json_extract(r.payload_json, '$.runId')
+     )
+     and not exists (
+       select 1
+       from agent_events as earlier_run
+       where earlier_run.session_id = message.session_id
+         and earlier_run.type = 'run.started'
+         and earlier_run.rowid < r.rowid
+         and json_valid(earlier_run.payload_json)
+         and not exists (
+           select 1
+           from agent_events as earlier_terminal
+           where earlier_terminal.session_id = message.session_id
+             and earlier_terminal.rowid > earlier_run.rowid
+             and earlier_terminal.rowid < message.rowid
+             and earlier_terminal.type in (
+               'run.completed', 'run.failed', 'run.blocked', 'run.cancelled'
+             )
+             and json_valid(earlier_terminal.payload_json)
+             and json_extract(earlier_terminal.payload_json, '$.runId') =
+               json_extract(earlier_run.payload_json, '$.runId')
+         )
+     )
+    where message.session_id = ? and message.rowid <= ?
+      and message.type = 'message.started' and json_valid(message.payload_json)
+      and json_extract(message.payload_json, '$.role') = 'assistant'
+      and json_extract(message.payload_json, '$.messageId') in (${[...pageMessageIds].map(() => "?").join(", ")})
+      and (
+        message.rowid between ? and ?
+        or message.rowid = (
+          select max(previous.rowid)
+          from agent_events as previous
+          where previous.session_id = message.session_id
+            and previous.type = 'message.started'
+            and json_valid(previous.payload_json)
+            and json_extract(previous.payload_json, '$.role') = 'assistant'
+            and json_extract(previous.payload_json, '$.messageId') =
+              json_extract(message.payload_json, '$.messageId')
+            and previous.rowid < ?
+        )
+      )`;
+  const runRowsParams = [
+    sessionId,
+    snapshotCursor,
+    ...pageMessageIds,
+    firstCursor,
+    lastCursor,
+    firstCursor,
+  ];
+  const runRowCandidates =
+    pageMessageIds.size === 0
+      ? []
+      : (db
+          .prepare(
+            `select r.rowid as event_cursor, max(length(cast(r.payload_json as blob))) as payload_bytes
+             ${runRowsFrom}
+             and (r.rowid < ? or r.rowid > ?)
+             group by r.rowid
+             order by r.rowid asc`,
+          )
+          .all(...runRowsParams, firstCursor, lastCursor) as Array<{
+          event_cursor: number;
+          payload_bytes: number;
+        }>);
+  for (const candidate of runRowCandidates) {
+    if (
+      !Number.isSafeInteger(candidate.event_cursor) ||
+      !Number.isSafeInteger(candidate.payload_bytes) ||
+      candidate.payload_bytes < 0 ||
+      candidate.payload_bytes > MAX_RUN_EVENT_PAYLOAD_PAGE_BYTES - expandedPayloadBytes
+    ) {
+      return undefined;
+    }
+    expandedPayloadBytes += candidate.payload_bytes;
+  }
+
   const expandedRows = new Map<number, AgentEventRow>(
     pageRows.map((row) => [row.event_cursor, row]),
   );
@@ -2003,82 +2167,13 @@ function expandAgentEventPageStreams(
   );
   loadRows(["tool.started", "tool.output", "tool.delta", "tool.ended"], "toolCallId", toolCallIds);
   if (pageMessageIds.size > 0) {
-    const ids = [...pageMessageIds];
-    const placeholders = ids.map(() => "?").join(", ");
     const runRows = db
       .prepare(
         `select r.id, r.payload_json, r.created_at, r.rowid as event_cursor
-         from agent_events as message
-         join agent_events as r
-           on r.session_id = message.session_id
-          and r.type = 'run.started'
-          and r.rowid = (
-            select max(previous.rowid)
-            from agent_events as previous
-            where previous.session_id = message.session_id
-              and previous.type = 'run.started'
-              and previous.rowid < message.rowid
-          )
-          and not exists (
-            select 1
-            from agent_events as terminal
-            where terminal.session_id = message.session_id
-              and terminal.rowid > r.rowid
-              and terminal.rowid < message.rowid
-              and terminal.type in ('run.completed', 'run.failed', 'run.blocked', 'run.cancelled')
-              and json_valid(terminal.payload_json)
-              and json_extract(terminal.payload_json, '$.runId') =
-                json_extract(r.payload_json, '$.runId')
-          )
-          and not exists (
-            select 1
-            from agent_events as earlier_run
-            where earlier_run.session_id = message.session_id
-              and earlier_run.type = 'run.started'
-              and earlier_run.rowid < r.rowid
-              and json_valid(earlier_run.payload_json)
-              and not exists (
-                select 1
-                from agent_events as earlier_terminal
-                where earlier_terminal.session_id = message.session_id
-                  and earlier_terminal.rowid > earlier_run.rowid
-                  and earlier_terminal.rowid < message.rowid
-                  and earlier_terminal.type in (
-                    'run.completed', 'run.failed', 'run.blocked', 'run.cancelled'
-                  )
-                  and json_valid(earlier_terminal.payload_json)
-                  and json_extract(earlier_terminal.payload_json, '$.runId') =
-                    json_extract(earlier_run.payload_json, '$.runId')
-              )
-          )
-         where message.session_id = ? and message.rowid <= ?
-           and message.type = 'message.started' and json_valid(message.payload_json)
-           and json_extract(message.payload_json, '$.role') = 'assistant'
-           and json_extract(message.payload_json, '$.messageId') in (${placeholders})
-           and (
-             message.rowid between ? and ?
-             or message.rowid = (
-               select max(previous.rowid)
-               from agent_events as previous
-               where previous.session_id = message.session_id
-                 and previous.type = 'message.started'
-                 and json_valid(previous.payload_json)
-                 and json_extract(previous.payload_json, '$.role') = 'assistant'
-                 and json_extract(previous.payload_json, '$.messageId') =
-                   json_extract(message.payload_json, '$.messageId')
-                 and previous.rowid < ?
-             )
-           )
+         ${runRowsFrom}
          order by r.rowid asc`,
       )
-      .all(
-        sessionId,
-        snapshotCursor,
-        ...ids,
-        firstCursor,
-        lastCursor,
-        firstCursor,
-      ) as AgentEventRow[];
+      .all(...runRowsParams) as AgentEventRow[];
     for (const row of runRows) expandedRows.set(row.event_cursor, row);
   }
   return [...expandedRows.values()]
