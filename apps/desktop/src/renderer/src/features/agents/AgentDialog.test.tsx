@@ -14,7 +14,7 @@ import type {
   GeneratedAgentProfile,
 } from "../../../../shared/contracts";
 import { encodeGroupErrorMessage } from "../../../../shared/group-errors";
-import { setBuyCreditsHandler } from "../../lib/modusModels";
+import type { PickableModel } from "../../lib/modusModels";
 import { GROUP_ERROR_MESSAGES } from "../groups/groupErrors";
 import { AGENT_GENERATED_HINT, AgentDialog } from "./AgentDialog";
 import { AGENT_NAME_REQUIRED, agentDialogError, needsProfileGeneration } from "./agentDialogModel";
@@ -69,19 +69,21 @@ function renderDialog({
   models = MODELS,
   generate = vi.fn(async (_input: GenerateAgentProfileInput) => GENERATED),
   create = vi.fn(async (_input: unknown) => undefined),
+  defaultModelId = "m-2",
 }: {
   agent?: AgentInfo;
   group?: AgentGroupWithMembers;
-  models?: readonly { id: string; name: string; locked?: boolean }[];
+  models?: readonly PickableModel[];
   generate?: (input: GenerateAgentProfileInput) => Promise<GeneratedAgentProfile>;
   create?: ReturnType<typeof vi.fn<(input: unknown) => Promise<undefined>>>;
+  defaultModelId?: string;
 } = {}) {
   const onUpdate = vi.fn(async (_input: unknown) => undefined);
   const onOpenChange = vi.fn();
   render(
     <AgentDialog
       agent={agent}
-      defaultModelId="m-2"
+      defaultModelId={defaultModelId}
       group={group}
       models={models}
       onCreate={create}
@@ -132,33 +134,71 @@ describe("agentDialogModel", () => {
 });
 
 describe("AgentDialog", () => {
-  it("L3b0: a locked Modus model shows a lock and opens Buy credits instead of being selected", async () => {
+  it("groups models by provider and hides a locked Modus model (never a BYOK one)", () => {
+    const { dialog } = renderDialog({
+      agent: ANA,
+      models: [
+        { id: "modus/zai/glm-5-3-flash", name: "GLM-5.3-Flash", provider: "modus" },
+        { id: "modus/anthropic/claude-fable-5-1", name: "Fable", provider: "modus", locked: true },
+        { id: "m-1", name: "Model 1", provider: "relay", providerName: "Relay" },
+        {
+          id: "openrouter/z-ai/glm-5.3-flash",
+          name: "GLM-5.3-Flash",
+          provider: "openrouter",
+          providerName: "OpenRouter",
+        },
+        {
+          id: "byok/locked",
+          name: "BYOK flagged",
+          provider: "byok",
+          providerName: "Acme",
+          locked: true,
+        },
+      ],
+    });
+    const select = within(dialog).getByRole("combobox", { name: "Model" }) as HTMLSelectElement;
+    expect(
+      [...select.children].map((el) => (el as HTMLOptGroupElement).label || el.textContent),
+    ).toEqual(["Choose a model", "Modus", "Acme", "OpenRouter", "Relay"]);
+    expect([...select.querySelectorAll("optgroup")].map((group) => group.textContent)).toEqual([
+      "GLM-5.3-Flash",
+      "BYOK flagged",
+      "GLM-5.3-Flash",
+      "Model 1",
+    ]);
+    expect(select.querySelector('option[value="modus/anthropic/claude-fable-5-1"]')).toBeNull();
+    expect(select.textContent).not.toMatch(/\p{Extended_Pictographic}/u);
+    expect(select.value).toBe("m-1");
+  });
+
+  it("keeps a saved model that is now locked as '(unavailable)' and saving does not change it", async () => {
     const user = userEvent.setup();
-    const buyCredits = vi.fn();
-    setBuyCreditsHandler(buyCredits);
-    try {
-      const { dialog } = renderDialog({
-        agent: ANA,
-        models: [
-          ...MODELS,
-          { id: "modus/anthropic/claude-fable-5-1", name: "Fable", locked: true },
-        ],
-      });
-      const select = within(dialog).getByRole("combobox", { name: "Model" }) as HTMLSelectElement;
-      const locked = select.querySelector<HTMLOptionElement>("option[data-locked]");
-      expect(locked?.textContent).toBe(
-        "🔒 Fable · Requires a credit pack that includes this model",
-      );
-      expect(select.value).toBe("m-1");
-      await user.selectOptions(select, "modus/anthropic/claude-fable-5-1");
-      expect(buyCredits).toHaveBeenCalledTimes(1);
-      expect(select.value).toBe("m-1");
-      await user.selectOptions(select, "m-2");
-      expect(select.value).toBe("m-2");
-      expect(buyCredits).toHaveBeenCalledTimes(1);
-    } finally {
-      setBuyCreditsHandler(undefined);
-    }
+    const { dialog, onUpdate } = renderDialog({
+      agent: { ...ANA, modelId: "modus/anthropic/claude-fable-5-1" },
+      models: [
+        ...MODELS,
+        { id: "modus/anthropic/claude-fable-5-1", name: "Fable", provider: "modus", locked: true },
+      ],
+    });
+    const select = within(dialog).getByRole("combobox", { name: "Model" }) as HTMLSelectElement;
+    expect(select.value).toBe("modus/anthropic/claude-fable-5-1");
+    expect(select.selectedOptions[0]?.textContent).toBe("Fable (unavailable)");
+    expect(select.selectedOptions[0]?.parentElement).toBe(select);
+    await user.clear(field(dialog, "Instructions"));
+    await user.type(field(dialog, "Instructions"), "Review twice.");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0]?.[0]).not.toHaveProperty("modelId");
+    expect(within(dialog).queryByRole("alert")).toBeNull();
+  });
+
+  it("does not preselect a locked Modus default for a new custom agent", () => {
+    const { dialog } = renderDialog({
+      defaultModelId: "modus/x/locked",
+      models: [...MODELS, { id: "modus/x/locked", name: "Locked", locked: true }],
+    });
+    const select = within(dialog).getByRole("combobox", { name: "Model" }) as HTMLSelectElement;
+    expect(select.value).toBe("");
   });
 
   it("shows every field with a 48 px animated preview that follows face and color", async () => {

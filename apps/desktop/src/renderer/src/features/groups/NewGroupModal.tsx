@@ -18,7 +18,7 @@ import type {
 import { GROUP_MAX_MEMBERS, GROUP_MIN_MEMBERS } from "../../../../shared/group-blocked";
 import type { GroupTextKey } from "../../../../shared/group-room-locale";
 import { cn } from "../../lib/cn";
-import { ModelOptions, pickModel } from "../../lib/modusModels";
+import { ModelOptions, selectableModels } from "../../lib/modusModels";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import { AgentDialog, type AgentDialogDraftTarget } from "../agents/AgentDialog";
 import type { GroupDialogModel } from "./CreateGroupDialog";
@@ -103,7 +103,7 @@ export function NewGroupModal({
   workspaces,
   defaultWorkspaceId = null,
   groups,
-  models,
+  models: allModels,
   defaultModelId,
   onCreate,
   services,
@@ -132,6 +132,7 @@ export function NewGroupModal({
   const [folderError, setFolderError] = useState<string | undefined>();
   const [agents, setAgents] = useState<AgentInfo[] | null>(null);
   const [agentsError, setAgentsError] = useState<string | undefined>();
+  const models = selectableModels(allModels);
   const keySeq = useRef(0);
   const nextKey = () => {
     keySeq.current += 1;
@@ -612,9 +613,7 @@ export function NewGroupModal({
                             aria-label={t("newGroup.modelOf", { name: label })}
                             className={cn(FIELD, "h-7 px-2 text-xs")}
                             onChange={(event) =>
-                              pickModel(models, event.target.value, (modelId) =>
-                                update(member.key, { modelId }),
-                              )
+                              update(member.key, { modelId: event.target.value })
                             }
                             value=""
                           >
@@ -623,7 +622,7 @@ export function NewGroupModal({
                                 ? t("common.noModelConfigured")
                                 : t("newGroup.chooseModel")}
                             </option>
-                            <ModelOptions locale={t.locale} models={models} />
+                            <ModelOptions models={models} />
                           </select>
                         ) : null}
                       </li>
@@ -681,7 +680,7 @@ export function NewGroupModal({
             <AgentDialog
               defaultModelId={defaultModelId}
               draft={dialogTarget}
-              models={models}
+              models={allModels}
               onGenerate={services.generateProfile}
               onOpenChange={(next) => {
                 if (!next) setAgentDialog(null);

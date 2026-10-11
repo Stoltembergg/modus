@@ -23,7 +23,7 @@ import {
   normalizeGroupMemberCapabilities,
 } from "../../../../shared/group-capabilities";
 import { cn } from "../../lib/cn";
-import { ModelOptions, pickModel } from "../../lib/modusModels";
+import { ModelOptions, selectableModels } from "../../lib/modusModels";
 import type { GroupDialogModel } from "../groups/CreateGroupDialog";
 import { describeGroupError } from "../groups/groupErrors";
 import { useGroupText } from "../groups/groupRoomI18n";
@@ -109,7 +109,7 @@ export function AgentDialog(props: AgentDialogProps) {
     onOpenChange,
     group,
     agent,
-    models,
+    models: allModels,
     defaultModelId,
     onGenerate,
     draft: target,
@@ -166,6 +166,8 @@ export function AgentDialog(props: AgentDialogProps) {
     ),
   );
   const [description, setDescription] = useState("");
+  // Locked Modus models are not offered (nor valid for a new pick); the saved one stays.
+  const models = selectableModels(allModels);
   const [modelId, setModelId] = useState(() => {
     if (agent) return agent.modelId ?? "";
     if (initial?.modelId !== undefined) return initial.modelId ?? "";
@@ -201,8 +203,6 @@ export function AgentDialog(props: AgentDialogProps) {
     availableModelIds: models.map((model) => model.id),
     savedModelId: agent?.modelId,
   });
-  const savedModelMissing =
-    agent?.modelId !== undefined && !models.some((model) => model.id === agent.modelId);
   const canGenerate = custom && !!name.trim() && !!modelId.trim() && busy === null;
 
   async function generate(): Promise<boolean> {
@@ -369,7 +369,7 @@ export function AgentDialog(props: AgentDialogProps) {
             <span className="text-2xs text-fg-subtle">Model</span>
             <select
               className={cn(FIELD, "px-2")}
-              onChange={(event) => pickModel(models, event.target.value, setModelId)}
+              onChange={(event) => setModelId(event.target.value)}
               value={modelId}
             >
               {custom ? (
@@ -379,10 +379,10 @@ export function AgentDialog(props: AgentDialogProps) {
               ) : (
                 <option value="">App default</option>
               )}
-              {savedModelMissing && agent?.modelId ? (
-                <option value={agent.modelId}>{agent.modelId} (unavailable)</option>
-              ) : null}
-              <ModelOptions models={models} />
+              <ModelOptions
+                models={allModels}
+                savedModelId={agent ? agent.modelId : initial?.modelId}
+              />
             </select>
           </label>
         </div>

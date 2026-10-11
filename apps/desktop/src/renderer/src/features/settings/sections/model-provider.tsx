@@ -79,7 +79,6 @@ export function ModelProviderSettingsPanel({
   models,
   defaultModel,
   onSetDefaultModel,
-  onBuyCredits,
 }: {
   authOperation: ProviderAuthOperationState | undefined;
   busy: boolean;
@@ -121,8 +120,6 @@ export function ModelProviderSettingsPanel({
   models?: readonly ModelInfo[] | undefined;
   defaultModel?: string | undefined;
   onSetDefaultModel?(modelId: string): void;
-  /** A locked Modus model was chosen: open Buy credits (Settings › Account). */
-  onBuyCredits?(): void;
 }) {
   const [providerQuery, setProviderQuery] = useState("");
   const providers = useMemo(() => [...connected, ...popular], [connected, popular]);
@@ -171,12 +168,11 @@ export function ModelProviderSettingsPanel({
         <ReadOnlyPill>{`${providers.length} providers`}</ReadOnlyPill>
       </div>
 
-      {models && onSetDefaultModel && onBuyCredits ? (
+      {models && onSetDefaultModel ? (
         <DefaultModelSetting
           busy={busy}
           defaultModel={defaultModel}
           models={models}
-          onBuyCredits={onBuyCredits}
           onSetDefaultModel={onSetDefaultModel}
         />
       ) : null}

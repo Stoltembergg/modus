@@ -41,32 +41,69 @@ const MODELS: ModelInfo[] = [
 ];
 
 describe("L3b0 Settings default model picker", () => {
-  it("lists models by provider; a locked Modus model has a lock and opens Buy credits, not selected", async () => {
+  it("lists models by provider, hides a locked Modus model, and selects on change", async () => {
     const user = userEvent.setup();
     const onSetDefaultModel = vi.fn();
-    const onBuyCredits = vi.fn();
     render(
       <DefaultModelSetting
         defaultModel="modus/deepseek/deepseek-flash"
         models={MODELS}
-        onBuyCredits={onBuyCredits}
         onSetDefaultModel={onSetDefaultModel}
       />,
     );
     const select = screen.getByRole("combobox", { name: "Default model" }) as HTMLSelectElement;
-    expect([...select.querySelectorAll("optgroup")].map((group) => group.label)).toEqual([
-      "Modus",
-      "OpenAI",
+    expect(
+      [...select.querySelectorAll("optgroup")].map((group) => [group.label, group.textContent]),
+    ).toEqual([
+      ["Modus", "Flash"],
+      ["OpenAI", "GPT X"],
     ]);
-    expect(select.querySelector("option[data-locked]")?.textContent).toBe(
-      "🔒 Fable · Available in the 25k credit pack",
-    );
-    await user.selectOptions(select, "modus/anthropic/claude-fable-5-1");
-    expect(onBuyCredits).toHaveBeenCalledTimes(1);
-    expect(onSetDefaultModel).not.toHaveBeenCalled();
-    expect(select.value).toBe("modus/deepseek/deepseek-flash");
+    expect(select.querySelector('option[value="modus/anthropic/claude-fable-5-1"]')).toBeNull();
+    expect(select.textContent).not.toMatch(/\p{Extended_Pictographic}/u);
     await user.selectOptions(select, "openai/gpt-x");
     expect(onSetDefaultModel).toHaveBeenCalledWith("openai/gpt-x");
-    expect(onBuyCredits).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a saved default that is now locked as '(unavailable)' without changing it", async () => {
+    const user = userEvent.setup();
+    const onSetDefaultModel = vi.fn();
+    render(
+      <DefaultModelSetting
+        defaultModel="modus/anthropic/claude-fable-5-1"
+        models={MODELS}
+        onSetDefaultModel={onSetDefaultModel}
+      />,
+    );
+    const select = screen.getByRole("combobox", { name: "Default model" }) as HTMLSelectElement;
+    expect(select.value).toBe("modus/anthropic/claude-fable-5-1");
+    expect(select.selectedOptions[0]?.textContent).toBe("Fable (unavailable)");
+    expect(select.selectedOptions[0]?.parentElement).toBe(select);
+    expect(onSetDefaultModel).not.toHaveBeenCalled();
+    await user.selectOptions(select, "modus/deepseek/deepseek-flash");
+    expect(onSetDefaultModel).toHaveBeenCalledWith("modus/deepseek/deepseek-flash");
+  });
+
+  it("never hides a BYOK model, even if it carries a locked flag", () => {
+    render(
+      <DefaultModelSetting
+        defaultModel={undefined}
+        models={[
+          model({
+            id: "openai/gpt-x",
+            name: "GPT X",
+            provider: "openai",
+            providerName: "OpenAI",
+            locked: "upgrade",
+          }),
+        ]}
+        onSetDefaultModel={vi.fn()}
+      />,
+    );
+    const select = screen.getByRole("combobox", { name: "Default model" }) as HTMLSelectElement;
+    expect(select.disabled).toBe(false);
+    expect([...select.options].map((option) => option.textContent)).toEqual([
+      "Choose a model",
+      "GPT X",
+    ]);
   });
 });

@@ -91,7 +91,6 @@ import {
 } from "../features/update/restoreUiState";
 import { UpdateToast } from "../features/update/UpdateToast";
 import { cn } from "../lib/cn";
-import { setBuyCreditsHandler } from "../lib/modusModels";
 import { useGitBranch } from "../lib/useGitBranch";
 import { TOP_BAR_BREAKPOINTS, useWidthTier } from "../lib/useWidthTier";
 import { beginInitialAppHydration, type InitialAppHydration } from "./initial-hydration";
@@ -202,11 +201,6 @@ export function App() {
     },
     [navigateToPrimary],
   );
-  // L3b0: a locked Modus model in a picker opens the existing Buy credits flow (Settings › Account).
-  useEffect(() => {
-    setBuyCreditsHandler(() => openSettings("account"));
-    return () => setBuyCreditsHandler(undefined);
-  }, [openSettings]);
   const closeSettings = useCallback(() => {
     primaryNavigationTouchedRef.current = true;
     setPrimaryNavigation((current) => closeSettingsNavigation(current));
@@ -971,8 +965,9 @@ export function App() {
         .map((item) => ({
           id: item.id,
           name: item.name,
+          provider: item.provider,
+          ...(item.providerName ? { providerName: item.providerName } : {}),
           ...(item.locked ? { locked: true } : {}),
-          ...(item.unlockPack ? { unlockPack: item.unlockPack } : {}),
         })),
     [models],
   );

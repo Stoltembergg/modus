@@ -1,5 +1,5 @@
 /**
- * Modus provider copy (B4b, L3b0): router errors shown in the chat, locked-model and
+ * Modus provider copy (B4b, L3b0): router errors shown in the chat, Modus
  * availability states, and the session-expired notice, in en / pt / zh. Same convention as
  * `files-search-text.ts` (C6 / C6.2): keys are `area.name`, `{name}`
  * placeholders, the en table defines the key set, pt / zh are type-checked to
@@ -26,10 +26,6 @@ export const MODUS_TEXT_EN = {
   "modus.requestTooLarge": "This request is too large for Modus models.",
   "modus.badRequest": "Modus couldn't process this request.",
   "modus.cancelled": "The request was cancelled.",
-  "modus.locked.badge": "Locked",
-  "modus.locked.unlock": "Requires a credit pack that includes this model",
-  "modus.locked.unlockPack": "Available in the {thousands}k credit pack",
-  "modus.locked.buyCredits": "Buy credits to unlock {model}",
   "modus.status.title": "Modus models",
   "modus.status.ready": "Available",
   "modus.status.loading": "Loading…",
@@ -59,10 +55,6 @@ export const MODUS_TEXT_PT: Record<ModusTextKey, string> = {
   "modus.requestTooLarge": "Esta solicitação é grande demais para os modelos Modus.",
   "modus.badRequest": "O Modus não conseguiu processar esta solicitação.",
   "modus.cancelled": "A solicitação foi cancelada.",
-  "modus.locked.badge": "Bloqueado",
-  "modus.locked.unlock": "Requer um pacote de créditos que inclua este modelo",
-  "modus.locked.unlockPack": "Disponível no pacote de {thousands} mil",
-  "modus.locked.buyCredits": "Compre créditos para desbloquear {model}",
   "modus.status.title": "Modelos Modus",
   "modus.status.ready": "Disponíveis",
   "modus.status.loading": "Carregando…",
@@ -88,10 +80,6 @@ export const MODUS_TEXT_ZH: Record<ModusTextKey, string> = {
   "modus.requestTooLarge": "此请求对 Modus 模型来说过大。",
   "modus.badRequest": "Modus 无法处理此请求。",
   "modus.cancelled": "请求已取消。",
-  "modus.locked.badge": "已锁定",
-  "modus.locked.unlock": "需要包含此模型的积分包",
-  "modus.locked.unlockPack": "{thousands}千积分包可用",
-  "modus.locked.buyCredits": "购买积分以解锁 {model}",
   "modus.status.title": "Modus 模型",
   "modus.status.ready": "可用",
   "modus.status.loading": "加载中…",

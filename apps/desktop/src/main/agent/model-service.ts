@@ -1009,7 +1009,21 @@ function thinkingStateForModel(model: Model<Api> | undefined, config: ModelConfi
   return { levels, options, selected, budget: undefined };
 }
 
-function modelToInfo(model: Model<Api>, available: boolean, config?: ModelConfigRow): ModelInfo {
+/**
+ * The provider's name exactly as Settings › Providers shows it (listProvidersFromRegistry):
+ * the provider config's display_name, else the registry's display name. The model pickers
+ * group by it.
+ */
+function providerDisplayName(provider: string, row: ProviderConfigRow | undefined): string {
+  return row?.display_name ?? getModelRegistry().getProviderDisplayName(provider);
+}
+
+function modelToInfo(
+  model: Model<Api>,
+  available: boolean,
+  config?: ModelConfigRow,
+  providerRow: ProviderConfigRow | undefined = getProviderConfig(model.provider),
+): ModelInfo {
   const id = modelToId(model);
   const thinking = thinkingStateForModel(model, config);
   const source = config?.source ?? "builtin";
@@ -1021,7 +1035,7 @@ function modelToInfo(model: Model<Api>, available: boolean, config?: ModelConfig
   return {
     id,
     provider: model.provider,
-    providerName: getModelRegistry().getProviderDisplayName(model.provider),
+    providerName: providerDisplayName(model.provider, providerRow),
     name: config?.display_name ?? model.name ?? model.id,
     available,
     // Modus models are on by default (no BYOK step); a config row can still turn one off.
@@ -1043,12 +1057,18 @@ function modelToInfo(model: Model<Api>, available: boolean, config?: ModelConfig
 
 function listModelsFromRegistry(modelRegistry: ModelRegistry): ModelInfo[] {
   const configs = new Map(listModelConfigRows().map((row) => [row.id, row]));
+  const providerConfigs = new Map(listProviderConfigRows().map((row) => [row.provider_id, row]));
   const availableIds = new Set(modelRegistry.getAvailable().map(modelToId));
   const configuredInfos = modelRegistry
     .getAll()
     .map((model) => {
       const id = modelToId(model);
-      return modelToInfo(model, availableIds.has(id), configs.get(id));
+      return modelToInfo(
+        model,
+        availableIds.has(id),
+        configs.get(id),
+        providerConfigs.get(model.provider),
+      );
     })
     .filter((model) => model.enabled && model.available);
 

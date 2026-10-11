@@ -34,13 +34,7 @@ describe("modusText", () => {
     expect(modusText("modus.status.unavailable", "fr")).toBe("Unavailable");
   });
 
-  it("fills placeholders and only the 504 copy mentions credits being used", () => {
-    expect(modusText("modus.locked.buyCredits", null, { model: "GLM" })).toBe(
-      "Buy credits to unlock GLM",
-    );
-    expect(modusText("modus.locked.buyCredits", "pt", { model: "GLM" })).toBe(
-      "Compre créditos para desbloquear GLM",
-    );
+  it("only the 504 copy mentions credits being used", () => {
     expect(modusText("modus.unavailable")).not.toMatch(/credit/i);
   });
 });
