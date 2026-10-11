@@ -1840,7 +1840,7 @@ cancellation follow-up above.
 |---|---|---|
 | A01 | Partially mitigated | Facade fails closed and Pi chat/review no longer auto-load project/user extensions. The shared protocol validates bounded frames and strict schemas; v2 adds distinct cancellation and rejects v1 on both worker handshake and host-response decode. No OS process executor or production caller exists; isolation and productive wiring remain unproven. Hostile execution proof remains blocked. |
 | A02 | Partially mitigated | The shared resource-policy contract records the approved CPU, memory, time, output, IPC, process, hostcall and concurrency ceilings. No platform adapter enforces them, and no process-tree preemption/reap path is integrated. Do not run blocked probes. |
-| A03 | Partially mitigated | Chat/review auto-discovery remains blocked. Host catalog lookups, built-in catalog entries, loader results, and capability provider queries expose immutable metadata descriptors without lifecycle/implementation callbacks. `PluginLoader` rejects catalog self-declared trust unless the exact catalog/source pair is host-registered. Loader state, catalog/registry references, source-manifest maps, and sensitive lifecycle/authorization helpers now use ECMAScript `#private`; unused loader/service registry accessors were removed after full-repository callsite search found no consumers. Exact source references remain within trusted in-process wiring; this is reflective encapsulation, not process isolation. The v2 IPC contract carries host-only digest, origin, trust, session/workspace/run and generation provenance, but has no production caller and does not establish trust on its own. |
+| A03 | Partially mitigated | Chat/review auto-discovery remains blocked. Host catalog lookups, built-in catalog entries, loader results, and capability provider queries expose immutable metadata descriptors without lifecycle/implementation callbacks. `PluginLoader`, `PluginLifecycleService`, and `CapabilityRegistry` now keep trust/authorization maps, checkpoints, provenance state, source/executor references, and internal helpers in ECMAScript `#private` fields/methods; unused loader/service registry accessors were removed after full-repository callsite search found no consumers. Exact source references remain within trusted in-process wiring; this is reflective encapsulation, not process isolation. The v2 IPC contract carries host-only digest, origin, trust, session/workspace/run and generation provenance, but has no production caller and does not establish trust on its own. |
 | A04 | Partially mitigated | External Pi extension ingress is disabled for chat and review; the review callsite guard covers loader flags and session creation. Registry provider execution remains dispatched through `CapabilityRegistry.execute`; rollback uses opaque registry-owned checkpoints. Public catalog/registry lookup APIs no longer return implementation references. The shared IPC dispatcher validates exact grants and cancellation in synthetic fixtures, but built-ins remain trusted in-process and no OS-backed dispatcher/lifecycle boundary is integrated. |
 | A05 | Partially mitigated; WASM watchdog cleanup fixed | `WasmCapabilityHost` validates a single bounded memory, reserves per-instance/aggregate maximum capacity, reports actual live memory, charges returned callable and JSON helper calls, defers reservation release until active exports unwind, invalidates returned callables on disposal, recognizes cross-realm resources, rejects object-valued globals/callback returns/exports and blocks function-reference escape through host imports/tables/tags/globals, keeps fuel imports host-owned, and now clears the host timeout timer on every settled invocation. External plugin wiring and blocked enforcement proof remain unavailable. |
 | A06 | Partially mitigated; no-grant WASI denial revalidated | All imported WASI modules are denied before instantiation; exact synthetic tests ran with instantiation asserted unused. Grant-backed env/preopens and host isolation remain unavailable. |
@@ -2399,3 +2399,31 @@ Windows x64 packaging (`38098027506`) and macOS x64/arm64 packaging
 (`38098027511`) also completed successfully. These results verify the A03
 change builds and passes its integrated regression suite; they do not prove an
 OS process boundary. PR #191 remains Draft.
+
+### A03 CapabilityRegistry reflection hardening
+
+The remaining registry-owned provider maps, active-provider selection,
+quarantine set, implementation identity/executor WeakMaps, rollback
+checkpoints, provenance tracker, and instrumentation reference were ordinary
+TypeScript `private` own properties. The registry's internal clone/snapshot/
+descriptor helpers were ordinary prototype methods. The registry is exported,
+so callers holding its reference could read or mutate that state with
+JavaScript reflection despite the TypeScript declarations. These fields and
+helpers now use ECMAScript `#private`; public registration, execution,
+discovery, and instrumentation APIs are unchanged.
+
+- RED/GREEN: a reflection regression failed before the change because
+  `Reflect.ownKeys(registry)` included `capabilities`; after conversion the
+  registry suite passed **28/28**. The combined registry, loader, and lifecycle
+  suites passed **107/107**. Desktop TypeScript typecheck passed. Targeted
+  Biome exited 0 with **11 existing warnings and 1 info** in the two files;
+  no rule was suppressed and no unrelated diagnostic was edited. `git diff
+  --check` passed.
+- Independent static review found no blocker, confirmed there are no
+  in-repository subclasses or users of the former private names, and requested
+  that the regression also name `immutableSnapshot`; that assertion was added.
+  Review emphasized that this narrows reflection only. Public registry methods
+  remain available to holders of the exported registry reference, and this
+  does not establish an OS/process boundary.
+- External plugin ingress remains blocked. The change does not alter the
+  production call graph or claim that the IPC dispatcher has a process caller.

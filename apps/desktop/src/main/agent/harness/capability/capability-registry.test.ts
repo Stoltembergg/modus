@@ -23,6 +23,34 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
   });
 
   describe("9.1 — Capability Registration and Version Decoupling", () => {
+    it("does not expose registry authorization state through JavaScript reflection", () => {
+      const ownKeys = Reflect.ownKeys(registry);
+      const prototype = Object.getPrototypeOf(registry) as object;
+
+      for (const key of [
+        "capabilities",
+        "providers",
+        "activeProviders",
+        "quarantinedProviderIds",
+        "implementationSources",
+        "implementationExecutors",
+        "providerRegistrationCheckpoints",
+        "tracker",
+        "instrumentation",
+      ]) {
+        expect(ownKeys).not.toContain(key);
+      }
+
+      for (const key of [
+        "cloneCapability",
+        "cloneProvider",
+        "immutableSnapshot",
+        "providerDescriptor",
+      ]) {
+        expect(Object.hasOwn(prototype, key)).toBe(false);
+      }
+    });
+
     it("keeps provider implementations behind the registry execution dispatcher", async () => {
       const execute = vi.fn(() => "dispatched result");
       registry.registerCapability({

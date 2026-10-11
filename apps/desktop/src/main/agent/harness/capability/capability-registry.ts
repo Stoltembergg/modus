@@ -22,23 +22,23 @@ import {
 } from "./capability-types";
 
 export class CapabilityRegistry {
-  private capabilities = new Map<string, Capability>();
-  private providers = new Map<string, CapabilityProvider[]>();
-  private activeProviders = new Map<string, string>();
-  private quarantinedProviderIds = new Set<string>();
-  private implementationSources = new WeakMap<CapabilityProvider, object>();
-  private implementationExecutors = new WeakMap<
+  #capabilities = new Map<string, Capability>();
+  #providers = new Map<string, CapabilityProvider[]>();
+  #activeProviders = new Map<string, string>();
+  #quarantinedProviderIds = new Set<string>();
+  #implementationSources = new WeakMap<CapabilityProvider, object>();
+  #implementationExecutors = new WeakMap<
     CapabilityProvider,
     CapabilityProvider["implementation"]["execute"]
   >();
-  private providerRegistrationCheckpoints = new WeakMap<
+  #providerRegistrationCheckpoints = new WeakMap<
     ProviderRegistrationCheckpoint,
     CapabilityProvider
   >();
-  private tracker = new ProvenanceTracker();
-  private instrumentation?: PluginInstrumentation | undefined;
+  #tracker = new ProvenanceTracker();
+  #instrumentation?: PluginInstrumentation | undefined;
 
-  private cloneCapability(capability: Capability): Capability {
+  #cloneCapability(capability: Capability): Capability {
     return {
       ...capability,
       dependencies: [...capability.dependencies],
@@ -49,12 +49,12 @@ export class CapabilityRegistry {
     };
   }
 
-  private cloneProvider(provider: CapabilityProvider): CapabilityProvider {
+  #cloneProvider(provider: CapabilityProvider): CapabilityProvider {
     const sourceImplementation =
-      this.implementationSources.get(provider) ?? provider.implementation;
+      this.#implementationSources.get(provider) ?? provider.implementation;
     // Capture once at registration, and invoke unbound: providers must use closures
     // for state, never rely on the source object's receiver or later property changes.
-    const execute = this.implementationExecutors.get(provider) ?? provider.implementation.execute;
+    const execute = this.#implementationExecutors.get(provider) ?? provider.implementation.execute;
     const implementation = Object.freeze({
       execute: (context: unknown, signal?: AbortSignal) => execute.call(undefined, context, signal),
     });
@@ -65,32 +65,32 @@ export class CapabilityRegistry {
       registeredAt: new Date(provider.registeredAt.getTime()),
       metadata: structuredClone(provider.metadata),
     };
-    this.implementationSources.set(cloned, sourceImplementation);
-    this.implementationExecutors.set(cloned, execute);
+    this.#implementationSources.set(cloned, sourceImplementation);
+    this.#implementationExecutors.set(cloned, execute);
     return cloned;
   }
 
-  private immutableSnapshot<T>(value: T): T {
+  #immutableSnapshot<T>(value: T): T {
     if (value instanceof Date) return new Date(value.getTime()) as T;
     if (Array.isArray(value)) {
       return Object.freeze(
         value
           .filter((item) => typeof item !== "function")
-          .map((item) => this.immutableSnapshot(item)),
+          .map((item) => this.#immutableSnapshot(item)),
       ) as T;
     }
     if (value && typeof value === "object") {
       const snapshot = Object.fromEntries(
         Object.entries(value)
           .filter(([, item]) => typeof item !== "function")
-          .map(([key, item]) => [key, this.immutableSnapshot(item)]),
+          .map(([key, item]) => [key, this.#immutableSnapshot(item)]),
       );
       return Object.freeze(snapshot) as T;
     }
     return value;
   }
 
-  private providerDescriptor(provider: CapabilityProvider): CapabilityProviderDescriptor {
+  #providerDescriptor(provider: CapabilityProvider): CapabilityProviderDescriptor {
     const metadata: CapabilityProviderDescriptor = {
       providerId: provider.providerId,
       providerVersion: provider.providerVersion,
@@ -101,7 +101,7 @@ export class CapabilityRegistry {
       registeredAt: provider.registeredAt,
       metadata: provider.metadata,
     };
-    return this.immutableSnapshot(metadata) as CapabilityProviderDescriptor;
+    return this.#immutableSnapshot(metadata) as CapabilityProviderDescriptor;
   }
 
   // ---------------------------------------------------------------------------
@@ -109,7 +109,7 @@ export class CapabilityRegistry {
   // ---------------------------------------------------------------------------
 
   public registerCapability(capability: Capability): void {
-    const existing = this.capabilities.get(capability.id);
+    const existing = this.#capabilities.get(capability.id);
     if (existing) {
       if (existing.apiVersion !== capability.apiVersion) {
         throw new CapabilityConflictError(
@@ -118,7 +118,7 @@ export class CapabilityRegistry {
       }
       return;
     }
-    this.capabilities.set(capability.id, this.cloneCapability(capability));
+    this.#capabilities.set(capability.id, this.#cloneCapability(capability));
   }
 
   /** Host-only rollback for a capability created by an unsuccessful registration transaction. */
@@ -126,20 +126,20 @@ export class CapabilityRegistry {
     if (authority !== HOST_CAPABILITY_REGISTRATION_AUTHORITY) {
       throw new CapabilityConflictError("Capability rollback is reserved for the host.");
     }
-    if ((this.providers.get(capabilityId) ?? []).length > 0) return false;
-    this.capabilities.delete(capabilityId);
-    this.activeProviders.delete(capabilityId);
+    if ((this.#providers.get(capabilityId) ?? []).length > 0) return false;
+    this.#capabilities.delete(capabilityId);
+    this.#activeProviders.delete(capabilityId);
     return true;
   }
 
   public getCapability(capabilityId: string): Capability | undefined {
-    const capability = this.capabilities.get(capabilityId);
-    return capability ? this.immutableSnapshot(capability) : undefined;
+    const capability = this.#capabilities.get(capabilityId);
+    return capability ? this.#immutableSnapshot(capability) : undefined;
   }
 
   public listCapabilities(): Capability[] {
     return Object.freeze(
-      Array.from(this.capabilities.values(), (capability) => this.immutableSnapshot(capability)),
+      Array.from(this.#capabilities.values(), (capability) => this.#immutableSnapshot(capability)),
     ) as unknown as Capability[];
   }
 
@@ -153,7 +153,7 @@ export class CapabilityRegistry {
         `Provider registration for capability "${provider.capabilityId}" is reserved for the host.`,
       );
     }
-    const capability = this.capabilities.get(provider.capabilityId);
+    const capability = this.#capabilities.get(provider.capabilityId);
     if (!capability) {
       throw new NoProviderError(
         `Cannot register provider for unknown capability "${provider.capabilityId}"`,
@@ -168,7 +168,7 @@ export class CapabilityRegistry {
       );
     }
 
-    const list = this.providers.get(provider.capabilityId) ?? [];
+    const list = this.#providers.get(provider.capabilityId) ?? [];
     if (
       !capability.replaceable &&
       list.length > 0 &&
@@ -183,39 +183,39 @@ export class CapabilityRegistry {
     if (existingIndex >= 0) {
       if (
         !capability.replaceable &&
-        this.implementationSources.get(list[existingIndex]!) !== provider.implementation
+        this.#implementationSources.get(list[existingIndex]!) !== provider.implementation
       ) {
         throw new CapabilityConflictError(
           `Capability "${provider.capabilityId}" is marked non-replaceable. Provider "${provider.providerId}" cannot be replaced.`,
         );
       }
-      list[existingIndex] = this.cloneProvider(provider);
+      list[existingIndex] = this.#cloneProvider(provider);
     } else {
-      list.push(this.cloneProvider(provider));
+      list.push(this.#cloneProvider(provider));
     }
-    this.providers.set(provider.capabilityId, list);
+    this.#providers.set(provider.capabilityId, list);
 
     // Auto-activate if no active provider yet
-    if (!this.activeProviders.has(provider.capabilityId)) {
-      this.activeProviders.set(provider.capabilityId, provider.providerId);
+    if (!this.#activeProviders.has(provider.capabilityId)) {
+      this.#activeProviders.set(provider.capabilityId, provider.providerId);
     }
   }
 
   public getActiveProvider(capabilityId: string): CapabilityProviderDescriptor | undefined {
-    const activeId = this.activeProviders.get(capabilityId);
+    const activeId = this.#activeProviders.get(capabilityId);
     if (!activeId) return undefined;
-    const list = this.providers.get(capabilityId) ?? [];
-    const provider = this.quarantinedProviderIds.has(activeId)
-      ? list.find((p) => !this.quarantinedProviderIds.has(p.providerId))
+    const list = this.#providers.get(capabilityId) ?? [];
+    const provider = this.#quarantinedProviderIds.has(activeId)
+      ? list.find((p) => !this.#quarantinedProviderIds.has(p.providerId))
       : list.find((p) => p.providerId === activeId);
-    return provider ? this.providerDescriptor(provider) : undefined;
+    return provider ? this.#providerDescriptor(provider) : undefined;
   }
 
   public listProviders(capabilityId: string): CapabilityProviderDescriptor[] {
     return Object.freeze(
-      (this.providers.get(capabilityId) ?? [])
-        .filter((provider) => !this.quarantinedProviderIds.has(provider.providerId))
-        .map((provider) => this.providerDescriptor(provider)),
+      (this.#providers.get(capabilityId) ?? [])
+        .filter((provider) => !this.#quarantinedProviderIds.has(provider.providerId))
+        .map((provider) => this.#providerDescriptor(provider)),
     ) as CapabilityProviderDescriptor[];
   }
 
@@ -228,12 +228,12 @@ export class CapabilityRegistry {
     if (authority !== HOST_CAPABILITY_REGISTRATION_AUTHORITY) {
       throw new CapabilityConflictError("Provider registration capture is reserved for the host.");
     }
-    const provider = (this.providers.get(capabilityId) ?? []).find(
+    const provider = (this.#providers.get(capabilityId) ?? []).find(
       (item) => item.providerId === providerId,
     );
     if (!provider) return undefined;
     const checkpoint = Object.freeze({}) as ProviderRegistrationCheckpoint;
-    this.providerRegistrationCheckpoints.set(checkpoint, this.cloneProvider(provider));
+    this.#providerRegistrationCheckpoints.set(checkpoint, this.#cloneProvider(provider));
     return checkpoint;
   }
 
@@ -245,35 +245,35 @@ export class CapabilityRegistry {
     if (authority !== HOST_CAPABILITY_REGISTRATION_AUTHORITY) {
       throw new CapabilityConflictError("Provider registration restore is reserved for the host.");
     }
-    const provider = this.providerRegistrationCheckpoints.get(checkpoint);
+    const provider = this.#providerRegistrationCheckpoints.get(checkpoint);
     if (!provider) return false;
     this.registerProvider(provider, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
-    this.providerRegistrationCheckpoints.delete(checkpoint);
+    this.#providerRegistrationCheckpoints.delete(checkpoint);
     return true;
   }
 
   public quarantineProvider(providerId: string, authority?: symbol): void {
     if (authority !== HOST_CAPABILITY_REGISTRATION_AUTHORITY)
       throw new CapabilityConflictError("Provider quarantine is reserved for the host.");
-    this.quarantinedProviderIds.add(providerId);
-    for (const [capabilityId, activeId] of this.activeProviders) {
+    this.#quarantinedProviderIds.add(providerId);
+    for (const [capabilityId, activeId] of this.#activeProviders) {
       if (activeId !== providerId) continue;
-      const fallback = (this.providers.get(capabilityId) ?? []).find(
-        (provider) => !this.quarantinedProviderIds.has(provider.providerId),
+      const fallback = (this.#providers.get(capabilityId) ?? []).find(
+        (provider) => !this.#quarantinedProviderIds.has(provider.providerId),
       );
-      if (fallback) this.activeProviders.set(capabilityId, fallback.providerId);
-      else this.activeProviders.delete(capabilityId);
+      if (fallback) this.#activeProviders.set(capabilityId, fallback.providerId);
+      else this.#activeProviders.delete(capabilityId);
     }
   }
 
   public clearProviderQuarantine(providerId: string, authority?: symbol): void {
     if (authority !== HOST_CAPABILITY_REGISTRATION_AUTHORITY)
       throw new CapabilityConflictError("Provider quarantine recovery is reserved for the host.");
-    this.quarantinedProviderIds.delete(providerId);
+    this.#quarantinedProviderIds.delete(providerId);
   }
 
   public isProviderQuarantined(providerId: string): boolean {
-    return this.quarantinedProviderIds.has(providerId);
+    return this.#quarantinedProviderIds.has(providerId);
   }
 
   /**
@@ -284,8 +284,8 @@ export class CapabilityRegistry {
    * core invariants must always stay dispatchable.
    */
   public unregisterProvider(capabilityId: string, providerId: string): boolean {
-    const capability = this.capabilities.get(capabilityId);
-    const list = this.providers.get(capabilityId) ?? [];
+    const capability = this.#capabilities.get(capabilityId);
+    const list = this.#providers.get(capabilityId) ?? [];
     const index = list.findIndex((p) => p.providerId === providerId);
     if (index < 0) return false;
 
@@ -297,17 +297,17 @@ export class CapabilityRegistry {
 
     list.splice(index, 1);
     if (list.length === 0) {
-      this.providers.delete(capabilityId);
+      this.#providers.delete(capabilityId);
     } else {
-      this.providers.set(capabilityId, list);
+      this.#providers.set(capabilityId, list);
     }
 
-    if (this.activeProviders.get(capabilityId) === providerId) {
+    if (this.#activeProviders.get(capabilityId) === providerId) {
       const fallback = list[0];
       if (fallback) {
-        this.activeProviders.set(capabilityId, fallback.providerId);
+        this.#activeProviders.set(capabilityId, fallback.providerId);
       } else {
-        this.activeProviders.delete(capabilityId);
+        this.#activeProviders.delete(capabilityId);
       }
     }
     return true;
@@ -322,18 +322,18 @@ export class CapabilityRegistry {
     if (authority !== HOST_CAPABILITY_REGISTRATION_AUTHORITY) {
       throw new CapabilityConflictError("Forced provider removal is reserved for the host.");
     }
-    const list = this.providers.get(capabilityId) ?? [];
+    const list = this.#providers.get(capabilityId) ?? [];
     const index = list.findIndex((provider) => provider.providerId === providerId);
     if (index < 0) return false;
     list.splice(index, 1);
-    if (list.length === 0) this.providers.delete(capabilityId);
-    else this.providers.set(capabilityId, list);
-    if (this.activeProviders.get(capabilityId) === providerId) {
+    if (list.length === 0) this.#providers.delete(capabilityId);
+    else this.#providers.set(capabilityId, list);
+    if (this.#activeProviders.get(capabilityId) === providerId) {
       const fallback = list.find(
-        (provider) => !this.quarantinedProviderIds.has(provider.providerId),
+        (provider) => !this.#quarantinedProviderIds.has(provider.providerId),
       );
-      if (fallback) this.activeProviders.set(capabilityId, fallback.providerId);
-      else this.activeProviders.delete(capabilityId);
+      if (fallback) this.#activeProviders.set(capabilityId, fallback.providerId);
+      else this.#activeProviders.delete(capabilityId);
     }
     return true;
   }
@@ -344,19 +344,19 @@ export class CapabilityRegistry {
    * when none is left. Returns false when the provider was not active.
    */
   public deactivateProvider(capabilityId: string, providerId: string): boolean {
-    if (this.activeProviders.get(capabilityId) !== providerId) return false;
-    const list = this.providers.get(capabilityId) ?? [];
+    if (this.#activeProviders.get(capabilityId) !== providerId) return false;
+    const list = this.#providers.get(capabilityId) ?? [];
     const fallback = list.find((p) => p.providerId !== providerId);
     if (fallback) {
-      this.activeProviders.set(capabilityId, fallback.providerId);
+      this.#activeProviders.set(capabilityId, fallback.providerId);
     } else {
-      this.activeProviders.delete(capabilityId);
+      this.#activeProviders.delete(capabilityId);
     }
     return true;
   }
 
   public activateProvider(capabilityId: string, providerId: string): void {
-    const capability = this.capabilities.get(capabilityId);
+    const capability = this.#capabilities.get(capabilityId);
     if (!capability) {
       throw new NoProviderError(`Unknown capability "${capabilityId}"`);
     }
@@ -364,15 +364,15 @@ export class CapabilityRegistry {
     // Non-replaceable capabilities cannot change their active provider once
     // one is set (initial activation and idempotent re-activation stay allowed).
     // Checked before target lookup, mirroring switchProvider.
-    const currentActive = this.activeProviders.get(capabilityId);
+    const currentActive = this.#activeProviders.get(capabilityId);
     if (!capability.replaceable && currentActive !== undefined && currentActive !== providerId) {
       throw new CapabilityConflictError(
         `Capability "${capabilityId}" is marked non-replaceable. Active provider cannot be changed from "${currentActive}".`,
       );
     }
 
-    const list = this.providers.get(capabilityId) ?? [];
-    if (this.quarantinedProviderIds.has(providerId))
+    const list = this.#providers.get(capabilityId) ?? [];
+    if (this.#quarantinedProviderIds.has(providerId))
       throw new CapabilityConflictError(`Provider "${providerId}" is quarantined.`);
     const target = list.find((p) => p.providerId === providerId);
     if (!target) {
@@ -380,14 +380,14 @@ export class CapabilityRegistry {
         `Provider "${providerId}" is not registered for capability "${capabilityId}"`,
       );
     }
-    this.activeProviders.set(capabilityId, providerId);
+    this.#activeProviders.set(capabilityId, providerId);
   }
 
   public switchProvider(
     capabilityId: string,
     targetProviderId: string,
   ): { from?: string | undefined; to: string } {
-    const capability = this.capabilities.get(capabilityId);
+    const capability = this.#capabilities.get(capabilityId);
     if (!capability) {
       throw new NoProviderError(`Unknown capability "${capabilityId}"`);
     }
@@ -398,8 +398,8 @@ export class CapabilityRegistry {
       );
     }
 
-    const list = this.providers.get(capabilityId) ?? [];
-    if (this.quarantinedProviderIds.has(targetProviderId))
+    const list = this.#providers.get(capabilityId) ?? [];
+    if (this.#quarantinedProviderIds.has(targetProviderId))
       throw new CapabilityConflictError(`Provider "${targetProviderId}" is quarantined.`);
     const target = list.find((p) => p.providerId === targetProviderId);
     if (!target) {
@@ -408,8 +408,8 @@ export class CapabilityRegistry {
       );
     }
 
-    const from = this.activeProviders.get(capabilityId);
-    this.activeProviders.set(capabilityId, targetProviderId);
+    const from = this.#activeProviders.get(capabilityId);
+    this.#activeProviders.set(capabilityId, targetProviderId);
 
     return { from, to: targetProviderId };
   }
@@ -419,11 +419,11 @@ export class CapabilityRegistry {
   // ---------------------------------------------------------------------------
 
   public setInstrumentation(instrumentation: PluginInstrumentation): void {
-    this.instrumentation = instrumentation;
+    this.#instrumentation = instrumentation;
   }
 
   public getInstrumentation(): PluginInstrumentation | undefined {
-    return this.instrumentation;
+    return this.#instrumentation;
   }
 
   // ---------------------------------------------------------------------------
@@ -435,23 +435,23 @@ export class CapabilityRegistry {
     context: TContext,
     signal?: AbortSignal,
   ): Promise<TResult> {
-    const capability = this.capabilities.get(capabilityId);
-    const activeId = this.activeProviders.get(capabilityId);
-    const activeProvider = (this.providers.get(capabilityId) ?? []).find(
+    const capability = this.#capabilities.get(capabilityId);
+    const activeId = this.#activeProviders.get(capabilityId);
+    const activeProvider = (this.#providers.get(capabilityId) ?? []).find(
       (provider) => provider.providerId === activeId,
     );
 
     if (
       !capability ||
       !activeProvider ||
-      this.quarantinedProviderIds.has(activeProvider.providerId)
+      this.#quarantinedProviderIds.has(activeProvider.providerId)
     ) {
       throw new NoProviderError(capabilityId);
     }
 
     const runner = async (executionSignal?: AbortSignal): Promise<TResult> => {
       const traceId = randomUUID();
-      this.tracker.recordStart(
+      this.#tracker.recordStart(
         traceId,
         capabilityId,
         capability.apiVersion,
@@ -463,11 +463,11 @@ export class CapabilityRegistry {
       try {
         const result = await activeProvider.implementation.execute(context, executionSignal);
         const durationMs = Date.now() - startTime;
-        this.tracker.recordSuccess(traceId, capabilityId, activeProvider.providerId, durationMs);
+        this.#tracker.recordSuccess(traceId, capabilityId, activeProvider.providerId, durationMs);
         return result as TResult;
       } catch (error) {
         const durationMs = Date.now() - startTime;
-        this.tracker.recordFailure(
+        this.#tracker.recordFailure(
           traceId,
           capabilityId,
           activeProvider.providerId,
@@ -478,8 +478,8 @@ export class CapabilityRegistry {
       }
     };
 
-    if (this.instrumentation) {
-      return await this.instrumentation.trace(activeProvider.providerId, capabilityId, runner, {
+    if (this.#instrumentation) {
+      return await this.#instrumentation.trace(activeProvider.providerId, capabilityId, runner, {
         version: activeProvider.providerVersion,
         ...(signal ? { signal } : {}),
       });
@@ -494,13 +494,13 @@ export class CapabilityRegistry {
   }
 
   public getProvenance(capabilityId: string): CapabilityProvenance {
-    const capability = this.capabilities.get(capabilityId);
+    const capability = this.#capabilities.get(capabilityId);
     const active = this.getActiveProvider(capabilityId);
     if (!capability || !active) {
       throw new NoProviderError(capabilityId);
     }
 
-    return this.tracker.getProvenance(
+    return this.#tracker.getProvenance(
       capabilityId,
       capability.apiVersion,
       active,
@@ -510,11 +510,11 @@ export class CapabilityRegistry {
 
   public getAllProvenance(): CapabilityProvenance[] {
     const results: CapabilityProvenance[] = [];
-    for (const [id, capability] of this.capabilities.entries()) {
+    for (const [id, capability] of this.#capabilities.entries()) {
       const active = this.getActiveProvider(id);
       if (active) {
         results.push(
-          this.tracker.getProvenance(id, capability.apiVersion, active, this.listProviders(id)),
+          this.#tracker.getProvenance(id, capability.apiVersion, active, this.listProviders(id)),
         );
       }
     }
@@ -522,7 +522,7 @@ export class CapabilityRegistry {
   }
 
   public listDiscoveredCapabilities(): DiscoveredCapability[] {
-    return Array.from(this.capabilities.values()).map((cap) => {
+    return Array.from(this.#capabilities.values()).map((cap) => {
       const active = this.getActiveProvider(cap.id);
       const all = this.listProviders(cap.id);
       const alternatives = all
@@ -550,18 +550,18 @@ export class CapabilityRegistry {
   }
 
   public getTraces(capabilityId?: string, limit?: number) {
-    return this.tracker.getTraces(capabilityId, limit);
+    return this.#tracker.getTraces(capabilityId, limit);
   }
 
   public clear(): void {
-    this.capabilities.clear();
-    this.providers.clear();
-    this.activeProviders.clear();
-    this.quarantinedProviderIds.clear();
-    this.implementationSources = new WeakMap();
-    this.implementationExecutors = new WeakMap();
-    this.providerRegistrationCheckpoints = new WeakMap();
-    this.tracker.clear();
+    this.#capabilities.clear();
+    this.#providers.clear();
+    this.#activeProviders.clear();
+    this.#quarantinedProviderIds.clear();
+    this.#implementationSources = new WeakMap();
+    this.#implementationExecutors = new WeakMap();
+    this.#providerRegistrationCheckpoints = new WeakMap();
+    this.#tracker.clear();
   }
 }
 
