@@ -3,9 +3,9 @@
 **Sprint:** 0.2 — Inventário de Stores Existentes\
 **Status:** COMPLETED\
 **Target Delivery:** `docs/architecture/modus-persistent-stores-inventory.md`\
-**Test Suite / Benchmark:** [`apps/desktop/src/main/agent/stores-inventory-poc.test.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/stores-inventory-poc.test.ts)\
+**Test Suite / Benchmark:** [`apps/desktop/src/main/agent/stores-inventory-poc.test.ts`](../../apps/desktop/src/main/agent/stores-inventory-poc.test.ts)\
 **Database Engine:** `node:sqlite` (`DatabaseSync` nativo do Node.js 22+ / Electron)\
-**Primary Schema Definition:** [`apps/desktop/src/main/db/database.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/db/database.ts)
+**Primary Schema Definition:** [`apps/desktop/src/main/db/database.ts`](../../apps/desktop/src/main/db/database.ts)
 
 ---
 
@@ -19,7 +19,7 @@ O Sprint 0.2 realizou um levantamento detalhado de todos os repositórios persis
 2. **Capacidade do SQLite para Payloads Grandes:**\
    O SQLite suporta nativamente campos `TEXT` e `BLOB` de até 1GB (ou 2GB dependendo das flags de compilação). Nossos benchmarks comprovaram que inserções e leituras pontuais de payloads de 1MB são executadas em **< 15ms**.
 3. **O Verdadeiro Gargalo de Escalabilidade:**\
-   O gargalo de performance **NÃO é o disco ou o SQLite**, mas sim o pipeline da função [`listAgentEvents(sessionId)`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/agent-event-store.ts#L1217-L1250):
+   O gargalo de performance **NÃO é o disco ou o SQLite**, mas sim o pipeline da função [`listAgentEvents(sessionId)`](../../apps/desktop/src/main/agent/agent-event-store.ts#L1217-L1250):
    - A função executa `select id, payload_json, created_at, rowid as event_cursor from agent_events where session_id = ? order by created_at asc`.
    - Em seguida, executa `JSON.parse` em **cada evento** da sessão e envia todo o array deserializado através do barramento IPC do Electron para o processo de renderização.
    - Se uma sessão contiver 100 tool outputs de 50KB sem spill, a consulta carrega **> 5MB de strings JSON** e aloca dezenas de megabytes na heap do Node e do V8 do Renderer.
@@ -31,7 +31,7 @@ O Sprint 0.2 realizou um levantamento detalhado de todos os repositórios persis
 
 ## 2. Inventário Técnico dos Stores
 
-### 2.1 `agent_events` ([`agent-event-store.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/agent-event-store.ts))
+### 2.1 `agent_events` ([`agent-event-store.ts`](../../apps/desktop/src/main/agent/agent-event-store.ts))
 
 O store mais ativo do Modus, servindo como o *event log* imutável e fonte da verdade da linha do tempo do agente.
 
@@ -64,7 +64,7 @@ O store mais ativo do Modus, servindo como o *event log* imutável e fonte da ve
 
 ---
 
-### 2.2 `agent_runs` ([`agent-run-store.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/agent-run-store.ts))
+### 2.2 `agent_runs` ([`agent-run-store.ts`](../../apps/desktop/src/main/agent/agent-run-store.ts))
 
 Rastreia cada execução de prompt do usuário dentro de uma sessão.
 
@@ -91,7 +91,7 @@ Rastreia cada execução de prompt do usuário dentro de uma sessão.
 
 ---
 
-### 2.3 `project_memory_*` ([`project-memory-store.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/project-model-store.ts))
+### 2.3 `project_memory_*` ([`project-memory-store.ts`](../../apps/desktop/src/main/agent/harness/project-model-store.ts))
 
 Subsistema de memória persistente estruturada para guardar decisões, convenções, constraints e lições aprendidas pelo agente.
 
@@ -106,7 +106,7 @@ Subsistema de memória persistente estruturada para guardar decisões, convenç�
 
 ---
 
-### 2.4 `project_model_*` ([`project-model-store.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/project-model-store.ts))
+### 2.4 `project_model_*` ([`project-model-store.ts`](../../apps/desktop/src/main/agent/harness/project-model-store.ts))
 
 Grafo de dependências e descobertas do workspace gerado pelo CodeGraph e Git.
 
@@ -117,7 +117,7 @@ Grafo de dependências e descobertas do workspace gerado pelo CodeGraph e Git.
 
 ---
 
-### 2.5 `harness_failure_blacklist` & `harness_promotions` ([`promoted-policy-store.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/promoted-policy-store.ts))
+### 2.5 `harness_failure_blacklist` & `harness_promotions` ([`promoted-policy-store.ts`](../../apps/desktop/src/main/agent/harness/promoted-policy-store.ts))
 
 Mecanismo de Failure Intelligence do Modus para bloquear loops de repetição de estratégias falhas (Repeat Guards).
 
@@ -129,7 +129,7 @@ Mecanismo de Failure Intelligence do Modus para bloquear loops de repetição de
 
 ---
 
-### 2.6 Subagentes & Groups ([`group-store.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/groups/group-store.ts))
+### 2.6 Subagentes & Groups ([`group-store.ts`](../../apps/desktop/src/main/groups/group-store.ts))
 
 Rastreia salas de colaboração multi-agente, tarefas delegadas e jobs assíncronos.
 
@@ -145,7 +145,7 @@ Rastreia salas de colaboração multi-agente, tarefas delegadas e jobs assíncro
 
 ## 3. Benchmarks Empíricos de Capacidade (POC)
 
-Executado via Vitest em [`apps/desktop/src/main/agent/stores-inventory-poc.test.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/stores-inventory-poc.test.ts).
+Executado via Vitest em [`apps/desktop/src/main/agent/stores-inventory-poc.test.ts`](../../apps/desktop/src/main/agent/stores-inventory-poc.test.ts).
 
 ### Resultados Coletados:
 

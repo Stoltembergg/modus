@@ -55,7 +55,7 @@ Conforme especificado em `docs/roadmap/plugin-system.md` (linhas 1555-1860) e no
 ## 2. Arquitetura e Componentes Criados
 
 ### 2.1 — Modelos de Dados e Contratos
-**Arquivo:** [`apps/desktop/src/main/agent/harness/plugin/plugin-rollback-types.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/plugin-rollback-types.ts)
+**Arquivo:** [`apps/desktop/src/main/agent/harness/plugin/plugin-rollback-types.ts`](../../../apps/desktop/src/main/agent/harness/plugin/plugin-rollback-types.ts)
 
 Define os contratos estritos de preservação, diagnóstico e recuperação:
 - `SafeModeLevel`: `'core' | 'official' | 'verified'`
@@ -65,7 +65,7 @@ Define os contratos estritos de preservação, diagnóstico e recuperação:
 - `UpdateFailedError`: classe de erro contendo `pluginId`, `targetVersion`, `errorRate` e `rolledBackTo`.
 
 ### 2.2 — PluginVersionManager
-**Arquivo:** [`apps/desktop/src/main/agent/harness/plugin/version-manager.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/version-manager.ts)
+**Arquivo:** [`apps/desktop/src/main/agent/harness/plugin/version-manager.ts`](../../../apps/desktop/src/main/agent/harness/plugin/version-manager.ts)
 
 - `preserveVersion(pluginId, version?)`: obtém o estado atual no SQLite/catálogo e persiste na tabela de versões históricas com cópia defensiva das configurações.
 - `rollback(pluginId, targetVersion)`: coordena a reversão via `PluginLifecycleService.downgrade()` com validação de existência de snapshot.
@@ -73,7 +73,7 @@ Define os contratos estritos de preservação, diagnóstico e recuperação:
 - `getLatestBackup(pluginId, excludeVersion?)`: recupera o backup mais recente imediatamente anterior à versão atual.
 
 ### 2.3 — AutoRollbackManager
-**Arquivo:** [`apps/desktop/src/main/agent/harness/plugin/auto-rollback.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/auto-rollback.ts)
+**Arquivo:** [`apps/desktop/src/main/agent/harness/plugin/auto-rollback.ts`](../../../apps/desktop/src/main/agent/harness/plugin/auto-rollback.ts)
 
 - `watchUpdate(pluginId, newManifest, options?)`:
   1. Cria snapshot da versão atualmente ativa via `versionManager.preserveVersion`.
@@ -83,7 +83,7 @@ Define os contratos estritos de preservação, diagnóstico e recuperação:
   5. Se o processo de deploy falhar com exceção inesperada, também aciona a reversão preventiva.
 
 ### 2.4 — PluginSafeModeManager
-**Arquivo:** [`apps/desktop/src/main/agent/harness/plugin/safe-mode.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/safe-mode.ts)
+**Arquivo:** [`apps/desktop/src/main/agent/harness/plugin/safe-mode.ts`](../../../apps/desktop/src/main/agent/harness/plugin/safe-mode.ts)
 
 - `enter(level)`:
   1. Salva a lista de plugins ativos no momento do chaveamento.
@@ -98,7 +98,7 @@ Define os contratos estritos de preservação, diagnóstico e recuperação:
   - Retorna relatório com estado ativo, nível corrente e lista de plugins desativados pelo modo de segurança.
 
 ### 2.5 — PluginRecoveryManager
-**Arquivo:** [`apps/desktop/src/main/agent/harness/plugin/plugin-recovery.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/plugin-recovery.ts)
+**Arquivo:** [`apps/desktop/src/main/agent/harness/plugin/plugin-recovery.ts`](../../../apps/desktop/src/main/agent/harness/plugin/plugin-recovery.ts)
 
 - `diagnose()`:
   - Varre o banco de dados em busca de plugins com estado `error`.
@@ -112,7 +112,7 @@ Define os contratos estritos de preservação, diagnóstico e recuperação:
     - Suporta modo `--dry-run` para planejamento sem mutações de estado.
 
 ### 2.6 — CLI Commands & PiSdkRuntime
-**Arquivos:** [`apps/desktop/src/main/agent/harness/plugin/plugin-cli.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/plugin-cli.ts) e [`apps/desktop/src/main/agent/pi-sdk-runtime.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/pi-sdk-runtime.ts)
+**Arquivos:** [`apps/desktop/src/main/agent/harness/plugin/plugin-cli.ts`](../../../apps/desktop/src/main/agent/harness/plugin/plugin-cli.ts) e [`apps/desktop/src/main/agent/pi-sdk-runtime.ts`](../../../apps/desktop/src/main/agent/pi-sdk-runtime.ts)
 
 - CLI estendida com os comandos:
   - `modus plugin rollback <plugin-id> [version]`

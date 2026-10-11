@@ -34,10 +34,10 @@ Ambiente medido: Windows, Node **v24.21.0**, PI SDK instalado **0.80.6**, deskto
 
 Evidências locais completas:
 
-1. `C:/Users/Gabriel/AppData/Local/Temp/opencode/modus-phase19-audit-vMxRuU/results.json` — 25 modos, 27 subprocessos, incluindo dois pares crash/restart.
-2. `C:/Users/Gabriel/AppData/Local/Temp/opencode/modus-phase19-audit-i04dxP/results.json` — rerodada do broker; escrita via junction comprovada, leitura de hardlink negada pelo escopo e execução interrompida antes dos checks restantes.
-3. `C:/Users/Gabriel/AppData/Local/Temp/opencode/modus-audit-baseline-tests.json` e `.log` — suíte desktop completa.
-4. `C:/Users/Gabriel/AppData/Local/Temp/opencode/modus-audit-serial-tests.json` e `.log` — rerodada serial de dez arquivos.
+1. `~/AppData/Local/Temp/opencode/modus-phase19-audit-vMxRuU/results.json` — 25 modos, 27 subprocessos, incluindo dois pares crash/restart.
+2. `~/AppData/Local/Temp/opencode/modus-phase19-audit-i04dxP/results.json` — rerodada do broker; escrita via junction comprovada, leitura de hardlink negada pelo escopo e execução interrompida antes dos checks restantes.
+3. `~/AppData/Local/Temp/opencode/modus-audit-baseline-tests.json` e `.log` — suíte desktop completa.
+4. `~/AppData/Local/Temp/opencode/modus-audit-serial-tests.json` e `.log` — rerodada serial de dez arquivos.
 
 Os logs PowerShell podem ser UTF-16; os JSONs são legíveis por Node. São arquivos temporários locais, não anexos versionados; preserve-os antes de limpar o diretório temporário.
 
@@ -140,7 +140,7 @@ Suíte desktop completa executada nesta auditoria: **392 arquivos, 4184 testes; 
 
 Rerodada serial fresca:
 
-`npx vitest run apps/desktop/src/main/agent/harness/plugin apps/desktop/src/main/agent/harness/groups/groups.test.ts apps/desktop/src/main/groups/group-runtime-reliability.test.ts apps/desktop/src/main/groups/group-task-details.test.ts --no-file-parallelism --maxWorkers=1 --testTimeout=20000 --reporter=json --outputFile="C:/Users/Gabriel/AppData/Local/Temp/opencode/modus-audit-serial-tests.json"`
+`npx vitest run apps/desktop/src/main/agent/harness/plugin apps/desktop/src/main/agent/harness/groups/groups.test.ts apps/desktop/src/main/groups/group-runtime-reliability.test.ts apps/desktop/src/main/groups/group-task-details.test.ts --no-file-parallelism --maxWorkers=1 --testTimeout=20000 --reporter=json --outputFile="~/AppData/Local/Temp/opencode/modus-audit-serial-tests.json"`
 
 **10 arquivos, 207 testes: 204 pass, 3 fail, 0 skip**. Nove arquivos passaram, incluindo todos os arquivos de plugins/WASM, mailbox e `group-runtime-reliability`. As três falhas persistem em `group-task-details.test.ts`: outcome/provenance tipados; `unavailable` versus `stale`; atualização concorrente durante freshness Git. Sua causa completa ainda não foi isolada; não foi contado novo defeito de segurança só pela divergência de expectativa.
 

@@ -2,7 +2,7 @@
 
 **Data:** 07 de Outubro de 2026\
 **Status:** Concluída com Sucesso (100% dos testes e typecheck aprovados, sem quebra de regressão)\
-**Documento de Referência:** [2026-10-05-deepseek-harness-evolution-REVISED.md](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/docs/superpowers/plans/2026-10-05-deepseek-harness-evolution-REVISED.md)
+**Documento de Referência:** [2026-10-05-deepseek-harness-evolution-REVISED.md](2026-10-05-deepseek-harness-evolution-REVISED.md)
 
 ---
 
@@ -35,22 +35,22 @@ A fase foi dividida estrategicamente em:
 ## 2. Artefatos Criados e Modificados
 
 ### 2.1 Estrutura de Código em `apps/desktop/src/main/agent/harness/plugin/`
-- [`plugin-types.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/plugin-types.ts): Definições de interfaces de manifesto, provisões, requisitos, hooks de ciclo de vida e classes de erro (`PluginValidationError`, `PluginDependencyError`, `PluginLifecycleError`).
-- [`plugin-loader.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/plugin-loader.ts): Classe `PluginLoader` que gerencia validação, resolução de dependências, registro de provedores no `CapabilityRegistry` e transições de ciclo de vida.
-- [`bootstrap.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/bootstrap.ts): Função `bootstrapModusPlugins` que orquestra a inicialização e ativação topológica dos 6 plugins internos.
-- [`index.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/index.ts): Exportação unificada do módulo de plugins.
+- [`plugin-types.ts`](../../../apps/desktop/src/main/agent/harness/plugin/plugin-types.ts): Definições de interfaces de manifesto, provisões, requisitos, hooks de ciclo de vida e classes de erro (`PluginValidationError`, `PluginDependencyError`, `PluginLifecycleError`).
+- [`plugin-loader.ts`](../../../apps/desktop/src/main/agent/harness/plugin/plugin-loader.ts): Classe `PluginLoader` que gerencia validação, resolução de dependências, registro de provedores no `CapabilityRegistry` e transições de ciclo de vida.
+- [`bootstrap.ts`](../../../apps/desktop/src/main/agent/harness/plugin/bootstrap.ts): Função `bootstrapModusPlugins` que orquestra a inicialização e ativação topológica dos 6 plugins internos.
+- [`index.ts`](../../../apps/desktop/src/main/agent/harness/plugin/index.ts): Exportação unificada do módulo de plugins.
 
 ### 2.2 Plugins Internos Implementados em `plugins/`
-1. [`memory-plugin.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/plugins/memory-plugin.ts): `@modus/memory` (provê `memory.retrieve`, `memory.store`, `memory.compact`).
-2. [`model-router-plugin.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/plugins/model-router-plugin.ts): `@modus/model-router` (provê `model.select`, `model.route`).
-3. [`verifier-plugin.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/plugins/verifier-plugin.ts): `@modus/verifier` (provê `verification.run`, `verification.assess`; requer `context.resolve`).
-4. [`context-engine-plugin.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/plugins/context-engine-plugin.ts): `@modus/context-engine` (provê `context.resolve`, `context.filter`; requer `memory.retrieve`).
-5. [`failure-intel-plugin.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/plugins/failure-intel-plugin.ts): `@modus/failure-intelligence` (provê `failure.classify`, `failure.recover`; requer `verification.run`).
-6. [`groups-plugin.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/plugins/groups-plugin.ts): `@modus/groups` (provê `groups.coordinate`, `groups.mailbox`; requer `context.resolve`).
+1. [`memory-plugin.ts`](../../../apps/desktop/src/main/agent/harness/plugin/plugins/memory-plugin.ts): `@modus/memory` (provê `memory.retrieve`, `memory.store`, `memory.compact`).
+2. [`model-router-plugin.ts`](../../../apps/desktop/src/main/agent/harness/plugin/plugins/model-router-plugin.ts): `@modus/model-router` (provê `model.select`, `model.route`).
+3. [`verifier-plugin.ts`](../../../apps/desktop/src/main/agent/harness/plugin/plugins/verifier-plugin.ts): `@modus/verifier` (provê `verification.run`, `verification.assess`; requer `context.resolve`).
+4. [`context-engine-plugin.ts`](../../../apps/desktop/src/main/agent/harness/plugin/plugins/context-engine-plugin.ts): `@modus/context-engine` (provê `context.resolve`, `context.filter`; requer `memory.retrieve`).
+5. [`failure-intel-plugin.ts`](../../../apps/desktop/src/main/agent/harness/plugin/plugins/failure-intel-plugin.ts): `@modus/failure-intelligence` (provê `failure.classify`, `failure.recover`; requer `verification.run`).
+6. [`groups-plugin.ts`](../../../apps/desktop/src/main/agent/harness/plugin/plugins/groups-plugin.ts): `@modus/groups` (provê `groups.coordinate`, `groups.mailbox`; requer `context.resolve`).
 
 ### 2.3 Integração no Runtime e Governança
-- [`feature-flags.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/feature-flags.ts): Adicionada flag `MODUS_PLUGINS: boolean` com validação de dependência sobre `MODUS_CAPABILITY_REGISTRY`.
-- [`pi-sdk-runtime.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/pi-sdk-runtime.ts):
+- [`feature-flags.ts`](../../../apps/desktop/src/main/agent/harness/feature-flags.ts): Adicionada flag `MODUS_PLUGINS: boolean` com validação de dependência sobre `MODUS_CAPABILITY_REGISTRY`.
+- [`pi-sdk-runtime.ts`](../../../apps/desktop/src/main/agent/pi-sdk-runtime.ts):
   - Instanciação de `PluginLoader(this.capabilityRegistry)`.
   - Getter público `getPluginLoader(): PluginLoader`.
   - Método de espera assíncrona `waitForPlugins(): Promise<void>`.

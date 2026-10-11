@@ -2,7 +2,7 @@
 
 **Data:** 07 de Outubro de 2026\
 **Status:** CONCLUÍDO COM SUCESSO (100%)\
-**Referência:** [2026-10-05-deepseek-harness-evolution-REVISED.md](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/docs/superpowers/plans/2026-10-05-deepseek-harness-evolution-REVISED.md#L2158-L2240)
+**Referência:** [2026-10-05-deepseek-harness-evolution-REVISED.md](2026-10-05-deepseek-harness-evolution-REVISED.md#L2158-L2240)
 
 ---
 
@@ -37,9 +37,9 @@ A **Fase 11 (Plugin Lifecycle & State Storage)** conclui a infraestrutura do eco
 
 | Critério do Plano Diretor | Status | Evidência / Arquivo |
 |---|:---:|---|
-| **Todas as operações de lifecycle implementadas** | ✅ Aprovado | [`apps/desktop/src/main/agent/harness/plugin/plugin-lifecycle-service.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/plugin-lifecycle-service.ts) |
-| **CLI funcional para todas as operações** | ✅ Aprovado | [`apps/desktop/src/main/agent/harness/plugin/plugin-cli.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/plugin-cli.ts) |
-| **Estado persiste em SQLite com integridade ACID** | ✅ Aprovado | [`apps/desktop/src/main/agent/harness/plugin/plugin-state-store.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/plugin-state-store.ts) |
+| **Todas as operações de lifecycle implementadas** | ✅ Aprovado | [`apps/desktop/src/main/agent/harness/plugin/plugin-lifecycle-service.ts`](../../../apps/desktop/src/main/agent/harness/plugin/plugin-lifecycle-service.ts) |
+| **CLI funcional para todas as operações** | ✅ Aprovado | [`apps/desktop/src/main/agent/harness/plugin/plugin-cli.ts`](../../../apps/desktop/src/main/agent/harness/plugin/plugin-cli.ts) |
+| **Estado persiste em SQLite com integridade ACID** | ✅ Aprovado | [`apps/desktop/src/main/agent/harness/plugin/plugin-state-store.ts`](../../../apps/desktop/src/main/agent/harness/plugin/plugin-state-store.ts) |
 | **Transações garantem consistência após crash/rollback** | ✅ Aprovado | Testado com crash simulado em transação (`plugin-lifecycle.test.ts`) |
 | **Zero erros de tipagem estrita no TypeScript** | ✅ Aprovado | `npm --prefix apps/desktop run typecheck` (`tsc -p tsconfig.json --noEmit` -> 0 errors) |
 | **Testes unitários e de integração 100% verdes** | ✅ Aprovado | 18/18 testes em `plugin-lifecycle.test.ts`, 54/54 testes no conjunto total de plugins e capacidades |
@@ -51,7 +51,7 @@ A **Fase 11 (Plugin Lifecycle & State Storage)** conclui a infraestrutura do eco
 ### Execução da Suíte Fase 11 (`plugin-lifecycle.test.ts`)
 
 ```
- RUN  v5.0.3 C:/Users/Gabriel/Desktop/Nova pasta/modus
+ RUN  v5.0.3 ~/Desktop/Nova pasta/modus
 
  ✓ apps/desktop/src/main/agent/harness/plugin/plugin-lifecycle.test.ts (18 tests) 32ms
    ✓ Fase 11 — Plugin Lifecycle & State Storage (18)
@@ -85,7 +85,7 @@ A **Fase 11 (Plugin Lifecycle & State Storage)** conclui a infraestrutura do eco
 ### Execução Conjunta de Capacidades e Plugins (Fases 9, 10 e 11)
 
 ```
- RUN  v5.0.3 C:/Users/Gabriel/Desktop/Nova pasta/modus
+ RUN  v5.0.3 ~/Desktop/Nova pasta/modus
 
  ✓ apps/desktop/src/main/agent/harness/plugin/plugin-lifecycle.test.ts (18 tests) 38ms
  ✓ apps/desktop/src/main/agent/harness/capability/capability-registry.test.ts (15 tests) 14ms

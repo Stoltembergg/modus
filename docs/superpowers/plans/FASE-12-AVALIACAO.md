@@ -2,7 +2,7 @@
 
 **Data:** 07 de Outubro de 2026\
 **Status:** CONCLUÍDO COM SUCESSO (100%)\
-**Referência:** [2026-10-05-deepseek-harness-evolution-REVISED.md](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/docs/superpowers/plans/2026-10-05-deepseek-harness-evolution-REVISED.md#L2230-L2310)
+**Referência:** [2026-10-05-deepseek-harness-evolution-REVISED.md](2026-10-05-deepseek-harness-evolution-REVISED.md#L2230-L2310)
 
 ---
 
@@ -52,12 +52,12 @@ Principais componentes entregues:
 
 | Critério do Plano Diretor | Status | Evidência / Arquivo |
 |---|:---:|---|
-| **Instrumentação de plugins com timeout e traces** | ✅ Aprovado | [`apps/desktop/src/main/agent/harness/plugin/plugin-instrumentation.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/plugin-instrumentation.ts) |
-| **Integração com HarnessObserver e métricas P95** | ✅ Aprovado | [`apps/desktop/src/main/agent/harness/observability/harness-observer.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/observability/harness-observer.ts) |
-| **Monitoramento de saúde com thresholds (healthy/degraded/failing)** | ✅ Aprovado | [`apps/desktop/src/main/agent/harness/plugin/plugin-health-monitor.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/plugin-health-monitor.ts) |
-| **Correlação de falhas heurística multinível** | ✅ Aprovado | [`apps/desktop/src/main/agent/harness/plugin/plugin-failure-correlation.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/plugin-failure-correlation.ts) |
-| **Integração automática no CapabilityRegistry.execute()** | ✅ Aprovado | [`apps/desktop/src/main/agent/harness/capability/capability-registry.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/capability/capability-registry.ts) |
-| **PiSdkRuntime integração e Feature Flags** | ✅ Aprovado | [`apps/desktop/src/main/agent/pi-sdk-runtime.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/pi-sdk-runtime.ts) & [`feature-flags.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/feature-flags.ts) |
+| **Instrumentação de plugins com timeout e traces** | ✅ Aprovado | [`apps/desktop/src/main/agent/harness/plugin/plugin-instrumentation.ts`](../../../apps/desktop/src/main/agent/harness/plugin/plugin-instrumentation.ts) |
+| **Integração com HarnessObserver e métricas P95** | ✅ Aprovado | [`apps/desktop/src/main/agent/harness/observability/harness-observer.ts`](../../../apps/desktop/src/main/agent/harness/observability/harness-observer.ts) |
+| **Monitoramento de saúde com thresholds (healthy/degraded/failing)** | ✅ Aprovado | [`apps/desktop/src/main/agent/harness/plugin/plugin-health-monitor.ts`](../../../apps/desktop/src/main/agent/harness/plugin/plugin-health-monitor.ts) |
+| **Correlação de falhas heurística multinível** | ✅ Aprovado | [`apps/desktop/src/main/agent/harness/plugin/plugin-failure-correlation.ts`](../../../apps/desktop/src/main/agent/harness/plugin/plugin-failure-correlation.ts) |
+| **Integração automática no CapabilityRegistry.execute()** | ✅ Aprovado | [`apps/desktop/src/main/agent/harness/capability/capability-registry.ts`](../../../apps/desktop/src/main/agent/harness/capability/capability-registry.ts) |
+| **PiSdkRuntime integração e Feature Flags** | ✅ Aprovado | [`apps/desktop/src/main/agent/pi-sdk-runtime.ts`](../../../apps/desktop/src/main/agent/pi-sdk-runtime.ts) & [`feature-flags.ts`](../../../apps/desktop/src/main/agent/harness/feature-flags.ts) |
 | **Zero erros de tipagem estrita no TypeScript** | ✅ Aprovado | `npm --prefix apps/desktop run typecheck` (`tsc -p tsconfig.json --noEmit` -> 0 errors) |
 | **Suíte de testes 100% verde (unitários e regressão)** | ✅ Aprovado | 16/16 testes em `plugin-tracing.test.ts`, 96/96 testes no total geral do harness |
 
@@ -68,7 +68,7 @@ Principais componentes entregues:
 ### Execução da Suíte da Fase 12 (`plugin-tracing.test.ts`)
 
 ```
- RUN  v5.0.3 C:/Users/Gabriel/Desktop/Nova pasta/modus
+ RUN  v5.0.3 ~/Desktop/Nova pasta/modus
 
  ✓ apps/desktop/src/main/agent/harness/plugin/plugin-tracing.test.ts (16 tests) 38ms
    ✓ Fase 12 — Plugin Tracing & Observability (16)
@@ -102,7 +102,7 @@ Principais componentes entregues:
 ### Execução Conjunta de Regressão do Harness (Fases 8, 9, 10, 11 e 12)
 
 ```
- RUN  v5.0.3 C:/Users/Gabriel/Desktop/Nova pasta/modus
+ RUN  v5.0.3 ~/Desktop/Nova pasta/modus
 
  ✓ apps/desktop/src/main/agent/harness/plugin/plugin-lifecycle.test.ts (21 tests) 56ms
  ✓ apps/desktop/src/main/agent/harness/observability/observability.test.ts (23 tests) 22ms

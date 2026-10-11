@@ -22,7 +22,7 @@ Nenhum blocker técnico foi identificado. Todos os riscos foram mapeados com mit
 
 ### Sprint 0.1 — PI SDK Integration Analysis ✅
 
-**Arquivo produzido:** [`docs/architecture/pi-sdk-integration-analysis.md`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/docs/architecture/pi-sdk-integration-analysis.md)
+**Arquivo produzido:** [`docs/architecture/pi-sdk-integration-analysis.md`](../../architecture/pi-sdk-integration-analysis.md)
 
 #### Qualidade da Investigação: ⭐⭐⭐⭐⭐ (5/5)
 
@@ -80,7 +80,7 @@ Nenhum blocker técnico foi identificado. Todos os riscos foram mapeados com mit
 
 ### Sprint 0.2 — Stores Inventory & Capacity Analysis ✅
 
-**Arquivo produzido:** [`docs/architecture/modus-persistent-stores-inventory.md`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/docs/architecture/modus-persistent-stores-inventory.md)
+**Arquivo produzido:** [`docs/architecture/modus-persistent-stores-inventory.md`](../../architecture/modus-persistent-stores-inventory.md)
 
 #### Qualidade da Investigação: ⭐⭐⭐⭐⭐ (5/5)
 
@@ -141,7 +141,7 @@ Nenhum blocker técnico foi identificado. Todos os riscos foram mapeados com mit
 
 ### Sprint 0.3 — Real Sessions Baseline Analysis ✅
 
-**Arquivo produzido:** [`docs/architecture/modus-real-sessions-baseline-analysis.md`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/docs/architecture/modus-real-sessions-baseline-analysis.md)
+**Arquivo produzido:** [`docs/architecture/modus-real-sessions-baseline-analysis.md`](../../architecture/modus-real-sessions-baseline-analysis.md)
 
 #### Qualidade da Investigação: ⭐⭐⭐⭐⭐ (5/5)
 

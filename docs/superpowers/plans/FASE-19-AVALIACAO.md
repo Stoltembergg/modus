@@ -57,7 +57,7 @@ Conforme definido no documento mestre de evolução do harness:
 ## 2. Arquitetura e Componentes Implementados
 
 ### 2.1 — Modelos de Dados e Erros Tipados
-**Arquivo:** [`apps/desktop/src/main/agent/harness/plugin/wasm/wasm-types.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/wasm/wasm-types.ts)
+**Arquivo:** [`apps/desktop/src/main/agent/harness/plugin/wasm/wasm-types.ts`](../../../apps/desktop/src/main/agent/harness/plugin/wasm/wasm-types.ts)
 
 Define as interfaces e hierarquia de exceções estritas:
 - `WasmFuelExhaustedError`: disparado imediatamente quando o limite de combustível for atingido.
@@ -67,21 +67,21 @@ Define as interfaces e hierarquia de exceções estritas:
 - `WasmInstanceOptions`, `WasmFuelConfig`, `WasmMemoryLimits`, `WasiSandboxOptions`, `WasmExecutionMetrics` e `WasmExecutionResult<T>`.
 
 ### 2.2 — Medidor de Combustível (Fuel Metering)
-**Arquivo:** [`apps/desktop/src/main/agent/harness/plugin/wasm/wasm-fuel-meter.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/wasm/wasm-fuel-meter.ts)
+**Arquivo:** [`apps/desktop/src/main/agent/harness/plugin/wasm/wasm-fuel-meter.ts`](../../../apps/desktop/src/main/agent/harness/plugin/wasm/wasm-fuel-meter.ts)
 
 - Implementa o rastreamento atômico de combustível (`initialFuel`, `fuelRemaining`, `fuelConsumed`).
 - Fornece as importações de host (`consume_fuel`, `host_consume_fuel`, `get_fuel_remaining`).
 - Ao ocorrer esgotamento, lança `WasmFuelExhaustedError`, que desenrola a pilha síncrona do WebAssembly de volta ao runtime Node.js de maneira limpa.
 
 ### 2.3 — Sandbox WASI Isolado
-**Arquivo:** [`apps/desktop/src/main/agent/harness/plugin/wasm/wasi-sandbox.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/wasm/wasi-sandbox.ts)
+**Arquivo:** [`apps/desktop/src/main/agent/harness/plugin/wasm/wasi-sandbox.ts`](../../../apps/desktop/src/main/agent/harness/plugin/wasm/wasi-sandbox.ts)
 
 - Encapsula `node:wasi` nativo do Node.js (`version: 'preview1'`).
 - Redireciona e captura `stdout` e `stderr` em buffers em memória.
 - Sanitiza o dicionário de variáveis de ambiente e restringe o acesso ao sistema de arquivos por meio de `preopens` seguros.
 
 ### 2.4 — Instância e Gerenciamento de Memória Linear
-**Arquivo:** [`apps/desktop/src/main/agent/harness/plugin/wasm/wasm-instance.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/wasm/wasm-instance.ts)
+**Arquivo:** [`apps/desktop/src/main/agent/harness/plugin/wasm/wasm-instance.ts`](../../../apps/desktop/src/main/agent/harness/plugin/wasm/wasm-instance.ts)
 
 - Envelopa `WebAssembly.Instance`.
 - Gerencia a memória linear:
@@ -91,7 +91,7 @@ Define as interfaces e hierarquia de exceções estritas:
 - Retorna métricas precisas de consumo (`fuelConsumed`, `memoryPagesUsed`, `memoryBytesUsed`, `latencyMs`).
 
 ### 2.5 — Gerador de Bytecodes WebAssembly
-**Arquivo:** [`apps/desktop/src/main/agent/harness/plugin/wasm/wasm-bytecode-builder.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/wasm/wasm-bytecode-builder.ts)
+**Arquivo:** [`apps/desktop/src/main/agent/harness/plugin/wasm/wasm-bytecode-builder.ts`](../../../apps/desktop/src/main/agent/harness/plugin/wasm/wasm-bytecode-builder.ts)
 
 - Implementa geradores binários válidos em conformidade com o padrão WebAssembly 1.0 (codificação LEB128, seções de tipos, imports, funções, memórias, exports e corpos de código):
   - `buildAddModule()`: módulo puro de adição aritmética de alta performance.
@@ -99,7 +99,7 @@ Define as interfaces e hierarquia de exceções estritas:
   - `buildMemoryModule(initialPages)`: módulo com memória linear exportada e contadores de bytes.
 
 ### 2.6 — Aceleradores de Alta Vazão (High-Throughput Accelerators)
-**Arquivo:** [`apps/desktop/src/main/agent/harness/plugin/wasm/wasm-accelerators.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/wasm/wasm-accelerators.ts)
+**Arquivo:** [`apps/desktop/src/main/agent/harness/plugin/wasm/wasm-accelerators.ts`](../../../apps/desktop/src/main/agent/harness/plugin/wasm/wasm-accelerators.ts)
 
 Implementa algoritmos críticos com tempo de execução `< 0.1ms`:
 - **`FastVectorDistance`**:
@@ -112,7 +112,7 @@ Implementa algoritmos críticos com tempo de execução `< 0.1ms`:
   - Varredura léxica ultrarrápida identificando palavras-chave, identificadores, números, strings e símbolos estruturais.
 
 ### 2.7 — Host de Capabilities WASM
-**Arquivo:** [`apps/desktop/src/main/agent/harness/plugin/wasm/wasm-capability-host.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/wasm/wasm-capability-host.ts)
+**Arquivo:** [`apps/desktop/src/main/agent/harness/plugin/wasm/wasm-capability-host.ts`](../../../apps/desktop/src/main/agent/harness/plugin/wasm/wasm-capability-host.ts)
 
 - `compileModule(wasmBytes, cacheKey)`: compilação com cache determinístico indexado pelo hash SHA-256 dos bytecodes.
 - `inspectModule(module)`: inspeção estática de exports, globals, imports e detecção de requisitos WASI sem instanciar o módulo.
@@ -145,7 +145,7 @@ Executado via suíte de benchmarks e CLI integrada em ambiente Node.js v24:
 
 ## 4. Cobertura da Suíte de Testes Automatizada
 
-**Arquivo:** [`apps/desktop/src/main/agent/harness/plugin/wasm/wasm-sandbox.test.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/wasm/wasm-sandbox.test.ts)
+**Arquivo:** [`apps/desktop/src/main/agent/harness/plugin/wasm/wasm-sandbox.test.ts`](../../../apps/desktop/src/main/agent/harness/plugin/wasm/wasm-sandbox.test.ts)
 
 A suíte cobre 19 cenários estritos divididos em 8 subgrupos:
 

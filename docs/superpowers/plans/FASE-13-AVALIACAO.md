@@ -2,7 +2,7 @@
 
 **Data:** 07 de Outubro de 2026\
 **Status:** CONCLUÍDO COM SUCESSO (100%)\
-**Referência:** [2026-10-05-deepseek-harness-evolution-REVISED.md](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/docs/superpowers/plans/2026-10-05-deepseek-harness-evolution-REVISED.md#L2315-L2370)
+**Referência:** [2026-10-05-deepseek-harness-evolution-REVISED.md](2026-10-05-deepseek-harness-evolution-REVISED.md#L2315-L2370)
 
 ---
 
@@ -59,11 +59,11 @@ Principais componentes entregues:
 
 | Critério do Plano Diretor | Status | Evidência / Arquivo |
 |---|:---:|---|
-| **Process isolation para plugins comunitários** | ✅ Aprovado | [`apps/desktop/src/main/agent/harness/plugin/plugin-isolation-host.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/plugin-isolation-host.ts) |
+| **Process isolation para plugins comunitários** | ✅ Aprovado | [`apps/desktop/src/main/agent/harness/plugin/plugin-isolation-host.ts`](../../../apps/desktop/src/main/agent/harness/plugin/plugin-isolation-host.ts) |
 | **Queda de plugin comunitário não derruba o Modus** | ✅ Aprovado | Testado com falha fatal e exceção em runtime (`plugin-isolation.test.ts`) |
-| **Permission brokers para filesystem, network, shell e git** | ✅ Aprovado | [`apps/desktop/src/main/agent/harness/plugin/permission-brokers.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/permission-brokers.ts) |
-| **Prevenção total de acesso a credenciais e segredos** | ✅ Aprovado | [`apps/desktop/src/main/agent/harness/plugin/credential-guard.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/credential-guard.ts) |
-| **Trilha de auditoria criptograficamente encadeada (SHA-256)** | ✅ Aprovado | [`apps/desktop/src/main/agent/harness/plugin/security-audit-logger.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/harness/plugin/security-audit-logger.ts) |
+| **Permission brokers para filesystem, network, shell e git** | ✅ Aprovado | [`apps/desktop/src/main/agent/harness/plugin/permission-brokers.ts`](../../../apps/desktop/src/main/agent/harness/plugin/permission-brokers.ts) |
+| **Prevenção total de acesso a credenciais e segredos** | ✅ Aprovado | [`apps/desktop/src/main/agent/harness/plugin/credential-guard.ts`](../../../apps/desktop/src/main/agent/harness/plugin/credential-guard.ts) |
+| **Trilha de auditoria criptograficamente encadeada (SHA-256)** | ✅ Aprovado | [`apps/desktop/src/main/agent/harness/plugin/security-audit-logger.ts`](../../../apps/desktop/src/main/agent/harness/plugin/security-audit-logger.ts) |
 | **Zero erros de tipagem estrita no TypeScript** | ✅ Aprovado | `npm --prefix apps/desktop run typecheck` (`tsc -p tsconfig.json --noEmit` -> 0 errors) |
 | **Suíte de testes 100% verde (unitários e regressão)** | ✅ Aprovado | 22/22 testes em `plugin-isolation.test.ts`, 120/120 testes no total geral do harness |
 
@@ -74,7 +74,7 @@ Principais componentes entregues:
 ### Execução da Suíte da Fase 13 (`plugin-isolation.test.ts`)
 
 ```
- RUN  v5.0.3 C:/Users/Gabriel/Desktop/Nova pasta/modus
+ RUN  v5.0.3 ~/Desktop/Nova pasta/modus
 
  ✓ apps/desktop/src/main/agent/harness/plugin/plugin-isolation.test.ts (22 tests) 48ms
    ✓ Fase 13 — Plugin Isolation & Security (22)
@@ -114,7 +114,7 @@ Principais componentes entregues:
 ### Execução Conjunta de Regressão do Harness (6 Arquivos de Teste)
 
 ```
- RUN  v5.0.3 C:/Users/Gabriel/Desktop/Nova pasta/modus
+ RUN  v5.0.3 ~/Desktop/Nova pasta/modus
 
  ✓ apps/desktop/src/main/agent/harness/plugin/plugin-lifecycle.test.ts (21 tests) 79ms
  ✓ apps/desktop/src/main/agent/harness/observability/observability.test.ts (24 tests) 33ms
