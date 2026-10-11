@@ -2442,6 +2442,22 @@ fs.renameSync("original-manifest-link", "package.json");
     expect(secondPage.events.map(({ event }) => event.eventCursor)).toEqual([second]);
     expect(secondPage.events[0]?.event).toMatchObject({ type: "tool.output", output });
     expect(secondPage.hasMore).toBe(false);
+
+    const newestPage = listAgentEventRawPage(sessionId, { direction: "backward", limit: 10 });
+    expect(newestPage.events.map(({ event }) => event.eventCursor)).toEqual([second]);
+    expect(newestPage.nextCursor).toBe(second);
+    expect(newestPage.events[0]?.event).toMatchObject({ type: "tool.output", output });
+    expect(newestPage.hasMore).toBe(true);
+
+    const olderPage = listAgentEventRawPage(sessionId, {
+      direction: "backward",
+      beforeCursor: newestPage.nextCursor,
+      snapshotCursor: newestPage.snapshotCursor,
+      limit: 10,
+    });
+    expect(olderPage.events.map(({ event }) => event.eventCursor)).toEqual([first]);
+    expect(olderPage.events[0]?.event).toMatchObject({ type: "tool.output", output });
+    expect(olderPage.hasMore).toBe(false);
   });
 
   it("returns raw streamed deltas once when a message crosses a page boundary", () => {

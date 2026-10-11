@@ -50,6 +50,7 @@ type AgentRunPromptRow = {
 };
 
 type AgentEventItem = SharedAgentEventItem & { createdAt: string };
+type AgentEventPageCandidate = { event_cursor: number; payload_bytes: number };
 const DEFAULT_AGENT_EVENT_PAGE_SIZE = 128;
 const MAX_AGENT_EVENT_SUMMARY_ROWS_PER_KIND = 512;
 const MAX_AGENT_GROUP_ACTIVITY_EVENTS = 512;
@@ -1677,39 +1678,18 @@ function listAgentEventPageInternal(
   const runToolPage = runId
     ? listAgentRunToolEventRows(sessionId, runId, afterCursor ?? 0, snapshotCursor, limit)
     : undefined;
-  const rows =
-    runToolPage?.rows ??
-    (direction === "forward"
-      ? (db
-          .prepare(
-            `select id, payload_json, created_at, rowid as event_cursor
-             from agent_events
-             where session_id = ? and rowid > ? and rowid <= ?
-             order by rowid asc
-             limit ?`,
-          )
-          .all(sessionId, afterCursor ?? 0, snapshotCursor, limit + 1) as AgentEventRow[])
-      : beforeCursor === undefined
-        ? (db
-            .prepare(
-              `select id, payload_json, created_at, rowid as event_cursor
-               from agent_events
-               where session_id = ? and rowid <= ?
-               order by rowid desc
-               limit ?`,
-            )
-            .all(sessionId, snapshotCursor, limit + 1) as AgentEventRow[])
-        : (db
-            .prepare(
-              `select id, payload_json, created_at, rowid as event_cursor
-               from agent_events
-               where session_id = ? and rowid < ? and rowid <= ?
-               order by rowid desc
-               limit ?`,
-            )
-            .all(sessionId, beforeCursor, snapshotCursor, limit + 1) as AgentEventRow[]));
-  const hasMore = runToolPage?.hasMore ?? rows.length > limit;
-  const pageRows = runToolPage ? rows : hasMore ? rows.slice(0, limit) : rows;
+  const page =
+    runToolPage ??
+    listBoundedAgentEventRows(
+      sessionId,
+      direction,
+      afterCursor,
+      beforeCursor,
+      snapshotCursor,
+      limit,
+    );
+  const hasMore = page.hasMore;
+  const pageRows = page.rows;
   if (direction === "backward") pageRows.reverse();
   const parsedEvents = pageRows.map(parseAgentEventRow);
   const expandedStreamEvents =
@@ -1741,6 +1721,99 @@ function listAgentEventPageInternal(
     ...(nextCursor === undefined ? {} : { nextCursor }),
     hasMore,
   };
+}
+
+function listBoundedAgentEventRows(
+  sessionId: string,
+  direction: "forward" | "backward",
+  afterCursor: number | undefined,
+  beforeCursor: number | undefined,
+  snapshotCursor: number,
+  pageLimit: number,
+): { rows: AgentEventRow[]; hasMore: boolean } {
+  const db = getDatabase();
+  db.exec("savepoint agent_event_page_read");
+  try {
+    const candidates =
+      direction === "forward"
+        ? (db
+            .prepare(
+              `select rowid as event_cursor,
+                      length(cast(payload_json as blob)) as payload_bytes
+               from agent_events
+               where session_id = ? and rowid > ? and rowid <= ?
+               order by rowid asc limit ?`,
+            )
+            .all(sessionId, afterCursor ?? 0, snapshotCursor, pageLimit + 1) as AgentEventPageCandidate[])
+        : beforeCursor === undefined
+          ? (db
+              .prepare(
+                `select rowid as event_cursor,
+                        length(cast(payload_json as blob)) as payload_bytes
+                 from agent_events
+                 where session_id = ? and rowid <= ?
+                 order by rowid desc limit ?`,
+              )
+              .all(sessionId, snapshotCursor, pageLimit + 1) as AgentEventPageCandidate[])
+          : (db
+              .prepare(
+                `select rowid as event_cursor,
+                        length(cast(payload_json as blob)) as payload_bytes
+                 from agent_events
+                 where session_id = ? and rowid < ? and rowid <= ?
+                 order by rowid desc limit ?`,
+              )
+              .all(sessionId, beforeCursor, snapshotCursor, pageLimit + 1) as AgentEventPageCandidate[]);
+
+    const selectedCursors: number[] = [];
+    let totalPayloadBytes = 0;
+    let hasMore = false;
+    for (const [candidateIndex, candidate] of candidates.entries()) {
+      if (
+        !Number.isSafeInteger(candidate.event_cursor) ||
+        !Number.isSafeInteger(candidate.payload_bytes) ||
+        candidate.payload_bytes < 0
+      ) {
+        throw new RangeError("Agent event page has invalid stored payload sizes.");
+      }
+      if (selectedCursors.length >= pageLimit) {
+        hasMore = true;
+        break;
+      }
+      if (candidate.payload_bytes > MAX_RUN_EVENT_PAYLOAD_PAGE_BYTES - totalPayloadBytes) {
+        if (selectedCursors.length === 0) {
+          // An event is indivisible at this API boundary. Return an oversized
+          // event alone so callers retain complete durable content.
+          selectedCursors.push(candidate.event_cursor);
+          hasMore = candidateIndex + 1 < candidates.length;
+          break;
+        }
+        hasMore = true;
+        break;
+      }
+      selectedCursors.push(candidate.event_cursor);
+      totalPayloadBytes += candidate.payload_bytes;
+    }
+
+    const rows =
+      selectedCursors.length === 0
+        ? []
+        : (db
+            .prepare(
+              `select id, payload_json, created_at, rowid as event_cursor
+               from agent_events
+               where session_id = ? and rowid <= ?
+                 and rowid in (${selectedCursors.map(() => "?").join(", ")})
+               order by rowid ${direction === "forward" ? "asc" : "desc"}`,
+            )
+            .all(sessionId, snapshotCursor, ...selectedCursors) as AgentEventRow[]);
+    db.exec("release savepoint agent_event_page_read");
+    return { rows, hasMore };
+  } catch (error) {
+    db.exec("rollback to savepoint agent_event_page_read");
+    db.exec("release savepoint agent_event_page_read");
+    throw error;
+  }
 }
 
 /** Read one bounded page of message events for exactly one assistant run. */
