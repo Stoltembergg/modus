@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub mod resource_policy;
+pub mod worker_admission;
 
 /// Version 2 adds an explicit cancellation response so a worker can distinguish
 /// cancellation from failure. Version 1 is rejected during handshake.
