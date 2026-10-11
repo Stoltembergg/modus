@@ -166,6 +166,63 @@ describe("Fase 14 — Dependency Intelligence", () => {
       expect(graph.getPlugin("@modus/memory")?.dependents).toHaveLength(0);
       expect(graph.getPlugin("@modus/context-engine")).toBeUndefined();
     });
+
+    it("returns detached node snapshots from public graph readers", () => {
+      const graph = new DependencyGraph();
+      graph.rebuild([baseMemoryPlugin, contextEnginePlugin]);
+
+      const fromLookup = graph.getPlugin("@modus/context-engine");
+      expect(fromLookup).toBeDefined();
+      fromLookup?.dependencies.push("@test/forged-dependency");
+      fromLookup?.provides.push("@test/forged-provider");
+      fromLookup?.requiresCapabilities.splice(0, 1);
+      fromLookup?.requiresPlugins.push("@test/forged-required-plugin");
+
+      const fromList = graph.getAllPlugins();
+      const listedProvider = fromList.find((node) => node.pluginId === "@modus/memory");
+      listedProvider?.dependents.push("@test/forged-dependent");
+      fromList.pop();
+
+      expect(graph.getPlugin("@modus/context-engine")?.dependencies).toEqual(["@modus/memory"]);
+      expect(graph.getPlugin("@modus/context-engine")?.provides).toEqual(["context.build"]);
+      expect(graph.getPlugin("@modus/context-engine")?.requiresCapabilities).toEqual([
+        "memory.query",
+      ]);
+      expect(graph.getPlugin("@modus/context-engine")?.requiresPlugins).toEqual([
+        "@modus/model-router",
+      ]);
+      expect(graph.getPlugin("@modus/memory")?.dependents).toEqual(["@modus/context-engine"]);
+      expect(graph.getAllPlugins()).toHaveLength(2);
+    });
+
+    it("copies manifest requirement arrays instead of retaining caller-owned aliases", () => {
+      const addRequirements = ["@modus/model-router"];
+      const addManifest: PluginManifest = {
+        ...contextEnginePlugin,
+        requires: { ...contextEnginePlugin.requires, plugins: addRequirements },
+      };
+      const addGraph = new DependencyGraph();
+      addGraph.addPlugin(baseMemoryPlugin);
+      addGraph.addPlugin(addManifest);
+      addRequirements.push("@test/late-add-mutation");
+
+      expect(addGraph.getPlugin(contextEnginePlugin.id)?.requiresPlugins).toEqual([
+        "@modus/model-router",
+      ]);
+
+      const rebuildRequirements = ["@modus/model-router"];
+      const rebuildManifest: PluginManifest = {
+        ...contextEnginePlugin,
+        requires: { ...contextEnginePlugin.requires, plugins: rebuildRequirements },
+      };
+      const rebuildGraph = new DependencyGraph();
+      rebuildGraph.rebuild([baseMemoryPlugin, rebuildManifest]);
+      rebuildRequirements.push("@test/late-rebuild-mutation");
+
+      expect(rebuildGraph.getPlugin(contextEnginePlugin.id)?.requiresPlugins).toEqual([
+        "@modus/model-router",
+      ]);
+    });
   });
 
   describe("14.2 — Blast Radius Calculation", () => {

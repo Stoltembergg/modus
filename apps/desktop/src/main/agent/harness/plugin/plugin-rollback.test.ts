@@ -4,6 +4,7 @@
  * Self-Healing Recovery, CLI Commands, Feature Flags and PiSdkRuntime integration.
  */
 
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HOST_CAPABILITY_REGISTRATION_AUTHORITY } from "../capability/capability-registration-authority";
 import { CapabilityRegistry } from "../capability/capability-registry";
@@ -28,6 +29,7 @@ import type { PluginVersionManager } from "./version-manager";
 
 describe("Fase 15 — Rollback e Safe Mode", () => {
   let store: PluginStateStore;
+  let db: DatabaseSync;
   let registry: CapabilityRegistry;
   let loader: PluginLoader;
   let service: PluginLifecycleService;
@@ -81,7 +83,8 @@ describe("Fase 15 — Rollback e Safe Mode", () => {
 
   beforeEach(() => {
     resetFeatureFlagOverrides();
-    store = new PluginStateStore(":memory:");
+    db = new DatabaseSync(":memory:");
+    store = new PluginStateStore(db);
     registry = new CapabilityRegistry();
     registry.registerCapability({
       id: "test.run",
@@ -744,13 +747,10 @@ describe("Fase 15 — Rollback e Safe Mode", () => {
     });
 
     it("defaults malformed persisted safety state to restrictive core mode", () => {
-      store.getDatabase().exec("PRAGMA ignore_check_constraints = ON");
-      store
-        .getDatabase()
-        .prepare(
-          "UPDATE plugin_safe_mode SET level = ?, previously_enabled_json = ?, disabled_plugins_json = ? WHERE singleton = 1",
-        )
-        .run("invalid", "{", "[]");
+      db.exec("PRAGMA ignore_check_constraints = ON");
+      db.prepare(
+        "UPDATE plugin_safe_mode SET level = ?, previously_enabled_json = ?, disabled_plugins_json = ? WHERE singleton = 1",
+      ).run("invalid", "{", "[]");
 
       expect(store.getSafeModeState()).toEqual({
         level: "core",

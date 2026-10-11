@@ -134,7 +134,7 @@ describe("Fase 11 — Plugin Lifecycle & State Storage", () => {
     expect(storeKeys).not.toContain("db");
     expect(storeKeys).not.toContain("inTransaction");
     expect(Reflect.ownKeys(PluginStateStore.prototype)).not.toContain("initSchema");
-    expect(store.getDatabase()).toBe(db);
+    expect(Reflect.ownKeys(PluginStateStore.prototype)).not.toContain("getDatabase");
 
     const graph = service.getDependencyGraph();
     const graphKeys = Reflect.ownKeys(graph);

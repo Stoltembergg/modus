@@ -115,7 +115,8 @@ function manifest(id = "audit/plugin", version = "1.0.0", extra: Record<string, 
   } as any;
 }
 function setup(file = ":memory:") {
-  const store = new PluginStateStore(file),
+  const database = new DatabaseSync(file);
+  const store = new PluginStateStore(database),
     registry = new CapabilityRegistry();
   registry.registerCapability({
     id: "audit.cap",
@@ -125,7 +126,7 @@ function setup(file = ":memory:") {
   });
   const loader = new PluginLoader(registry),
     service = new PluginLifecycleService(store, loader, registry);
-  return { store, registry, loader, service };
+  return { database, store, registry, loader, service };
 }
 const host = new WasmCapabilityHost();
 if (mode === "privileges") {
@@ -430,11 +431,9 @@ if (mode === "privileges") {
   const t = setup();
   await t.service.install(manifest());
   await t.service.enable("audit/plugin");
-  t.store
-    .getDatabase()
-    .exec(
-      "CREATE TRIGGER fail_update BEFORE UPDATE ON plugins BEGIN SELECT RAISE(ABORT,'DB-FAIL'); END;",
-    );
+  t.database.exec(
+    "CREATE TRIGGER fail_update BEFORE UPDATE ON plugins BEGIN SELECT RAISE(ABORT,'DB-FAIL'); END;",
+  );
   let err = "";
   try {
     await t.service.disable("audit/plugin");
@@ -502,7 +501,7 @@ if (mode === "privileges") {
     active: s.service.getSafeModeManager().isActive(),
     pluginState: s.store.getPlugin("hostile")?.state,
   });
-  s.store.getDatabase().exec("UPDATE plugins SET config = '{broken';");
+  s.database.exec("UPDATE plugins SET config = '{broken';");
   let dbError = "";
   try {
     await s.service.getSafeModeManager().enter("core");

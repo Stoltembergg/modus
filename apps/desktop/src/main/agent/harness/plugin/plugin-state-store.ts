@@ -140,10 +140,6 @@ export class PluginStateStore {
     `);
   }
 
-  public getDatabase(): DatabaseSync {
-    return this.#db;
-  }
-
   public getSafeModeState(): PersistedSafeModeState {
     try {
       const row = this.#db

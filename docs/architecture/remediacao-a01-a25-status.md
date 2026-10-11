@@ -680,15 +680,42 @@ also observes the six host-catalog loads through the loader prototype.
   suites passed **110/110**, and desktop typecheck passed. Targeted Biome exited
   0 with **8 warnings and 2 infos** in the eight selected files; no fixes or
   rule changes were applied. `git diff --check` passed. Public compatibility
-  getters for the store, graph, database, and four managers remain and are
-  asserted to preserve identity where relevant. The manager instances retain
-  their operational public APIs. This is reflective encapsulation only: code
-  holding those public references can call public operations and the store,
-  database, and graph getters still expose mutable objects, including live
-  graph nodes. Independent review found no behavior/API blocker and confirmed
+  getters for the store, graph, database, and four managers remained in commit
+  `3f9a3ed` and were asserted to preserve identity where relevant. The manager
+  instances retain their operational public APIs. A follow-up below removes
+  the raw database getter and detaches graph read results. The store, graph,
+  and manager APIs that remain are still callable by same-process code holding
+  those references; the graph getter retains its explicit public mutation
+  methods.
+  Independent review found no behavior/API blocker and confirmed
   the manager field chain is closed; it did not execute tests or probes. The
   change creates neither an in-process trust boundary nor an OS boundary.
   Remote CI for the expanded follow-up is pending.
+- A13 dependency-graph reader follow-up: review noted that `getPlugin()` and
+  `getAllPlugins()` returned live internal nodes and arrays, so an ordinary
+  read could mutate dependency edges outside `addPlugin()`/`removePlugin()`/
+  `rebuild()`. A synthetic RED test mutated returned dependency arrays and a
+  dependent list, then observed those writes in the graph. Both readers now
+  return detached node snapshots; explicit graph mutation methods and result
+  shapes are unchanged. A second RED test showed that `addPlugin()` and
+  `rebuild()` retained the caller-owned `requires.plugins` array; both now copy
+  that array before storing it. A separate RED reflection assertion showed
+  `PluginStateStore.getDatabase()` exposed the mutable SQLite handle, with no
+  production callers. The getter was removed, and the rollback fixture now
+  retains and injects its own test database handle. The combined
+  lifecycle/dependency/rollback suite passed **112/112** after the final
+  snapshot assertions covered all five array fields. Independent review then
+  found two stale `getDatabase()` uses in the phase-19 audit fixture. Its
+  setup now creates and retains its own `DatabaseSync` connection and passes
+  that connection into `PluginStateStore`; both fixture mutations use the
+  retained handle. This fixes the documented runner's static API mismatch,
+  but the runner and its modes were not executed. Compile-only esbuild
+  bundling of `probes.ts` passed. Targeted Biome exited 0 with **19 warnings
+  and 6 infos** when including the audit fixture; no fixes or rule changes
+  were applied. `git diff --check` and desktop typecheck passed. The
+  independent static review found no blocker after the
+  runner fixture adaptation; it did not execute tests or modes. Remote CI for
+  this follow-up is pending.
 - Residual: ECMAScript-private fields narrow accidental same-process access,
   but do not establish a same-process trust boundary. Plugin trace snapshots remain private when
   `MODUS_OBSERVABILITY=false`. External consumers that depended on removed
@@ -1873,7 +1900,7 @@ cancellation follow-up above.
 | A10 | Mitigated for host-catalog plugins; legacy activation blocked | Startup uses exact host-catalog versions, opens the durable store before deferred activation, reconciles disabled/tombstoned state, and restores dependency order. `MODUS_PLUGINS` now requires `MODUS_PLUGIN_LIFECYCLE`; no direct bootstrap path remains. External artifact identity and crash-consistent package deployment remain unavailable. |
 | A11 | Mitigated | Disable transaction rollback restores runtime or leaves provider quarantined; broader crash atomicity remains unproven. |
 | A12 | Mitigated | Per-store lifecycle queue serializes shared DB/graph operations; stress/fault injection beyond targeted tests remains open. |
-| A13 | Mitigated; reflective encapsulation extended | Persisted Safe Mode policy is service-derived; transitions are validated before reload and restoration retains quarantine. Runtime registry, loader, lifecycle-owned state/unlocked helpers, manager-owned references/state, startup promises, and HarnessKernel use ECMAScript-private slots/methods. Public store, graph, database, and manager getters/APIs remain, including mutable references; this does not create an in-process or OS boundary. Storage corruption/power-loss proof and a read-only diagnostics API remain open. |
+| A13 | Mitigated; reflective encapsulation and detached graph readers | Persisted Safe Mode policy is service-derived; transitions are validated before reload and restoration retains quarantine. Runtime registry, loader, lifecycle-owned state/unlocked helpers, manager-owned references/state, startup promises, and HarnessKernel use ECMAScript-private slots/methods. The raw SQLite getter was removed; store and manager operational APIs remain. Graph query methods return detached snapshots and copy caller-owned plugin requirement arrays, while the graph instance retains explicit public mutation methods. This does not create an in-process or OS boundary. Storage corruption/power-loss proof and a read-only diagnostics API remain open. |
 | A14 | Mitigated | SemVer constraints, active-provider checks, cycle preflight/recovery, and dependent suspension are covered; an OS boundary remains absent. |
 | A15 | Partially mitigated | Pi cancellation propagates to terminal/app launches and the trusted CodeGraph CLI; active root-run agent processes are selected by session+run and cancelled, and cancellation telemetry is distinct. App cancellation preserves cleanup errors and refuses to signal an exited tracked leader. UI reports unconfirmed stop outcomes in workspace/session/process scope with an explicit dismiss action. CodeGraph abort/timeout now waits for the shared process-ops result; Windows taskkill is time-bounded. POSIX confirms the original process group; Windows confirms the leader PID after a tree-termination request. Escaped descendants, PID/PGID reuse races without stable OS handles, non-cooperative in-process work, and hard OS preemption remain unproven. |
 | A16 | Prior fix preserved | Explicit user-selected model identity and provider. |
@@ -2494,8 +2521,8 @@ passed; global Vitest passed **4,652 tests**, skipped **8**, across **414
 files**; Supabase pgTAP passed **1,041 tests** across 20 files. Safe-filtered
 containment checks on Ubuntu/Windows/macOS, IPC protocol fixtures,
 compile-only sandbox, Verifier-First, and PTY cancellation passed. The Windows
-and macOS package workflows for that head were still running when this note
-was written; no probes ran, and the PR remained Draft.
+and macOS package workflows later completed successfully; no probes ran, and
+the PR remained Draft.
 
 The next full run `38099517953` on `c08e3ca8c13d849c0cec8626ea63eb6ebe60f04e`
 passed Biome/typecheck and all non-timing feature jobs except the macOS
@@ -2510,3 +2537,15 @@ jobs were still running at the time of this snapshot. This is additional
 reproducibility evidence for the timing-sensitive assertion, but it does not
 establish a baseline or an exclusively environmental cause; its code and
 threshold remain untouched.
+
+The separate Windows x64 and macOS x64/arm64 package workflows for `c08e3ca`
+later completed successfully (`38099517992` and `38099517972`).
+
+The last published commit `3f9a3ed` completed CI workflow `38100096634`
+successfully across all nine jobs. Global Vitest passed **4,656 tests**,
+skipped **8**, across **415 files**; pgTAP passed **1,041 tests** across 20
+files. Safe-filtered containment on Ubuntu/Windows/macOS, IPC safe fixtures,
+sandbox compile-only, Verifier-First, and PTY cancellation passed. The Windows
+package run `38100096636` completed successfully; the macOS package run
+`38100096627` was still running at this snapshot. This run validates the
+published `3f9a3ed` commit, not the uncommitted A13 follow-up described above.

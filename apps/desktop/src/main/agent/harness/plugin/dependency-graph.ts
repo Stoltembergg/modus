@@ -25,20 +25,11 @@ export class DependencyGraph {
    */
   public addPlugin(manifest: PluginManifestInput): void {
     const previousNode = this.#nodes.get(manifest.id);
-    const previousNodeSnapshot = previousNode
-      ? {
-          ...previousNode,
-          provides: [...previousNode.provides],
-          requiresCapabilities: [...previousNode.requiresCapabilities],
-          requiresPlugins: [...previousNode.requiresPlugins],
-          dependencies: [...previousNode.dependencies],
-          dependents: [...previousNode.dependents],
-        }
-      : undefined;
+    const previousNodeSnapshot = previousNode ? this.#copyNode(previousNode) : undefined;
     const previousCapabilityProviders = new Map(this.#capabilityProviders);
     const provides = manifest.provides.map((p) => p.capability);
     const requiresCaps = (manifest.requires.capabilities ?? []).map((c) => c.capability);
-    const requiresPlugins = manifest.requires.plugins ?? [];
+    const requiresPlugins = [...(manifest.requires.plugins ?? [])];
 
     // Register capability provisions
     for (const cap of provides) {
@@ -70,19 +61,7 @@ export class DependencyGraph {
 
   public assertCanAddPlugin(manifest: PluginManifestInput): void {
     const candidate = new DependencyGraph();
-    candidate.#nodes = new Map(
-      Array.from(this.#nodes, ([id, node]) => [
-        id,
-        {
-          ...node,
-          provides: [...node.provides],
-          requiresCapabilities: [...node.requiresCapabilities],
-          requiresPlugins: [...node.requiresPlugins],
-          dependencies: [...node.dependencies],
-          dependents: [...node.dependents],
-        },
-      ]),
-    );
+    candidate.#nodes = new Map(Array.from(this.#nodes, ([id, node]) => [id, this.#copyNode(node)]));
     candidate.#capabilityProviders = new Map(this.#capabilityProviders);
     candidate.addPlugin(manifest);
   }
@@ -105,11 +84,12 @@ export class DependencyGraph {
   }
 
   public getPlugin(pluginId: string): DependencyNode | undefined {
-    return this.#nodes.get(pluginId);
+    const node = this.#nodes.get(pluginId);
+    return node ? this.#copyNode(node) : undefined;
   }
 
   public getAllPlugins(): DependencyNode[] {
-    return Array.from(this.#nodes.values());
+    return Array.from(this.#nodes.values(), (node) => this.#copyNode(node));
   }
 
   /**
@@ -129,13 +109,24 @@ export class DependencyGraph {
         version: manifest.version,
         provides,
         requiresCapabilities: (manifest.requires.capabilities ?? []).map((c) => c.capability),
-        requiresPlugins: manifest.requires.plugins ?? [],
+        requiresPlugins: [...(manifest.requires.plugins ?? [])],
         dependencies: [],
         dependents: [],
       });
     }
 
     this.#recomputeAllLinks();
+  }
+
+  #copyNode(node: DependencyNode): DependencyNode {
+    return {
+      ...node,
+      provides: [...node.provides],
+      requiresCapabilities: [...node.requiresCapabilities],
+      requiresPlugins: [...node.requiresPlugins],
+      dependencies: [...node.dependencies],
+      dependents: [...node.dependents],
+    };
   }
 
   /**
