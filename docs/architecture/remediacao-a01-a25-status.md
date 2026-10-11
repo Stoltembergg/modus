@@ -1202,8 +1202,11 @@ read from the live instance on invocation failures, measured memory is retained
 when available, and unavailable memory is marked as unavailable instead of
 being reported as measured zero.
 
-Caller-provided cache namespaces are SHA-256 hashed before entering the map, so
-long plugin identifiers do not bypass the fixed-length cache-key bound.
+Caller-provided cache namespaces up to 256 UTF-16 code units are SHA-256 hashed
+before entering the map. Longer namespaces bypass cache lookup and retention,
+while compilation for the current call remains available; oversized names are
+also omitted from compilation errors. This caps work spent hashing namespace
+input and avoids retaining that input in either cache keys or error objects.
 
 `WasiSandbox` still has output arrays that are not connected to WASI
 `fd_write`. The production host rejects all WASI imports before instantiation
@@ -1256,9 +1259,19 @@ implementation; A24 remains partial until that work is safe to enable.
 - Independent review found that an unbounded caller-supplied namespace string
   could remain in a cache key. A 64 KiB synthetic namespace test failed first;
   hashing the namespace made it pass. The final independent review found no
-  blocker in the bounded cache change. Hashing a very long namespace still
-  takes transient time proportional to its input length, but that input is not
-  retained by the cache.
+  blocker in the bounded cache change. A residual remained because hashing a
+  very long namespace still takes transient time proportional to its input,
+  and a compilation error retained the original name. RED reproduced both
+  behaviors with a 64 KiB synthetic namespace. The follow-up now bypasses cache
+  lookup/retention above 256 UTF-16 code units and omits oversized names from
+  compilation errors; targeted compile-only tests passed **10/10**. Desktop
+  typecheck passed. Biome passed with one existing `noUnusedVariables` warning
+  for `executeWasm<TIn>`; no unrelated code was changed. Independent static
+  review of the follow-up found no blocker. It confirmed that the oversized
+  namespace is not hashed or stored, the bounded diagnostic name is computed
+  before the compile await, and both cache counters remain zero. Runtime GC may
+  retain caller values transiently at its discretion, and this does not bound
+  WASM input/compile memory. Remote CI for this follow-up is pending.
 
 ### Limits
 
@@ -1911,7 +1924,7 @@ cancellation follow-up above.
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |
 | A22 | Partially mitigated; productive event reads and renderer source lookups are paged, bounded, and fail closed | Cursor-page reads drive IPC, timeline/history, source lookup and Pi output; the old `agent:list-events` bridge endpoint is removed. Collector-local budgets cover active call identities, argument traversal/references, unfinished external-tool output, and retained source metadata; ambiguous active tool-call IDs across runs invalidate attribution. Overflow is sticky: complete lookup fails, the main-chat hook marks the run unavailable, the group hook exposes unavailable status, and synchronous timeline rendering preserves the answer while marking sources unavailable. Renderer lookups admit at most four active loads and 256 queued loads; releasing the last view stops pagination after any already in-flight page returns. RED/GREEN, review, and local checks are recorded below. Main-process event-page materialization, a single IPC payload, renderer heap/RSS, and the existing 24-source display cap remain unbounded or lossy, so A22 remains partial. The `FastVectorDistance` timing failure from CI run `38100554455` is documented below without a pre-existing or solely environmental classification. |
 | A23 | Mitigated; integrated checks pass | Synthetic capability outputs and the generic core `status: ok` fallback now fail explicitly with `CapabilityUnavailableError`; stale declared grants are reconciled by exact host identity/version; separate Pi runtime services, A16 selection, and A17 evidence flows are preserved. Independent review found no blocker. Workflow `38081920060` passed the relevant feature jobs, Supabase pgTAP (20 files/1,041 tests), containment, compile-only sandbox and Windows/macOS packaging. The same run had one unrelated-to-A23 global Vitest timing failure, without a baseline classification. |
-| A24 | Partially mitigated | Compiled-module cache has LRU entry/source-byte caps and hashes caller namespaces; cache counters do not measure native compiled memory. A05 supplies measured failure metrics. WASI remains denied and stdio capture is unavailable. |
+| A24 | Partially mitigated | Compiled-module cache has LRU entry/source-byte caps, hashes namespaces up to 256 UTF-16 code units, and bypasses cache retention plus error-name retention for longer namespaces. Cache counters do not measure native compiled memory or transient compile memory. A05 supplies measured failure metrics. WASI remains denied and stdio capture is unavailable. |
 | A25 | Mitigated; prior fix preserved and revalidated | `allow-workspace` requires workspace+tool identity and lookup keys include both plus action/target; the Pi runtime supplies persisted host workspace identity across worktree cwd changes. Unknown tools are blocked before permission prompting and are not read-only safe. Safe focused validation: 52 permission-store/permission-extension/tool-registry tests and one productive Pi runtime workspace-scope test passed. A two-workspace synthetic store test passes; external tool/plugin execution remains disabled. |
 
 This matrix will be updated as each independent remediation is completed and
@@ -2647,3 +2660,14 @@ preempted from the renderer.
   set. This increment also does not bound main-process event-page
   materialization, a single IPC response size, JavaScript heap/RSS, or the UI's
   existing source display cap. A22 remains partial.
+
+- Remote CI for `09dbdd3` completed the `typecheck · test · biome` job: **415
+  files, 4,668 passed, 8 skipped**. The pgTAP/function job, safe protocol
+  fixtures, compile-only sandbox job, PTY cancellation, Verifier-First
+  regressions, and Windows/macOS containment jobs passed. The overall CI run
+  failed only in Linux plugin-containment when the existing
+  `FastVectorDistance` latency assertion measured **0.10624799999999368 ms**
+  against `< 0.1 ms`; the benchmark and threshold were not changed, and this
+  repeated result is not classified as pre-existing or solely environmental.
+  Windows/macOS packaging for `09dbdd3` was still running at this status check;
+  packaging for `6dab9f0` completed successfully on both platforms.

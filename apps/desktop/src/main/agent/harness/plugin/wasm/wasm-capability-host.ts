@@ -23,6 +23,7 @@ import {
 
 type WasmInstantiationFailureMetrics = Omit<WasmExecutionMetrics, "latencyMs">;
 const instantiationFailureMetrics = new WeakMap<object, WasmInstantiationFailureMetrics>();
+const MAX_CACHE_NAMESPACE_LENGTH = 256;
 
 function hasWebAssemblyInternalSlot(value: unknown, prototype: object, property: string): boolean {
   const getter = Object.getOwnPropertyDescriptor(prototype, property)?.get;
@@ -108,9 +109,15 @@ export class WasmCapabilityHost {
     cacheKey?: string,
   ): Promise<WebAssembly.Module> {
     const hash = createHash("sha256").update(wasmBytes).digest("hex");
-    const namespace = cacheKey ? `${createHash("sha256").update(cacheKey).digest("hex")}:` : "";
+    const namespaceIsBounded =
+      cacheKey === undefined || cacheKey.length <= MAX_CACHE_NAMESPACE_LENGTH;
+    const moduleName = namespaceIsBounded ? cacheKey : undefined;
+    const namespace =
+      namespaceIsBounded && cacheKey
+        ? `${createHash("sha256").update(cacheKey).digest("hex")}:`
+        : "";
     const key = `${namespace}${hash}`;
-    const cached = this.moduleCache.get(key);
+    const cached = namespaceIsBounded ? this.moduleCache.get(key) : undefined;
     if (cached) {
       this.moduleCache.delete(key);
       this.moduleCache.set(key, cached);
@@ -119,10 +126,12 @@ export class WasmCapabilityHost {
 
     try {
       const module = await WebAssembly.compile(wasmBytes as unknown as BufferSource);
-      this.cacheCompiledModule(key, module, wasmBytes.byteLength);
+      if (namespaceIsBounded) {
+        this.cacheCompiledModule(key, module, wasmBytes.byteLength);
+      }
       return module;
     } catch (err) {
-      throw new WasmCompilationError(err instanceof Error ? err.message : String(err), cacheKey);
+      throw new WasmCompilationError(err instanceof Error ? err.message : String(err), moduleName);
     }
   }
 

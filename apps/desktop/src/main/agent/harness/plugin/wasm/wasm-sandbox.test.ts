@@ -469,7 +469,7 @@ describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
 
     it("does not retain caller-controlled cache namespace strings", async () => {
       const host = new WasmCapabilityHost();
-      const cacheKey = "plugin/" + "x".repeat(64 * 1024);
+      const cacheKey = `plugin/${"x".repeat(64 * 1024)}`;
 
       await host.compileModule(buildAddModule(), cacheKey);
 
@@ -477,6 +477,44 @@ describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
         host as unknown as { moduleCache: Map<string, unknown> }
       ).moduleCache.keys();
       expect([...moduleKeys].every((key) => key.length <= 129)).toBe(true);
+    });
+
+    it("bypasses module caching for oversized caller-controlled namespaces", async () => {
+      const host = new WasmCapabilityHost();
+      const bytes = buildAddModule();
+      const cacheKey = `plugin/${"x".repeat(64 * 1024)}`;
+
+      const first = await host.compileModule(bytes, cacheKey);
+      const second = await host.compileModule(bytes, cacheKey);
+
+      expect(second).not.toBe(first);
+      expect(host.getModuleCacheStats()).toMatchObject({ entries: 0, sourceBytes: 0 });
+    });
+
+    it("caches a namespace at the configured size boundary", async () => {
+      const host = new WasmCapabilityHost();
+      const bytes = buildAddModule();
+      const cacheKey = "x".repeat(256);
+
+      const first = await host.compileModule(bytes, cacheKey);
+      const second = await host.compileModule(bytes, cacheKey);
+
+      expect(second).toBe(first);
+      expect(host.getModuleCacheStats().entries).toBe(1);
+    });
+
+    it("does not retain oversized cache namespaces in compilation errors", async () => {
+      const host = new WasmCapabilityHost();
+      const cacheKey = `plugin/${"x".repeat(64 * 1024)}`;
+      const corruptBytes = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x99, 0x99]);
+
+      const error = await host
+        .compileModule(corruptBytes, cacheKey)
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(WasmCompilationError);
+      expect((error as WasmCompilationError).moduleName).toBeUndefined();
+      expect((error as WasmCompilationError).message.length).toBeLessThan(256);
     });
 
     it("rejects malformed WASM bytecode with WasmCompilationError", async () => {
