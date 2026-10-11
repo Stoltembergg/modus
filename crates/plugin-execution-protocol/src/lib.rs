@@ -1024,6 +1024,8 @@ fn valid_sha256(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::resource_policy::APPROVED_RESOURCE_POLICY;
+
     use std::collections::VecDeque;
     use std::io::Read;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

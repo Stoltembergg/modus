@@ -224,7 +224,7 @@ impl PluginHostcallRateLimiter {
         })
     }
 
-    fn reserve(&self, provenance: &HostProvenance) -> Result<(), crate::ProtocolError> {
+    pub(crate) fn reserve(&self, provenance: &HostProvenance) -> Result<(), crate::ProtocolError> {
         self.reserve_with_clock(provenance, Instant::now)
     }
 
