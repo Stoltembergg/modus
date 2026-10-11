@@ -135,7 +135,7 @@ export function coordinateCompaction(
   const filteredEvidence = filterPreservedEvidence(rawEvidence, policy.preserveCategories);
   const evidenceMarkdown = formatPreservedEvidenceMarkdown(filteredEvidence);
 
-  let enhancedSummary: string | undefined = undefined;
+  let enhancedSummary: string | undefined;
   if (evidenceMarkdown) {
     enhancedSummary = input.baseSummary
       ? `${input.baseSummary}\n\n${evidenceMarkdown}`

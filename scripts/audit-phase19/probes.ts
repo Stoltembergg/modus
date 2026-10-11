@@ -653,7 +653,7 @@ if (mode === "privileges") {
   out({ events: audit.getEntries(), chainValid: audit.verifyChain() });
 } else if (mode === "benchmark") {
   const bytes = buildAddModule();
-  let start = performance.now();
+  const start = performance.now();
   const first = await host.createInstance(bytes);
   const cold = performance.now() - start;
   const stats = (samples: number[]) => {
@@ -725,7 +725,7 @@ if (mode === "privileges") {
     await s.service.enable("audit/plugin");
     if (mode === "rollback-crash") await s.service.upgrade(manifest("audit/plugin", "2.0.0"));
     const original = s.store.transaction.bind(s.store);
-    let armed = true;
+    const armed = true;
     s.store.transaction = (fn: any) => {
       if (armed) {
         out({

@@ -15,14 +15,14 @@ export class SubagentProviderRegistry {
   }
 
   static getInstance(): SubagentProviderRegistry {
-    if (!this.instance) {
-      this.instance = new SubagentProviderRegistry();
+    if (!SubagentProviderRegistry.instance) {
+      SubagentProviderRegistry.instance = new SubagentProviderRegistry();
     }
-    return this.instance;
+    return SubagentProviderRegistry.instance;
   }
 
   static resetInstance(): void {
-    this.instance = null;
+    SubagentProviderRegistry.instance = null;
   }
 
   register(provider: SubagentProvider): void {

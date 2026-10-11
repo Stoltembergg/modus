@@ -145,7 +145,7 @@ export class FastAstTokenizer {
     let totalTokens = 0;
 
     const regex =
-      /\b[a-zA-Z_$][a-zA-Z0-9_$]*\b|\d+(?:\.\d+)?|"[^"]*"|'[^']*'|[+\-*/%=<>!&|^~?:;,.(){}\[\]]/g;
+      /\b[a-zA-Z_$][a-zA-Z0-9_$]*\b|\d+(?:\.\d+)?|"[^"]*"|'[^']*'|[+\-*/%=<>!&|^~?:;,.(){}[\]]/g;
     for (const match of source.matchAll(regex)) {
       totalTokens++;
       const tok = match[0];
@@ -153,7 +153,7 @@ export class FastAstTokenizer {
 
       if ((firstChar >= "0" && firstChar <= "9") || firstChar === '"' || firstChar === "'") {
         literalsCount++;
-      } else if (this.KEYWORDS.has(tok)) {
+      } else if (FastAstTokenizer.KEYWORDS.has(tok)) {
         keywordsCount++;
       } else if (/^[a-zA-Z_$]/.test(tok)) {
         identifiersCount++;

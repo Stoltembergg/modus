@@ -23,7 +23,7 @@ function topLevelSection(source, sectionName) {
 
 function topLevelKeys(sectionLines) {
   return sectionLines.flatMap((line) => {
-    const match = line.match(/^  ([A-Za-z][A-Za-z0-9_-]*):\s*$/);
+    const match = line.match(/^ {2}([A-Za-z][A-Za-z0-9_-]*):\s*$/);
     return match ? [match[1]] : [];
   });
 }
@@ -37,13 +37,13 @@ function assertManualAuthorization(source, token, fileName) {
   );
   assert.match(
     triggerLines.join("\n"),
-    /^  workflow_dispatch:\n    inputs:\n      authorization:\n        description: .+\n        required: true\n        type: string$/m,
+    /^ {2}workflow_dispatch:\n {4}inputs:\n {6}authorization:\n {8}description: .+\n {8}required: true\n {8}type: string$/m,
     `${fileName} must require an explicit authorization input`,
   );
 
   const jobLines = topLevelSection(source, "jobs");
   const jobHeaders = jobLines.flatMap((line, index) => {
-    const match = line.match(/^  ([a-z][a-z0-9_-]*):\s*$/);
+    const match = line.match(/^ {2}([a-z][a-z0-9_-]*):\s*$/);
     return match ? [{ index, name: match[1] }] : [];
   });
   assert.ok(jobHeaders.length > 0, `${fileName} must define a job`);

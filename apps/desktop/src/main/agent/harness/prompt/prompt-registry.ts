@@ -227,7 +227,7 @@ export class PromptRegistry {
     const staticRatio = prompt.length > 0 ? cacheablePrefix.length / prompt.length : 0;
 
     const systemBlocks: CacheControlBlock[] = [];
-    let cacheBreakpointSectionId: string | undefined = undefined;
+    let cacheBreakpointSectionId: string | undefined;
 
     if (cacheablePrefix.length > 0) {
       const lastStatic = staticSections[staticSections.length - 1];

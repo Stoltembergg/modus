@@ -251,7 +251,7 @@ export function identifyPruneCandidates(
     const toolName = msg.toolName ?? "";
     let candidateType: PruneCandidateType = "tool_result";
     let superseded = false;
-    let path: string | undefined = undefined;
+    let path: string | undefined;
 
     if (
       toolName.includes("run_command") ||

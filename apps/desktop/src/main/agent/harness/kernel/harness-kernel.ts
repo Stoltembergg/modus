@@ -87,7 +87,7 @@ export class HarnessKernel {
       if (context.isCurrent && !context.isCurrent()) break;
       const startTime = performance.now();
       let success = true;
-      let errorMsg: string | undefined = undefined;
+      let errorMsg: string | undefined;
 
       try {
         const output = await hook.execute(currentData, context);
