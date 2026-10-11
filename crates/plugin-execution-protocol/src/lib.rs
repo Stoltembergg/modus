@@ -16,7 +16,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::worker_admission::WorkerTransport;
-use crate::worker_admission::{AdmissionAssessmentToken, HostAuthorization};
+use crate::worker_admission::{
+    AdmissionAssessmentToken, HostAuthorization, PluginHostcallRateLimiter,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -119,6 +121,9 @@ pub enum ProtocolError {
     CapabilityDenied,
     OutOfOrder,
     TooManyPending,
+    PluginHostcallRateLimitExceeded,
+    HostcallLimiterIdentityMismatch,
+    HostcallLimiterUnavailable,
     UnknownSequence,
     SequenceOverflow,
 }
@@ -316,6 +321,7 @@ struct Dispatcher {
     challenge: String,
     provenance: HostProvenance,
     approved_policy: resource_policy::ResourcePolicy,
+    hostcall_rate_limiter: Arc<PluginHostcallRateLimiter>,
     granted_capabilities: BTreeSet<String>,
     state: SessionState,
     next_sequence: u64,
@@ -326,6 +332,7 @@ impl Dispatcher {
     fn from_validated_parts(
         provenance: HostProvenance,
         approved_policy: resource_policy::ResourcePolicy,
+        hostcall_rate_limiter: Arc<PluginHostcallRateLimiter>,
         challenge: String,
         granted_capabilities: BTreeSet<String>,
     ) -> Self {
@@ -333,6 +340,7 @@ impl Dispatcher {
             challenge,
             provenance,
             approved_policy,
+            hostcall_rate_limiter,
             granted_capabilities,
             state: SessionState::AwaitingHello,
             next_sequence: 1,
@@ -350,9 +358,11 @@ impl Dispatcher {
             validate_dispatch_config(challenge, granted_capabilities)?;
         let (provenance, approved_policy, transport) = admission.into_parts();
         drop(transport);
+        let hostcall_rate_limiter = PluginHostcallRateLimiter::for_plugin(&provenance);
         Ok(Self::from_validated_parts(
             provenance,
             approved_policy,
+            hostcall_rate_limiter,
             challenge,
             granted_capabilities,
         ))
@@ -459,10 +469,12 @@ impl Dispatcher {
                 if payload_bytes.len() > MAX_RESULT_BYTES {
                     return Err(ProtocolError::ResultTooLarge);
                 }
-                self.next_sequence = self
+                let next_sequence = self
                     .next_sequence
                     .checked_add(1)
                     .ok_or(ProtocolError::SequenceOverflow)?;
+                self.hostcall_rate_limiter.reserve(&self.provenance)?;
+                self.next_sequence = next_sequence;
                 let generation_active = Arc::new(AtomicBool::new(true));
                 self.pending
                     .insert(sequence, Arc::clone(&generation_active));
@@ -576,7 +588,8 @@ impl<T: WorkerTransport> WorkerSession<T> {
         authorization: HostAuthorization,
         challenge: impl Into<String>,
     ) -> Result<Self, ProtocolError> {
-        let (authorized_provenance, granted_capabilities) = authorization.into_parts();
+        let (authorized_provenance, granted_capabilities, hostcall_rate_limiter) =
+            authorization.into_parts();
         if admission.provenance() != &authorized_provenance {
             return Err(reject_admission(
                 admission,
@@ -592,6 +605,7 @@ impl<T: WorkerTransport> WorkerSession<T> {
         let dispatcher = Dispatcher::from_validated_parts(
             provenance,
             approved_policy,
+            hostcall_rate_limiter,
             challenge,
             granted_capabilities,
         );
@@ -1163,18 +1177,39 @@ mod tests {
         .unwrap()
     }
 
+    fn dispatcher_for_with_rate_limiter(
+        provenance: HostProvenance,
+        hostcall_rate_limiter: Arc<PluginHostcallRateLimiter>,
+    ) -> Dispatcher {
+        let (challenge, granted_capabilities) =
+            validate_dispatch_config(CHALLENGE, ["memory.read".to_string()]).unwrap();
+        let (provenance, approved_policy, transport) =
+            synthetic_test_token(provenance).into_parts();
+        drop(transport);
+        Dispatcher::from_validated_parts(
+            provenance,
+            approved_policy,
+            hostcall_rate_limiter,
+            challenge,
+            granted_capabilities,
+        )
+    }
+
     fn new_dispatcher() -> Dispatcher {
         dispatcher_for(provenance())
     }
 
     fn fixture_worker_session(transport: FixtureTransport) -> WorkerSession<FixtureTransport> {
         let provenance = provenance();
+        let hostcall_rate_limiter = PluginHostcallRateLimiter::for_plugin(&provenance);
         let authorization = unsafe {
             HostAuthorization::from_permission_broker(
                 provenance.clone(),
                 ["memory.read".to_string()],
+                hostcall_rate_limiter,
             )
-        };
+        }
+        .unwrap();
         WorkerSession::new(
             synthetic_test_token_with_transport(provenance, transport),
             authorization,
@@ -1317,6 +1352,8 @@ mod tests {
         let worker_provenance = provenance();
         let authorization_provenance =
             provenance_for_scope("session-fixture", "workspace-fixture", "other-run-fixture");
+        let hostcall_rate_limiter =
+            PluginHostcallRateLimiter::for_plugin(&authorization_provenance);
         let termination_requested = Arc::new(AtomicBool::new(false));
         let reaped = Arc::new(AtomicBool::new(false));
         let transport = FixtureTransport {
@@ -1329,8 +1366,10 @@ mod tests {
             HostAuthorization::from_permission_broker(
                 authorization_provenance,
                 ["memory.read".to_string()],
+                hostcall_rate_limiter,
             )
-        };
+        }
+        .unwrap();
 
         assert_eq!(
             WorkerSession::new(admission, authorization, CHALLENGE).err(),
@@ -1341,6 +1380,36 @@ mod tests {
     }
 
     #[test]
+    fn host_authorization_rejects_a_rate_limiter_for_another_plugin() {
+        let authorized_provenance = provenance();
+        let other_plugin = HostProvenance::from_host_catalog(
+            "@modus/other-fixture",
+            "1.2.3",
+            DIGEST,
+            "host://bundled",
+            HostTrustLevel::Core,
+            "session-fixture-other",
+            "workspace-fixture-other",
+            "run-fixture-other",
+            1,
+        )
+        .unwrap();
+        let rate_limiter = PluginHostcallRateLimiter::for_plugin(&other_plugin);
+
+        assert_eq!(
+            unsafe {
+                HostAuthorization::from_permission_broker(
+                    authorized_provenance,
+                    ["memory.read".to_string()],
+                    rate_limiter,
+                )
+            }
+            .err(),
+            Some(ProtocolError::HostcallLimiterIdentityMismatch),
+        );
+    }
+
+    #[test]
     fn worker_session_reports_cleanup_failure_when_authorization_is_rejected() {
         let fail_reaps_remaining = Arc::new(AtomicUsize::new(1));
         let transport = FixtureTransport {
@@ -1348,16 +1417,21 @@ mod tests {
             ..FixtureTransport::default()
         };
         let admission = synthetic_test_token_with_transport(provenance(), transport);
+        let authorization_provenance = provenance_for_scope(
+            "session-fixture-1",
+            "workspace-fixture-1",
+            "different-run-fixture",
+        );
+        let hostcall_rate_limiter =
+            PluginHostcallRateLimiter::for_plugin(&authorization_provenance);
         let authorization = unsafe {
             HostAuthorization::from_permission_broker(
-                provenance_for_scope(
-                    "session-fixture-1",
-                    "workspace-fixture-1",
-                    "different-run-fixture",
-                ),
+                authorization_provenance,
                 ["memory.read".to_string()],
+                hostcall_rate_limiter,
             )
-        };
+        }
+        .unwrap();
 
         assert_eq!(
             WorkerSession::new(admission, authorization, CHALLENGE).err(),
@@ -1374,9 +1448,17 @@ mod tests {
             ..FixtureTransport::default()
         };
         let admission = synthetic_test_token_with_transport(provenance(), transport);
+        let authorization_provenance = provenance();
+        let hostcall_rate_limiter =
+            PluginHostcallRateLimiter::for_plugin(&authorization_provenance);
         let authorization = unsafe {
-            HostAuthorization::from_permission_broker(provenance(), ["memory.read".to_string()])
-        };
+            HostAuthorization::from_permission_broker(
+                authorization_provenance,
+                ["memory.read".to_string()],
+                hostcall_rate_limiter,
+            )
+        }
+        .unwrap();
 
         assert_eq!(
             WorkerSession::new(admission, authorization, "invalid-challenge").err(),
@@ -1974,6 +2056,80 @@ mod tests {
         assert_eq!(
             dispatcher.receive(&invoke(1, "memory.read", json!({}))),
             Err(ProtocolError::OutOfOrder),
+        );
+    }
+
+    #[test]
+    fn shares_the_approved_plugin_hostcall_rate_budget_across_dispatchers() {
+        let first_provenance = provenance();
+        let rate_limiter = PluginHostcallRateLimiter::for_plugin(&first_provenance);
+        let now = Instant::now() + Duration::from_secs(3_600);
+        for _ in 0..APPROVED_RESOURCE_POLICY.max_hostcalls_per_plugin_second {
+            rate_limiter
+                .reserve_at(&first_provenance, now)
+                .unwrap();
+        }
+
+        let second_provenance = provenance_for_scope(
+            "session-fixture-2",
+            "workspace-fixture-2",
+            "run-fixture-2",
+        );
+        let mut dispatcher =
+            dispatcher_for_with_rate_limiter(second_provenance, Arc::clone(&rate_limiter));
+        dispatcher.receive(&hello()).unwrap();
+        assert_eq!(
+            dispatcher.receive(&invoke(1, "memory.read", json!({}))),
+            Err(ProtocolError::PluginHostcallRateLimitExceeded),
+        );
+        assert!(dispatcher.is_closed());
+
+        assert_eq!(
+            rate_limiter.reserve_at(&first_provenance, now + Duration::from_secs(1)),
+            Ok(()),
+            "calls at the exact one-second boundary must expire",
+        );
+    }
+
+    #[test]
+    fn concurrent_sessions_cannot_overbook_the_plugin_hostcall_budget() {
+        let provenance = provenance();
+        let rate_limiter = PluginHostcallRateLimiter::for_plugin(&provenance);
+        let now = Instant::now();
+        let outcomes = std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..8)
+                .map(|_| {
+                    let limiter = Arc::clone(&rate_limiter);
+                    let provenance = provenance.clone();
+                    scope.spawn(move || {
+                        (0..64)
+                            .map(|_| limiter.reserve_at(&provenance, now))
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .flat_map(|worker| worker.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| outcome.is_ok())
+                .count(),
+            APPROVED_RESOURCE_POLICY.max_hostcalls_per_plugin_second as usize,
+        );
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| {
+                    **outcome == Err(ProtocolError::PluginHostcallRateLimitExceeded)
+                })
+                .count(),
+            outcomes.len()
+                - APPROVED_RESOURCE_POLICY.max_hostcalls_per_plugin_second as usize,
         );
     }
 

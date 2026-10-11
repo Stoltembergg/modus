@@ -59,8 +59,9 @@
 //! }
 //! ```
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::io;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::resource_policy::{APPROVED_RESOURCE_POLICY, ResourcePolicy};
@@ -204,6 +205,66 @@ pub enum AdmissionError {
     WorkerCleanupFailed(io::ErrorKind),
 }
 
+/// Host-owned rolling one-second hostcall budget shared by every session for
+/// one plugin identity. The supervisor must reuse the same value when it
+/// authorizes concurrent or restarted workers for that plugin.
+#[derive(Debug)]
+pub struct PluginHostcallRateLimiter {
+    plugin_id: String,
+    recent_calls: Mutex<VecDeque<Instant>>,
+}
+
+impl PluginHostcallRateLimiter {
+    /// Create a limiter for the plugin identity resolved by the host catalog.
+    /// Keep and reuse this `Arc` across sessions for that plugin.
+    pub fn for_plugin(provenance: &HostProvenance) -> Arc<Self> {
+        Arc::new(Self {
+            plugin_id: provenance.plugin_id().to_string(),
+            recent_calls: Mutex::new(VecDeque::new()),
+        })
+    }
+
+    fn reserve(&self, provenance: &HostProvenance) -> Result<(), crate::ProtocolError> {
+        self.reserve_with_clock(provenance, Instant::now)
+    }
+
+    fn reserve_with_clock(
+        &self,
+        provenance: &HostProvenance,
+        clock: impl FnOnce() -> Instant,
+    ) -> Result<(), crate::ProtocolError> {
+        if provenance.plugin_id() != self.plugin_id {
+            return Err(crate::ProtocolError::HostcallLimiterIdentityMismatch);
+        }
+        let mut recent_calls = self
+            .recent_calls
+            .lock()
+            .map_err(|_| crate::ProtocolError::HostcallLimiterUnavailable)?;
+        let now = clock();
+        while recent_calls.front().is_some_and(|recorded| {
+            now.saturating_duration_since(*recorded) >= Duration::from_secs(1)
+        }) {
+            recent_calls.pop_front();
+        }
+        if recent_calls.len()
+            >= APPROVED_RESOURCE_POLICY.max_hostcalls_per_plugin_second as usize
+        {
+            return Err(crate::ProtocolError::PluginHostcallRateLimitExceeded);
+        }
+        recent_calls.push_back(now);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reserve_at(
+        &self,
+        provenance: &HostProvenance,
+        now: Instant,
+    ) -> Result<(), crate::ProtocolError> {
+        self.reserve_with_clock(provenance, || now)
+    }
+}
+
 /// Non-cloneable token that owns the assessed worker transport until it is
 /// consumed by `WorkerSession`. It is not a proof of OS enforcement.
 pub struct AdmissionAssessmentToken<T: WorkerTransport> {
@@ -285,6 +346,7 @@ impl<T: WorkerTransport> Drop for AdmissionAssessmentToken<T> {
 pub struct HostAuthorization {
     provenance: HostProvenance,
     granted_capabilities: BTreeSet<String>,
+    hostcall_rate_limiter: Arc<PluginHostcallRateLimiter>,
 }
 
 impl HostAuthorization {
@@ -295,19 +357,36 @@ impl HostAuthorization {
     /// The caller must supply the current grant set returned by the host's
     /// permission broker for this exact provenance. It must not widen grants
     /// based on worker input or configuration that the broker has not
-    /// approved.
+    /// approved. It must also pass the host-owned rate limiter shared by all
+    /// sessions for this plugin identity; constructing a fresh limiter for
+    /// each authorization would not enforce the per-plugin rate ceiling.
     pub unsafe fn from_permission_broker(
         provenance: HostProvenance,
         granted_capabilities: impl IntoIterator<Item = String>,
-    ) -> Self {
-        Self {
+        hostcall_rate_limiter: Arc<PluginHostcallRateLimiter>,
+    ) -> Result<Self, crate::ProtocolError> {
+        if hostcall_rate_limiter.plugin_id != provenance.plugin_id() {
+            return Err(crate::ProtocolError::HostcallLimiterIdentityMismatch);
+        }
+        Ok(Self {
             provenance,
             granted_capabilities: granted_capabilities.into_iter().collect(),
-        }
+            hostcall_rate_limiter,
+        })
     }
 
-    pub(crate) fn into_parts(self) -> (HostProvenance, BTreeSet<String>) {
-        (self.provenance, self.granted_capabilities)
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        HostProvenance,
+        BTreeSet<String>,
+        Arc<PluginHostcallRateLimiter>,
+    ) {
+        (
+            self.provenance,
+            self.granted_capabilities,
+            self.hostcall_rate_limiter,
+        )
     }
 }
 
