@@ -16,10 +16,10 @@ const ISOLATION_UNAVAILABLE =
   "OS-backed plugin isolation is unavailable; untrusted execution was blocked.";
 
 export class PluginIsolationHost {
-  private audit: SecurityAuditLogger;
+  readonly #audit: SecurityAuditLogger;
 
   constructor(options: PluginIsolationOptions = {}) {
-    this.audit = options.auditLogger ?? SecurityAuditLogger.getInstance();
+    this.#audit = options.auditLogger ?? SecurityAuditLogger.getInstance();
   }
 
   /**
@@ -40,7 +40,7 @@ export class PluginIsolationHost {
       },
     ) => Promise<TResult> | TResult;
   }): Promise<PluginRpcResponse<TResult>> {
-    return this.blocked(
+    return this.#blocked(
       params.pluginId,
       `capability.execute.${params.capability}`,
       params.capability,
@@ -56,21 +56,21 @@ export class PluginIsolationHost {
     wasmBytes: Uint8Array;
     functionName: string;
   }): Promise<PluginRpcResponse<TOut>> {
-    return this.blocked(
+    return this.#blocked(
       params.pluginId,
       `wasm.execute.${params.functionName}`,
       params.functionName,
     );
   }
 
-  private blocked<TResult>(
+  #blocked<TResult>(
     pluginId: string,
     action: string,
     resource: string,
   ): PluginRpcResponse<TResult> {
     const error = ISOLATION_UNAVAILABLE;
     const startTime = Date.now();
-    this.audit.log({ pluginId, action, resource, decision: "deny", reason: error });
+    this.#audit.log({ pluginId, action, resource, decision: "deny", reason: error });
     return { id: randomUUID(), success: false, error, latencyMs: Date.now() - startTime };
   }
 

@@ -1857,7 +1857,7 @@ cancellation follow-up above.
 | A17 | Prior fix preserved | Verification evidence integrity. |
 | A18 | Implemented and independently reviewed; integrated checks pass | SQLite source of truth, durable per-recipient broadcast ACKs, bounded inbox queries, host-derived group scope, expiry-safe ACKs and lazy cleanup. Latest recorded workflow `38081920060` passed Biome/typecheck, Supabase pgTAP (20 files/1,041 tests), PTY/protocol/security regression jobs and platform packaging. Its global Vitest job had one `FastVectorDistance` timing failure; it is not classified as pre-existing or solely environmental. |
 | A19 | Prior A21.4 implementation preserved | Spill authorization, persistence, quotas, and recovery. |
-| A20 | Partially mitigated; same-connection mutation detection added | Audit events and checkpoints persist in SQLite; immutable snapshots, transactional retention, append-time verification on audit revision changes, and checkpoint comparisons detect ordinary record changes through the same or another connection. No independent signing key or database access boundary exists. |
+| A20 | Partially mitigated; same-connection mutation detection and reflective state encapsulation | Audit events and checkpoints persist in SQLite; immutable snapshots, transactional retention, append-time verification on audit revision changes, and checkpoint comparisons detect ordinary record changes through the same or another connection. The logger's database handle and chain state, plus the fail-closed facade's logger reference, now use ECMAScript `#private`; this prevents ordinary property reflection only. No independent signing key or database access boundary exists, and public logger APIs remain available to code holding a reference. |
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |
 | A22 | Partially mitigated; productive readers page and source extraction is incremental | Cursor-page reads now drive IPC, timeline/history, source lookup and Pi output; the unbounded `agent:list-events` bridge endpoint is removed. Store/helper/context tests passed 89/89, offline Pi runtime 232/232; source/timeline/history/EventHub regressions passed 39/39; the A22 IPC follow-up passed 87/87 and independent review found no blocker. The internal `listAgentEvents` helper still aggregates if explicitly called but has no productive callsite. CI on `e1f175e` passed Biome/typecheck, containment on all three platforms, Verifier-First, sandbox compile-only and PTY cancellation. Global Vitest recorded 4,606 passed, 8 skipped, one `FastVectorDistance` timing failure at 0.113051 ms against <0.1 ms; pgTAP test 22 received 2026-10-30 and expected 2026-10-31. Subsequent pgTAP CI after migration `6844254` passed (20 files/1,041 tests; see the renewal follow-up above). Windows/macOS packaging later passed. Fresh read-only query-plan checks show the current `idx_agent_events_session_id` serves forward and backward `rowid` keyset ranges; a proposed composite index was discarded because `event_cursor` is the `INTEGER PRIMARY KEY` rowid alias and the existing plan already applies the cursor bounds. No query-plan regression was demonstrated. No baseline or instability classification is claimed. Active source-tool arguments/output, individual raw event payloads, synthetic prompt backfill and volatile partial previews remain byte/retention limitations. |
 | A23 | Mitigated; integrated checks pass | Synthetic capability outputs and the generic core `status: ok` fallback now fail explicitly with `CapabilityUnavailableError`; stale declared grants are reconciled by exact host identity/version; separate Pi runtime services, A16 selection, and A17 evidence flows are preserved. Independent review found no blocker. Workflow `38081920060` passed the relevant feature jobs, Supabase pgTAP (20 files/1,041 tests), containment, compile-only sandbox and Windows/macOS packaging. The same run had one unrelated-to-A23 global Vitest timing failure, without a baseline classification. |
@@ -2427,3 +2427,49 @@ discovery, and instrumentation APIs are unchanged.
   does not establish an OS/process boundary.
 - External plugin ingress remains blocked. The change does not alter the
   production call graph or claim that the IPC dispatcher has a process caller.
+
+### A20 audit logger reflective state encapsulation
+
+The audit logger's database handle, retained cache, chain anchor/head,
+sequence/revision state, and integrity-failure flag were TypeScript `private`
+properties. `PluginIsolationHost` also held its audit logger in a reflectable
+property, and both classes' sensitive helper methods were ordinary prototype
+methods. The logger and the facade now keep those members in ECMAScript
+`#private` slots/methods; the existing public logging, verification, and
+fail-closed execution APIs retain their signatures.
+
+- RED/GREEN: a safe reflection-only fixture failed first on the logger's
+  `database` property, and then a second fixture failed on the facade's
+  `audit` property. After the conversions, the boundary fixtures and selected
+  normal logger/facade regressions passed **5 tests**, with **94** unrelated
+  tests filtered out. The selected set covered chained logging, returned-entry
+  immutability, and the facade's existing fail-closed WASM response; no guest
+  code, DB mutation, probe, or enforcement case ran. Desktop TypeScript
+  typecheck passed. Targeted Biome passed on all three changed TypeScript files
+  with no diagnostics; `git diff --check` passed.
+- Independent review found no behavioral or syntax blocker and confirmed the
+  tests only inspect names on a newly constructed in-memory logger/facade.
+  Review explicitly limits the claim to reflective encapsulation: the logger
+  still exposes public APIs, a caller can supply/hold the SQLite connection,
+  the SHA-256 chain is unkeyed, and same-process code or a DB writer can alter
+  audit history. This patch does not make A20 tamper-proof or establish a
+  process/database boundary.
+
+### Remote validation snapshot before A20
+
+The official rerun of only the failed `typecheck · test · biome` job on the
+documentation-only head `0e4cc576` failed again at the unchanged
+`FastVectorDistance` assertion: **0.118321 ms** against `<0.1 ms`, with
+**4,650 passed, 8 skipped, 1 failed across 414 files**. Its first attempt had
+failed the same assertion at **0.103422 ms** with the same counts. Windows and
+macOS packaging on `0e4cc576` passed. These observations show different
+run-level outcomes but do not establish a baseline or cause, so the benchmark
+is not classified as pre-existing or solely environmental.
+
+The subsequent full CI run `38099164607` on code head `a46d6c63813a17103f1e8bae518d601f6ce9bd9b` passed all nine jobs. Biome and desktop typecheck
+passed; global Vitest passed **4,652 tests**, skipped **8**, across **414
+files**; Supabase pgTAP passed **1,041 tests** across 20 files. Safe-filtered
+containment checks on Ubuntu/Windows/macOS, IPC protocol fixtures,
+compile-only sandbox, Verifier-First, and PTY cancellation passed. The Windows
+and macOS package workflows for that head were still running when this note
+was written; no probes ran, and the PR remained Draft.
