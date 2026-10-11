@@ -664,6 +664,7 @@
 :root[data-theme="light"] {
   color-scheme: light;
   --overlay-scrim-color: rgba(18, 24, 38, 0.18);
+  --dialog-shadow: 0 1px 2px rgba(18, 24, 38, 0.06), 0 24px 64px -24px rgba(18, 24, 38, 0.3);
   --group-icon-lightness: 42%;
 
   /* Surfaces — clean editor white + neutral panel chrome */
@@ -904,6 +905,16 @@
   border-radius: var(--radius-overlay);
   background: var(--surface-glass);
   box-shadow: var(--menu-shadow);
+}
+/*
+ * Modal dialog surface (agent dialog): pairs with .popup-chrome, which owns the
+ * border and the fill (glass only under native glass + Transparency "full",
+ * solid otherwise and in every reduced-transparency / no-backdrop-filter
+ * fallback). This only gives the larger radius and the deeper dialog shadow.
+ */
+.surface-dialog {
+  border-radius: var(--radius-xl);
+  box-shadow: var(--dialog-shadow);
 }
 
 /*

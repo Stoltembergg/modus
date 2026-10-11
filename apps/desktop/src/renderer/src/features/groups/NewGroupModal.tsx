@@ -1,5 +1,6 @@
 import { Dialog } from "@base-ui/react/dialog";
 import { IconCrown, IconPlus, IconX } from "@tabler/icons-react";
+import { AnimatePresence } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AGENT_TEMPLATES,
@@ -85,7 +86,9 @@ export type NewGroupModalProps = {
   services: NewGroupServices;
 };
 
-type AgentDialogState = { initial?: NewGroupAgentInput; lead?: boolean } | null;
+type AgentDialogRequest = { initial?: NewGroupAgentInput; lead?: boolean };
+/** `nonce` is new on every open: the dialog remounts instead of reviving an exiting instance. */
+type AgentDialogState = (AgentDialogRequest & { nonce: number }) | null;
 
 /**
  * "New group" (A4). Folder first (required; Projects plus "Add folder…",
@@ -126,7 +129,10 @@ export function NewGroupModal({
   const [tab, setTab] = useState<Tab>("templates");
   const [members, setMembers] = useState<NewGroupMember[]>([]);
   const [leadKey, setLeadKey] = useState<string | null>(null);
-  const [agentDialog, setAgentDialog] = useState<AgentDialogState>(null);
+  const [agentDialog, setAgentDialogState] = useState<AgentDialogState>(null);
+  const agentDialogSeq = useRef(0);
+  const setAgentDialog = (next: AgentDialogRequest | null) =>
+    setAgentDialogState(next && { ...next, nonce: ++agentDialogSeq.current });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [folderError, setFolderError] = useState<string | undefined>();
@@ -676,18 +682,22 @@ export function NewGroupModal({
             </div>
           </form>
 
-          {dialogTarget ? (
-            <AgentDialog
-              defaultModelId={defaultModelId}
-              draft={dialogTarget}
-              models={allModels}
-              onGenerate={services.generateProfile}
-              onOpenChange={(next) => {
-                if (!next) setAgentDialog(null);
-              }}
-              open
-            />
-          ) : null}
+          {/* Keeps the agent dialog mounted for its exit spring after onOpenChange(false). */}
+          <AnimatePresence>
+            {dialogTarget ? (
+              <AgentDialog
+                defaultModelId={defaultModelId}
+                draft={dialogTarget}
+                key={`agent-dialog-${agentDialog?.nonce ?? 0}`}
+                models={allModels}
+                onGenerate={services.generateProfile}
+                onOpenChange={(next) => {
+                  if (!next) setAgentDialog(null);
+                }}
+                open
+              />
+            ) : null}
+          </AnimatePresence>
         </Dialog.Popup>
       </Dialog.Portal>
     </Dialog.Root>

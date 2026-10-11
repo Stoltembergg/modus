@@ -96,6 +96,20 @@ describe("Modus semantic design tokens", () => {
     expect(composerDock).toContain("box-shadow: var(--shadow-composer)");
   });
 
+  it("the dialog surface only reshapes .popup-chrome (radius + shadow), never its own glass", () => {
+    const dialog = css.match(/(?:^|\n)\.surface-dialog\s*\{([^}]+)\}/)?.[1] ?? "";
+    expect(dialog).toContain("border-radius: var(--radius-xl)");
+    expect(dialog).toContain("box-shadow: var(--dialog-shadow)");
+    // Fill and blur stay with .popup-chrome (glass in Full, solid otherwise and in fallbacks).
+    expect(dialog).not.toMatch(/background|backdrop-filter/);
+    expect(css).not.toMatch(/\.surface-dialog[^{]*\{[^}]*backdrop-filter/);
+    // Declared after .popup-chrome so the shared specificity resolves to the dialog shape.
+    expect(css.indexOf("\n.surface-dialog {")).toBeGreaterThan(css.indexOf("\n.popup-chrome {"));
+    // Each theme has its own dialog shadow (the light one is soft, not the dark 0.68 black).
+    const light = css.match(/:root\[data-theme="light"\]\s*\{([^}]+)\}/)?.[1] ?? "";
+    expect(light).toMatch(/--dialog-shadow:/);
+  });
+
   it("adds only a light translucent tint to app surfaces", () => {
     expect(css).toMatch(
       /--surface-app:\s*color-mix\(in srgb, var\(--color-panel\) 97%, transparent\)/,

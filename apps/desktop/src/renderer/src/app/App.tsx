@@ -163,9 +163,15 @@ export function App() {
     : undefined;
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>();
   /** The agent dialog (A3): create in a group, or edit an agent. */
-  const [agentDialog, setAgentDialog] = useState<{ groupId: string; agent?: AgentInfo } | null>(
-    null,
-  );
+  const [agentDialog, setAgentDialogState] = useState<{
+    groupId: string;
+    agent?: AgentInfo;
+    /** New on every open: the dialog remounts instead of reviving an exiting instance. */
+    nonce: number;
+  } | null>(null);
+  const agentDialogSeq = useRef(0);
+  const setAgentDialog = (next: { groupId: string; agent?: AgentInfo } | null) =>
+    setAgentDialogState(next && { ...next, nonce: ++agentDialogSeq.current });
   const [initialEventsBySession, setInitialEventsBySession] = useState<
     Record<string, AgentEventItem[]>
   >({});
@@ -1324,28 +1330,32 @@ export function App() {
                           onAddAgent={(groupId) => setAgentDialog({ groupId })}
                         />
                       </ContextSidebar>
-                      {agentDialogGroup && agentDialog ? (
-                        <AgentDialog
-                          agent={agentDialog.agent}
-                          defaultModelId={model || undefined}
-                          group={agentDialogGroup}
-                          models={groupModels}
-                          onCreate={async (input) => {
-                            await window.modus.agents.create(input);
-                            await refreshGroups();
-                          }}
-                          onGenerate={(input) => window.modus.agents.generateProfile(input)}
-                          onOpenChange={(open) => {
-                            if (!open) setAgentDialog(null);
-                          }}
-                          onUpdate={async (input) => {
-                            await window.modus.agents.update(input);
-                            // The 1:1 chat is titled after the agent.
-                            await refreshSessions();
-                          }}
-                          open
-                        />
-                      ) : null}
+                      {/* Keeps the dialog mounted for its exit spring after onOpenChange(false). */}
+                      <AnimatePresence>
+                        {agentDialogGroup && agentDialog ? (
+                          <AgentDialog
+                            key={`agent-dialog-${agentDialog.nonce}`}
+                            agent={agentDialog.agent}
+                            defaultModelId={model || undefined}
+                            group={agentDialogGroup}
+                            models={groupModels}
+                            onCreate={async (input) => {
+                              await window.modus.agents.create(input);
+                              await refreshGroups();
+                            }}
+                            onGenerate={(input) => window.modus.agents.generateProfile(input)}
+                            onOpenChange={(open) => {
+                              if (!open) setAgentDialog(null);
+                            }}
+                            onUpdate={async (input) => {
+                              await window.modus.agents.update(input);
+                              // The 1:1 chat is titled after the agent.
+                              await refreshSessions();
+                            }}
+                            open
+                          />
+                        ) : null}
+                      </AnimatePresence>
 
                       <MainSurface
                         data-shell-layer="main-surface"
