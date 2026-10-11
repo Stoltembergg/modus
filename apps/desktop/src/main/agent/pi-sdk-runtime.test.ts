@@ -11321,6 +11321,29 @@ describe("PiSdkRuntime Phase 9 subagent provider delegation", () => {
     expect(waitRes.success).toBe(true);
   });
 
+  it("forwards read-only intent through the provider and skips the writable worktree", async () => {
+    await useOfflineDeltaSessions();
+    await initGitRepo();
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const runtime = new PiSdkRuntime();
+    const provider = runtime.getSubagentRegistry().getDefaultProvider();
+    const spawnRes = await provider.spawn({
+      role: "reviewer",
+      task: "review it",
+      sessionId,
+      isolation: "worktree",
+      readOnly: true,
+    });
+    expect(spawnRes.status).toBe("spawned");
+    const { getAgentSession: getSession } = await import("./agent-store");
+    const child = getSession(spawnRes.subagentId);
+    expect(child?.subagentReadOnly).toBe(true);
+    expect(child?.subagentWorktree).toBeUndefined();
+    const waitRes = await provider.wait(spawnRes.subagentId, 30000);
+    expect(waitRes.success).toBe(true);
+  });
+
   it("returns failed (does not throw) when the parent session does not exist", async () => {
     await useOfflinePiToolSessions();
     const runtime = new PiSdkRuntime();

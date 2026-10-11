@@ -1237,7 +1237,9 @@ export class PiSdkRuntime implements AgentRuntime {
                 name: input.role,
                 body: "",
                 model: "inherit",
-                readOnly: false,
+                // Forward the caller's read-only intent; a read-only child never
+                // gets a writable worktree (see runSubagent).
+                readOnly: input.readOnly === true,
                 ...(input.isolation === "worktree" ? { isolation: "worktree" as const } : {}),
               },
             });
