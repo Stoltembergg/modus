@@ -233,6 +233,15 @@ no new issue. CI run `38076843678` on commit `c3b423e3` is green: pgTAP passed
 and typecheck, Biome, Vitest, verifier-first, containment, PTY, and compile-only
 Rust jobs all passed. The compile-only sandbox job did not execute probes.
 
+The renewal fix was revalidated on the current PR head `8c9a0a8` in CI run
+`38107531336`: the Supabase pgTAP/integration job passed **20 files / 1,041
+tests**, including `17_free_monthly_renewal.test.sql` test 22 and its fixed
+month-end/leap-year fixtures. The same workflow's global Vitest job had one
+separate failure in the unchanged `FastVectorDistance` timing assertion
+(`0.127588 ms` against `<0.1 ms`; 4,679 passed, 1 failed, 8 skipped across
+415 files). No base-branch comparison was performed, so that failure remains
+unclassified. The Windows and macOS packaging workflows on `8c9a0a8` passed.
+
 Known legacy limitation: Stripe's historical credit ledger stores invoice
 ids but not their subscription ids. For former Stripe subscribers already on
 Free, the migration preserves the currently stored `period_end` rather than
@@ -1200,8 +1209,9 @@ tamper resistance against host-process compromise or establish an OS boundary.
 
 ## Milestone 7 — A24 WASM cache bounds and measurement truthfulness
 
-**Status: cache retention is bounded and cache counters are explicit; WASI
-output capture remains unavailable while the host denies WASI imports.**
+**Status: cache retention and WASM source admission are bounded; native compiled
+memory and WASI output capture remain unavailable while the host denies WASI
+imports.**
 
 The compiled-module cache was an unbounded `Map`. `WasmCapabilityHost` now
 maintains it as an LRU with a default cap of 64 compiled modules and 16 MiB of
@@ -1289,13 +1299,38 @@ implementation; A24 remains partial until that work is safe to enable.
   retain caller values transiently at its discretion, and this does not bound
   WASM input/compile memory. Remote CI for this follow-up is pending.
 
+- The host now enforces the already-approved 32 MiB artifact ceiling before
+  copying or compiling WASM. It reads typed-array length, backing buffer, and
+  offset through captured intrinsic getters, so an own-property `byteLength`
+  cannot understate the input. It copies exactly the checked span into a fixed
+  snapshot and uses that same snapshot for hashing and compilation; a
+  length-tracking view over a growable `SharedArrayBuffer` cannot expand the
+  bytes passed downstream. The internal compile helper uses a JavaScript
+  `#private` method so callers cannot bypass the admission snapshot at runtime.
+- RED: the 32 MiB + 1 array with an own `byteLength = 1` failed to hit the
+  intended limit check; the growable shared-buffer test observed the compile
+  input grow from 41 bytes to 33,554,433 bytes; and a runtime-reflection test
+  found the TypeScript-only `private` compile helper callable. Each regression
+  failed before its corresponding correction. GREEN: the focused compilation,
+  module-inspection and cache group passed **12/12** tests, including artifact
+  rejection and fixed-snapshot behavior. Tests only compile bounded generated
+  bytes and do not instantiate or invoke the WASM fixture.
+- The fresh `npm run check` completed with exit code 0: Biome checked 1,152
+  files with **0 errors, 318 warnings, and 46 infos**, and desktop TypeScript
+  typecheck passed. The modified-file Biome check also exited 0 with one
+  existing `noUnusedVariables` warning for `executeWasm<TIn>`. No unrelated
+  diagnostics were changed. Remote CI for this source follow-up is pending.
+
 ### Limits
 
 The cache entry count and source-byte accounting bound retained module count
 and the sum of source sizes represented by those entries, not the compiled
-machine-code memory V8 retains. A too-large input is still compiled once for
-the current request, so this does not cap transient compile memory. WASI output
-is not captured or made available; the grantless host denial remains intact.
+machine-code memory V8 retains. Source inputs larger than 32 MiB are rejected;
+inputs at or below that limit are copied for stable hashing and compilation,
+but this does not bound native compiler overhead or retained compiled memory.
+WASI output is not captured or made available; the grantless host denial
+remains intact. This cap does not enable the in-process host for external
+plugins; productive isolated execution remains unavailable.
 
 ## Milestone 8 — A18 durable, paged and group-scoped mailbox
 
@@ -1940,7 +1975,7 @@ cancellation follow-up above.
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |
 | A22 | Partially mitigated; productive event reads and renderer source lookups are paged, bounded, and fail closed | Cursor-page reads drive IPC, timeline/history, source lookup and Pi output; the old `agent:list-events` bridge endpoint is removed. Collector-local budgets cover active call identities, argument traversal/references, unfinished external-tool output, and retained source metadata; ambiguous active tool-call IDs across runs invalidate attribution. Overflow is sticky: complete lookup fails, the main-chat hook marks the run unavailable, the group hook exposes unavailable status, and synchronous timeline rendering preserves the answer while marking sources unavailable. Renderer lookups admit at most four active loads and 256 queued loads; releasing the last view stops pagination after any already in-flight page returns. Run-scoped tool-evidence and assistant-message pages preflight `payload_json` bytes under a SQLite savepoint. Pages are split at event boundaries to stay within 8 MiB when possible; an indivisible event larger than 8 MiB is returned alone to preserve complete content. The cap excludes IPC/page envelopes. This does not bound generic/non-run event pages, stream expansion, individual event allocations, aggregate requests, renderer heap/RSS, or the existing 24-source display cap, so A22 remains partial. RED/GREEN, review, local checks, and current remote CI are recorded below. The prior global run's benchmark timing failure and the current successful run are both recorded without assigning a definitive root cause. |
 | A23 | Mitigated; integrated checks pass | Synthetic capability outputs and the generic core `status: ok` fallback now fail explicitly with `CapabilityUnavailableError`; stale declared grants are reconciled by exact host identity/version; separate Pi runtime services, A16 selection, and A17 evidence flows are preserved. Independent review found no blocker. Workflow `38081920060` passed the relevant feature jobs, Supabase pgTAP (20 files/1,041 tests), containment, compile-only sandbox and Windows/macOS packaging. The same run had one unrelated-to-A23 global Vitest timing failure, without a baseline classification. |
-| A24 | Partially mitigated | Compiled-module cache has LRU entry/source-byte caps, hashes namespaces up to 256 UTF-16 code units, and bypasses cache retention plus error-name retention for longer namespaces. Cache counters do not measure native compiled memory or transient compile memory. A05 supplies measured failure metrics. WASI remains denied and stdio capture is unavailable. |
+| A24 | Partially mitigated; artifact admission capped, isolated execution unproven | Cache has LRU entry/source-byte caps; namespaces are hashed up to 256 UTF-16 code units and longer ones bypass retention. WASM inputs over the existing 32 MiB limit are rejected using intrinsic view metadata, then hashed and compiled from one fixed snapshot. Cache counters do not measure native compiled memory or compiler overhead. A05 supplies measured failure metrics. WASI remains denied and stdio capture is unavailable; the in-process host is not an OS-isolated executor. |
 | A25 | Mitigated; prior fix preserved and revalidated | `allow-workspace` requires workspace+tool identity and lookup keys include both plus action/target; the Pi runtime supplies persisted host workspace identity across worktree cwd changes. Unknown tools are blocked before permission prompting and are not read-only safe. Safe focused validation: 52 permission-store/permission-extension/tool-registry tests and one productive Pi runtime workspace-scope test passed. A two-workspace synthetic store test passes; external tool/plugin execution remains disabled. |
 
 This matrix will be updated as each independent remediation is completed and

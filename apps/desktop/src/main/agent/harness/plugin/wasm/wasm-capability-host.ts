@@ -23,8 +23,59 @@ import {
 type WasmInstantiationFailureMetrics = Omit<WasmExecutionMetrics, "latencyMs">;
 const instantiationFailureMetrics = new WeakMap<object, WasmInstantiationFailureMetrics>();
 const MAX_CACHE_NAMESPACE_LENGTH = 256;
+/** Mirrors the frozen 32 MiB plugin artifact ceiling in resource_policy.rs. */
+const MAX_WASM_ARTIFACT_BYTES = 32 * 1024 * 1024;
+const typedArrayByteLengthGetter = Object.getOwnPropertyDescriptor(
+  Object.getPrototypeOf(Uint8Array.prototype),
+  "byteLength",
+)?.get;
+const typedArrayBufferGetter = Object.getOwnPropertyDescriptor(
+  Object.getPrototypeOf(Uint8Array.prototype),
+  "buffer",
+)?.get;
+const typedArrayByteOffsetGetter = Object.getOwnPropertyDescriptor(
+  Object.getPrototypeOf(Uint8Array.prototype),
+  "byteOffset",
+)?.get;
 const IN_PROCESS_WASM_TIMEOUT_ERROR =
   "WASM timeouts cannot be enforced for in-process WebAssembly; use a preemptible OS-isolated worker.";
+
+function snapshotWasmArtifact(wasmBytes: Uint8Array): Uint8Array {
+  if (!typedArrayByteLengthGetter || !typedArrayBufferGetter || !typedArrayByteOffsetGetter) {
+    throw new Error("Unable to validate WASM source byte length.");
+  }
+  let sourceBytes: unknown;
+  let sourceBuffer: unknown;
+  let sourceByteOffset: unknown;
+  try {
+    sourceBytes = Reflect.apply(typedArrayByteLengthGetter, wasmBytes, []);
+    sourceBuffer = Reflect.apply(typedArrayBufferGetter, wasmBytes, []);
+    sourceByteOffset = Reflect.apply(typedArrayByteOffsetGetter, wasmBytes, []);
+  } catch {
+    throw new TypeError("WASM source must be a Uint8Array.");
+  }
+  if (
+    typeof sourceBytes !== "number" ||
+    !Number.isSafeInteger(sourceBytes) ||
+    sourceBytes < 0 ||
+    sourceBytes > MAX_WASM_ARTIFACT_BYTES
+  ) {
+    throw new RangeError("WASM artifact exceeds the approved 32 MiB limit.");
+  }
+  if (typeof sourceByteOffset !== "number" || !Number.isSafeInteger(sourceByteOffset)) {
+    throw new TypeError("WASM source must be a Uint8Array.");
+  }
+
+  let fixedSource: Uint8Array;
+  try {
+    fixedSource = new Uint8Array(sourceBuffer as ArrayBufferLike, sourceByteOffset, sourceBytes);
+  } catch {
+    throw new TypeError("WASM source must remain a valid Uint8Array during snapshot.");
+  }
+  const snapshot = new Uint8Array(sourceBytes);
+  snapshot.set(fixedSource);
+  return snapshot;
+}
 
 function assertNoInProcessWasmTimeout(options: WasmInstanceOptions): void {
   const timeoutMs = options.timeoutMs;
@@ -116,6 +167,14 @@ export class WasmCapabilityHost {
     wasmBytes: Uint8Array,
     cacheKey?: string,
   ): Promise<WebAssembly.Module> {
+    return this.#compileStableModule(snapshotWasmArtifact(wasmBytes), cacheKey);
+  }
+
+  async #compileStableModule(
+    wasmBytes: Uint8Array,
+    cacheKey?: string,
+  ): Promise<WebAssembly.Module> {
+    const sourceBytes = wasmBytes.byteLength;
     const hash = createHash("sha256").update(wasmBytes).digest("hex");
     const namespaceIsBounded =
       cacheKey === undefined || cacheKey.length <= MAX_CACHE_NAMESPACE_LENGTH;
@@ -135,7 +194,7 @@ export class WasmCapabilityHost {
     try {
       const module = await WebAssembly.compile(wasmBytes as unknown as BufferSource);
       if (namespaceIsBounded) {
-        this.cacheCompiledModule(key, module, wasmBytes.byteLength);
+        this.cacheCompiledModule(key, module, sourceBytes);
       }
       return module;
     } catch (err) {
@@ -202,8 +261,8 @@ export class WasmCapabilityHost {
     options: WasmInstanceOptions = {},
   ): Promise<{ instance: WasmPluginInstance; wasiSandbox?: WasiSandbox }> {
     assertNoInProcessWasmTimeout(options);
-    const stableWasmBytes = new Uint8Array(wasmBytes);
-    const module = await this.compileModule(stableWasmBytes, options.pluginId);
+    const stableWasmBytes = snapshotWasmArtifact(wasmBytes);
+    const module = await this.#compileStableModule(stableWasmBytes, options.pluginId);
     let memoryDeclarations: WasmMemoryDeclaration[] = [];
     try {
       memoryDeclarations = inspectWasmMemories(stableWasmBytes);

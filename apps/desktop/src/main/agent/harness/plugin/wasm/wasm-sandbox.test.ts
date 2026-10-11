@@ -40,6 +40,8 @@ import {
   WasmPluginInstance,
 } from "./index";
 
+const WASM_ARTIFACT_LIMIT_BYTES = 32 * 1024 * 1024;
+
 function buildHostFunctionReferenceModule(): Uint8Array {
   const header = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
   const typeSection = createSection(0x01, [
@@ -398,6 +400,65 @@ describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
   });
 
   describe("19.1 — Compilation, Module Inspection & Caching", () => {
+    it("rejects WASM source above the approved artifact limit before copying or compiling", async () => {
+      const host = new WasmCapabilityHost();
+      expect(Reflect.get(host, "compileStableModule")).toBeUndefined();
+      const oversizedBytes = new Uint8Array(WASM_ARTIFACT_LIMIT_BYTES + 1);
+      Object.defineProperty(oversizedBytes, "byteLength", {
+        value: 1,
+      });
+      const compile = vi.spyOn(WebAssembly, "compile");
+
+      try {
+        await expect(host.compileModule(oversizedBytes)).rejects.toThrow(
+          /wasm artifact exceeds the approved 32 mib limit/i,
+        );
+        await expect(host.createInstance(oversizedBytes)).rejects.toThrow(
+          /wasm artifact exceeds the approved 32 mib limit/i,
+        );
+        const execution = await host.executeWasm(oversizedBytes, "run");
+
+        expect(execution.success).toBe(false);
+        expect(execution.error).toMatch(/wasm artifact exceeds the approved 32 mib limit/i);
+        expect(compile).not.toHaveBeenCalled();
+        expect(host.getModuleCacheStats()).toMatchObject({ entries: 0, sourceBytes: 0 });
+      } finally {
+        compile.mockRestore();
+      }
+    });
+
+    it.skipIf(typeof SharedArrayBuffer.prototype.grow !== "function")(
+      "compiles a fixed-size snapshot when a shared WASM source grows during compilation",
+      async () => {
+        const bytes = buildAddModule();
+        const maxSharedBytes = WASM_ARTIFACT_LIMIT_BYTES + bytes.byteLength + 1;
+        const shared = new SharedArrayBuffer(bytes.byteLength, { maxByteLength: maxSharedBytes });
+        const source = new Uint8Array(shared);
+        source.set(bytes);
+        const compileBytes = new Uint8Array(bytes.byteLength);
+        compileBytes.set(bytes);
+        const compiledModule = await WebAssembly.compile(compileBytes);
+        const host = new WasmCapabilityHost();
+        let compiledSourceBytes = -1;
+        const compile = vi
+          .spyOn(WebAssembly, "compile")
+          .mockImplementation(async (bufferSource) => {
+            shared.grow(WASM_ARTIFACT_LIMIT_BYTES + 1);
+            compiledSourceBytes = ArrayBuffer.isView(bufferSource) ? bufferSource.byteLength : -1;
+            return compiledModule;
+          });
+
+        try {
+          await host.compileModule(source);
+
+          expect(source.byteLength).toBeGreaterThan(WASM_ARTIFACT_LIMIT_BYTES);
+          expect(compiledSourceBytes).toBe(bytes.byteLength);
+        } finally {
+          compile.mockRestore();
+        }
+      },
+    );
+
     it("compiles valid WASM bytecode and caches module by SHA-256", async () => {
       const bytes = buildAddModule();
       const mod1 = await wasmHost.compileModule(bytes);
