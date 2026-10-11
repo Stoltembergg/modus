@@ -2428,13 +2428,13 @@ fs.renameSync("original-manifest-link", "package.json");
       output,
     });
 
-    const firstPage = listAgentEventRawPage(sessionId, { limit: 10 });
+    const firstPage = listAgentEventPage(sessionId, { limit: 10 });
     expect(firstPage.events.map(({ event }) => event.eventCursor)).toEqual([first]);
     expect(firstPage.events[0]?.event).toMatchObject({ type: "tool.output", output });
     expect(firstPage.nextCursor).toBe(first);
     expect(firstPage.hasMore).toBe(true);
 
-    const secondPage = listAgentEventRawPage(sessionId, {
+    const secondPage = listAgentEventPage(sessionId, {
       afterCursor: firstPage.nextCursor,
       snapshotCursor: firstPage.snapshotCursor,
       limit: 10,
@@ -2443,13 +2443,13 @@ fs.renameSync("original-manifest-link", "package.json");
     expect(secondPage.events[0]?.event).toMatchObject({ type: "tool.output", output });
     expect(secondPage.hasMore).toBe(false);
 
-    const newestPage = listAgentEventRawPage(sessionId, { direction: "backward", limit: 10 });
+    const newestPage = listAgentEventPage(sessionId, { direction: "backward", limit: 10 });
     expect(newestPage.events.map(({ event }) => event.eventCursor)).toEqual([second]);
     expect(newestPage.nextCursor).toBe(second);
     expect(newestPage.events[0]?.event).toMatchObject({ type: "tool.output", output });
     expect(newestPage.hasMore).toBe(true);
 
-    const olderPage = listAgentEventRawPage(sessionId, {
+    const olderPage = listAgentEventPage(sessionId, {
       direction: "backward",
       beforeCursor: newestPage.nextCursor,
       snapshotCursor: newestPage.snapshotCursor,
