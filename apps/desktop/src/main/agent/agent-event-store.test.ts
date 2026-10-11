@@ -2411,6 +2411,39 @@ fs.renameSync("original-manifest-link", "package.json");
     expect(page2.hasMore).toBe(false);
   });
 
+  it("bounds generic event pages by stored payload bytes without dropping events", () => {
+    const sessionId = `bounded-generic-event-page-${crypto.randomUUID()}`;
+    const output = "x".repeat(4 * 1024 * 1024);
+    insertSession(sessionId);
+    const first = recordAgentEvent({
+      type: "tool.output",
+      sessionId,
+      toolCallId: "large-first",
+      output,
+    });
+    const second = recordAgentEvent({
+      type: "tool.output",
+      sessionId,
+      toolCallId: "large-second",
+      output,
+    });
+
+    const firstPage = listAgentEventRawPage(sessionId, { limit: 10 });
+    expect(firstPage.events.map(({ event }) => event.eventCursor)).toEqual([first]);
+    expect(firstPage.events[0]?.event).toMatchObject({ type: "tool.output", output });
+    expect(firstPage.nextCursor).toBe(first);
+    expect(firstPage.hasMore).toBe(true);
+
+    const secondPage = listAgentEventRawPage(sessionId, {
+      afterCursor: firstPage.nextCursor,
+      snapshotCursor: firstPage.snapshotCursor,
+      limit: 10,
+    });
+    expect(secondPage.events.map(({ event }) => event.eventCursor)).toEqual([second]);
+    expect(secondPage.events[0]?.event).toMatchObject({ type: "tool.output", output });
+    expect(secondPage.hasMore).toBe(false);
+  });
+
   it("returns raw streamed deltas once when a message crosses a page boundary", () => {
     const sessionId = `raw-stream-page-${crypto.randomUUID()}`;
     insertSession(sessionId);
