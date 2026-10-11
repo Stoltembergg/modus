@@ -170,7 +170,7 @@ pub fn execute_assessed_worker<T: WorkerTransport>(
         )?
     };
     let mut session = WorkerSession::new(admission, authorization, challenge)?;
-    session.execute_until(capability, payload, deadline, broker)
+    Ok(session.execute_until(capability, payload, deadline, broker)?)
 }
 
 /// Encode a supervisor response under the same bounded host IPC ceiling.
@@ -222,8 +222,8 @@ mod tests {
 
     use modus_plugin_execution_protocol::worker_admission::PlatformAssessment;
     use modus_plugin_execution_protocol::{
-        DispatchEvent, HostFrame, PROTOCOL_VERSION, WorkerExecutionOutcome, WorkerFrame,
-        decode_host_frame, encode_worker_frame,
+        HostFrame, PROTOCOL_VERSION, WorkerExecutionOutcome, WorkerFrame, decode_host_frame,
+        encode_worker_frame,
     };
     use serde_json::json;
 
