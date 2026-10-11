@@ -4,6 +4,9 @@ const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: never[]) => unknown>(),
   getAgentSession: vi.fn(),
   getAgentRuntime: vi.fn(),
+  getRunWorkspaceRevision: vi.fn(),
+  listAgentEventPage: vi.fn(),
+  isWorkspaceWatched: vi.fn(),
   readPlanById: vi.fn(),
   updatePlanContentById: vi.fn(),
   recordAgentEvent: vi.fn(),
@@ -13,12 +16,14 @@ const mocks = vi.hoisted(() => ({
   fingerprintPlanSource: vi.fn(),
   promotePlanRevision: vi.fn(),
   publishPlanUpdated: vi.fn(),
+  recordPermissionDecision: vi.fn(),
   startPlanBuild: vi.fn(),
   startOriginalPlanBuild: vi.fn(),
   assertHyperPlanSessionAvailable: vi.fn(),
   startProviderAuth: vi.fn(),
+  startAgentReview: vi.fn(),
+  getAgent: vi.fn(),
   getDefaultModelId: vi.fn(),
-  getModusTurnModelId: vi.fn(),
   isUsableModelId: vi.fn(),
   requireAgentChatWritable: vi.fn(),
   restoreCheckpoint: vi.fn(),
@@ -42,9 +47,14 @@ vi.mock("../agent/agent-store", () => ({
   getAgentSession: mocks.getAgentSession,
 }));
 vi.mock("../agent/agent-event-store", () => ({
-  listAgentEvents: vi.fn(() => []),
+  listAgentEventPage: mocks.listAgentEventPage,
   recordAgentEvent: mocks.recordAgentEvent,
+  getRunWorkspaceRevision: mocks.getRunWorkspaceRevision,
   getWorkspaceHarnessInsightEvidence: vi.fn(() => ({ runs: [], events: [] })),
+}));
+vi.mock("../files/files-watcher", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../files/files-watcher")>()),
+  isWorkspaceWatched: mocks.isWorkspaceWatched,
 }));
 vi.mock("../agent/checkpoint-service", () => ({
   getLastTurnComparison: vi.fn(),
@@ -57,6 +67,10 @@ vi.mock("../agent/tools/plan-tools", () => ({
   registerPlanTools: vi.fn(),
 }));
 vi.mock("../agent/runtime-registry", () => ({ getAgentRuntime: mocks.getAgentRuntime }));
+vi.mock("../agent/review-service", () => ({
+  listAgentReviews: vi.fn(() => []),
+  startAgentReview: mocks.startAgentReview,
+}));
 vi.mock("../plan/plan-store", () => ({
   fingerprintPlanSource: mocks.fingerprintPlanSource,
   promotePlanRevision: mocks.promotePlanRevision,
@@ -75,12 +89,16 @@ vi.mock("../agent/model-service", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agent/model-service")>()),
   startProviderAuth: mocks.startProviderAuth,
   getDefaultModelId: mocks.getDefaultModelId,
-  getModusTurnModelId: mocks.getModusTurnModelId,
   isUsableModelId: mocks.isUsableModelId,
 }));
 vi.mock("../agents/agents-store", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/agents-store")>()),
+  getAgent: mocks.getAgent,
   requireAgentChatWritable: mocks.requireAgentChatWritable,
+}));
+vi.mock("../permissions/permission-store", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../permissions/permission-store")>()),
+  recordPermissionDecision: mocks.recordPermissionDecision,
 }));
 
 import type { HyperPlanRevision, HyperPlanSummary, PlanRef } from "../../shared/contracts";
@@ -95,6 +113,134 @@ import {
 import { IPC_CHANNELS } from "./channels";
 import { registerAppIpc } from "./register-app-ipc";
 import { registerTrustedSender } from "./trusted-sender";
+
+describe("permission decision IPC", () => {
+  const sender = { mainFrame: { url: "file:///app/index.html" } };
+  const trustedEvent = { sender, senderFrame: sender.mainFrame };
+
+  beforeEach(() => {
+    mocks.handlers.clear();
+    mocks.recordPermissionDecision.mockReset();
+    registerTrustedSender(sender, "file:///app/index.html");
+    registerAppIpc();
+  });
+
+  it("requires a live permission request before recording a decision", () => {
+    const handler = mocks.handlers.get(IPC_CHANNELS.permissionDecide);
+    if (!handler) throw new Error("Permission decision IPC handler was not registered.");
+
+    expect(() =>
+      handler(
+        trustedEvent as never,
+        {
+          sessionId: "session-a",
+          action: "shell.execute",
+          target: "rm -rf build-output",
+          decision: "allow-workspace",
+        } as never,
+      ),
+    ).toThrow();
+    expect(mocks.recordPermissionDecision).not.toHaveBeenCalled();
+  });
+
+  it("does not persist decisions for expired permission requests", () => {
+    const handler = mocks.handlers.get(IPC_CHANNELS.permissionDecide);
+    if (!handler) throw new Error("Permission decision IPC handler was not registered.");
+
+    expect(() =>
+      handler(
+        trustedEvent as never,
+        {
+          requestId: "expired-request",
+          sessionId: "session-a",
+          action: "shell.execute",
+          target: "rm -rf build-output",
+          decision: "allow-workspace",
+        } as never,
+      ),
+    ).toThrow("Permission request is no longer active.");
+    expect(mocks.recordPermissionDecision).not.toHaveBeenCalled();
+  });
+});
+
+describe("agent event page IPC", () => {
+  const sender = { mainFrame: { url: "file:///app/index.html" } };
+  const trustedEvent = { sender, senderFrame: sender.mainFrame };
+
+  beforeEach(() => {
+    mocks.handlers.clear();
+    mocks.listAgentEventPage.mockReset();
+    registerTrustedSender(sender, "file:///app/index.html");
+    registerAppIpc();
+  });
+
+  it("does not expose unbounded full-history event reads over IPC", () => {
+    expect(mocks.handlers.has("agent:list-events")).toBe(false);
+    expect(mocks.handlers.has(IPC_CHANNELS.agentListEventPage)).toBe(true);
+  });
+
+  it("passes trusted bounded page requests to the stable-cursor store", () => {
+    const page = { events: [], snapshotCursor: 42, hasMore: true, nextCursor: 31 };
+    mocks.listAgentEventPage.mockReturnValue(page);
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentListEventPage);
+    if (!handler) throw new Error("Agent event page IPC handler was not registered.");
+
+    expect(
+      handler(
+        trustedEvent as never,
+        {
+          sessionId: "session-a",
+          options: { direction: "backward", beforeCursor: 31, snapshotCursor: 42, limit: 128 },
+        } as never,
+      ),
+    ).toEqual(page);
+    expect(mocks.listAgentEventPage).toHaveBeenCalledWith("session-a", {
+      direction: "backward",
+      beforeCursor: 31,
+      snapshotCursor: 42,
+      limit: 128,
+    });
+  });
+
+  it("routes run-scoped tool history requests through the same bounded store", () => {
+    const page = { events: [], snapshotCursor: 42, hasMore: false };
+    mocks.listAgentEventPage.mockReturnValue(page);
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentListEventPage);
+    if (!handler) throw new Error("Agent event page IPC handler was not registered.");
+
+    expect(
+      handler(
+        trustedEvent as never,
+        {
+          sessionId: "session-a",
+          options: { direction: "forward", runId: "run-a", afterCursor: 0, limit: 64 },
+        } as never,
+      ),
+    ).toEqual(page);
+    expect(mocks.listAgentEventPage).toHaveBeenCalledWith("session-a", {
+      direction: "forward",
+      runId: "run-a",
+      afterCursor: 0,
+      limit: 64,
+    });
+  });
+
+  it("rejects malformed page cursors before querying the store", () => {
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentListEventPage);
+    if (!handler) throw new Error("Agent event page IPC handler was not registered.");
+
+    expect(() =>
+      handler(
+        trustedEvent as never,
+        {
+          sessionId: "session-a",
+          options: { direction: "backward", beforeCursor: -1 },
+        } as never,
+      ),
+    ).toThrow("Invalid IPC payload");
+    expect(mocks.listAgentEventPage).not.toHaveBeenCalled();
+  });
+});
 
 const summary: HyperPlanSummary = {
   critiques: [
@@ -172,7 +318,10 @@ describe("dedicated HyperPlan review IPC", () => {
     registerHyperPlanDraftOwner(5);
     mocks.handlers.clear();
     mocks.getAgentSession.mockReset();
+    mocks.getAgent.mockReset();
     mocks.getAgentRuntime.mockReset();
+    mocks.getRunWorkspaceRevision.mockReset();
+    mocks.isWorkspaceWatched.mockReset();
     mocks.readPlanById.mockReset();
     mocks.updatePlanContentById.mockReset();
     mocks.recordAgentEvent.mockReset();
@@ -229,6 +378,34 @@ describe("dedicated HyperPlan review IPC", () => {
     });
     registerTrustedSender(sender, "file:///app/index.html");
     registerAppIpc();
+  });
+
+  it("reads the current workspace revision for one exact session and run", () => {
+    const revision = "a".repeat(64);
+    mocks.getRunWorkspaceRevision.mockReturnValue(revision);
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentRunWorkspaceRevision);
+    if (!handler) throw new Error("Run workspace revision IPC handler was not registered.");
+
+    expect(
+      handler(trustedEvent as never, { sessionId: "session-1", runId: "run-1" } as never),
+    ).toBe(revision);
+    expect(mocks.getRunWorkspaceRevision).toHaveBeenCalledWith("session-1", "run-1");
+    expect(() =>
+      handler(
+        trustedEvent as never,
+        { sessionId: "session-1", runId: "run-1", workspaceId: "other" } as never,
+      ),
+    ).toThrow();
+  });
+
+  it("reports whether live workspace watching is active for QA freshness", () => {
+    mocks.isWorkspaceWatched.mockReturnValue(false);
+    const handler = mocks.handlers.get(IPC_CHANNELS.filesWatchStatus);
+    if (!handler) throw new Error("Files watcher status IPC handler was not registered.");
+
+    expect(handler(trustedEvent as never, "C:/workspace" as never)).toBe(false);
+    expect(mocks.isWorkspaceWatched).toHaveBeenCalledWith("C:/workspace");
+    expect(() => handler(trustedEvent as never, { cwd: "C:/workspace" } as never)).toThrow();
   });
 
   it("reviews only an owned Spec plan and passes bounded plan data to the dedicated coordinator", async () => {
@@ -1152,7 +1329,7 @@ describe("subagent worktree IPC with Agent Group member sessions", () => {
   });
 });
 
-describe("agent:prompt turn model (L2 fields, L3b Modus-only forcing)", () => {
+describe("agent:prompt preserves the session model", () => {
   const sender = { mainFrame: { url: "file:///app/index.html" } };
   const trustedEvent = { sender, senderFrame: sender.mainFrame };
   const prompt = vi.fn(async () => ({ outcome: "ok" }));
@@ -1161,9 +1338,9 @@ describe("agent:prompt turn model (L2 fields, L3b Modus-only forcing)", () => {
     mocks.handlers.clear();
     prompt.mockClear();
     mocks.getDefaultModelId.mockReset().mockReturnValue("anthropic/claude-opus-5-5");
-    mocks.getModusTurnModelId.mockReset().mockReturnValue("modus/deepseek/deepseek-flash");
     mocks.isUsableModelId.mockReset().mockReturnValue(true);
     mocks.getAgentSession.mockReset();
+    mocks.getAgent.mockReset();
     mocks.requireAgentChatWritable.mockReset();
     mocks.fromWebContents.mockReturnValue(mocks.senderWindow);
     mocks.getAgentRuntime.mockReturnValue({ prompt });
@@ -1172,6 +1349,10 @@ describe("agent:prompt turn model (L2 fields, L3b Modus-only forcing)", () => {
   });
 
   it("an old session's model (sent by the renderer) and its thinking are ignored for the run", async () => {
+    mocks.getAgentSession.mockReturnValue({
+      id: "session-1",
+      model: "anthropic/claude-opus-5-5",
+    });
     const handler = mocks.handlers.get(IPC_CHANNELS.agentPrompt);
     await handler?.(
       trustedEvent as never,
@@ -1189,7 +1370,7 @@ describe("agent:prompt turn model (L2 fields, L3b Modus-only forcing)", () => {
     expect(input).not.toHaveProperty("thinkingLevel");
   });
 
-  it("L3b: a Modus 1:1 session is forced to the Modus turn model (plan default)", async () => {
+  it("preserves the exact Modus model selected for a 1:1 session", async () => {
     mocks.getAgentSession.mockReturnValue({
       id: "session-1",
       model: "modus/anthropic/claude-fable-5-1",
@@ -1200,26 +1381,293 @@ describe("agent:prompt turn model (L2 fields, L3b Modus-only forcing)", () => {
       { sessionId: "session-1", message: "hi", model: "modus/anthropic/claude-fable-5-1" } as never,
     );
     const input = (prompt.mock.calls[0] as unknown as [unknown, Record<string, unknown>])[1];
-    expect(input.model).toBe("modus/deepseek/deepseek-flash");
+    expect(input.model).toBe("modus/anthropic/claude-fable-5-1");
     expect(mocks.getAgentSession).toHaveBeenCalledWith("session-1");
   });
 
-  it("L3b: an own-provider 1:1 session keeps its stored model (not the Settings default)", async () => {
+  it("a BYOK session keeps its stored model instead of the Settings default", async () => {
     mocks.getAgentSession.mockReturnValue({ id: "session-1", model: "openai/gpt-5" });
     mocks.getDefaultModelId.mockReturnValue("modus/deepseek/deepseek-flash");
     const handler = mocks.handlers.get(IPC_CHANNELS.agentPrompt);
     await handler?.(trustedEvent as never, { sessionId: "session-1", message: "hi" } as never);
     const input = (prompt.mock.calls[0] as unknown as [unknown, Record<string, unknown>])[1];
     expect(input.model).toBe("openai/gpt-5");
-    expect(mocks.getModusTurnModelId).not.toHaveBeenCalled();
   });
 
-  it("refuses the turn when Settings has no default model", async () => {
+  it("preserves the model selected for a linked session over its agent setting", async () => {
+    const sessionModel = "byok/session-selection";
+    mocks.getAgentSession.mockReturnValue({
+      id: "session-1",
+      agentId: "agent-1",
+      model: sessionModel,
+    });
+    mocks.getAgent.mockReturnValue({ modelId: "byok/agent-model" });
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentPrompt);
+
+    await handler?.(trustedEvent as never, { sessionId: "session-1", message: "hi" } as never);
+
+    const input = (prompt.mock.calls[0] as unknown as [unknown, Record<string, unknown>])[1];
+    expect(input.model).toBe(sessionModel);
+    expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
+  });
+
+  it("uses the linked agent model when the session has no saved selection", async () => {
+    mocks.getAgentSession.mockReturnValue({
+      id: "session-1",
+      agentId: "agent-1",
+      model: null,
+    });
+    mocks.getAgent.mockReturnValue({ modelId: "byok/agent-model" });
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentPrompt);
+
+    await handler?.(trustedEvent as never, { sessionId: "session-1", message: "hi" } as never);
+
+    const input = (prompt.mock.calls[0] as unknown as [unknown, Record<string, unknown>])[1];
+    expect(input.model).toBe("byok/agent-model");
+    expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
+  });
+
+  it("uses the Settings default when a linked agent has no model", async () => {
+    mocks.getAgentSession.mockReturnValue({
+      id: "session-1",
+      agentId: "agent-1",
+      model: null,
+    });
+    mocks.getAgent.mockReturnValue({ modelId: null });
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentPrompt);
+
+    await handler?.(trustedEvent as never, { sessionId: "session-1", message: "hi" } as never);
+
+    const input = (prompt.mock.calls[0] as unknown as [unknown, Record<string, unknown>])[1];
+    expect(input).toHaveProperty("model", null);
+    expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
+  });
+
+  it("restores a saved session model when it differs from the linked agent", async () => {
+    mocks.getAgentSession.mockReturnValue({
+      id: "session-1",
+      agentId: "agent-1",
+      model: "byok/session-selection",
+    });
+    mocks.getAgent.mockReturnValue({ modelId: "byok/agent-model" });
+    const ensure = vi.fn().mockResolvedValue({ id: "session-1" });
+    mocks.getAgentRuntime.mockReturnValue({ ensure });
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentEnsure);
+    if (!handler) throw new Error("Agent ensure IPC handler was not registered.");
+
+    await handler(trustedEvent as never, "session-1" as never);
+
+    expect(ensure).toHaveBeenCalledWith(mocks.senderWindow, "session-1", "byok/session-selection");
+  });
+
+  it("uses the linked agent model to restore a session with no saved selection", async () => {
+    mocks.getAgentSession.mockReturnValue({
+      id: "session-1",
+      agentId: "agent-1",
+      model: null,
+    });
+    mocks.getAgent.mockReturnValue({ modelId: "byok/agent-model" });
+    const ensure = vi.fn().mockResolvedValue({ id: "session-1" });
+    mocks.getAgentRuntime.mockReturnValue({ ensure });
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentEnsure);
+    if (!handler) throw new Error("Agent ensure IPC handler was not registered.");
+
+    await handler(trustedEvent as never, "session-1" as never);
+
+    expect(ensure).toHaveBeenCalledWith(mocks.senderWindow, "session-1", "byok/agent-model");
+  });
+
+  it("passes the app-default directive into restoration for a linked agent without a model", async () => {
+    mocks.getAgentSession.mockReturnValue({
+      id: "session-1",
+      agentId: "agent-1",
+      model: null,
+    });
+    mocks.getAgent.mockReturnValue({ modelId: null });
+    const ensure = vi.fn().mockResolvedValue({ id: "session-1" });
+    mocks.getAgentRuntime.mockReturnValue({ ensure });
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentEnsure);
+    if (!handler) throw new Error("Agent ensure IPC handler was not registered.");
+
+    await handler(trustedEvent as never, "session-1" as never);
+
+    expect(ensure).toHaveBeenCalledWith(mocks.senderWindow, "session-1", null);
+  });
+
+  it("rejects a removed linked agent model before restoring its session", async () => {
+    mocks.getAgentSession.mockReturnValue({
+      id: "session-1",
+      agentId: "agent-1",
+      model: null,
+    });
+    mocks.getAgent.mockReturnValue({ modelId: "byok/removed-model" });
+    mocks.isUsableModelId.mockReturnValue(false);
+    const ensure = vi.fn().mockResolvedValue({ id: "session-1" });
+    mocks.getAgentRuntime.mockReturnValue({ ensure });
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentEnsure);
+    if (!handler) throw new Error("Agent ensure IPC handler was not registered.");
+
+    await expect(handler(trustedEvent as never, "session-1" as never)).rejects.toThrow(
+      "Selected model is unavailable: byok/removed-model",
+    );
+
+    expect(ensure).not.toHaveBeenCalled();
+    expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
+  });
+
+  it("defers a legacy session with no database model to runtime branch restoration", async () => {
+    mocks.getAgentSession.mockReturnValue({ id: "session-1", model: undefined });
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentPrompt);
+
+    await handler?.(
+      trustedEvent as never,
+      {
+        sessionId: "session-1",
+        message: "hi",
+        model: "renderer/untrusted",
+      } as never,
+    );
+
+    const input = (prompt.mock.calls[0] as unknown as [unknown, Record<string, unknown>])[1];
+    expect(input).not.toHaveProperty("model");
+    expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
+  });
+
+  it("defers an absent session choice to runtime when Settings has no default", async () => {
     mocks.getDefaultModelId.mockReturnValue(undefined);
+    prompt.mockRejectedValueOnce(new Error("No model is configured"));
     const handler = mocks.handlers.get(IPC_CHANNELS.agentPrompt);
     await expect(
       handler?.(trustedEvent as never, { sessionId: "session-1", message: "hi" } as never),
     ).rejects.toThrow("No model is configured");
+    expect(prompt).toHaveBeenCalledTimes(1);
+    const input = (prompt.mock.calls[0] as unknown as [unknown, Record<string, unknown>])[1];
+    expect(input).not.toHaveProperty("model");
+    expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "byok/removed-model",
+    "modus/removed-model",
+  ])("refuses unavailable explicit model %s without sending a request to the Settings default", async (selectedModel) => {
+    mocks.getAgentSession.mockReturnValue({ id: "session-1", model: selectedModel });
+    mocks.isUsableModelId.mockReturnValue(false);
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentPrompt);
+
+    await expect(
+      handler?.(trustedEvent as never, { sessionId: "session-1", message: "hi" } as never),
+    ).rejects.toThrow(`Selected model is unavailable: ${selectedModel}`);
+
     expect(prompt).not.toHaveBeenCalled();
+    expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
+  });
+});
+
+describe("reviewStart preserves the session model", () => {
+  const sender = { mainFrame: { url: "file:///app/index.html" } };
+  const trustedEvent = { sender, senderFrame: sender.mainFrame };
+
+  beforeEach(() => {
+    mocks.handlers.clear();
+    mocks.getAgentSession.mockReset();
+    mocks.getAgent.mockReset();
+    mocks.getAgentRuntime.mockReset();
+    mocks.startAgentReview.mockReset().mockResolvedValue({ id: "review-1" });
+    mocks.getDefaultModelId.mockReset().mockReturnValue("openai/current-default");
+    mocks.isUsableModelId.mockReset().mockReturnValue(true);
+    mocks.fromWebContents.mockReturnValue(mocks.senderWindow);
+    registerTrustedSender(sender, "file:///app/index.html");
+    registerAppIpc();
+  });
+
+  it("passes the exact stored session model to the dedicated review", async () => {
+    mocks.getAgentSession.mockReturnValue({
+      id: "session-1",
+      model: "byok/session-model",
+    });
+    const handler = mocks.handlers.get(IPC_CHANNELS.reviewStart);
+    if (!handler) throw new Error("Review start IPC handler was not registered.");
+
+    await handler(
+      trustedEvent as never,
+      {
+        cwd: "C:/workspace",
+        sessionId: "session-1",
+      } as never,
+    );
+
+    expect(mocks.startAgentReview).toHaveBeenCalledWith(
+      expect.objectContaining({ modelId: "byok/session-model" }),
+    );
+    expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
+  });
+
+  it("preserves a linked session's selected model for review over its agent setting", async () => {
+    mocks.getAgentSession.mockReturnValue({
+      id: "session-1",
+      agentId: "agent-1",
+      model: "byok/session-selection",
+    });
+    mocks.getAgent.mockReturnValue({ modelId: "byok/agent-model" });
+    const handler = mocks.handlers.get(IPC_CHANNELS.reviewStart);
+    if (!handler) throw new Error("Review start IPC handler was not registered.");
+
+    await handler(
+      trustedEvent as never,
+      {
+        cwd: "C:/workspace",
+        sessionId: "session-1",
+      } as never,
+    );
+
+    expect(mocks.startAgentReview).toHaveBeenCalledWith(
+      expect.objectContaining({ modelId: "byok/session-selection" }),
+    );
+    expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
+  });
+
+  it("restores an unlinked legacy branch before choosing the review model", async () => {
+    mocks.getAgentSession.mockReturnValue({ id: "session-1" });
+    const ensure = vi.fn().mockResolvedValue({ id: "session-1", model: "byok/legacy-model" });
+    mocks.getAgentRuntime.mockReturnValue({ ensure });
+    const handler = mocks.handlers.get(IPC_CHANNELS.reviewStart);
+    if (!handler) throw new Error("Review start IPC handler was not registered.");
+
+    await handler(
+      trustedEvent as never,
+      {
+        cwd: "C:/workspace",
+        sessionId: "session-1",
+      } as never,
+    );
+
+    expect(ensure).toHaveBeenCalledWith(mocks.senderWindow, "session-1");
+    expect(mocks.startAgentReview).toHaveBeenCalledWith(
+      expect.objectContaining({ modelId: "byok/legacy-model" }),
+    );
+    expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
+  });
+
+  it("does not start a review on the default when the stored model is unavailable", async () => {
+    mocks.getAgentSession.mockReturnValue({
+      id: "session-1",
+      model: "byok/removed-model",
+    });
+    mocks.isUsableModelId.mockReturnValue(false);
+    const handler = mocks.handlers.get(IPC_CHANNELS.reviewStart);
+    if (!handler) throw new Error("Review start IPC handler was not registered.");
+
+    await expect(
+      handler(
+        trustedEvent as never,
+        {
+          cwd: "C:/workspace",
+          sessionId: "session-1",
+        } as never,
+      ),
+    ).rejects.toThrow("Selected model is unavailable: byok/removed-model");
+
+    expect(mocks.startAgentReview).not.toHaveBeenCalled();
+    expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
   });
 });

@@ -14,6 +14,12 @@ use decoder::PtyDecoder;
 
 type Sessions = Arc<Mutex<HashMap<String, Session>>>;
 type HostWriter = Arc<Mutex<io::Stdout>>;
+type TerminationTasks = Vec<thread::JoinHandle<()>>;
+
+#[cfg(unix)]
+const PROCESS_TREE_TERM_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
+#[cfg(unix)]
+const PROCESS_TREE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
 
 struct Session {
     master: Box<dyn MasterPty + Send>,
@@ -116,13 +122,13 @@ fn spawn_session(
         }
     }
 
-    let mut child = pair.slave.spawn_command(command)?;
-    let pid = child.process_id();
-    let killer = child.clone_killer();
     let mut reader = pair.master.try_clone_reader()?;
     // `mut` required on Windows for the ConPTY CPR write below; unused on Unix.
     #[cfg_attr(not(windows), allow(unused_mut))]
     let mut pty_writer = pair.master.take_writer()?;
+    let mut child = pair.slave.spawn_command(command)?;
+    let pid = child.process_id();
+    let killer = child.clone_killer();
 
     // ── ConPTY unblock (Windows) ─────────────────────────────────────────────────────────────
     // portable-pty 0.9.0 creates the ConPTY with PSEUDOCONSOLE_INHERIT_CURSOR,
@@ -154,7 +160,6 @@ fn spawn_session(
 
     send_event(writer, HostEvent::Spawned { id: &id, pid })?;
 
-    let read_sessions = Arc::clone(sessions);
     let read_writer = Arc::clone(writer);
     let read_id = id.clone();
     thread::spawn(move || {
@@ -203,13 +208,13 @@ fn spawn_session(
             );
         }
 
-        let _ = read_sessions.lock().map(|mut sessions| sessions.remove(&read_id));
     });
 
     let wait_sessions = Arc::clone(sessions);
     let wait_writer = Arc::clone(writer);
     thread::spawn(move || {
         let exit_code = child.wait().ok().map(|status| status.exit_code() as i32);
+        terminate_process_group_after_leader_exit(pid);
         let _ = send_event(
             &wait_writer,
             HostEvent::Exit {
@@ -223,15 +228,14 @@ fn spawn_session(
     Ok(())
 }
 
-/// Best-effort termination of a child *and its descendants*, so killing a
-/// terminal that ran e.g. `npm run dev` also stops the `node` server it spawned
-/// and releases the port. Uses only platform CLIs (no extra crates): `taskkill
-/// /T` on Windows, and a process-group `kill` on Unix (PTY children are session
-/// leaders, so the negative pid targets the whole group). The direct
-/// `killer.kill()` in the caller remains the fallback.
-fn kill_process_tree(pid: Option<u32>) {
+/// Starts termination of a child *and its descendants*, so killing a terminal
+/// that ran e.g. `npm run dev` also stops the `node` server it spawned and
+/// releases the port. PTY children are session leaders, so the negative pid
+/// targets their entire process group on Unix. The returned task escalates to
+/// SIGKILL after a short grace period if any process in the group remains.
+fn kill_process_tree(pid: Option<u32>) -> Option<thread::JoinHandle<()>> {
     let Some(pid) = pid else {
-        return;
+        return None;
     };
 
     #[cfg(windows)]
@@ -241,20 +245,147 @@ fn kill_process_tree(pid: Option<u32>) {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status();
+        None
     }
 
     #[cfg(unix)]
     {
-        // Negative pid → the process group led by the PTY child.
-        let _ = std::process::Command::new("kill")
-            .args(["-TERM", &format!("-{pid}")])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
+        let Ok(process_group) = libc::pid_t::try_from(pid) else {
+            return None;
+        };
+
+        // Send the cooperative signal first so ordinary commands can clean up.
+        unsafe {
+            libc::kill(-process_group, libc::SIGTERM);
+        }
+
+        Some(thread::spawn(move || {
+            let deadline = std::time::Instant::now() + PROCESS_TREE_TERM_GRACE;
+            while unix_process_group_exists(process_group)
+                && std::time::Instant::now() < deadline
+            {
+                thread::sleep(PROCESS_TREE_POLL_INTERVAL);
+            }
+
+            // A process group can outlive its original shell. If it did not
+            // exit during the grace period, terminate only that PTY group.
+            if unix_process_group_exists(process_group) {
+                unsafe {
+                    libc::kill(-process_group, libc::SIGKILL);
+                }
+            }
+        }))
     }
 }
 
-fn handle_command(command: HostCommand, sessions: &Sessions, writer: &HostWriter) -> Result<bool> {
+#[cfg(unix)]
+fn unix_process_group_exists(process_group: libc::pid_t) -> bool {
+    if unsafe { libc::kill(-process_group, 0) } == 0 {
+        return true;
+    }
+
+    io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_state_and_group(pid: libc::pid_t) -> Option<(char, libc::pid_t)> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let fields = stat.rsplit_once(')')?.1.split_whitespace();
+    let mut fields = fields;
+    let state = fields.next()?.chars().next()?;
+    let _parent_pid = fields.next()?;
+    let process_group = fields.next()?.parse().ok()?;
+    Some((state, process_group))
+}
+
+#[cfg(target_os = "linux")]
+fn unix_process_group_has_live_members(process_group: libc::pid_t) -> bool {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return unix_process_group_exists(process_group);
+    };
+
+    for entry in entries.flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<libc::pid_t>() else {
+            continue;
+        };
+        if let Some((state, member_group)) = linux_process_state_and_group(pid)
+            && member_group == process_group
+            && !matches!(state, 'Z' | 'X')
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn unix_process_group_has_live_members(process_group: libc::pid_t) -> bool {
+    unix_process_group_exists(process_group)
+}
+
+fn terminate_process_group_after_leader_exit(pid: Option<u32>) {
+    if let Some(task) = kill_process_tree(pid) {
+        let _ = task.join();
+    }
+
+    #[cfg(unix)]
+    if let Some(pid) = pid
+        && let Ok(process_group) = libc::pid_t::try_from(pid)
+    {
+        while unix_process_group_has_live_members(process_group) {
+            thread::sleep(PROCESS_TREE_POLL_INTERVAL);
+        }
+    }
+}
+
+fn schedule_process_tree_kill(pid: Option<u32>, tasks: &mut TerminationTasks) {
+    let mut pending = Vec::with_capacity(tasks.len());
+    for task in tasks.drain(..) {
+        if task.is_finished() {
+            let _ = task.join();
+        } else {
+            pending.push(task);
+        }
+    }
+    *tasks = pending;
+    if let Some(task) = kill_process_tree(pid) {
+        tasks.push(task);
+    }
+}
+
+fn terminate_sessions(sessions: &Sessions, tasks: &mut TerminationTasks) {
+    let mut locked_sessions = sessions
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let sessions = std::mem::take(&mut *locked_sessions);
+    drop(locked_sessions);
+    for (_, mut session) in sessions {
+        schedule_process_tree_kill(session.pid, tasks);
+        let _ = session.killer.kill();
+    }
+}
+
+struct HostCleanup {
+    sessions: Sessions,
+    termination_tasks: TerminationTasks,
+}
+
+impl Drop for HostCleanup {
+    fn drop(&mut self) {
+        terminate_sessions(&self.sessions, &mut self.termination_tasks);
+        for task in self.termination_tasks.drain(..) {
+            let _ = task.join();
+        }
+    }
+}
+
+fn handle_command(
+    command: HostCommand,
+    sessions: &Sessions,
+    writer: &HostWriter,
+    termination_tasks: &mut TerminationTasks,
+) -> Result<bool> {
     match command {
         HostCommand::Spawn {
             id,
@@ -295,15 +426,12 @@ fn handle_command(command: HostCommand, sessions: &Sessions, writer: &HostWriter
                 // Tear down the whole tree first (frees ports held by grandchildren
                 // such as a `node` spawned by `npm run dev`), then signal the PTY
                 // child directly as a fallback in case the tree kill missed it.
-                kill_process_tree(session.pid);
+                schedule_process_tree_kill(session.pid, termination_tasks);
                 let _ = session.killer.kill();
             }
         }
         HostCommand::Shutdown => {
-            for (_, mut session) in sessions.lock().expect("session lock poisoned").drain() {
-                kill_process_tree(session.pid);
-                let _ = session.killer.kill();
-            }
+            terminate_sessions(sessions, termination_tasks);
             return Ok(false);
         }
     }
@@ -311,9 +439,11 @@ fn handle_command(command: HostCommand, sessions: &Sessions, writer: &HostWriter
     Ok(true)
 }
 
-fn main() -> Result<()> {
-    let sessions = Arc::new(Mutex::new(HashMap::new()));
-    let writer = Arc::new(Mutex::new(io::stdout()));
+fn run_host_commands(
+    sessions: &Sessions,
+    writer: &HostWriter,
+    termination_tasks: &mut TerminationTasks,
+) -> Result<()> {
     let stdin = io::stdin();
 
     for line in stdin.lock().lines() {
@@ -337,7 +467,7 @@ fn main() -> Result<()> {
             }
         };
 
-        if !handle_command(command, &sessions, &writer)? {
+        if !handle_command(command, sessions, writer, termination_tasks)? {
             break;
         }
     }
@@ -345,10 +475,324 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+fn main() -> Result<()> {
+    let sessions = Arc::new(Mutex::new(HashMap::new()));
+    let writer = Arc::new(Mutex::new(io::stdout()));
+    let mut cleanup = HostCleanup {
+        sessions: Arc::clone(&sessions),
+        termination_tasks: Vec::new(),
+    };
+    let run_result = run_host_commands(&sessions, &writer, &mut cleanup.termination_tasks);
+    drop(cleanup);
+    run_result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[cfg(target_os = "linux")]
+    static NEXT_TEST_FILE: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
+
+    #[cfg(target_os = "linux")]
+    fn create_pid_file() -> PathBuf {
+        loop {
+            let candidate = std::env::temp_dir().join(format!(
+                "modus-pty-child-{}-{}.pid",
+                std::process::id(),
+                NEXT_TEST_FILE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ));
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&candidate)
+            {
+                Ok(_) => break candidate,
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("create synthetic child pid file: {error}"),
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn read_reported_process_ids(path: &PathBuf) -> Option<(libc::pid_t, libc::pid_t)> {
+        let contents = std::fs::read_to_string(path).ok()?;
+        let mut pids = contents
+            .split_whitespace()
+            .map(str::parse::<libc::pid_t>);
+        Some((pids.next()?.ok()?, pids.next()?.ok()?))
+    }
+
+    #[cfg(target_os = "linux")]
+    struct ProcessGroupCleanup {
+        pgid: Option<libc::pid_t>,
+        child_pid: Option<libc::pid_t>,
+        pid_file: PathBuf,
+        sessions: Sessions,
+        session_id: String,
+    }
+
+    #[cfg(target_os = "linux")]
+    impl Drop for ProcessGroupCleanup {
+        fn drop(&mut self) {
+            let session = self
+                .sessions
+                .lock()
+                .ok()
+                .and_then(|mut sessions| sessions.remove(&self.session_id));
+            let reported_pids = std::fs::read_to_string(&self.pid_file)
+                .ok()
+                .and_then(|contents| {
+                    let mut pids = contents
+                        .split_whitespace()
+                        .map(str::parse::<libc::pid_t>);
+                    Some((pids.next()?.ok()?, pids.next()?.ok()?))
+                });
+            let child_pid = self.child_pid.or_else(|| reported_pids.map(|pids| pids.0));
+            let pgid = self.pgid.or_else(|| {
+                session
+                    .as_ref()
+                    .and_then(|session| session.pid)
+                    .and_then(|pid| libc::pid_t::try_from(pid).ok())
+            }).or_else(|| {
+                let (child_pid, reported_pgid) = reported_pids?;
+                let child_group = linux_process_state_and_group(child_pid)?.1;
+                (child_group == reported_pgid).then_some(reported_pgid)
+            });
+            if let Some(pgid) = pgid
+                && unix_process_group_has_live_members(pgid)
+            {
+                // Always clean up the synthetic child, including assertion and
+                // setup failures. A zombie is already terminated and harmless.
+                unsafe {
+                    libc::kill(-pgid, libc::SIGKILL);
+                }
+            }
+            if let Some(child_pid) = child_pid
+                && linux_process_state_and_group(child_pid)
+                    .is_some_and(|(_, child_group)| Some(child_group) == pgid)
+            {
+                unsafe {
+                    libc::kill(child_pid, libc::SIGKILL);
+                }
+            }
+            if let Some(mut session) = session {
+                let _ = session.killer.kill();
+            }
+            let _ = std::fs::remove_file(&self.pid_file);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn kill_escalates_for_terminal_descendants_that_ignore_terminate() {
+        let sessions: Sessions = Arc::new(Mutex::new(HashMap::new()));
+        let writer: HostWriter = Arc::new(Mutex::new(io::stdout()));
+        let id = "ignore-term-child".to_string();
+        let pid_file = create_pid_file();
+        let mut cleanup = ProcessGroupCleanup {
+            pgid: None,
+            child_pid: None,
+            pid_file: pid_file.clone(),
+            sessions: Arc::clone(&sessions),
+            session_id: id.clone(),
+        };
+        let quoted_pid_file = format!(
+            "'{}'",
+            pid_file.display().to_string().replace('\'', "'\\''")
+        );
+        let script = format!(
+            "trap '' TERM HUP; (trap '' TERM HUP; exec sleep 30) & child=$!; printf '%s %s' \"$child\" \"$$\" > {quoted_pid_file}; wait"
+        );
+
+        spawn_session(
+            &sessions,
+            &writer,
+            id.clone(),
+            "/bin/sh".to_string(),
+            ".".to_string(),
+            80,
+            24,
+            None,
+            None,
+            Some(vec!["-c".to_string(), script]),
+        )
+        .expect("spawn synthetic PTY process group");
+
+        let pgid = sessions
+            .lock()
+            .expect("session lock")
+            .get(&id)
+            .and_then(|session| session.pid)
+            .expect("PTY process id");
+        let pgid = libc::pid_t::try_from(pgid).expect("PTY process id fits pid_t");
+        cleanup.pgid = Some(pgid);
+
+        let child_pid = {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                if let Some((child_pid, child_group_from_shell)) =
+                    read_reported_process_ids(&pid_file)
+                    && let Some((_, child_group)) = linux_process_state_and_group(child_pid)
+                {
+                    assert_eq!(
+                        child_group_from_shell, pgid,
+                        "shell reported another process group"
+                    );
+                    assert_eq!(child_group, pgid, "synthetic child escaped the PTY group");
+                    cleanup.child_pid = Some(child_pid);
+                    break child_pid;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "synthetic child did not report its pid"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+        };
+
+        let mut termination_tasks = Vec::new();
+        handle_command(
+            HostCommand::Kill { id },
+            &sessions,
+            &writer,
+            &mut termination_tasks,
+        )
+        .expect("dispatch normal PTY cancellation command");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let terminated = loop {
+            match linux_process_state_and_group(child_pid) {
+                None | Some(('Z', _)) => break true,
+                Some(_) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Some(_) => break false,
+            }
+        };
+        assert!(
+            terminated,
+            "SIGTERM-ignoring descendant remained active after terminal cancellation"
+        );
+        for task in termination_tasks {
+            task.join().expect("process-group escalation task");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn shutdown_keeps_group_ownership_after_the_pty_leader_exits() {
+        let sessions: Sessions = Arc::new(Mutex::new(HashMap::new()));
+        let writer: HostWriter = Arc::new(Mutex::new(io::stdout()));
+        let id = "leader-exits-first".to_string();
+        let pid_file = create_pid_file();
+        let mut cleanup = ProcessGroupCleanup {
+            pgid: None,
+            child_pid: None,
+            pid_file: pid_file.clone(),
+            sessions: Arc::clone(&sessions),
+            session_id: id.clone(),
+        };
+        let quoted_pid_file = format!(
+            "'{}'",
+            pid_file.display().to_string().replace('\'', "'\\''")
+        );
+        let script = format!(
+            "trap '' TERM HUP; (trap '' TERM HUP; exec sleep 30) & child=$!; printf '%s %s' \"$child\" \"$$\" > {quoted_pid_file}; read command; exit 0"
+        );
+        spawn_session(
+            &sessions,
+            &writer,
+            id.clone(),
+            "/bin/sh".to_string(),
+            ".".to_string(),
+            80,
+            24,
+            None,
+            None,
+            Some(vec!["-c".to_string(), script]),
+        )
+        .expect("spawn synthetic PTY process group");
+
+        let pgid = sessions
+            .lock()
+            .expect("session lock")
+            .get(&id)
+            .and_then(|session| session.pid)
+            .expect("PTY process id");
+        let pgid = libc::pid_t::try_from(pgid).expect("PTY process id fits pid_t");
+        cleanup.pgid = Some(pgid);
+
+        let child_pid = {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                if let Some((child_pid, child_group_from_shell)) =
+                    read_reported_process_ids(&pid_file)
+                    && let Some((_, child_group)) = linux_process_state_and_group(child_pid)
+                {
+                    assert_eq!(child_group_from_shell, pgid);
+                    assert_eq!(child_group, pgid);
+                    cleanup.child_pid = Some(child_pid);
+                    break child_pid;
+                }
+                assert!(Instant::now() < deadline, "synthetic child did not report its pid");
+                thread::sleep(Duration::from_millis(10));
+            }
+        };
+
+        let mut termination_tasks = Vec::new();
+        handle_command(
+            HostCommand::Write {
+                id: id.clone(),
+                data: "exit\n".to_string(),
+            },
+            &sessions,
+            &writer,
+            &mut termination_tasks,
+        )
+        .expect("send shell exit through the managed PTY");
+
+        let leader_deadline = Instant::now() + Duration::from_secs(2);
+        while linux_process_state_and_group(pgid).is_some() && Instant::now() < leader_deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            linux_process_state_and_group(pgid).is_none(),
+            "PTY shell did not exit"
+        );
+        assert!(
+            sessions.lock().expect("session lock").contains_key(&id),
+            "the host released group ownership before its descendants were gone"
+        );
+
+        handle_command(
+            HostCommand::Shutdown,
+            &sessions,
+            &writer,
+            &mut termination_tasks,
+        )
+        .expect("dispatch host shutdown");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !matches!(
+            linux_process_state_and_group(child_pid),
+            None | Some(('Z', _))
+        ) && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            matches!(
+                linux_process_state_and_group(child_pid),
+                None | Some(('Z', _))
+            ),
+            "shutdown lost the descendant after its PTY leader exited"
+        );
+        for task in termination_tasks {
+            task.join().expect("process-group escalation task");
+        }
+    }
 
     /// Regression guard for the ConPTY blindness bug (wezterm#6783).
     ///

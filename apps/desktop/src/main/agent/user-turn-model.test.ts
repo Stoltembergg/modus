@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { agentPromptSchema } from "../ipc/schemas";
 import {
-  isModusModelId,
-  MODUS_UNAVAILABLE_MESSAGE,
   NO_DEFAULT_MODEL_MESSAGE,
+  resolveAgentTurnModel,
+  resolveExplicitTurnModel,
   resolveTurnModel,
   type TurnModelDeps,
   userTurnPromptInput,
@@ -67,77 +67,173 @@ describe("userTurnPromptInput (L2 fields; model from resolveTurnModel, L3b)", ()
     });
   });
 
-  it("no default model configured: the turn is refused (never falls back to the session model)", () => {
-    expect(() =>
-      userTurnPromptInput(parse({ sessionId: "s1", message: "hi", model: "x/y" }), undefined),
-    ).toThrow(NO_DEFAULT_MODEL_MESSAGE);
+  it("leaves an absent stored selection for runtime session restoration", () => {
+    const input = userTurnPromptInput(
+      parse({ sessionId: "s1", message: "hi", model: "renderer/untrusted" }),
+      undefined,
+    );
+
+    expect(input).not.toHaveProperty("model");
+  });
+
+  it("preserves an explicit request to use the current Settings default", () => {
+    const input = userTurnPromptInput(
+      parse({ sessionId: "s1", message: "hi", model: "renderer/untrusted" }),
+      null,
+    );
+
+    expect(input).toHaveProperty("model", null);
   });
 });
 
-describe("L3b: forced plan default only for Modus; own provider keeps its model", () => {
+describe("explicit turn model identity", () => {
   const MODUS_PLAN = "modus/deepseek/deepseek-flash";
   function deps(overrides: Partial<TurnModelDeps> = {}): TurnModelDeps {
-    const usable = new Set([MODUS_PLAN, "openai/gpt-5", "anthropic/claude-opus-5-5"]);
+    const usable = new Set([
+      MODUS_PLAN,
+      "modus/anthropic/claude-opus-5-5",
+      "openai/gpt-5",
+      "anthropic/claude-opus-5-5",
+    ]);
     return {
       defaultModelId: () => "openai/gpt-5",
-      modusTurnModelId: () => MODUS_PLAN,
       isUsable: (id) => usable.has(id),
       ...overrides,
     };
   }
 
-  it("1:1 Modus session: forced to the Modus turn model, whatever it stored", () => {
-    expect(resolveTurnModel("modus/anthropic/claude-fable-5-1", deps())).toBe(MODUS_PLAN);
-    expect(resolveTurnModel("modus/zai/glm-5.3-flash", deps())).toBe(MODUS_PLAN);
-    // With an allowed Modus Settings pick, getModusTurnModelId returns it (model-service).
+  it("preserves the exact selected Modus model instead of remapping to the plan model", () => {
+    const selected = "modus/anthropic/claude-opus-5-5";
     expect(
       resolveTurnModel(
-        "modus/deepseek/deepseek-flash",
-        deps({ modusTurnModelId: () => "modus/anthropic/claude-opus-5-5" }),
+        selected,
+        deps({
+          isUsable: (id) => id === selected,
+        }),
       ),
-    ).toBe("modus/anthropic/claude-opus-5-5");
+    ).toBe(selected);
   });
 
-  it("1:1 own-provider session keeps its model, even when the Settings default is Modus", () => {
+  it("preserves a model explicitly selected for a linked session over its agent setting", () => {
+    const selected = "byok/selected-model";
+
+    expect(
+      resolveAgentTurnModel(
+        "byok/agent-model",
+        selected,
+        true,
+        deps({ isUsable: (id) => id === selected }),
+      ),
+    ).toBe(selected);
+  });
+
+  it("preserves a session model when its linked agent has no separate model", () => {
+    const selected = "byok/session-model";
+    expect(
+      resolveAgentTurnModel(undefined, selected, true, deps({ isUsable: (id) => id === selected })),
+    ).toBe(selected);
+  });
+
+  it("rejects an unavailable agent model instead of trying the session or default", () => {
+    const defaultModelId = vi.fn(() => "openai/gpt-5");
+
+    expect(() =>
+      resolveAgentTurnModel(
+        "byok/removed-model",
+        undefined,
+        true,
+        deps({ defaultModelId, isUsable: (id) => id === "openai/gpt-5" }),
+      ),
+    ).toThrow("Selected model is unavailable: byok/removed-model");
+    expect(defaultModelId).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unavailable session model instead of trying the linked agent or default", () => {
+    const defaultModelId = vi.fn(() => "openai/gpt-5");
+
+    expect(() =>
+      resolveAgentTurnModel(
+        "openai/gpt-5",
+        "byok/removed-model",
+        true,
+        deps({ defaultModelId, isUsable: (id) => id === "openai/gpt-5" }),
+      ),
+    ).toThrow("Selected model is unavailable: byok/removed-model");
+    expect(defaultModelId).not.toHaveBeenCalled();
+  });
+
+  it("requests the current Settings default when neither a linked agent nor session has a model", () => {
+    expect(resolveAgentTurnModel(undefined, undefined, true, deps())).toBeNull();
+  });
+
+  it("leaves an unlinked legacy session unset for PI branch restoration", () => {
+    expect(resolveAgentTurnModel(undefined, undefined, false, deps())).toBeUndefined();
+  });
+
+  it("preserves the selected BYOK model when the Settings default is another provider", () => {
     expect(resolveTurnModel("anthropic/claude-opus-5-5", deps())).toBe("anthropic/claude-opus-5-5");
     expect(
       resolveTurnModel("anthropic/claude-opus-5-5", deps({ defaultModelId: () => MODUS_PLAN })),
     ).toBe("anthropic/claude-opus-5-5");
-    // No longer usable (provider disconnected): the Settings default, never stuck.
-    expect(resolveTurnModel("gone/model", deps())).toBe("openai/gpt-5");
-    expect(resolveTurnModel("gone/model", deps({ defaultModelId: () => MODUS_PLAN }))).toBe(
-      MODUS_PLAN,
-    );
   });
 
-  it("no stored model: the Settings default, with the Modus rule when it is a Modus model", () => {
+  it("uses the Settings default only when the session has no stored model", () => {
     expect(resolveTurnModel(undefined, deps())).toBe("openai/gpt-5");
-    expect(
-      resolveTurnModel(
-        undefined,
-        deps({
-          defaultModelId: () => "modus/anthropic/claude-fable-5-1",
-          modusTurnModelId: () => MODUS_PLAN,
-        }),
-      ),
-    ).toBe(MODUS_PLAN);
+    expect(resolveTurnModel(undefined, deps({ defaultModelId: () => MODUS_PLAN }))).toBe(
+      MODUS_PLAN,
+    );
     expect(() => resolveTurnModel(undefined, deps({ defaultModelId: () => undefined }))).toThrow(
       NO_DEFAULT_MODEL_MESSAGE,
     );
   });
 
-  it("a Modus session with no usable Modus model is refused (never moved to the user's key)", () => {
-    expect(() => resolveTurnModel(MODUS_PLAN, deps({ modusTurnModelId: () => undefined }))).toThrow(
-      MODUS_UNAVAILABLE_MESSAGE,
-    );
-    expect(isModusModelId(MODUS_PLAN)).toBe(true);
-    expect(isModusModelId("openai/gpt-5")).toBe(false);
+  it("leaves an absent persisted choice unresolved until the runtime restores the session", () => {
+    const defaultModelId = vi.fn(() => "openai/gpt-5");
+
+    expect(resolveExplicitTurnModel(undefined, deps({ defaultModelId }))).toBeUndefined();
+    expect(defaultModelId).not.toHaveBeenCalled();
   });
 
-  it("group agent: an explicit own-provider model passes as-is (keepUnusable)", () => {
-    expect(resolveTurnModel("openai/gpt-6-luna", deps(), { keepUnusable: true })).toBe(
-      "openai/gpt-6-luna",
+  it("rejects an unavailable persisted choice without substituting the default", () => {
+    const selected = "byok/removed-model";
+    const defaultModelId = vi.fn(() => "openai/gpt-5");
+
+    expect(() =>
+      resolveExplicitTurnModel(selected, deps({ defaultModelId, isUsable: () => false })),
+    ).toThrow(`Selected model is unavailable: ${selected}`);
+    expect(defaultModelId).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "openai/removed-model",
+    "modus/removed-model",
+  ])("refuses an unavailable explicit model %s without consulting the Settings default", (selected) => {
+    const defaultModelId = vi.fn(() => "openai/gpt-5");
+    expect(() =>
+      resolveTurnModel(selected, deps({ defaultModelId, isUsable: () => false })),
+    ).toThrow(`Selected model is unavailable: ${selected}`);
+    expect(defaultModelId).not.toHaveBeenCalled();
+  });
+
+  it("refuses a stale explicit Settings default", () => {
+    expect(() =>
+      resolveTurnModel(
+        undefined,
+        deps({ defaultModelId: () => "byok/removed-model", isUsable: () => false }),
+      ),
+    ).toThrow("Selected model is unavailable: byok/removed-model");
+  });
+
+  it("preserves the Modus identity and identifies it in errors", () => {
+    expect(() => resolveTurnModel(MODUS_PLAN, deps({ isUsable: () => false }))).toThrow(
+      `Selected model is unavailable: ${MODUS_PLAN}`,
     );
-    expect(resolveTurnModel("modus/zai/glm", deps(), { keepUnusable: true })).toBe(MODUS_PLAN);
+  });
+
+  it("group agent selection uses the exact model and refuses a removed member model", () => {
+    expect(resolveTurnModel("openai/gpt-5", deps())).toBe("openai/gpt-5");
+    expect(() =>
+      resolveTurnModel("openai/removed-group-model", deps({ isUsable: () => false })),
+    ).toThrow("Selected model is unavailable: openai/removed-group-model");
   });
 });

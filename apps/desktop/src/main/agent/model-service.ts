@@ -1992,11 +1992,6 @@ function clearProviderConnectionState(
   if (removeAuth) modelRegistry.authStorage.remove(provider);
   const db = getDatabase();
   db.prepare("delete from model_configs where provider_id = ?").run(provider);
-
-  const currentDefault = readSetting("model.default");
-  if (currentDefault?.startsWith(`${provider}/`)) {
-    writeSetting("model.default", undefined);
-  }
 }
 
 export async function disconnectProvider(provider: string): Promise<void> {
@@ -2054,8 +2049,9 @@ export async function disconnectProvider(provider: string): Promise<void> {
 
 /**
  * Fully removes a custom provider from local state: the models.json entry, both
- * DB config tables, the stored API key, and the default-model pointer if it
- * referenced this provider. Refuses to touch built-in providers.
+ * DB config tables, and the stored API key. A saved default-model identity is
+ * retained so later sessions report it unavailable instead of switching providers.
+ * Refuses to touch built-in providers.
  */
 export function deleteCustomProvider(provider: string): void {
   const id = provider.trim();
@@ -2185,28 +2181,23 @@ export function listScopedModels(): Array<{
 }
 
 export function getDefaultModel(): Model<Api> | undefined {
-  const configuredDefault = findModel(getDefaultModelId());
-  if (configuredDefault) {
-    return configuredDefault;
+  const modelId = getDefaultModelId();
+  if (modelId === undefined) return undefined;
+  const model = findModel(modelId);
+  if (!model || !isUsableModelId(modelId)) {
+    throw new Error(`Selected model is unavailable: ${modelId}`);
   }
-
-  const firstEnabled = listModels().find((model) => model.available && !model.locked);
-  return findModel(firstEnabled?.id);
+  return model;
 }
 
 export function getDefaultModelId(models = listModels()): string | undefined {
   const configured = readSetting("model.default");
-  if (
-    configured &&
-    models.some((model) => model.id === configured && model.enabled && !model.locked)
-  ) {
-    return configured;
-  }
+  // A saved default is a user selection. Preserve it verbatim so callers can report that
+  // it is unavailable instead of silently substituting a model from another provider.
+  if (configured !== undefined && configured !== "") return configured;
 
-  // L3b0 fallback (Settings default unset or no longer usable): a Modus model when signed in
-  // and the router answered /v1/models ("ready"); otherwise the user's own provider. Never a
-  // locked (not in plan) Modus model.
-  // L3b: the Modus pick is the plan default (/v1/models default_model) when usable.
+  // With no saved selection, derive the first usable app default. A configured value never
+  // reaches this branch merely because its model/provider became unavailable.
   const usable = models.filter((model) => model.enabled && !model.locked);
   const modus = modusProvider?.status() === "ready" ? modusPlanOrFirst(usable) : undefined;
   return modus ?? usable.find((model) => model.provider !== MODUS_PROVIDER_ID)?.id ?? usable[0]?.id;
@@ -2219,13 +2210,7 @@ function modusPlanOrFirst(usable: readonly ModelInfo[]): string | undefined {
   return (modus.find((model) => model.id === plan) ?? modus[0])?.id;
 }
 
-/**
- * L3b (replaces L2b decision #2 for Modus): the model a turn of a Modus session / agent runs
- * on. The user's Settings default when it is an allowed (listed, enabled, unlocked) Modus
- * model (Starter+ may pick Opus / Fable); otherwise the plan default from /v1/models; else
- * the first usable Modus model. undefined = no usable Modus model (signed out / unavailable).
- * The router still answers 403 for a model outside the plan.
- */
+/** Modus's current usable default, exposed for account/settings display only. */
 export function getModusTurnModelId(models = listModels()): string | undefined {
   const usable = models.filter(
     (model) => model.provider === MODUS_PROVIDER_ID && model.enabled && !model.locked,
@@ -2235,7 +2220,7 @@ export function getModusTurnModelId(models = listModels()): string | undefined {
   return modusPlanOrFirst(usable);
 }
 
-/** L3b: a usable model of the list (enabled, available, not a locked Modus model). */
+/** Whether the exact model id is present in the current usable catalog. */
 export function isUsableModelId(modelId: string, models = listModels()): boolean {
   return models.some((model) => model.id === modelId && model.enabled && !model.locked);
 }
@@ -2512,7 +2497,9 @@ export async function completeWithModel(request: {
   timeoutMs?: number;
 }): Promise<string> {
   const model = findModel(request.modelId);
-  if (!model) throw new Error(`Model not available: ${request.modelId}`);
+  if (!model || !isUsableModelId(request.modelId)) {
+    throw new Error(`Selected model is unavailable: ${request.modelId}`);
+  }
   const auth = await getModelRegistry().getApiKeyAndHeaders(model);
   if (!auth.ok) throw new Error(auth.error);
   const context = {

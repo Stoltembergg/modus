@@ -9,6 +9,7 @@ let userData: string;
 vi.mock("electron", () => ({ app: { getPath: () => userData } }));
 
 const { getDatabase } = await import("../db/database");
+const { getAgentSession, updateAgentSessionMetadata } = await import("../agent/agent-store");
 const { ensureChatsWorkspace } = await import("../workspace/workspace-store");
 const { createAgent, createAgentInGroup, createGroupWithNewAgents, setAgentArchived, updateAgent } =
   await import("../agents/agents-store");
@@ -48,7 +49,7 @@ const { runGroupTool, setGroupTaskWakeSink } = await import("../agent/tools/grou
 const { insertLegacyGroup } = await import("./legacy-group.fixture");
 const { createGroupTask } = await import("./group-task-store");
 const { setGroupTurnModelResolver } = await import("./group-runtime-lib");
-const { resolveTurnModel } = await import("../agent/user-turn-model");
+const { resolveAgentTurnModel, resolveTurnModel } = await import("../agent/user-turn-model");
 type PromptTurnResult = import("../agent/runtime").PromptTurnResult;
 type TurnSettledEvent = import("../agent/runtime").TurnSettledEvent;
 type PromptAgentInput = import("../agent/runtime").PromptAgentInput;
@@ -1545,21 +1546,15 @@ describe("structured task follow-ups", () => {
 
 /* ── Edit agent model applies on the next wake ───────────────────────── */
 
-describe("L3b: group turns force the plan default only for Modus agents", () => {
+describe("group turns preserve each member's selected model", () => {
   afterEach(() => setGroupTurnModelResolver(undefined));
 
-  it("a Modus agent runs on the Modus turn model; an own-provider agent keeps its model", async () => {
-    const MODUS_TURN = "modus/deepseek/deepseek-flash";
+  it("a Modus agent and an own-provider agent run their exact selected models", async () => {
     setGroupTurnModelResolver((agentModelId, _sessionId) =>
-      resolveTurnModel(
-        agentModelId,
-        {
-          defaultModelId: () => "openai/gpt-5",
-          modusTurnModelId: () => MODUS_TURN,
-          isUsable: () => true,
-        },
-        { keepUnusable: agentModelId !== undefined },
-      ),
+      resolveTurnModel(agentModelId, {
+        defaultModelId: () => "openai/gpt-5",
+        isUsable: () => true,
+      }),
     );
     const group = createGroupWithNewAgents({
       name: uid("ModusGroup"),
@@ -1576,7 +1571,7 @@ describe("L3b: group turns force the plan default only for Modus agents", () => 
     groups.postUserMessage({ groupId: group.id, body: "@Planner plan it" });
     expect(runtime.calls[0]?.input).toMatchObject({
       sessionId: planner?.sessionId,
-      model: MODUS_TURN,
+      model: "modus/anthropic/claude-fable-5-1",
     });
     runtime.take(planner?.sessionId ?? "").resolve({ outcome: "ok", finalText: "Plan ready." });
     await flush();
@@ -1586,6 +1581,77 @@ describe("L3b: group turns force the plan default only for Modus agents", () => 
       sessionId: builder?.sessionId,
       model: "anthropic/claude-opus-5-5",
     });
+  });
+
+  it("keeps a member session's explicit model when its agent has a different model", async () => {
+    const agentModel = "openai/gpt-5";
+    const sessionModel = "modus/anthropic/claude-fable-5-1";
+    setGroupTurnModelResolver((agentModelId, sessionId) =>
+      resolveAgentTurnModel(agentModelId, getAgentSession(sessionId)?.model, true, {
+        defaultModelId: () => "openai/available-default",
+        isUsable: () => true,
+      }),
+    );
+    const group = createGroupWithNewAgents({
+      name: uid("SessionModelGroup"),
+      workspaceId: insertWorkspace(),
+      members: [
+        { name: "Planner", role: "Lead", modelId: agentModel },
+        { name: "Builder", role: "Builder", modelId: "openai/available-default" },
+      ],
+    });
+    const planner = group.members.find((member) => member.name === "Planner");
+    if (!planner) throw new Error("Planner group member was not created.");
+    updateAgentSessionMetadata(planner.sessionId, { model: sessionModel });
+    const { runtime, groups } = setup();
+
+    groups.postUserMessage({ groupId: group.id, body: "@Planner plan it" });
+
+    expect(runtime.calls[0]?.input).toMatchObject({
+      sessionId: planner.sessionId,
+      model: sessionModel,
+    });
+  });
+
+  it("forwards the app-default directive to a group member with no model", () => {
+    setGroupTurnModelResolver(() => null);
+    const { group, beta } = squad();
+    const { runtime, groups } = setup();
+
+    groups.postUserMessage({ groupId: group.id, body: "@Beta take a look" });
+
+    expect(runtime.calls[0]?.input).toMatchObject({ sessionId: beta, model: null });
+  });
+
+  it("does not wake a group member with an unavailable explicit model", async () => {
+    const selectedModel = "byok/removed-model";
+    const defaultModelId = vi.fn(() => "openai/available-default");
+    setGroupTurnModelResolver((agentModelId) =>
+      resolveTurnModel(agentModelId, {
+        defaultModelId,
+        isUsable: (modelId) => modelId !== selectedModel,
+      }),
+    );
+    const group = createGroupWithNewAgents({
+      name: uid("UnavailableModelGroup"),
+      workspaceId: insertWorkspace(),
+      members: [
+        { name: "Planner", role: "Lead", modelId: selectedModel },
+        { name: "Builder", role: "Builder", modelId: "openai/available-default" },
+      ],
+    });
+    const { runtime, groups } = setup();
+
+    groups.postUserMessage({ groupId: group.id, body: "@Planner plan it" });
+    await flush();
+
+    expect(runtime.calls).toHaveLength(0);
+    expect(defaultModelId).not.toHaveBeenCalled();
+    expect(
+      room(group.id).some(
+        (message) => message.error === `Selected model is unavailable: ${selectedModel}`,
+      ),
+    ).toBe(true);
   });
 });
 

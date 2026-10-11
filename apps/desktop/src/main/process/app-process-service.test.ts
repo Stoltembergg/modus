@@ -28,6 +28,7 @@ describe("app-process-service", () => {
       args: SLEEP_ARGS,
       cwd: process.cwd(),
       sessionId: "test-session",
+      runId: "test-run",
     });
 
     try {
@@ -36,6 +37,7 @@ describe("app-process-service", () => {
       expect(pidAlive(result.pid)).toBe(true);
       expect(result.command).toBe(NODE);
       expect(result.name).toBeTruthy();
+      expect(result.runId).toBe("test-run");
       expect(isAppId(result.id)).toBe(true);
 
       const listed = listApps({ sessionId: "test-session" }).find((a) => a.id === result.id);
@@ -49,6 +51,49 @@ describe("app-process-service", () => {
     } finally {
       // Defensive cleanup so a failed assertion never leaks a real process.
       await killApp(result.id).catch(() => undefined);
+    }
+  }, 20_000);
+
+  it("kills a process when its launch is cancelled during readiness verification", async () => {
+    const sessionId = "cancelled-launch-session";
+    const controller = new AbortController();
+    const launch = launchApp({
+      path: NODE,
+      args: SLEEP_ARGS,
+      cwd: process.cwd(),
+      sessionId,
+      runId: "cancelled-run",
+      signal: controller.signal,
+    });
+    const abortTimer = setTimeout(() => controller.abort(), 20);
+
+    try {
+      await expect(launch).rejects.toMatchObject({ name: "AbortError" });
+      expect(listApps({ sessionId })).toHaveLength(0);
+    } finally {
+      clearTimeout(abortTimer);
+      await Promise.all(listApps({ sessionId }).map((app) => killApp(app.id)));
+    }
+  }, 20_000);
+
+  it("kills a detached launch when cancellation arrives before the spawn event", async () => {
+    const sessionId = "cancelled-before-spawn-session";
+    const controller = new AbortController();
+    const launch = launchApp({
+      path: NODE,
+      args: SLEEP_ARGS,
+      cwd: process.cwd(),
+      sessionId,
+      runId: "cancelled-before-spawn-run",
+      signal: controller.signal,
+    });
+    controller.abort();
+
+    try {
+      await expect(launch).rejects.toMatchObject({ name: "AbortError" });
+      expect(listApps({ sessionId })).toHaveLength(0);
+    } finally {
+      await Promise.all(listApps({ sessionId }).map((app) => killApp(app.id)));
     }
   }, 20_000);
 

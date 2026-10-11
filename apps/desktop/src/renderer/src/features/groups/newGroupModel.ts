@@ -254,7 +254,7 @@ export function newGroupBlocker(
 
 /** One member of the `group:create` payload. */
 export function newGroupMemberInput(member: NewGroupMember): NewGroupAgentInput {
-  const modelId = member.modelId.trim();
+  const modelId = member.modelId;
   return {
     ...(member.templateId ? { templateId: member.templateId } : {}),
     ...normalizeGroupMemberCapabilities(member),

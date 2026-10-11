@@ -6,10 +6,14 @@ import type {
   PermissionRequest,
 } from "../../shared/contracts";
 import { PendingRequestRegistry } from "../interaction/pending-requests";
-import { recordPermissionDecision } from "./permission-store";
+import { type PermissionDecisionScope, recordPermissionDecision } from "./permission-store";
 
 type PermissionResult = PermissionDecision & { requestId: string };
-type PermissionContext = { request: PermissionRequest; emit(event: AgentEvent): void };
+type PermissionContext = {
+  request: PermissionRequest;
+  emit(event: AgentEvent): void;
+  scope: PermissionDecisionScope;
+};
 
 /** All blocking permission prompts share the generic interactive-request registry. */
 const registry = new PendingRequestRegistry<PermissionResult, PermissionContext>();
@@ -19,11 +23,18 @@ function resolvedResult(
   decision: PermissionDecision["decision"],
   targetSuffix = "",
 ): PermissionResult {
+  // A request without a host-verified workspace can be approved for this call,
+  // but must never create a durable workspace grant.
+  const effectiveDecision =
+    decision === "allow-workspace" && (!context.scope.workspaceId || !context.scope.toolName)
+      ? "allow-once"
+      : decision;
   const result = {
     ...recordPermissionDecision(
       context.request.action,
       `${context.request.target}${targetSuffix}`,
-      decision,
+      effectiveDecision,
+      context.scope,
     ),
     requestId: context.request.id,
   };
@@ -32,7 +43,7 @@ function resolvedResult(
       type: "permission.resolved",
       sessionId: context.request.sessionId,
       requestId: context.request.id,
-      decision,
+      decision: effectiveDecision,
     });
   }
   return result;
@@ -41,6 +52,8 @@ function resolvedResult(
 export async function requestPermission(input: {
   sessionId: string;
   runId?: string;
+  workspaceId?: string;
+  toolName?: string;
   action: PermissionAction;
   target: string;
   reason: string;
@@ -61,7 +74,14 @@ export async function requestPermission(input: {
   return await registry.open({
     id: request.id,
     sessionId: input.sessionId,
-    context: { request, emit: input.emit },
+    context: {
+      request,
+      emit: input.emit,
+      scope: {
+        ...(input.workspaceId === undefined ? {} : { workspaceId: input.workspaceId }),
+        ...(input.toolName === undefined ? {} : { toolName: input.toolName }),
+      },
+    },
     timeoutMs: 120_000,
     onTimeout: (context) => resolvedResult(context, "deny"),
   });

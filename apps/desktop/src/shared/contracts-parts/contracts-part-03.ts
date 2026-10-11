@@ -38,7 +38,7 @@ type AgentEventPayload =
       sessionId: string;
       runId: string;
       decision: AdaptiveDecision;
-      boundary: "pre_prompt" | "post_qa" | "post_failure";
+      boundary: "pre_prompt" | "post_qa" | "post_failure" | "tool_guard";
     }
   | {
       type: "harness.failure";
@@ -142,6 +142,7 @@ type AgentEventPayload =
       isError: boolean;
       exitCode?: number;
       aborted?: boolean;
+      timedOut?: boolean;
       skipped?: boolean;
     }
   | { type: "permission.requested"; sessionId: string; request: PermissionRequest }
@@ -239,6 +240,8 @@ export type TerminalInfo = {
   title?: string;
   /** Modus agent session that spawned it, when origin === "agent". */
   sessionId?: string;
+  /** Agent run that owns this process, when spawned during a run. */
+  runId?: string;
   /** OS process id, once spawned. */
   pid?: number;
   /** Exit code, once status === "exited". */
@@ -278,6 +281,8 @@ export type ManagedProcessInfo = {
   workspaceId?: string;
   /** Agent session that started it; the isolation key for agent processes. */
   sessionId?: string;
+  /** Agent run that started it; used to stop only work owned by that run. */
+  runId?: string;
   /** Human-readable label: the agent command, app name, or shell name. */
   label: string;
   status: ManagedProcessStatus;

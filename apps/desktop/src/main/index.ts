@@ -6,6 +6,7 @@ import {
   stopRemoteModelCatalog,
 } from "./agent/model-service";
 import { startModusProvider, stopModusProvider } from "./agent/modus-provider-instance";
+import { shutdownAgentRuntime } from "./agent/runtime-registry";
 import {
   type AppearanceController,
   createAppearanceController,
@@ -214,6 +215,7 @@ if (!app.requestSingleInstanceLock()) {
     disposeGroupRuntime();
     shutdownBillingService();
     void drainShutdown([
+      shutdownAgentRuntime(),
       shutdownProviderAuthOperations(),
       shutdownAuthService(),
       (async () => {

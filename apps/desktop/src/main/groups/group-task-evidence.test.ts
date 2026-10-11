@@ -28,6 +28,7 @@ const {
   verifyGroupTaskForTransition,
   findGroupTaskForWake,
 } = await import("./group-task-evidence");
+const { getGroupTaskDetails } = await import("./group-task-details");
 const { getGroupSourceFingerprint } = await import("../git/git-service");
 const git = promisify(execFile);
 
@@ -111,7 +112,12 @@ function qa(
   sessionId: string,
   runId: string,
   sourceFingerprint: string,
-  checks: Array<{ checkName: string; status: string }> = [{ checkName: "tests", status: "passed" }],
+  checks: Array<{
+    checkName: string;
+    status: string;
+    id?: string | null;
+    eventId?: string | null;
+  }> = [{ checkName: "tests", status: "passed" }],
 ) {
   return recordAgentEvent({
     type: "harness.qa",
@@ -119,11 +125,14 @@ function qa(
     runId,
     result: {
       required: true,
-      status: "passed",
+      status: checks.every((item) => item.status === "passed")
+        ? "passed"
+        : (checks[0]?.status ?? "missing"),
       reasonCode: "all_passed",
       sourceFingerprint,
       evidence: checks.map((item, index) => ({
-        id: `e${index}`,
+        ...(item.id === null ? {} : { id: item.id ?? `e${index}` }),
+        ...(item.eventId === null ? {} : { eventId: item.eventId ?? `event-${index}` }),
         kind: "check",
         status: item.status,
         label: item.checkName,
@@ -183,6 +192,41 @@ describe("group task evidence", () => {
     expect(resolveGroupTaskEvidence(f.task, f.sourceFingerprint).criterionOutcomes).toMatchObject([
       { status: "missing" },
     ]);
+    await rm(f.root, { recursive: true, force: true });
+  });
+
+  it("preserves cancellation through the task detail without inventing evidence ids", async () => {
+    const f = await fixture();
+    const row = qa(f.owner, f.runId, f.sourceFingerprint, [
+      { checkName: "tests", status: "cancelled", id: null, eventId: null },
+    ]);
+    const refs = collectGroupTaskRunEvidence(f.binding, row);
+
+    expect(refs).toEqual([
+      expect.objectContaining({
+        checkName: "tests",
+        eventRowId: row,
+        runId: f.runId,
+      }),
+    ]);
+    expect(refs[0]).not.toHaveProperty("evidenceId");
+    recordGroupTaskEvidence({
+      groupId: f.group.id,
+      taskId: f.task.id,
+      actorSessionId: f.owner,
+      expectedVersion: 1,
+      operationId: crypto.randomUUID(),
+      evidenceRefs: refs,
+    });
+
+    const details = await getGroupTaskDetails(f.group.id, f.task.id);
+    expect(details.criteria[0]).toMatchObject({
+      status: "cancelled",
+      evidence: [{ checkName: "tests", status: "cancelled" }],
+    });
+    expect(resolveGroupTaskEvidence(f.task, f.sourceFingerprint).criterionOutcomes[0]?.status).toBe(
+      "missing",
+    );
     await rm(f.root, { recursive: true, force: true });
   });
 

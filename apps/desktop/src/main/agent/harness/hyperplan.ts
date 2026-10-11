@@ -17,7 +17,7 @@ import type {
   HyperPlanSummary,
   PlanSpec,
 } from "../../../shared/contracts";
-import { findModel, getDefaultModel, getModelRegistry } from "../model-service";
+import { findModel, getDefaultModel, getModelRegistry, isUsableModelId } from "../model-service";
 
 const CRITICS: Array<{ id: HyperPlanCriticId; prompt: string }> = [
   {
@@ -408,9 +408,12 @@ async function createIsolatedSession(modelId?: string): Promise<{
       reload: async () => {},
     };
     const modelRegistry = getModelRegistry();
-    // Prefer Spec/session/composer model; fall back to settings default.
-    const model = findModel(modelId) ?? getDefaultModel();
-    if (!model) throw new Error("No model available.");
+    // Prefer the Spec/session/composer model exactly; use Settings only when none was chosen.
+    const model = modelId === undefined ? getDefaultModel() : findModel(modelId);
+    if (!model || (modelId !== undefined && !isUsableModelId(modelId))) {
+      if (modelId !== undefined) throw new Error(`Selected model is unavailable: ${modelId}`);
+      throw new Error("No model available.");
+    }
     const { session } = await createAgentSession({
       cwd: tempDir,
       agentDir: tempDir,

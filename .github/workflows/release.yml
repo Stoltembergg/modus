@@ -4,7 +4,8 @@ name: Release
 # GitHub release and upload installers + update metadata to it. Publishing the draft
 # is a manual step (see docs/releasing.md).
 #
-# Pull requests that touch the release pipeline run Linux packaging as a dry run.
+# Pull requests that touch the release pipeline or Linux supervisor/runtime run
+# Linux packaging as a dry run.
 # macOS and Windows packaging are covered by their dedicated workflows, avoiding
 # duplicate builds. Tag runs still build every platform and merge mac metadata.
 # PR runs keep Linux update metadata as an Actions artifact (7 days); installers
@@ -22,6 +23,16 @@ on:
       - ".github/workflows/release.yml"
       - "apps/desktop/scripts/release/**"
       - "apps/desktop/electron-builder.config.ts"
+      - "apps/desktop/src/main/agent/harness/plugin/linux-plugin-worker-supervisor.ts"
+      - "apps/desktop/src/main/agent/pi-sdk-runtime.ts"
+      - "apps/desktop/src/main/agent/runtime-registry.ts"
+      - "apps/desktop/src/main/index.ts"
+      - "apps/desktop/scripts/build-plugin-supervisor.mjs"
+      - "crates/plugin-execution-protocol/**"
+      - "crates/plugin-execution-supervisor/**"
+      - "crates/plugin-execution-worker/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
 
 # Default for every job. Only the tag-only draft-release / publish-assets jobs raise
 # this to contents: write, so pull request runs never get a write token.

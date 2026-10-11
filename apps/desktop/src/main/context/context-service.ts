@@ -8,7 +8,7 @@ import type {
   ContextSuggestion,
   ResolvedContext,
 } from "../../shared/contracts";
-import { listAgentEvents } from "../agent/agent-event-store";
+import { listAgentEventRawPage, MAX_AGENT_EVENT_PAGE_SIZE } from "../agent/agent-event-store";
 import { listAgentSessions } from "../agent/agent-store";
 import { activeBrowserContext } from "../browser/browser-service";
 import { getDocChunk } from "../docs/docs-service";
@@ -154,29 +154,109 @@ function searchPastChats(workspaceId: string, query: string): ContextSuggestion[
  * reflects exactly what was said — no separate storage to drift.
  */
 function readSessionTranscript(sessionId: string): string {
-  const parts: string[] = [];
+  const capturedParts: string[] = [];
+  const maxCapturedCodeUnits = MAX_CONTEXT_TEXT_BYTES + 4;
+  let capturedCodeUnits = 0;
+  let transcriptBytes = 0;
+  let completedMessages = 0;
   let role: "user" | "assistant" | undefined;
-  let buffer = "";
-  const flush = (): void => {
-    const text = buffer.trim();
-    if (role && text) {
-      parts.push(`${role === "user" ? "User" : "Assistant"}: ${text}`);
-    }
-    buffer = "";
+  let hasMessageText = false;
+  let leadingWhitespace = true;
+  let pendingWhitespace: string[] = [];
+  let pendingWhitespaceCodeUnits = 0;
+  let pendingWhitespaceBytes = 0;
+  let afterCursor = 0;
+  let snapshotCursor: number | undefined;
+
+  const capture = (text: string): void => {
+    const remaining = maxCapturedCodeUnits - capturedCodeUnits;
+    if (remaining <= 0 || !text) return;
+    const captured = text.slice(0, remaining);
+    capturedParts.push(captured);
+    capturedCodeUnits += captured.length;
   };
-  for (const { event } of listAgentEvents(sessionId)) {
-    if (event.type === "message.started") {
-      flush();
-      role = event.role;
-    } else if (event.type === "message.delta" && role) {
-      buffer += event.delta;
-    } else if (event.type === "message.completed") {
-      flush();
-      role = undefined;
+
+  const appendTranscript = (text: string): void => {
+    transcriptBytes += Buffer.byteLength(text, "utf8");
+    capture(text);
+  };
+
+  const flushPendingWhitespace = (): void => {
+    if (pendingWhitespace.length > 0) {
+      transcriptBytes += pendingWhitespaceBytes;
+      capture(pendingWhitespace.join(""));
     }
+    pendingWhitespace = [];
+    pendingWhitespaceCodeUnits = 0;
+    pendingWhitespaceBytes = 0;
+  };
+
+  const flush = (): void => {
+    if (role && hasMessageText) completedMessages += 1;
+    role = undefined;
+    hasMessageText = false;
+    leadingWhitespace = true;
+    pendingWhitespace = [];
+    pendingWhitespaceCodeUnits = 0;
+    pendingWhitespaceBytes = 0;
+  };
+
+  const appendDelta = (delta: string): void => {
+    for (const character of delta) {
+      if (/^\s$/u.test(character)) {
+        if (!leadingWhitespace) {
+          pendingWhitespaceBytes += Buffer.byteLength(character, "utf8");
+          if (pendingWhitespaceCodeUnits < maxCapturedCodeUnits) {
+            const remaining = maxCapturedCodeUnits - pendingWhitespaceCodeUnits;
+            const capturedWhitespace = character.slice(0, remaining);
+            pendingWhitespace.push(capturedWhitespace);
+            pendingWhitespaceCodeUnits += capturedWhitespace.length;
+            if (pendingWhitespace.length > 1024) {
+              pendingWhitespace = [pendingWhitespace.join("")];
+            }
+          }
+        }
+        continue;
+      }
+
+      if (!role) continue;
+      if (leadingWhitespace) {
+        leadingWhitespace = false;
+        hasMessageText = true;
+        if (completedMessages > 0) appendTranscript("\n\n");
+        appendTranscript(`${role === "user" ? "User" : "Assistant"}: `);
+      } else {
+        flushPendingWhitespace();
+      }
+      appendTranscript(character);
+    }
+  };
+
+  while (true) {
+    const page = listAgentEventRawPage(sessionId, {
+      afterCursor,
+      limit: MAX_AGENT_EVENT_PAGE_SIZE,
+      ...(snapshotCursor === undefined ? {} : { snapshotCursor }),
+    });
+    snapshotCursor = page.snapshotCursor;
+    for (const { event } of page.events) {
+      if (event.type === "message.started") {
+        flush();
+        role = event.role;
+      } else if (event.type === "message.delta" && role) {
+        appendDelta(event.delta);
+        if (transcriptBytes > MAX_CONTEXT_TEXT_BYTES) {
+          return capText(capturedParts.join(""));
+        }
+      } else if (event.type === "message.completed") {
+        flush();
+      }
+    }
+    if (!page.hasMore || page.nextCursor === undefined) break;
+    afterCursor = page.nextCursor;
   }
   flush();
-  return capText(parts.join("\n\n"));
+  return capText(capturedParts.join(""));
 }
 
 export async function resolveContext(

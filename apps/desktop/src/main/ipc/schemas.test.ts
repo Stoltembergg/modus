@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   agentApplyHyperPlanRevisionSchema,
+  agentEventPageRequestSchema,
   agentPromptSchema,
   agentSetBranchSchema,
   agentStartOriginalPlanBuildSchema,
@@ -14,6 +15,45 @@ import {
 } from "./schemas";
 
 describe("IPC schemas", () => {
+  it("accepts bounded event history pages and rejects ambiguous or oversized cursors", () => {
+    expect(
+      agentEventPageRequestSchema.safeParse({
+        sessionId: "session-1",
+        options: { direction: "backward", snapshotCursor: 100, limit: 128 },
+      }).success,
+    ).toBe(true);
+    expect(
+      agentEventPageRequestSchema.safeParse({
+        sessionId: "session-1",
+        options: { direction: "backward", beforeCursor: 100, snapshotCursor: 100, limit: 256 },
+      }).success,
+    ).toBe(true);
+    expect(
+      agentEventPageRequestSchema.safeParse({
+        sessionId: "session-1",
+        options: { direction: "backward", afterCursor: 4 },
+      }).success,
+    ).toBe(false);
+    expect(
+      agentEventPageRequestSchema.safeParse({
+        sessionId: "session-1",
+        options: { direction: "forward", beforeCursor: 4 },
+      }).success,
+    ).toBe(false);
+    expect(
+      agentEventPageRequestSchema.safeParse({
+        sessionId: "session-1",
+        options: { direction: "forward", runId: "run-1", afterCursor: 0, limit: 64 },
+      }).success,
+    ).toBe(true);
+    expect(
+      agentEventPageRequestSchema.safeParse({
+        sessionId: "session-1",
+        options: { direction: "backward", limit: 257 },
+      }).success,
+    ).toBe(false);
+  });
+
   it("requires a bounded strict source snapshot for original-plan builds", () => {
     const snapshot = {
       title: "Plan",
@@ -323,10 +363,27 @@ describe("IPC schemas", () => {
     expect(
       parseIpcInput(
         permissionDecideSchema,
+        {
+          requestId: "request-1",
+          action: "git.write",
+          target: "git clean -f",
+          decision: "deny",
+        },
+        "permission:decide",
+      ),
+    ).toEqual({
+      requestId: "request-1",
+      action: "git.write",
+      target: "git clean -f",
+      decision: "deny",
+    });
+    expect(() =>
+      parseIpcInput(
+        permissionDecideSchema,
         { action: "git.write", target: "git clean -f", decision: "deny" },
         "permission:decide",
       ),
-    ).toEqual({ action: "git.write", target: "git clean -f", decision: "deny" });
+    ).toThrow("Invalid IPC payload");
   });
 
   // Regression: a prompt turn must carry its own execution params (mode, model,

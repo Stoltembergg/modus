@@ -209,6 +209,8 @@ export type FileWriteResult = {
 export type FilesChangeEvent = {
   cwd: string;
   paths: string[];
+  /** Present and false when the workspace watcher can no longer observe changes. */
+  watching?: boolean;
 };
 
 /* ── Plan Mode ─────────────────────────────────────────────────────────── */
@@ -241,7 +243,7 @@ export type PlanAcceptanceCriterion = {
   status: "pending" | "passed" | "failed" | "skipped" | "blocked";
 };
 
-export type PlanEvidenceRef = HarnessEvidenceRef & { criterionId: string };
+export type PlanEvidenceRef = Omit<HarnessEvidenceRef, "id"> & { id: string; criterionId: string };
 
 export type PlanSpec = {
   requirements: PlanRequirement[];

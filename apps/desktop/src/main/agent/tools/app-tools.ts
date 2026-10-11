@@ -59,7 +59,7 @@ const launchAppTool: ToolDefinition = defineTool({
       }),
     ),
   }),
-  execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+  execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
     const context = resolveAgentToolContext(ctx.cwd);
     const result = await launchApp({
       path: params.path,
@@ -67,6 +67,8 @@ const launchAppTool: ToolDefinition = defineTool({
       cwd: params.cwd || context.cwd || ctx.cwd,
       ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
       ...(context.sessionId ? { sessionId: context.sessionId } : {}),
+      ...(context.runId ? { runId: context.runId } : {}),
+      ...(signal ? { signal } : {}),
     });
     return toResult(formatLaunch(result), result);
   },

@@ -67,10 +67,20 @@ describe("normalizePiEvent", () => {
         result: { details: { aborted: true, output: "secret aborted output" } },
       }),
     );
+    const timedOut = normalize(
+      event({
+        type: "tool_execution_end",
+        toolCallId: "tool-timed-out",
+        toolName: "terminal_run",
+        isError: false,
+        result: { details: { timedOut: true, output: "secret timed out output" } },
+      }),
+    );
 
     expect(skipped[0]).toMatchObject({ type: "tool.ended", skipped: true });
     expect(aborted[0]).toMatchObject({ type: "tool.ended", aborted: true });
-    expect(JSON.stringify([...skipped, ...aborted])).not.toContain("secret");
+    expect(timedOut[0]).toMatchObject({ type: "tool.ended", timedOut: true });
+    expect(JSON.stringify([...skipped, ...aborted, ...timedOut])).not.toContain("secret");
   });
 
   it("maps PI assistant text deltas to Modus message deltas", () => {

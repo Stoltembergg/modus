@@ -15,12 +15,21 @@ type PermissionRow = {
   target: string;
   decision: PermissionDecision["decision"];
   created_at: string;
+  workspace_id?: string | null;
+  tool_name?: string | null;
+};
+
+export type PermissionDecisionScope = {
+  workspaceId?: string;
+  toolName?: string;
 };
 
 export type { ApprovalModeState };
 
 export function normalizePermissionTarget(target: string): string {
-  return target.trim().replace(/\s+/g, " ");
+  // Paths and quoted command arguments can contain meaningful whitespace.
+  // Approval keys therefore preserve the full target verbatim.
+  return target;
 }
 
 /** Stable key fragment for project-scoped approval overrides. */
@@ -42,7 +51,12 @@ export function recordPermissionDecision(
   action: PermissionAction,
   target: string,
   decision: PermissionDecision["decision"],
+  scope: PermissionDecisionScope = {},
 ): PermissionDecision {
+  if (decision === "allow-workspace" && (!scope.workspaceId?.trim() || !scope.toolName?.trim())) {
+    throw new Error("Workspace and tool identity are required for workspace grants.");
+  }
+
   const entry = {
     id: randomUUID(),
     action,
@@ -53,10 +67,18 @@ export function recordPermissionDecision(
 
   getDatabase()
     .prepare(
-      `insert into permissions (id, action, target, decision, created_at)
-       values (?, ?, ?, ?, ?)`,
+      `insert into permissions (id, action, target, decision, created_at, workspace_id, tool_name)
+       values (?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run(entry.id, entry.action, entry.target, entry.decision, entry.createdAt);
+    .run(
+      entry.id,
+      entry.action,
+      entry.target,
+      entry.decision,
+      entry.createdAt,
+      scope.workspaceId ?? null,
+      scope.toolName ?? null,
+    );
 
   return entry;
 }
@@ -153,16 +175,22 @@ export function getApprovalModeState(cwd?: string): ApprovalModeState {
 export function findWorkspaceAllowDecision(
   action: PermissionAction,
   target: string,
+  workspaceId: string,
+  toolName: string,
 ): PermissionDecision | undefined {
+  if (!workspaceId.trim() || !toolName.trim()) return undefined;
   const row = getDatabase()
     .prepare(
       `select id, action, target, decision, created_at
        from permissions
-       where action = ? and target = ? and decision = 'allow-workspace'
+       where workspace_id = ? and tool_name = ?
+         and action = ? and target = ? and decision = 'allow-workspace'
        order by created_at desc
        limit 1`,
     )
-    .get(action, normalizePermissionTarget(target)) as PermissionRow | undefined;
+    .get(workspaceId, toolName, action, normalizePermissionTarget(target)) as
+    | PermissionRow
+    | undefined;
 
   return row ? toPermission(row) : undefined;
 }

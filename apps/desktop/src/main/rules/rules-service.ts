@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 import type {
   RuleFileInfo,
   RuleMode,
@@ -206,12 +206,14 @@ export function saveWorkspaceAgents(cwd: string, content: string): WorkspaceAgen
 export function resolveAlwaysRulesPrompt(
   cwd: string,
   maxTotalBytes = RULES_MAX_TOTAL_BYTES,
+  excludedPaths: readonly string[] = [],
 ): string | undefined {
   const sections: string[] = [];
   let total = 0;
+  const excludedRulePaths = new Set(excludedPaths.map((path) => resolve(path)));
 
   for (const rule of listRuleFiles(cwd)) {
-    if (rule.mode !== "always") {
+    if (rule.mode !== "always" || excludedRulePaths.has(resolve(rule.path))) {
       continue;
     }
     let body: string;

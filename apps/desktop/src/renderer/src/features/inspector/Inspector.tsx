@@ -39,6 +39,7 @@ import { SubagentsPanel } from "./SubagentsPanel";
 type InspectorProps = {
   activeWorkspace: WorkspaceInfo | null;
   cwd?: string | undefined;
+  sessionCwd?: string | undefined;
   sessionId?: string | undefined;
   securityState: SecurityState | null;
   open: boolean;
@@ -139,6 +140,7 @@ const TABS = [
 export function Inspector({
   activeWorkspace,
   cwd,
+  sessionCwd,
   sessionId,
   securityState,
   open,
@@ -372,7 +374,11 @@ export function Inspector({
                 </Tabs.Panel>
                 <Tabs.Panel className={INSPECTOR_TAB_PANEL_CLASS} value="plan">
                   <ContentTransition className="flex min-h-0 flex-1 flex-col" transitionKey="plan">
-                    <PlanPanel plan={plan} />
+                    <PlanPanel
+                      active={open && tab === "plan"}
+                      sessionCwd={sessionCwd}
+                      plan={plan}
+                    />
                   </ContentTransition>
                 </Tabs.Panel>
                 <Tabs.Panel className={INSPECTOR_TAB_PANEL_CLASS} value="files">

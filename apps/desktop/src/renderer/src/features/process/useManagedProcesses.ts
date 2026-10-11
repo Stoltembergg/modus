@@ -32,8 +32,8 @@ export type UseManagedProcesses = {
   processes: ManagedProcessInfo[];
   /** `Date.now()` snapshot that advances each second, for elapsed display. */
   nowMs: number;
-  /** Terminate a managed process by id (optimism deferred to the change event). */
-  kill: (id: string) => void;
+  /** Request process termination by id; terminal completion is observed separately. */
+  kill: (id: string) => Promise<boolean>;
 };
 
 export function useManagedProcesses(scope: ManagedProcessScope): UseManagedProcesses {
@@ -75,8 +75,8 @@ export function useManagedProcesses(scope: ManagedProcessScope): UseManagedProce
     return () => window.clearInterval(tick);
   }, []);
 
-  const kill = (id: string): void => {
-    void window.modus.process.kill(id);
+  const kill = (id: string): Promise<boolean> => {
+    return window.modus.process.kill(id);
   };
 
   return { processes, nowMs, kill };

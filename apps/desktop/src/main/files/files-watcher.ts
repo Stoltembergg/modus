@@ -60,12 +60,50 @@ function scheduleFlush(entry: WatchEntry): void {
   }, DEBOUNCE_MS);
 }
 
+function emitWatcherUnavailable(root: string): void {
+  emitFilesEvent({ cwd: root, paths: [], watching: false });
+}
+
+function startWatcher(entry: WatchEntry): void {
+  if (entry.watcher) return;
+  try {
+    const watcher = watch(entry.root, { recursive: true }, (_event, filename) => {
+      const name =
+        typeof filename === "string" ? filename : filename == null ? undefined : String(filename);
+      if (name) {
+        const abs = join(entry.root, name);
+        if (isNoise(abs, entry.root)) {
+          return;
+        }
+        entry.pendingPaths.add(abs);
+      }
+      // Missing filename (some platforms) ⇒ flush with empty paths = full refresh.
+      scheduleFlush(entry);
+    });
+    entry.watcher = watcher;
+    watcher.on("error", () => {
+      if (entry.watcher !== watcher) return;
+      entry.watcher = undefined;
+      try {
+        watcher.close();
+      } catch {
+        // already closed
+      }
+      emitWatcherUnavailable(entry.root);
+    });
+  } catch {
+    // Snapshot-only consumers remain usable; verification consumers fail closed.
+    entry.watcher = undefined;
+  }
+}
+
 /** Begin watching `cwd` (ref-counted). Returns the resolved absolute root. */
 export function watchWorkspace(cwd: string): string {
   const root = resolve(cwd);
   const existing = entries.get(root);
   if (existing) {
     existing.refCount += 1;
+    startWatcher(existing);
     return root;
   }
 
@@ -77,30 +115,14 @@ export function watchWorkspace(cwd: string): string {
     root,
   };
 
-  try {
-    const watcher = watch(root, { recursive: true }, (_event, filename) => {
-      const name =
-        typeof filename === "string" ? filename : filename == null ? undefined : String(filename);
-      if (name) {
-        const abs = join(root, name);
-        if (isNoise(abs, root)) {
-          return;
-        }
-        entry.pendingPaths.add(abs);
-      }
-      // Missing filename (some platforms) ⇒ flush with empty paths = full refresh.
-      scheduleFlush(entry);
-    });
-    watcher.on("error", () => {
-      // Watch can drop (e.g. inotify limits). Degrade quietly; next open re-subscribes.
-    });
-    entry.watcher = watcher;
-  } catch {
-    // Recursive watch unsupported — panel stays snapshot-only for this root.
-  }
-
   entries.set(root, entry);
+  startWatcher(entry);
   return root;
+}
+
+/** Return whether this workspace still has an active filesystem watcher. */
+export function isWorkspaceWatched(cwd: string): boolean {
+  return entries.get(resolve(cwd))?.watcher !== undefined;
 }
 
 /** Stop watching (ref-counted). Closes the watcher when the last subscriber leaves. */

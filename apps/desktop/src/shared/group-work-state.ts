@@ -36,7 +36,7 @@ export type GroupTaskEvidenceRef = {
   sessionId: string;
   runId: string;
   eventRowId: number;
-  evidenceId: string;
+  evidenceId?: string;
   sourceFingerprint: string;
 };
 
@@ -102,6 +102,8 @@ export type GroupTaskTransitionEvent = {
 export type GroupTaskEvidenceDetailStatus =
   | "passed"
   | "failed"
+  | "timed_out"
+  | "cancelled"
   | "skipped"
   | "missing"
   | "stale"
@@ -122,7 +124,15 @@ export type GroupTaskCriterionDetail = {
   criterionId: string;
   description: string;
   requiredCheckKinds: HarnessTaskCheckKind[];
-  status: "passed" | "review_approved" | "failed" | "missing" | "stale" | "unavailable";
+  status:
+    | "passed"
+    | "review_approved"
+    | "failed"
+    | "timed_out"
+    | "cancelled"
+    | "missing"
+    | "stale"
+    | "unavailable";
   evidence: GroupTaskEvidenceDetail[];
   omittedEvidenceCount: number;
 };
@@ -412,7 +422,15 @@ export type GroupDecisionSnapshot = {
   /** Required QA checks before review; review-only criteria can be ready before approval. */
   reviewReadiness: Record<
     string,
-    "ready" | "missing" | "failed" | "skipped" | "stale" | "unavailable" | "user_confirmed"
+    | "ready"
+    | "missing"
+    | "failed"
+    | "timed_out"
+    | "cancelled"
+    | "skipped"
+    | "stale"
+    | "unavailable"
+    | "user_confirmed"
   >;
   stopRequested: boolean;
   waitingForUser: boolean;

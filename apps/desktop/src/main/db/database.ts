@@ -55,11 +55,14 @@ export function migrateDatabase(db: DatabaseSync): void {
       action text not null,
       target text not null,
       decision text not null,
-      created_at text not null
+      created_at text not null,
+      workspace_id text references workspaces(id) on delete cascade,
+      tool_name text
     );
 
     create table if not exists agent_events (
-      id text primary key,
+      event_cursor integer primary key autoincrement,
+      id text not null unique,
       session_id text not null references agent_sessions(id) on delete cascade,
       type text not null,
       payload_json text not null,
@@ -77,6 +80,28 @@ export function migrateDatabase(db: DatabaseSync): void {
       completed_at text,
       error text
     );
+
+    create table if not exists tool_result_spills (
+      id text primary key,
+      session_id text not null references agent_sessions(id) on delete cascade,
+      run_id text not null references agent_runs(id) on delete cascade,
+      workspace_id text not null references workspaces(id) on delete cascade,
+      tool_name text not null check(length(tool_name) between 1 and 128),
+      full_content text not null,
+      content_hash text not null check(length(content_hash) = 64),
+      size_bytes integer not null check(size_bytes between 0 and 2097152),
+      line_count integer not null check(line_count >= 1),
+      is_error integer not null default 0 check(is_error in (0, 1)),
+      spill_reason text not null check(spill_reason in ('byte_limit_exceeded', 'line_limit_exceeded')),
+      created_at integer not null,
+      expires_at integer not null,
+      last_accessed_at integer not null,
+      check(size_bytes = length(cast(full_content as blob)))
+    );
+    create index if not exists idx_tool_result_spills_scope_expiry
+      on tool_result_spills(session_id, workspace_id, expires_at);
+    create index if not exists idx_tool_result_spills_expiry_lru
+      on tool_result_spills(expires_at, last_accessed_at);
 
     create table if not exists terminal_outputs (
       terminal_id text primary key,
@@ -180,6 +205,16 @@ export function migrateDatabase(db: DatabaseSync): void {
     create index if not exists idx_browser_recents_workspace_recent
       on browser_recents(workspace_id, last_opened_at desc);
   `);
+
+  migrateAgentEventCursor(db);
+  db.exec("create index if not exists idx_agent_events_session_id on agent_events(session_id)");
+
+  // Workspace approvals are matched against durable workspace and tool identity.
+  // Legacy rows stay NULL scoped because their original workspace cannot be proven.
+  addColumn(db, "permissions", "workspace_id", "text references workspaces(id) on delete cascade");
+  addColumn(db, "permissions", "tool_name", "text");
+  db.exec(`create index if not exists idx_permissions_workspace_tool_grant
+    on permissions(workspace_id, tool_name, action, target, decision)`);
 
   addColumn(db, "agent_sessions", "runtime", "text not null default 'pi-sdk'");
   addColumn(db, "agent_sessions", "model", "text");
@@ -425,6 +460,63 @@ export function migrateDatabase(db: DatabaseSync): void {
     );
     create index if not exists idx_harness_promotions_workspace_status
       on harness_promotions(workspace_id, status, updated_at desc);
+
+    create table if not exists security_audit_state (
+      singleton integer primary key check (singleton = 1),
+      anchor_hash text not null,
+      latest_hash text not null,
+      next_sequence integer not null check (next_sequence >= 1)
+    );
+    insert or ignore into security_audit_state
+      (singleton, anchor_hash, latest_hash, next_sequence)
+      values (1, '0000000000000000000000000000000000000000000000000000000000000000',
+                 '0000000000000000000000000000000000000000000000000000000000000000', 1);
+    create table if not exists security_audit_events (
+      sequence integer primary key,
+      id text not null unique,
+      timestamp integer not null,
+      plugin_id text not null,
+      action text not null,
+      resource text not null,
+      decision text not null check (decision in ('allow','deny')),
+      reason text not null,
+      hash text not null,
+      previous_hash text not null
+    );
+
+    create table if not exists harness_group_messages (
+      id text primary key,
+      group_id text not null,
+      from_agent text not null,
+      to_agent text not null,
+      content text not null,
+      revision integer not null default 0,
+      sent_at text not null,
+      acked_at text,
+      dedupe_hash text not null
+    );
+    create table if not exists harness_group_message_acks (
+      message_id text not null references harness_group_messages(id) on delete cascade,
+      agent_id text not null,
+      acked_at text not null,
+      primary key (message_id, agent_id)
+    );
+    create index if not exists idx_harness_group_message_acks_agent
+      on harness_group_message_acks(agent_id, message_id);
+    create index if not exists idx_harness_group_messages_to_ack
+      on harness_group_messages(to_agent, acked_at, sent_at);
+    create index if not exists idx_harness_group_messages_group
+      on harness_group_messages(group_id, sent_at);
+    create index if not exists idx_harness_group_messages_recipient_capacity
+      on harness_group_messages(group_id, to_agent, sent_at);
+    create index if not exists idx_harness_group_messages_group_ack
+      on harness_group_messages(group_id, acked_at);
+    create index if not exists idx_harness_group_messages_ack_expiry
+      on harness_group_messages(acked_at) where acked_at is not null;
+    create index if not exists idx_harness_group_messages_unack_expiry
+      on harness_group_messages(sent_at) where acked_at is null;
+    create index if not exists idx_harness_group_messages_dedupe
+      on harness_group_messages(dedupe_hash, sent_at);
   `);
 
   // Agent Groups: rooms of normal agent_sessions. A null workspace_id means the
@@ -581,6 +673,34 @@ export function migrateDatabase(db: DatabaseSync): void {
   `);
   migrateGroupTaskState(db);
   migrateGroupIntegrationState(db);
+}
+
+/** Preserve existing rowids while making event cursors monotonic after deletion. */
+function migrateAgentEventCursor(db: DatabaseSync): void {
+  if (hasColumn(db, "agent_events", "event_cursor")) return;
+
+  db.exec("begin immediate");
+  try {
+    db.exec(`
+      create table agent_events_cursor_migration (
+        event_cursor integer primary key autoincrement,
+        id text not null unique,
+        session_id text not null references agent_sessions(id) on delete cascade,
+        type text not null,
+        payload_json text not null,
+        created_at text not null
+      );
+      insert into agent_events_cursor_migration (event_cursor, id, session_id, type, payload_json, created_at)
+        select rowid, id, session_id, type, payload_json, created_at
+        from agent_events order by rowid asc;
+      drop table agent_events;
+      alter table agent_events_cursor_migration rename to agent_events;
+    `);
+    db.exec("commit");
+  } catch (error) {
+    db.exec("rollback");
+    throw error;
+  }
 }
 
 /** Durable, versioned previews and append-only integration state transitions. */

@@ -369,6 +369,24 @@ describe("AgentDialog", () => {
     expect(within(dialog).queryByRole("button", { name: "Regenerate" })).toBeNull();
     expect(within(dialog).queryByRole("textbox", { name: /What should it help with/ })).toBeNull();
   });
+
+  it("requires a user choice when the explicit default is unavailable", async () => {
+    const user = userEvent.setup();
+    const create = vi.fn(async () => undefined);
+    const { dialog } = renderDialog({ models: MODELS.slice(0, 1), create });
+    const model = within(dialog).getByRole("combobox", { name: "Model" }) as HTMLSelectElement;
+    expect(model.value).toBe("");
+    await user.type(field(dialog, "Name"), "Cy");
+    await user.type(field(dialog, "Role"), "Scribe");
+    await user.click(within(dialog).getByRole("button", { name: "Create" }));
+
+    await waitFor(() =>
+      expect(within(dialog).getByRole("alert").textContent).toBe(
+        GROUP_ERROR_MESSAGES["agent-model-required"],
+      ),
+    );
+    expect(create).not.toHaveBeenCalled();
+  });
 });
 
 describe("AgentDialog explicit capabilities", () => {

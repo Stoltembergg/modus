@@ -241,11 +241,15 @@ export class ToolRegistry {
     if (event.toolName.startsWith("mcp_")) {
       return { action: "mcp.call", dangerous: true };
     }
-    // Unregistered tool: preserve the legacy name heuristic (permissive except delete/remove).
+    // Keep destructive-name classification for diagnostics; all other unknown names also fail closed.
     if (/delete|remove/i.test(event.toolName)) {
       return { action: "file.delete", dangerous: true };
     }
-    return { action: DEFAULT_ACTION, dangerous: false };
+    return { action: DEFAULT_ACTION, dangerous: true };
+  }
+
+  isKnownTool(name: string): boolean {
+    return this.entries.has(name) || this.classifiers.has(name);
   }
 
   getEntry(name: string): ToolCatalogEntry | undefined {
@@ -255,7 +259,7 @@ export class ToolRegistry {
   capabilitiesFor(name: string): ToolCapability[] {
     const entry = this.entries.get(name);
     if (!entry) {
-      return [];
+      return ["write"];
     }
     if (entry.capabilities) {
       return entry.capabilities;

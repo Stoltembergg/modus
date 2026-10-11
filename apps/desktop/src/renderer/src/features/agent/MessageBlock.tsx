@@ -73,6 +73,8 @@ type MessageBlockProps = {
   skills?: SkillSelection[];
   /** Run-scoped references shown only after the final assistant response. */
   sources?: RunSource[];
+  /** Completeness state of the run-scoped reference lookup. */
+  sourceStatus?: "loading" | "unavailable";
   compactClip?: boolean | undefined;
 };
 
@@ -95,6 +97,7 @@ export const MessageBlock = memo(function MessageBlock({
   contextItems,
   skills,
   sources,
+  sourceStatus,
   compactClip = false,
 }: MessageBlockProps) {
   const [editing, setEditing] = useState(false);
@@ -220,6 +223,16 @@ export const MessageBlock = memo(function MessageBlock({
       ) : null}
       {!streaming && sources?.length ? (
         <PromptSources onOpenFile={onOpenFile} sources={sources} />
+      ) : null}
+      {!streaming && sourceStatus === "loading" ? (
+        <div className="mt-2 text-xs text-muted" role="status">
+          Loading run sources…
+        </div>
+      ) : null}
+      {!streaming && sourceStatus === "unavailable" ? (
+        <div className="mt-2 text-xs text-muted" role="status">
+          Run sources could not be loaded. Tool activity remains in the timeline.
+        </div>
       ) : null}
     </div>
   );

@@ -61,6 +61,7 @@ describe("criterionEvidenceStatus", () => {
         "passed",
         spec.evidence.filter((evidence) => evidence.runId === "run-42"),
         ["tests", "typecheck"],
+        "rev-7",
       ),
     ).toBe("passed");
     expect(
@@ -86,7 +87,12 @@ describe("criterionEvidenceStatus", () => {
 
 describe("SpecAcceptanceCriteria", () => {
   it("shows required checks and bounded linked evidence", () => {
-    const markup = renderToStaticMarkup(<SpecAcceptanceCriteria spec={spec} />);
+    const markup = renderToStaticMarkup(
+      <SpecAcceptanceCriteria
+        currentWorkspaceRevisions={new Map([["run-42", "rev-7"]])}
+        spec={spec}
+      />,
+    );
 
     expect(markup).toContain("Reject unauthenticated requests");
     expect(markup).toContain("Tests");
@@ -139,7 +145,12 @@ describe("SpecAcceptanceCriteria", () => {
   });
 
   it("does not let old failed evidence override a later passing run status", () => {
-    const markup = renderToStaticMarkup(<SpecAcceptanceCriteria spec={spec} />);
+    const markup = renderToStaticMarkup(
+      <SpecAcceptanceCriteria
+        currentWorkspaceRevisions={new Map([["run-42", "rev-7"]])}
+        spec={spec}
+      />,
+    );
 
     expect(markup).toContain(">Passed<");
     expect(markup).not.toContain(">Failed<");
@@ -154,7 +165,12 @@ describe("SpecAcceptanceCriteria", () => {
           : item,
       ),
     };
-    const markup = renderToStaticMarkup(<SpecAcceptanceCriteria spec={latestRunFailed} />);
+    const markup = renderToStaticMarkup(
+      <SpecAcceptanceCriteria
+        currentWorkspaceRevisions={new Map([["run-42", "rev-7"]])}
+        spec={latestRunFailed}
+      />,
+    );
 
     expect(markup).toContain(">Failed<");
     expect(markup).not.toContain(">Passed<");

@@ -238,7 +238,7 @@ export function createAgent(input: AgentCreateFields): AgentInfo {
       requireFreeName(input.name, groupId),
       (input.role ?? "").trim(),
       input.instructions ?? "",
-      input.modelId?.trim() || null,
+      input.modelId || null,
       requireWorkspace(input.defaultWorkspaceId ?? null),
       requireAvatar(input.avatarFace ?? avatar.avatarFace, AGENT_AVATAR_FACES, "avatar face"),
       requireAvatar(input.avatarColor ?? avatar.avatarColor, AGENT_AVATAR_COLORS, "avatar color"),
@@ -425,7 +425,7 @@ export function updateAgent(agentId: string, input: UpdateAgentInput): AgentInfo
         ? input.supportedTaskKinds
         : JSON.parse(row.supported_task_kinds_json),
   });
-  const nextModelId = input.modelId !== undefined ? input.modelId?.trim() || null : row.model_id;
+  const nextModelId = input.modelId !== undefined ? input.modelId || null : row.model_id;
   const avatarShape = requireAvatar(
     input.avatarShape ?? row.avatar_shape,
     AGENT_AVATAR_SHAPES,

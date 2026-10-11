@@ -110,7 +110,7 @@ export const agentsGenerateProfileSchema = z
     // Absent in the create-group modal (A4): no group yet, `roles` carries the chosen ones.
     groupId: agentIdString.optional(),
     roles: z.array(agentFields.role).max(MAX_PROFILE_ROLES).optional(),
-    modelId: z.string().trim().min(1).max(256),
+    modelId: z.string().min(1).max(256),
     name: agentFields.name,
     description: z.string().trim().max(500).optional(),
     agentId: agentIdString.optional(),

@@ -7,6 +7,8 @@ import type {
 import { selectChangeStrategy } from "./change-strategy";
 import { selectExecutionPolicy } from "./execution-policy";
 import { listAvoidedStrategyCodes } from "./failure-intelligence";
+import { isFeatureFlagEnabled } from "./feature-flags";
+import { detectRepeatHypothesis } from "./guards/repeat-hypothesis-guard";
 import { mergePolicyEffects } from "./policy-dsl";
 import { loadPromotedPolicies } from "./promoted-policy-store";
 
@@ -89,6 +91,16 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
     snapshot.failureAttempts,
     snapshot.impact?.revision,
   );
+  if (isFeatureFlagEnabled("MODUS_REPEAT_GUARDS")) {
+    const repeatHypo = detectRepeatHypothesis(snapshot.failureAttempts);
+    if (repeatHypo.isRepeating) {
+      for (const dominant of repeatHypo.dominantSignatures) {
+        if (!failureAvoided.includes(dominant.strategyCode)) {
+          failureAvoided.push(dominant.strategyCode);
+        }
+      }
+    }
+  }
   const avoided = [...new Set([...failureAvoided, ...promoted.avoidStrategyCodes])].slice(0, 24);
   const policy = selectExecutionPolicy({
     classification: snapshot.classification,
@@ -106,6 +118,12 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
     snapshot.classification.complexity === "complex" || snapshot.classification.risk === "high";
   const oracleConsulted = snapshot.oracleConsulted === true;
   const qaFailed = qa === "failed" || verification === "failed";
+  // Phase 5: verdict from the failure-loop guard (repeat guards + circuit breaker).
+  const toolLoopTriggered = snapshot.failureLoopAction?.reasonCodes.includes("tool_loop_detected");
+  const loopAction =
+    isFeatureFlagEnabled("MODUS_REPEAT_GUARDS") && (qaFailed || toolLoopTriggered)
+      ? snapshot.failureLoopAction
+      : undefined;
   const changeStrategy = selectChangeStrategy({
     avoided,
     qaFailed,
@@ -140,6 +158,24 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
     };
   }
 
+  if (loopAction && !qaFailed) {
+    return withChangeStrategy(
+      {
+        ...base,
+        action: loopAction.action === "circuit_break" ? "replan" : "avoid_retry",
+        reasonCodes: ["repeat_guard_tool_loop", ...loopAction.reasonCodes].slice(0, 8),
+        confidence: "high",
+        expectedUncertaintyReduction: 8,
+      },
+      {
+        ...changeStrategy,
+        recommended:
+          changeStrategy.recommended === "none" ? "replan_scope" : changeStrategy.recommended,
+        reasonCodes: [...changeStrategy.reasonCodes, "repeat_guard_tool_loop"].slice(0, 8),
+      },
+    );
+  }
+
   if (
     verification === "verified" ||
     verification === "user_confirmed" ||
@@ -160,6 +196,25 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
   }
 
   if (qaFailed) {
+    // Phase 5 hard stop: the circuit breaker tripped, so replan instead of
+    // retrying the same failing strategy (or consulting Oracle again).
+    if (loopAction?.action === "circuit_break") {
+      return withChangeStrategy(
+        {
+          ...base,
+          action: "replan",
+          reasonCodes: [
+            "verification_failed",
+            "repeat_guard_circuit_break",
+            ...loopAction.reasonCodes,
+          ].slice(0, 8),
+          confidence: "high",
+          expectedUncertaintyReduction: 12,
+        },
+        changeStrategy,
+      );
+    }
+
     // Gap 5: after Oracle findings, prefer a different strategy — never re-spawn Oracle.
     if (oracleConsulted) {
       if (changeStrategy.recommended === "ask_clarification") {
@@ -216,7 +271,11 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
       snapshot.impact?.blastRadius === "cross_module" ||
       snapshot.classification.suggestedRole === "oracle" ||
       snapshot.classification.suggestedRole === "debugger";
-    const strategyAvoided = avoided.includes("same_edit_retry") || avoided.includes("blind_retry");
+    const strategyAvoided =
+      avoided.includes("same_edit_retry") ||
+      avoided.includes("blind_retry") ||
+      (isFeatureFlagEnabled("MODUS_REPEAT_GUARDS") &&
+        (loopAction !== undefined || (avoided.length > 0 && snapshot.failureAttempts.length >= 2)));
 
     // Gap 5: when a failed strategy is avoided but Oracle has not been consulted,
     // prefer Gap 1 spawn / advisory suggest_oracle over locking avoid_retry.
@@ -483,7 +542,9 @@ export function formatAdaptiveDecisionHint(decision: AdaptiveDecision): string |
         "Adaptive policy: verification evidence is still required before treating this task as done. Use only the eligible required check scripts already named for this turn.";
       break;
     case "avoid_retry":
-      hint = `Adaptive policy: an equivalent failed strategy was already tested at this revision. Do not repeat it; reformulate, gather new evidence, or ask the user.${strategySuffix}`;
+      hint = decision.reasonCodes.includes("repeat_guard_tool_loop")
+        ? "Adaptive policy: the same tool call repeated without progress. Change the inputs or approach; keep the selected model and provider."
+        : `Adaptive policy: an equivalent failed strategy was already tested at this revision. Do not repeat it; reformulate, gather new evidence, or ask the user.${strategySuffix}`;
       break;
     case "replan":
       hint = `Adaptive policy: last verification failed. Replan with a different strategy and record what was ruled out.${strategySuffix}`;

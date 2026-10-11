@@ -22,6 +22,8 @@ import {
 export type VerificationEvidenceStatus =
   | "passed"
   | "failed"
+  | "timed_out"
+  | "cancelled"
   | "skipped"
   | "missing"
   | "unavailable"
@@ -30,7 +32,7 @@ export type VerificationEvidenceStatus =
 export type AutoQAStatus = VerificationEvidenceStatus | "not_required";
 
 export type HarnessEvidenceRef = {
-  id: string;
+  id?: string;
   kind: string;
   status: VerificationEvidenceStatus;
   runId?: string;
@@ -44,7 +46,6 @@ export type HarnessEvidenceRef = {
 type ToolEventBase = {
   sessionId: string;
   runId: string;
-  eventId: string;
   toolCallId: string;
   toolName: string;
   checkName?: string;
@@ -53,6 +54,7 @@ type ToolEventBase = {
   fullProject?: boolean;
   mutatesSource?: boolean;
   revision?: string;
+  workspaceRevision?: string;
 };
 
 export type RecognizedCheckName = "tests" | "typecheck" | "lint" | "build";
@@ -66,13 +68,16 @@ export type RecognizedCheckInvocation = {
 };
 
 export type RunQAEvent =
-  | (ToolEventBase & { type: "tool.started" })
+  | (ToolEventBase & { type: "tool.started"; eventId: string })
   | (ToolEventBase & {
       type: "tool.ended";
+      eventId?: string;
       checkConfigStable?: boolean;
+      sourceStable?: boolean;
       exitCode?: number;
       error?: boolean;
       aborted?: boolean;
+      timedOut?: boolean;
       skipped?: boolean;
       output?: string;
     })
@@ -424,7 +429,9 @@ export function recognizeCheckInvocation(
   ) {
     return undefined;
   }
-  const mutatesSource = tokens.some((token) => /^--(?:write|fix|apply)(?:=.*)?$/i.test(token));
+  const mutatesSource = tokens.some((token) =>
+    /^(?:-u|--(?:write|fix|apply|update|updatesnapshot|update-snapshot))(?:=.*)?$/i.test(token),
+  );
   const executable = tokens[0]?.toLowerCase();
   if (!executable) return undefined;
 
@@ -589,7 +596,6 @@ function evidenceRef(
   revision?: string,
 ): HarnessEvidenceRef {
   const result: HarnessEvidenceRef = {
-    id: `${input.runId}:${check}${eventId ? `:${eventId}` : ""}`.slice(0, 240),
     kind: "check",
     status,
     runId: input.runId,
@@ -598,7 +604,10 @@ function evidenceRef(
       ? { checkName: check as HarnessTaskCheckKind }
       : {}),
   };
-  if (eventId) result.eventId = eventId.slice(0, 120);
+  if (eventId) {
+    result.id = eventId.slice(0, 120);
+    result.eventId = eventId.slice(0, 120);
+  }
   if (revision) result.revision = revision.slice(0, 120);
   if (paths) result.paths = paths;
   return result;
@@ -628,13 +637,15 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
       fullProject?: boolean;
       mutatesSource?: boolean;
       generation: number;
+      sequence: number;
     }
   >();
   const invalidatingActions = new Set<string>();
   const latest = new Map<string, HarnessEvidenceRef>();
+  const latestSequence = new Map<string, number>();
   let generation = 0;
 
-  for (const event of events) {
+  for (const [sequence, event] of events.entries()) {
     if (event.type === "tool.started") {
       const shellTool = event.toolName === "bash" || event.toolName === "terminal_run";
       const invocation = shellTool
@@ -645,11 +656,14 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
       const fullProject = event.fullProject ?? invocation?.fullProject;
       const mutatesSource = event.mutatesSource ?? invocation?.mutatesSource;
       const sourceMutation =
-        mutatesSource === true || ["write", "edit", "terminal_write"].includes(event.toolName);
+        mutatesSource === true ||
+        ["write", "edit", "terminal_write"].includes(event.toolName) ||
+        (event.toolName.startsWith("mcp_") && !event.toolName.startsWith("mcp_v1_allowlisted_"));
       const unclassifiedShellAction = shellTool && !invocation && !checkName;
       if (sourceMutation || unclassifiedShellAction) {
         generation += 1;
         latest.clear();
+        latestSequence.clear();
         invalidatingActions.add(event.toolCallId);
       }
       starts.set(event.toolCallId, {
@@ -659,6 +673,7 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
         ...(fullProject ? { fullProject: true } : {}),
         ...(mutatesSource ? { mutatesSource: true } : {}),
         generation,
+        sequence,
       });
       continue;
     }
@@ -666,11 +681,13 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
     if (event.type === "tool.ended" && invalidatingActions.delete(event.toolCallId)) {
       generation += 1;
       latest.clear();
+      latestSequence.clear();
     }
 
     if (event.type === "tool.ended" && event.checkConfigStable === false) {
       generation += 1;
       latest.clear();
+      latestSequence.clear();
       continue;
     }
 
@@ -693,6 +710,7 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
           event.revision,
         ),
       );
+      latestSequence.set(check, sequence);
       continue;
     }
 
@@ -719,19 +737,15 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
       continue;
     const eligibleShell =
       started.event.toolName === "bash" || started.event.toolName === "terminal_run";
-    const status: VerificationEvidenceStatus = event.aborted
-      ? "unavailable"
-      : event.skipped
-        ? "skipped"
-        : event.error || (event.exitCode !== undefined && event.exitCode !== 0)
-          ? "failed"
-          : !eligibleShell
-            ? "unavailable"
-            : event.exitCode === undefined
-              ? started.event.toolName === "bash"
-                ? "passed"
-                : "unavailable"
-              : "passed";
+    let status: VerificationEvidenceStatus;
+    if (event.timedOut) status = "timed_out";
+    else if (event.aborted) status = "cancelled";
+    else if (event.skipped) status = "skipped";
+    else if (event.error || (event.exitCode !== undefined && event.exitCode !== 0)) {
+      status = "failed";
+    } else if (!eligibleShell || event.exitCode === undefined) {
+      status = "unavailable";
+    } else status = "passed";
     latest.set(
       check,
       evidenceRef(
@@ -743,6 +757,32 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
         event.revision ?? started.event.revision,
       ),
     );
+    latestSequence.set(check, sequence);
+  }
+
+  for (const started of starts.values()) {
+    const check = started.checkName;
+    if (
+      !check ||
+      !requested.includes(check) ||
+      started.mutatesSource === true ||
+      started.generation !== generation ||
+      started.sequence <= (latestSequence.get(check) ?? -1)
+    ) {
+      continue;
+    }
+    latest.set(
+      check,
+      evidenceRef(
+        input,
+        check,
+        "unavailable",
+        undefined,
+        evidencePaths(started.paths),
+        started.event.revision,
+      ),
+    );
+    latestSequence.set(check, started.sequence);
   }
 
   const evidence = requested
@@ -754,6 +794,12 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
   if (statuses.includes("failed")) {
     status = "failed";
     reasonCode = "required_check_failed";
+  } else if (statuses.includes("timed_out")) {
+    status = "timed_out";
+    reasonCode = "required_check_timed_out";
+  } else if (statuses.includes("cancelled")) {
+    status = "cancelled";
+    reasonCode = "required_check_cancelled";
   } else if (statuses.includes("skipped")) {
     status = "skipped";
     reasonCode = "required_check_skipped";
@@ -772,4 +818,53 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
   }
 
   return { required: true, status, reasonCode, evidence };
+}
+
+/** Keep passing evidence valid only for the source content observed at check start, end, and QA time. */
+export function bindRunQAtoWorkspaceRevision(input: {
+  result: HarnessQAResult;
+  events: RunQAEvent[];
+  workspaceRevision: string | undefined;
+}): HarnessQAResult {
+  if (!input.result.required) return input.result;
+  const starts = new Map<string, Extract<RunQAEvent, { type: "tool.started" }>>();
+  for (const event of input.events) {
+    if (event.type === "tool.started") starts.set(event.toolCallId, event);
+  }
+
+  let invalidatedPass = false;
+  const evidence = input.result.evidence.map((item) => {
+    if (item.status !== "passed") return item;
+    if (!item.eventId) {
+      invalidatedPass = true;
+      return { ...item, status: "unavailable" as const };
+    }
+    const ended = input.events.find(
+      (event): event is Extract<RunQAEvent, { type: "tool.ended" }> =>
+        event.type === "tool.ended" && event.eventId === item.eventId,
+    );
+    const started = ended ? starts.get(ended.toolCallId) : undefined;
+    const current = input.workspaceRevision;
+    const isCurrent = Boolean(
+      current &&
+        started?.workspaceRevision &&
+        ended?.workspaceRevision &&
+        ended.sourceStable === true &&
+        started.workspaceRevision === ended.workspaceRevision &&
+        ended.workspaceRevision === current,
+    );
+    if (!current || !isCurrent) {
+      invalidatedPass = true;
+      return { ...item, status: "unavailable" as const };
+    }
+    return { ...item, revision: current };
+  });
+
+  return {
+    ...input.result,
+    ...(input.result.status === "passed" && invalidatedPass
+      ? { status: "unavailable" as const, reasonCode: "required_check_unavailable" }
+      : {}),
+    evidence,
+  };
 }

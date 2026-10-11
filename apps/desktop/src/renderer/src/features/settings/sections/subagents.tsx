@@ -163,7 +163,7 @@ export function SubagentsSettingsPanel({
         cwd: targetCwd,
         name: current.name.trim(),
         description: current.description.trim(),
-        model: current.model.trim() || "inherit",
+        model: current.model || "inherit",
         readOnly: current.readOnly,
         ...(tools ? { tools } : {}),
         ...(disallowedTools ? { disallowedTools } : {}),

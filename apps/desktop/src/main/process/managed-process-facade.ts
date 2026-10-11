@@ -33,7 +33,10 @@ export function listManagedProcesses(query: ManagedProcessQuery): ManagedProcess
 
 /**
  * Terminate a managed process by id, dispatching to the registry that owns it.
- * Returns false when the id is unknown to either registry.
+ * Returns false when the id is unknown to either registry. For terminals, true
+ * means the host accepted the kill request; it does not wait for process exit.
+ * App-process termination returns true only after the platform backend confirms
+ * the scoped termination operation.
  */
 export async function killManagedProcess(id: string): Promise<boolean> {
   if (isAppId(id)) {

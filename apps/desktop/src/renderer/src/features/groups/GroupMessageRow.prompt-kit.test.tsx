@@ -1,11 +1,19 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  AgentEventItem,
+  AgentEventPage,
+  AgentEventPageOptions,
+} from "../../../../shared/agent-events";
 import type { GroupMessage } from "../../../../shared/contracts";
 import { GroupMessageRow } from "./GroupMessageRow";
 import type { GroupLiveTurnSnapshot } from "./groupLiveTurn";
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  Object.assign(window, { modus: undefined });
+});
 
 const members = [
   { sessionId: "s-planner", title: "Planner" },
@@ -56,6 +64,59 @@ describe("GroupMessageRow Prompt Kit", () => {
       surface?.className.split(/\s+/u).some((className) => className.startsWith("border")),
     ).toBe(false);
     expect(surface?.textContent).toContain(message.body);
+  });
+
+  it("marks source overflow unavailable instead of presenting it as no sources", async () => {
+    const runId = "run-source-overflow";
+    const events = Array.from(
+      { length: 257 },
+      (_, index) =>
+        ({
+          id: `tool-${index}`,
+          event: {
+            type: "tool.started" as const,
+            sessionId: "s-planner",
+            runId,
+            toolCallId: `tool-${index}`,
+            toolName: "web_search",
+            args: { query: "documentation" },
+            eventCursor: index + 1,
+          },
+          createdAt: "2026-10-01T12:00:00.000Z",
+        }) satisfies AgentEventItem & { createdAt: string },
+    );
+    const listEventPage = vi.fn(
+      async (_sessionId: string, options: AgentEventPageOptions): Promise<AgentEventPage> => {
+        const afterCursor = "afterCursor" in options ? (options.afterCursor ?? 0) : 0;
+        const pageEvents = events.slice(afterCursor, afterCursor + 256);
+        const nextCursor = pageEvents.at(-1)?.event.eventCursor;
+        return {
+          events: pageEvents,
+          summaryEvents: [],
+          activityEvents: [],
+          snapshotCursor: events.length,
+          ...(nextCursor === undefined ? {} : { nextCursor }),
+          hasMore: afterCursor + pageEvents.length < events.length,
+        };
+      },
+    );
+    Object.assign(window, { modus: { agent: { listEventPage } } });
+
+    render(
+      <GroupMessageRow
+        labels={labels}
+        members={members}
+        message={{
+          ...agentMessage("The completed answer remains visible."),
+          runId,
+          status: "completed",
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("group-source-unavailable")).toBeTruthy());
+    expect(screen.getByText("The completed answer remains visible.")).toBeTruthy();
+    expect(listEventPage).toHaveBeenCalledTimes(2);
   });
 
   it("renders System Message for waiting / blocked statuses", () => {

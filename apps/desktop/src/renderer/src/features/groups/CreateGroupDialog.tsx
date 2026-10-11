@@ -85,7 +85,7 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
     const initialModel =
       props.defaultModelId && models.some((model) => model.id === props.defaultModelId)
         ? props.defaultModelId
-        : (models.find((model) => !model.locked)?.id ?? "");
+        : "";
     setModelId(initialModel);
     setRemoved([]);
     setAgents([]);

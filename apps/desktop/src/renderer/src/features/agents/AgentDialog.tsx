@@ -171,9 +171,9 @@ export function AgentDialog(props: AgentDialogProps) {
     if (initial?.modelId !== undefined) return initial.modelId ?? "";
     // A template starts on the app default model (null), like a picked card.
     if (!custom) return "";
-    return models.some((model) => model.id === defaultModelId)
-      ? (defaultModelId ?? "")
-      : (models.find((model) => !model.locked)?.id ?? "");
+    return defaultModelId && models.some((model) => model.id === defaultModelId)
+      ? defaultModelId
+      : "";
   });
   const [face, setFace] = useState<AgentAvatarFace>(initialAvatar.avatarFace);
   const [color, setColor] = useState<AgentAvatarColor>(initialAvatar.avatarColor);
@@ -213,7 +213,7 @@ export function AgentDialog(props: AgentDialogProps) {
       const profile = await onGenerate({
         ...(group ? { groupId: group.id } : {}),
         ...(roles.length > 0 ? { roles } : {}),
-        modelId: modelId.trim(),
+        modelId,
         name: name.trim(),
         ...(description.trim() ? { description: description.trim() } : {}),
         ...(agent ? { agentId: agent.id } : {}),
@@ -243,7 +243,7 @@ export function AgentDialog(props: AgentDialogProps) {
       await generate();
       return;
     }
-    const trimmedModel = modelId.trim();
+    const selectedModel = modelId;
     if (target) {
       // A4: added to the modal's member list; the group:create call creates it.
       target.onAdd({
@@ -252,7 +252,7 @@ export function AgentDialog(props: AgentDialogProps) {
         name: name.trim(),
         role: role.trim(),
         instructions,
-        ...(trimmedModel ? { modelId: trimmedModel } : {}),
+        ...(selectedModel ? { modelId: selectedModel } : {}),
         avatarFace: face,
         avatarColor: color,
         avatarShape: shape,
@@ -270,7 +270,7 @@ export function AgentDialog(props: AgentDialogProps) {
           name: name.trim(),
           role: role.trim(),
           instructions,
-          ...(trimmedModel !== (agent.modelId ?? "") ? { modelId: trimmedModel || null } : {}),
+          ...(selectedModel !== (agent.modelId ?? "") ? { modelId: selectedModel || null } : {}),
           avatarFace: face,
           avatarColor: color,
           avatarShape: shape,
@@ -282,7 +282,7 @@ export function AgentDialog(props: AgentDialogProps) {
           name: name.trim(),
           role: role.trim(),
           instructions,
-          modelId: trimmedModel,
+          modelId: selectedModel,
           avatarFace: face,
           avatarColor: color,
           avatarShape: shape,

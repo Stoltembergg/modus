@@ -25,7 +25,7 @@ const { getDatabase } = await import("../db/database");
 const { createAgentSessionRecord, updateAgentSessionWorktree } = await import(
   "../agent/agent-store"
 );
-const { recordAgentEvent } = await import("../agent/agent-event-store");
+const { getRunToolEvidence, recordAgentEvent } = await import("../agent/agent-event-store");
 const { runGroupTool, runGroupVerifiedTool } = await import("../agent/tools/group-tools");
 const {
   appendGroupMessage,
@@ -47,6 +47,7 @@ const {
 } = await import("./group-proactivity-store");
 const { GroupRuntime } = await import("./group-runtime");
 const { getHarnessQAEventByRowId } = await import("../agent/agent-event-store");
+const { summarizeRunQA } = await import("../agent/harness/qa-evidence");
 const { createGroupIntegrationService } = await import("./group-integration-service");
 const { getGroupSourceFingerprint } = await import("../git/git-service");
 const git = promisify(execFile);
@@ -71,6 +72,42 @@ afterAll(async () => {
 async function gitAt(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await git("git", args, { cwd, windowsHide: true });
   return stdout.trim();
+}
+
+function recordPassingCheckEvent(
+  sessionId: string,
+  runId: string,
+): ReturnType<typeof summarizeRunQA>["evidence"][number] & { id: string; eventId: string } {
+  const toolCallId = crypto.randomUUID();
+  recordAgentEvent({
+    type: "tool.started",
+    sessionId,
+    runId,
+    toolCallId,
+    toolName: "terminal_run",
+    args: { command: "vitest run" },
+  });
+  recordAgentEvent({
+    type: "tool.ended",
+    sessionId,
+    runId,
+    toolCallId,
+    toolName: "terminal_run",
+    isError: false,
+    exitCode: 0,
+  });
+  const result = summarizeRunQA({
+    sessionId,
+    runId,
+    changedPaths: [],
+    requiredChecks: ["tests"],
+    events: getRunToolEvidence(sessionId, runId),
+  });
+  const evidence = result.evidence[0];
+  if (result.status !== "passed" || !evidence?.id || !evidence.eventId) {
+    throw new Error("Missing passed QA from persisted check events.");
+  }
+  return { ...evidence, id: evidence.id, eventId: evidence.eventId };
 }
 
 function runtimeSquad() {
@@ -205,6 +242,7 @@ async function sourceTaskFixture() {
     expectedVersion: task.stateVersion ?? 1,
     operationId: crypto.randomUUID(),
   });
+  const checkEvidence = recordPassingCheckEvent(sessions.owner, runId);
   const qaRowId = recordAgentEvent({
     type: "harness.qa",
     sessionId: sessions.owner,
@@ -214,9 +252,7 @@ async function sourceTaskFixture() {
       status: "passed",
       reasonCode: "all_passed",
       sourceFingerprint: fingerprint,
-      evidence: [
-        { id: "qa-tests", kind: "check", status: "passed", label: "Tests", checkName: "tests" },
-      ],
+      evidence: [checkEvidence],
     },
   });
   const binding = getGroupTaskRunBinding(sessions.owner, runId);
@@ -331,6 +367,7 @@ describe("verified Group task workflow", () => {
         expectedVersion: assigned.stateVersion ?? 1,
         operationId: crypto.randomUUID(),
       });
+      const checkEvidence = recordPassingCheckEvent(memberIds.owner, runId);
       const qaRowId = recordAgentEvent({
         type: "harness.qa",
         sessionId: memberIds.owner,
@@ -340,9 +377,7 @@ describe("verified Group task workflow", () => {
           status: "passed",
           reasonCode: "all_passed",
           sourceFingerprint: fingerprint,
-          evidence: [
-            { id: "qa-tests", kind: "check", status: "passed", label: "Tests", checkName: "tests" },
-          ],
+          evidence: [checkEvidence],
         },
       });
       const binding = getGroupTaskRunBinding(memberIds.owner, runId);
