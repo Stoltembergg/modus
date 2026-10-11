@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { cloneElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AGENT_FALLBACK_INSTRUCTIONS,
@@ -18,6 +19,17 @@ import type { PickableModel } from "../../lib/modusModels";
 import { GROUP_ERROR_MESSAGES } from "../groups/groupErrors";
 import { AGENT_GENERATED_HINT, AgentDialog } from "./AgentDialog";
 import { AGENT_NAME_REQUIRED, agentDialogError, needsProfileGeneration } from "./agentDialogModel";
+import { normalizeSearch } from "./ModelPicker";
+
+/**
+ * Motion's presence flag. happy-dom finishes exit animations instantly, so the "exiting"
+ * window (AnimatePresence keeps the dialog mounted while isPresent is false) is simulated here.
+ */
+const presence = vi.hoisted(() => ({ current: true }));
+vi.mock("motion/react", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("motion/react")>()),
+  useIsPresent: () => presence.current,
+}));
 
 const MODELS = [
   { id: "m-1", name: "Model 1" },
@@ -80,7 +92,7 @@ function renderDialog({
 } = {}) {
   const onUpdate = vi.fn(async (_input: unknown) => undefined);
   const onOpenChange = vi.fn();
-  render(
+  const element = (
     <AgentDialog
       agent={agent}
       defaultModelId={defaultModelId}
@@ -91,10 +103,13 @@ function renderDialog({
       onOpenChange={onOpenChange}
       onUpdate={onUpdate}
       open
-    />,
+    />
   );
+  const view = render(element);
   const dialog = screen.getByRole("dialog");
-  return { dialog, generate, create, onUpdate, onOpenChange };
+  // A fresh element so React re-renders (the same element reference would bail out).
+  const rerender = () => view.rerender(cloneElement(element));
+  return { dialog, generate, create, onUpdate, onOpenChange, rerender };
 }
 
 const field = (dialog: HTMLElement, name: string | RegExp) =>
@@ -113,7 +128,10 @@ const groupLabel = (group: HTMLElement) =>
   group.ownerDocument.getElementById(group.getAttribute("aria-labelledby") ?? "")?.textContent ??
   null;
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  presence.current = true;
+});
 
 describe("agentDialogModel", () => {
   const context = { custom: true, takenNames: ["Ana"], availableModelIds: ["m-1"] };
@@ -549,6 +567,161 @@ describe("AgentDialog model picker", () => {
     expect(saved?.getAttribute("aria-selected")).toBe("true");
     await user.click(within(listbox).getByRole("option", { name: "Model 2" }));
     await waitFor(() => expect(modelTrigger(dialog).dataset.value).toBe("m-2"));
+  });
+  it("search ignores case and accents in the query and the names", async () => {
+    expect(normalizeSearch("ÉTOILE")).toBe("etoile");
+    expect(normalizeSearch("Pokémon")).toBe("pokemon");
+    expect(normalizeSearch("café")).toBe("cafe");
+    const user = userEvent.setup();
+    const { dialog } = renderDialog({
+      agent: ANA,
+      models: [
+        ...MIXED,
+        { id: "x/poke", name: "Pokémon Mini", provider: "relay", providerName: "Relay" },
+        { id: "x/etoile", name: "ÉTOILE 2", provider: "relay", providerName: "Relay" },
+        { id: "x/cafe", name: "Cafe Latte", provider: "relay", providerName: "Relay" },
+      ],
+    });
+    const listbox = await openModels(user, dialog);
+    const search = screen.getByRole("combobox", { name: "Search models" });
+    const shown = () =>
+      within(listbox)
+        .queryAllByRole("option")
+        .map((o) => o.textContent);
+    for (const [query, name] of [
+      ["pokemon", "Pokémon Mini"], // accent mid-word in the name
+      ["etoile", "ÉTOILE 2"], // accent at the start, uppercase name
+      ["café", "Cafe Latte"], // accent in the query
+      ["POKÉ", "Pokémon Mini"],
+    ] as const) {
+      await user.clear(search);
+      await user.type(search, query);
+      expect(shown(), query).toEqual([name]);
+    }
+  });
+
+  it("Home and End jump to the first and last option across groups", async () => {
+    const user = userEvent.setup();
+    const { dialog } = renderDialog({ agent: ANA, models: MIXED });
+    const listbox = await openModels(user, dialog);
+    const highlighted = () => listbox.querySelector("[data-highlighted]")?.textContent;
+    await waitFor(() => expect(highlighted()).toBe("Model 1"));
+    await user.keyboard("{Home}");
+    expect(highlighted()).toBe("GLM Modus");
+    await user.keyboard("{End}");
+    expect(highlighted()).toBe("Model 2");
+    await user.keyboard("{Home}{Enter}");
+    await waitFor(() => expect(modelTrigger(dialog).dataset.value).toBe("modus/zai/glm"));
+  });
+
+  it("Esc with a query closes the picker, keeps the value, returns focus and clears the query", async () => {
+    const user = userEvent.setup();
+    const { dialog, onOpenChange } = renderDialog({ agent: ANA, models: MIXED });
+    await openModels(user, dialog);
+    await user.type(screen.getByRole("combobox", { name: "Search models" }), "glm");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+    expect(modelTrigger(dialog).dataset.value).toBe("m-1");
+    await waitFor(() => expect(document.activeElement).toBe(modelTrigger(dialog)));
+    expect(onOpenChange).not.toHaveBeenCalled();
+    const listbox = await openModels(user, dialog);
+    expect(
+      (screen.getByRole("combobox", { name: "Search models" }) as HTMLInputElement).value,
+    ).toBe("");
+    expect(within(listbox).getAllByRole("option")).toHaveLength(MIXED.length);
+  });
+});
+
+describe("AgentDialog exit guard", () => {
+  const form = (dialog: HTMLElement) =>
+    within(dialog).getByTestId("agent-dialog") as HTMLFormElement;
+
+  it("a second Save after saving is ignored, and the exiting dialog is inert", async () => {
+    const user = userEvent.setup();
+    const { dialog, onUpdate, onOpenChange, rerender } = renderDialog({ agent: ANA });
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    // The button stays disabled through the exit instead of re-enabling in `finally`.
+    expect(within(dialog).getByRole("button", { name: "Saving…" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    // Re-entry (Enter / a racing click) before the host re-renders: ignored.
+    fireEvent.submit(form(dialog));
+    // The host now plays the exit (AnimatePresence: isPresent false).
+    presence.current = false;
+    rerender();
+    expect(form(dialog).hasAttribute("inert")).toBe(true);
+    expect(form(dialog).getAttribute("aria-hidden")).toBe("true");
+    fireEvent.submit(form(dialog));
+    fireEvent.click(within(dialog).getByText("Cancel"));
+    await Promise.resolve();
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    expect(onOpenChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("while exiting, Save, Create and Regenerate do nothing", async () => {
+    presence.current = false;
+    const generate = vi.fn(async (_input: GenerateAgentProfileInput) => GENERATED);
+    const { dialog, onUpdate, onOpenChange } = renderDialog({ agent: ANA, generate });
+    expect(form(dialog).hasAttribute("inert")).toBe(true);
+    fireEvent.click(within(dialog).getByText("Regenerate"));
+    fireEvent.submit(form(dialog));
+    await Promise.resolve();
+    expect(generate).not.toHaveBeenCalled();
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(within(dialog).queryByRole("alert")).toBeNull();
+  });
+
+  function renderDraft(onAdd: (input: unknown) => void, onOpenChange = vi.fn()) {
+    render(
+      <AgentDialog
+        draft={{
+          title: "Draft",
+          seed: "seed",
+          takenNames: [],
+          roles: [],
+          initial: {
+            name: "Build",
+            role: "Builder",
+            instructions: "Ship it.",
+            templateId: "builder",
+          },
+          onAdd,
+        }}
+        models={MODELS}
+        onGenerate={async () => GENERATED}
+        onOpenChange={onOpenChange}
+        open
+      />,
+    );
+    return { dialog: screen.getByRole("dialog"), onOpenChange };
+  }
+
+  it("group draft: Add adds the member once, even when submitted again during the exit", async () => {
+    const user = userEvent.setup();
+    const onAdd = vi.fn();
+    const { dialog, onOpenChange } = renderDraft(onAdd);
+    await user.click(within(dialog).getByRole("button", { name: "Add" }));
+    expect(onAdd).toHaveBeenCalledTimes(1);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    // Still mounted (exit animation): a second click / Enter must not add a duplicate.
+    await user.click(within(dialog).getByRole("button", { name: "Add" }));
+    fireEvent.submit(form(dialog));
+    expect(onAdd).toHaveBeenCalledTimes(1);
+    expect(onOpenChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("group draft: nothing is added while the dialog is exiting", () => {
+    presence.current = false;
+    const onAdd = vi.fn();
+    const { dialog, onOpenChange } = renderDraft(onAdd);
+    expect(form(dialog).hasAttribute("inert")).toBe(true);
+    fireEvent.submit(form(dialog));
+    expect(onAdd).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalled();
   });
 });
 

@@ -1,7 +1,7 @@
 import { Dialog } from "@base-ui/react/dialog";
 import { IconRefresh } from "@tabler/icons-react";
-import { m, type Transition, useReducedMotion } from "motion/react";
-import { useId, useMemo, useRef, useState } from "react";
+import { m, type Transition, useIsPresent, useReducedMotion } from "motion/react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { agentAvatarForId, getAgentTemplate } from "../../../../shared/agent-templates";
 import {
   AGENT_AVATAR_COLORS,
@@ -197,6 +197,23 @@ export function AgentDialog(props: AgentDialogProps) {
   const [touched, setTouched] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
   const reduceMotion = useReducedMotion();
+  // Exit guard: once the dialog has saved / added / cancelled (closingRef, set synchronously)
+  // or its host's AnimatePresence is playing the exit (isPresent false), it must not act again;
+  // otherwise a second click during the ~140 ms exit would save or add the member twice.
+  const isPresent = useIsPresent();
+  const closingRef = useRef(false);
+  const inactive = () => closingRef.current || !isPresent;
+  useEffect(() => {
+    // Re-entered while exiting (same instance brought back): usable again.
+    if (isPresent && closingRef.current) {
+      closingRef.current = false;
+      setBusy(null);
+    }
+  }, [isPresent]);
+  function close(): void {
+    closingRef.current = true;
+    onOpenChange(false);
+  }
   const roleId = useId();
 
   const takenNames = useMemo(
@@ -218,6 +235,7 @@ export function AgentDialog(props: AgentDialogProps) {
   const canGenerate = custom && !!name.trim() && !!modelId.trim() && busy === null;
 
   async function generate(): Promise<boolean> {
+    if (inactive()) return false;
     setBusy("generate");
     setError(null);
     try {
@@ -248,6 +266,7 @@ export function AgentDialog(props: AgentDialogProps) {
   }
 
   async function submit(): Promise<void> {
+    if (inactive()) return;
     setTouched(true);
     if (problem || busy) return;
     if (!agent && needsProfileGeneration(draft, custom)) {
@@ -258,6 +277,7 @@ export function AgentDialog(props: AgentDialogProps) {
     const selectedModel = modelId;
     if (target) {
       // A4: added to the modal's member list; the group:create call creates it.
+      closingRef.current = true; // before onAdd: a re-entrant submit must not add it twice
       target.onAdd({
         ...(initial?.templateId ? { templateId: initial.templateId } : {}),
         ...capabilities,
@@ -269,7 +289,7 @@ export function AgentDialog(props: AgentDialogProps) {
         avatarColor: color,
         avatarShape: shape,
       });
-      onOpenChange(false);
+      close();
       return;
     }
     setBusy("save");
@@ -300,11 +320,12 @@ export function AgentDialog(props: AgentDialogProps) {
           avatarShape: shape,
         });
       }
-      onOpenChange(false);
+      close();
     } catch (caught) {
       setError(describeGroupError(caught));
     } finally {
-      setBusy(null);
+      // After a save the dialog is leaving: keep the button disabled through the exit.
+      if (!closingRef.current) setBusy(null);
     }
   }
 
@@ -331,7 +352,9 @@ export function AgentDialog(props: AgentDialogProps) {
   const subtitle = group?.name ?? target?.title;
   const form = (
     <form
+      aria-hidden={isPresent ? undefined : true}
       data-testid="agent-dialog"
+      inert={!isPresent}
       noValidate
       onSubmit={(event) => {
         event.preventDefault();
@@ -609,7 +632,9 @@ export function AgentDialog(props: AgentDialogProps) {
             "h-8 rounded-lg px-3.5 text-xs text-fg-muted hover:bg-hover hover:text-fg",
             PRESS,
           )}
-          onClick={() => onOpenChange(false)}
+          onClick={() => {
+            if (!inactive()) close();
+          }}
           type="button"
         >
           Cancel

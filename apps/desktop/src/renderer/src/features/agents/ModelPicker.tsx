@@ -24,13 +24,17 @@ type PickerGroup = {
   items: PickerItem[];
 };
 
-const normalize = (text: string) => text.toLocaleLowerCase().normalize("NFKD");
+/** Lowercased with diacritics stripped (NFKD, then drop combining marks): "Pokémon" → "pokemon". */
+export const normalizeSearch = (text: string) =>
+  text.normalize("NFKD").replace(/\p{M}/gu, "").toLocaleLowerCase();
 
 /** Matches the model name or its provider name (case- and accent-insensitive). */
 function matches(item: PickerItem, query: string): boolean {
-  const q = normalize(query.trim());
+  const q = normalizeSearch(query.trim());
   if (!q) return true;
-  return normalize(item.label).includes(q) || normalize(item.provider ?? "").includes(q);
+  return (
+    normalizeSearch(item.label).includes(q) || normalizeSearch(item.provider ?? "").includes(q)
+  );
 }
 
 /**
@@ -162,7 +166,7 @@ export function ModelPicker({
             <Combobox.Empty>
               <p className="px-3 py-6 text-center text-xs text-fg-faint">No models match</p>
             </Combobox.Empty>
-            <Combobox.List className="scroll-thin max-h-[min(22rem,calc(var(--available-height)-3rem))] min-h-0 overflow-y-auto overscroll-contain p-1 outline-none empty:p-0">
+            <Combobox.List className="scroll-thin max-h-[min(22rem,calc(var(--available-height)-3rem))] min-h-0 scroll-pt-8 overflow-y-auto overscroll-contain p-1 outline-none empty:p-0">
               {(group: PickerGroup) => (
                 <Combobox.Group
                   className="pb-1 last:pb-0"
@@ -171,7 +175,7 @@ export function ModelPicker({
                   key={group.key}
                 >
                   {group.label !== null && group.providerId ? (
-                    <Combobox.GroupLabel className="flex items-center gap-2 px-2 pt-2 pb-1 text-2xs text-fg-subtle select-none">
+                    <Combobox.GroupLabel className="sticky top-0 z-[1] -mx-1 flex items-center gap-2 bg-elevated px-3 pt-2 pb-1 text-2xs text-fg-subtle select-none">
                       <span aria-hidden className="contents">
                         <ProviderLogo
                           framed={false}

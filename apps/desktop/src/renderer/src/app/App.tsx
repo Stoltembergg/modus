@@ -163,9 +163,15 @@ export function App() {
     : undefined;
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>();
   /** The agent dialog (A3): create in a group, or edit an agent. */
-  const [agentDialog, setAgentDialog] = useState<{ groupId: string; agent?: AgentInfo } | null>(
-    null,
-  );
+  const [agentDialog, setAgentDialogState] = useState<{
+    groupId: string;
+    agent?: AgentInfo;
+    /** New on every open: the dialog remounts instead of reviving an exiting instance. */
+    nonce: number;
+  } | null>(null);
+  const agentDialogSeq = useRef(0);
+  const setAgentDialog = (next: { groupId: string; agent?: AgentInfo } | null) =>
+    setAgentDialogState(next && { ...next, nonce: ++agentDialogSeq.current });
   const [initialEventsBySession, setInitialEventsBySession] = useState<
     Record<string, AgentEventItem[]>
   >({});
@@ -1328,7 +1334,7 @@ export function App() {
                       <AnimatePresence>
                         {agentDialogGroup && agentDialog ? (
                           <AgentDialog
-                            key={agentDialog.agent?.id ?? `new-${agentDialogGroup.id}`}
+                            key={`agent-dialog-${agentDialog.nonce}`}
                             agent={agentDialog.agent}
                             defaultModelId={model || undefined}
                             group={agentDialogGroup}

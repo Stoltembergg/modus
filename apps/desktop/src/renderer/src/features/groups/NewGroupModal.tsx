@@ -86,7 +86,9 @@ export type NewGroupModalProps = {
   services: NewGroupServices;
 };
 
-type AgentDialogState = { initial?: NewGroupAgentInput; lead?: boolean } | null;
+type AgentDialogRequest = { initial?: NewGroupAgentInput; lead?: boolean };
+/** `nonce` is new on every open: the dialog remounts instead of reviving an exiting instance. */
+type AgentDialogState = (AgentDialogRequest & { nonce: number }) | null;
 
 /**
  * "New group" (A4). Folder first (required; Projects plus "Add folder…",
@@ -127,7 +129,10 @@ export function NewGroupModal({
   const [tab, setTab] = useState<Tab>("templates");
   const [members, setMembers] = useState<NewGroupMember[]>([]);
   const [leadKey, setLeadKey] = useState<string | null>(null);
-  const [agentDialog, setAgentDialog] = useState<AgentDialogState>(null);
+  const [agentDialog, setAgentDialogState] = useState<AgentDialogState>(null);
+  const agentDialogSeq = useRef(0);
+  const setAgentDialog = (next: AgentDialogRequest | null) =>
+    setAgentDialogState(next && { ...next, nonce: ++agentDialogSeq.current });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [folderError, setFolderError] = useState<string | undefined>();
@@ -683,7 +688,7 @@ export function NewGroupModal({
               <AgentDialog
                 defaultModelId={defaultModelId}
                 draft={dialogTarget}
-                key="agent-dialog"
+                key={`agent-dialog-${agentDialog?.nonce ?? 0}`}
                 models={allModels}
                 onGenerate={services.generateProfile}
                 onOpenChange={(next) => {
