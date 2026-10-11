@@ -14,6 +14,7 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use crate::worker_admission::AdmissionAssessmentToken;
 
 pub mod resource_policy;
 pub mod worker_admission;
@@ -307,6 +308,7 @@ enum SessionState {
 pub struct Dispatcher {
     challenge: String,
     provenance: HostProvenance,
+    approved_policy: resource_policy::ResourcePolicy,
     granted_capabilities: BTreeSet<String>,
     state: SessionState,
     next_sequence: u64,
@@ -315,8 +317,8 @@ pub struct Dispatcher {
 
 impl Dispatcher {
     pub fn new(
+        admission: AdmissionAssessmentToken,
         challenge: impl Into<String>,
-        provenance: HostProvenance,
         granted_capabilities: impl IntoIterator<Item = String>,
     ) -> Result<Self, ProtocolError> {
         let challenge = challenge.into();
@@ -330,9 +332,11 @@ impl Dispatcher {
         {
             return Err(ProtocolError::InvalidCapability);
         }
+        let (provenance, approved_policy) = admission.into_parts();
         Ok(Self {
             challenge,
             provenance,
+            approved_policy,
             granted_capabilities,
             state: SessionState::AwaitingHello,
             next_sequence: 1,
@@ -516,6 +520,12 @@ impl Dispatcher {
 
     pub fn is_closed(&self) -> bool {
         self.state == SessionState::Closed
+    }
+
+    /// Frozen approved policy associated with this dispatcher's validated
+    /// platform assessment. It is not evidence that an OS enforces the limits.
+    pub fn approved_policy(&self) -> resource_policy::ResourcePolicy {
+        self.approved_policy
     }
 }
 
@@ -765,6 +775,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::worker_admission::synthetic_test_token;
 
     const CHALLENGE: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const DIGEST: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -803,8 +814,17 @@ mod tests {
         .unwrap()
     }
 
+    fn dispatcher_for(provenance: HostProvenance) -> Dispatcher {
+        Dispatcher::new(
+            synthetic_test_token(provenance),
+            CHALLENGE,
+            ["memory.read".to_string()],
+        )
+        .unwrap()
+    }
+
     fn new_dispatcher() -> Dispatcher {
-        Dispatcher::new(CHALLENGE, provenance(), ["memory.read".to_string()]).unwrap()
+        dispatcher_for(provenance())
     }
 
     fn hello() -> Vec<u8> {
@@ -1218,8 +1238,7 @@ mod tests {
     #[test]
     fn dispatcher_close_revokes_only_its_outstanding_invocations() {
         let mut first_dispatcher = new_dispatcher();
-        let mut second_dispatcher = Dispatcher::new(
-            CHALLENGE,
+        let mut second_dispatcher = dispatcher_for(
             HostProvenance::from_host_catalog(
                 "@modus/fixture-two",
                 "1.2.3",
@@ -1232,9 +1251,7 @@ mod tests {
                 2,
             )
             .unwrap(),
-            ["memory.read".to_string()],
-        )
-        .unwrap();
+        );
         first_dispatcher.receive(&hello()).unwrap();
         second_dispatcher.receive(&hello()).unwrap();
         let first = invocation(
@@ -1328,8 +1345,7 @@ mod tests {
         )
         .unwrap();
         let mut first = new_dispatcher();
-        let mut second =
-            Dispatcher::new(CHALLENGE, second_provenance, ["memory.read".to_string()]).unwrap();
+        let mut second = dispatcher_for(second_provenance);
 
         first.receive(&hello()).unwrap();
         second.receive(&hello()).unwrap();
@@ -1405,7 +1421,12 @@ mod tests {
     #[test]
     fn caps_pending_calls_and_response_bytes() {
         let grants = ["memory.read".to_string()];
-        let mut dispatcher = Dispatcher::new(CHALLENGE, provenance(), grants).unwrap();
+        let mut dispatcher = Dispatcher::new(
+            synthetic_test_token(provenance()),
+            CHALLENGE,
+            grants,
+        )
+        .unwrap();
         dispatcher.receive(&hello()).unwrap();
         for sequence in 1..=MAX_PENDING_REQUESTS as u64 {
             dispatcher

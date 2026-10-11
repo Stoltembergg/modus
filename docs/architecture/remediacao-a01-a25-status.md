@@ -25,8 +25,8 @@ blocked hostile-plugin or enforcement scenarios remains explicitly pending.
 
 ## A01–A04 — shared process protocol foundation
 
-**Status: shared protocol implemented and locally tested; no productive
-executor integration or security proof.** The new
+**Status: shared protocol and opaque admission prerequisite implemented; no
+productive executor integration or security proof.** The new
 `modus-plugin-execution-protocol` workspace crate defines the length-prefixed
 JSON worker envelope, strict message schemas, a per-worker handshake/sequence
 dispatcher, host-owned provenance, exact capability grants, bounded results,
@@ -169,6 +169,52 @@ terminate a process or prove that an in-flight OS operation was preempted.
   rejects v1 on all response variants. No production caller or OS process
   supervisor exists, so runtime wiring, deadline enforcement, preemption, and
   reap remain unproven.
+
+### One-use platform assessment prerequisite for the dispatcher
+
+`Dispatcher::new` now consumes a non-cloneable `AdmissionAssessmentToken`;
+host provenance alone cannot create a protocol dispatcher. The token is bound
+to the exact `HostProvenance` and records only the frozen
+`APPROVED_RESOURCE_POLICY`. An assessment with any changed field is rejected:
+the codec still enforces fixed limits, so accepting a smaller recorded policy
+would misstate what the dispatcher actually applies. The token and assessment
+have no wire/deserialization form. Synthetic construction exists only under
+`cfg(test)` for protocol fixtures. No production platform adapter implements
+the sealed `PlatformAssessmentSource`, so there is currently no production way
+to mint a token; this intentionally keeps external-worker dispatch unavailable
+and does not change the trusted Harness/plugin path.
+
+- RED: CI run `38109021619`, job `114380499499`, executed 26 existing protocol
+  unit tests successfully, then failed the new `compile_fail` doctest because
+  constructing a dispatcher from provenance alone **compiled successfully**.
+  This directly demonstrated the missing admission prerequisite.
+- GREEN tests now cover a complete synthetic assessment; omission of each
+  required control; one-above changes to each of the 25 frozen policy fields,
+  one-below changes to each positive field; and evidence from another
+  session, workspace, or run. The approved zero-child-process limit has no
+  representable lower value and is covered by the equality and one-above
+  cases. A
+  single macro defines the required control enum and list. Compile-fail
+  doctests ensure the token cannot be cloned or consumed by two dispatchers.
+  Until dynamic limits are wired throughout the codec, only the exact
+  approved policy is accepted.
+- The independent review rejected the earlier claims that this token was a
+  confinement proof or generation-bound: it was not tied to a process handle
+  or IPC stream, and the sealed adapter trait cannot be implemented in the
+  separate `plugin-sandbox-probe` crate. The API is now named and documented
+  as an assessment prerequisite, not OS evidence. This leaves a material
+  architectural gap: future platform adapters must live behind a reviewed
+  bridge in the protocol crate, and must own the process/stream binding before
+  artifacts are sent. The current `Dispatcher` still accepts caller-provided
+  frame bytes/readers and host-provided grants; this library API alone does
+  not prove those are from the assessed process or bound to the correct host
+  authorization.
+- No Windows/Linux/macOS adapter implementation, artifact-transfer callsite,
+  process supervisor, or productive desktop dependency exists. This source
+  contract neither proves OS policy enforcement nor closes A01–A04. The
+  external-worker path remains unavailable; the trusted Harness/plugin path is
+  unchanged. The independent follow-up and remote Rust job for the revised API
+  are pending.
 
 ## Mission CI prerequisite — Free monthly renewal calendar
 
@@ -1319,7 +1365,26 @@ implementation; A24 remains partial until that work is safe to enable.
   files with **0 errors, 318 warnings, and 46 infos**, and desktop TypeScript
   typecheck passed. The modified-file Biome check also exited 0 with one
   existing `noUnusedVariables` warning for `executeWasm<TIn>`. No unrelated
-  diagnostics were changed. Remote CI for this source follow-up is pending.
+  diagnostics were changed.
+- CI run `38108914588` on `7ea59b6` passed Biome/typecheck and the safe protocol,
+  A17/A21.2, Supabase, PTY, and compile-only jobs. All three plugin-containment
+  lanes exposed a test integration regression: `createInstance` now compiles
+  through its private snapshot helper, while the existing snapshot-integrity
+  test intercepted the public `compileModule` method and waited forever. This
+  left the pending instance rejection unobserved and caused a timeout; it did
+  not indicate a failed artifact-cap check. The test now pauses the actual
+  `WebAssembly.compile` call, retains the mutation-and-rejection assertions,
+  and restores the spy on all paths. The affected test and combined safe 19.1
+  selection pass **13/13** locally. Remote confirmation of the corrected test
+  is pending. The same CI run had one separate `FastVectorDistance` Vitest
+  failure at **0.127588 ms** against `<0.1 ms`; no base comparison was run, so
+  it remains unclassified. Windows and macOS packaging status for the run is
+  recorded separately below. On follow-up run `38109347484` at `e277fd6`, the
+  corrected A24 snapshot-integrity test passed in the Linux, macOS, and Windows
+  containment lanes, and global Vitest reported **4,682 passed, 8 skipped, 0
+  failed across 415 files**. Biome/typecheck and pgTAP also passed. The protocol
+  job failed only on its intentional A01 compile-fail RED test; Windows/macOS
+  package jobs were still pending at the time of this status update.
 
 ### Limits
 
@@ -1952,7 +2017,7 @@ cancellation follow-up above.
 
 | Finding | Current status | Implementation state / next evidence |
 |---|---|---|
-| A01 | Partially mitigated | Facade fails closed and Pi chat/review no longer auto-load project/user extensions. The shared protocol validates bounded frames and strict schemas; v2 adds distinct cancellation and rejects v1 on both worker handshake and host-response decode. No OS process executor or production caller exists; isolation and productive wiring remain unproven. Hostile execution proof remains blocked. |
+| A01 | Partially mitigated | Facade fails closed and Pi chat/review no longer auto-load project/user extensions. The shared protocol validates bounded frames and strict schemas; v2 adds distinct cancellation and rejects v1 on both worker handshake and host-response decode. `Dispatcher::new` now requires a non-cloneable assessment token, but the token is not bound to a process/stream, has no production adapter, and does not prove OS confinement. No productive executor exists; isolation and production wiring remain unproven. Hostile execution proof remains blocked. |
 | A02 | Partially mitigated | The shared resource-policy contract records the approved CPU, memory, time, output, IPC, process, hostcall and concurrency ceilings. No platform adapter enforces them, and no process-tree preemption/reap path is integrated. Do not run blocked probes. |
 | A03 | Partially mitigated | Chat/review auto-discovery remains blocked. Host catalog lookups, built-in catalog entries, loader results, and capability provider queries expose immutable metadata descriptors without lifecycle/implementation callbacks. `PluginLoader`, `PluginLifecycleService`, and `CapabilityRegistry` now keep trust/authorization maps, checkpoints, provenance state, source/executor references, and internal helpers in ECMAScript `#private` fields/methods; unused loader/service registry accessors were removed after full-repository callsite search found no consumers. Exact source references remain within trusted in-process wiring; this is reflective encapsulation, not process isolation. The v2 IPC contract carries host-only digest, origin, trust, session/workspace/run and generation provenance, but has no production caller and does not establish trust on its own. |
 | A04 | Partially mitigated | External Pi extension ingress is disabled for chat and review; the review callsite guard covers loader flags and session creation. Registry provider execution remains dispatched through `CapabilityRegistry.execute`; rollback uses opaque registry-owned checkpoints. Public catalog/registry lookup APIs no longer return implementation references. The shared IPC dispatcher validates exact grants and cancellation in synthetic fixtures, but built-ins remain trusted in-process and no OS-backed dispatcher/lifecycle boundary is integrated. |
