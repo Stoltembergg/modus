@@ -499,13 +499,14 @@ export function GroupMessageRow({
   const locale = t.locale;
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | undefined>();
-  const runSources = useRunSources(
+  const runSourceLookup = useRunSources(
     message.authorSessionId,
     message.runId,
     message.authorKind === "agent" &&
       message.kind === "message" &&
       (message.status === "completed" || message.status === undefined),
   );
+  const runSources = runSourceLookup.sources;
   async function retry(): Promise<void> {
     if (!onRetry || retrying) return;
     setRetrying(true);
@@ -784,6 +785,15 @@ export function GroupMessageRow({
           ) : null}
           {resultParsed ? <GroupFinalResultCard card={resultParsed.card} /> : null}
           <PromptSources onOpenFile={onOpenFile} sources={sources} />
+          {runSourceLookup.status === "unavailable" ? (
+            <div
+              className="mt-2 text-xs text-fg-muted"
+              data-testid="group-source-unavailable"
+              role="status"
+            >
+              {t("message.sourcesUnavailable")}
+            </div>
+          ) : null}
           <MessageAttachments message={message} />
           <MessageError message={message} />
           {canRetry ? (

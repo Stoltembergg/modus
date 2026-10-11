@@ -21,7 +21,12 @@ import { RevealOnMount } from "../../components/ui/RevealOnMount";
 import { Tooltip } from "../../components/ui/Tooltip";
 import { formatClock } from "../../lib/formatClock";
 import { formatTokenCount } from "../../lib/tokenUsage";
-import { collectRunSources, type RunSource, type RunSourcesSnapshot } from "../sources/runSources";
+import {
+  collectRunSources,
+  type RunSource,
+  RunSourceCollectionError,
+  type RunSourcesSnapshot,
+} from "../sources/runSources";
 import { WorkActivityRow, WorkFold } from "./ActivityGroup";
 import { MessageBlock } from "./MessageBlock";
 import {
@@ -971,9 +976,18 @@ export function buildBlocks(
   }
   for (const [runId, message] of finalAssistantByRun) {
     const isRequested = completeRunSources?.requestedRunIds.has(runId) ?? false;
-    const sources = isRequested
-      ? (completeRunSources?.sourcesByRun.get(runId) ?? [])
-      : collectRunSources(agentEvents, runId);
+    let sources: RunSource[];
+    if (isRequested) {
+      sources = completeRunSources?.sourcesByRun.get(runId) ?? [];
+    } else {
+      try {
+        sources = collectRunSources(agentEvents, runId);
+      } catch (error) {
+        if (!(error instanceof RunSourceCollectionError)) throw error;
+        message.sourceStatus = "unavailable";
+        continue;
+      }
+    }
     if (sources.length > 0) message.sources = sources;
     if (isRequested && completeRunSources?.loadingRunIds.has(runId)) {
       message.sourceStatus = "loading";

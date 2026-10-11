@@ -1909,7 +1909,7 @@ cancellation follow-up above.
 | A19 | Prior A21.4 implementation preserved | Spill authorization, persistence, quotas, and recovery. |
 | A20 | Partially mitigated; same-connection mutation detection and reflective state encapsulation | Audit events and checkpoints persist in SQLite; immutable snapshots, transactional retention, append-time verification on audit revision changes, and checkpoint comparisons detect ordinary record changes through the same or another connection. The logger's database handle and chain state, plus the fail-closed facade's logger reference, now use ECMAScript `#private`; this prevents ordinary property reflection only. No independent signing key or database access boundary exists, and public logger APIs remain available to code holding a reference. |
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |
-| A22 | Partially mitigated; productive readers page and source extraction is incremental | Cursor-page reads now drive IPC, timeline/history, source lookup and Pi output; the unbounded `agent:list-events` bridge endpoint is removed. Store/helper/context tests passed 89/89, offline Pi runtime 232/232; source/timeline/history/EventHub regressions passed 39/39; the A22 IPC follow-up passed 87/87 and independent review found no blocker. The internal `listAgentEvents` helper still aggregates if explicitly called but has no productive callsite. CI on `e1f175e` passed Biome/typecheck, containment on all three platforms, Verifier-First, sandbox compile-only and PTY cancellation. Global Vitest recorded 4,606 passed, 8 skipped, one `FastVectorDistance` timing failure at 0.113051 ms against <0.1 ms; pgTAP test 22 received 2026-10-30 and expected 2026-10-31. Subsequent pgTAP CI after migration `6844254` passed (20 files/1,041 tests; see the renewal follow-up above). Windows/macOS packaging later passed. Fresh read-only query-plan checks show the current `idx_agent_events_session_id` serves forward and backward `rowid` keyset ranges; a proposed composite index was discarded because `event_cursor` is the `INTEGER PRIMARY KEY` rowid alias and the existing plan already applies the cursor bounds. No query-plan regression was demonstrated. No baseline or instability classification is claimed. Active source-tool arguments/output, individual raw event payloads, synthetic prompt backfill and volatile partial previews remain byte/retention limitations. |
+| A22 | Partially mitigated; productive event reads are paged and renderer source collection now fails closed at bounded collector-local budgets | Cursor-page reads drive IPC, timeline/history, source lookup and Pi output; the old `agent:list-events` bridge endpoint is removed. This increment bounds active call identities, argument traversal/references, unfinished external-tool output, and retained source metadata; ambiguous active tool-call IDs across runs now invalidate source attribution. Overflow is sticky: complete lookup fails, the main-chat hook marks the run failed, the group hook exposes unavailable status, and synchronous timeline rendering preserves the answer while marking sources unavailable. RED/GREEN and local checks are recorded below. This does not bound event-page materialization/IPC payload size or total renderer heap, and the existing 24-source display cap can omit later references; A22 remains partial. The `FastVectorDistance` timing failure from CI run `38100554455` is documented in the latest validation section and is not classified as pre-existing or solely environmental. |
 | A23 | Mitigated; integrated checks pass | Synthetic capability outputs and the generic core `status: ok` fallback now fail explicitly with `CapabilityUnavailableError`; stale declared grants are reconciled by exact host identity/version; separate Pi runtime services, A16 selection, and A17 evidence flows are preserved. Independent review found no blocker. Workflow `38081920060` passed the relevant feature jobs, Supabase pgTAP (20 files/1,041 tests), containment, compile-only sandbox and Windows/macOS packaging. The same run had one unrelated-to-A23 global Vitest timing failure, without a baseline classification. |
 | A24 | Partially mitigated | Compiled-module cache has LRU entry/source-byte caps and hashes caller namespaces; cache counters do not measure native compiled memory. A05 supplies measured failure metrics. WASI remains denied and stdio capture is unavailable. |
 | A25 | Mitigated; prior fix preserved and revalidated | `allow-workspace` requires workspace+tool identity and lookup keys include both plus action/target; the Pi runtime supplies persisted host workspace identity across worktree cwd changes. Unknown tools are blocked before permission prompting and are not read-only safe. Safe focused validation: 52 permission-store/permission-extension/tool-registry tests and one productive Pi runtime workspace-scope test passed. A two-workspace synthetic store test passes; external tool/plugin execution remains disabled. |
@@ -2549,3 +2549,63 @@ sandbox compile-only, Verifier-First, and PTY cancellation passed. The Windows
 package run `38100096636` completed successfully; the macOS package run
 `38100096627` was still running at this snapshot. This run validates the
 published `3f9a3ed` commit, not the uncommitted A13 follow-up described above.
+
+### A22 source collector bounds and failure attribution
+
+The run-source collector now retains only the selected file paths and URLs from
+arguments, rather than holding whole argument objects. It caps call identities,
+argument traversal depth/nodes/bytes, active selected references, tracked
+external-tool output, total scanned bytes, and stored source metadata. A
+budget breach latches a generic collector error; `finish()` cannot return a
+partial source set as complete.
+
+- RED/GREEN: the first budget regressions failed for 257 unfinished calls,
+  oversized argument data, and over-budget output. The paged lookup regression
+  failed when the 257th unfinished call crossed the 256-event page boundary;
+  another failed when retained output exceeded its budget across pages. The
+  collector and paged hook suites then passed **14/14**. The existing
+  snapshot-change rejection was preserved.
+- Independent review found two further paths. The synchronous timeline fallback
+  could throw during React render, and a repeated active `toolCallId` across
+  runs could misattribute `tool.output` events because that event has no
+  `runId`. New timeline and Agent Group UI tests failed RED on render failure
+  and on the absence of an unavailable state; a collector fixture failed RED
+  on active ID reuse. The fix latches both budget and attribution errors, keeps
+  the timeline answer renderable with source status `unavailable`, and exposes
+  the same unavailable state on Agent Group messages. Tool IDs are tracked
+  across active runs so untagged output is consumed only for the exact target
+  run; a duplicate active identity fails closed.
+- GREEN: collector budget, paged lookup, the existing snapshot-change
+  rejection, timeline fallback, and Agent Group overflow indication passed
+  **86/86** across four targeted Vitest files. The new budget, attribution,
+  timeline, and Agent Group cases had failed RED before their fixes. Desktop
+  TypeScript typecheck passed. Targeted Biome passed on all nine changed
+  source, hook, timeline, group-copy and test files without fixes;
+  `git diff --check` passed. Independent second review confirmed that the
+  render crash and cross-run attribution blockers are closed.
+- Collector limits apply only after an event page has been materialized. They
+  do not cap stored event payloads, IPC page bytes, JavaScript object overhead,
+  or process RSS. The UI's existing 24-item source cap remains in place and can
+  omit additional unique references. Independent review also found that
+  completed-run source loading fans out one request per run and pagination
+  already in flight is not aborted on unmount. These aggregate concurrency and
+  cancellation gaps, plus event-page materialization, IPC page bytes, renderer
+  heap and process RSS, remain outside this increment. A22 remains partial;
+  this change does not claim complete memory bounding.
+
+
+#### Remote CI baseline on `907fd92` before the source-collector follow-up
+
+Workflow `38100554455` ran on the published A13 commit `907fd926` before these
+A22 source-collector changes. Its global Vitest job failed one timing assertion
+in `wasm-sandbox.test.ts:1003`: `FastVectorDistance` measured `0.109634 ms`
+against `<0.1 ms`; **4,657 tests passed, 8 skipped, and 1 failed across 415
+files**. The Ubuntu containment job independently hit that same assertion at
+`0.104817 ms` (**307 passed, 7 skipped, 1 failed across 11 files**). The
+benchmark, its threshold, filters, and production implementation were not
+changed, and these observations do not establish a baseline or solely
+environmental cause. The same workflow passed Biome/typecheck, pgTAP, safe IPC
+fixtures, PTY cancellation, Verifier-First, sandbox compile-only, and safe
+containment on macOS and Windows. Windows packaging run `38100554454` and macOS
+packaging run `38100554439` both succeeded. A fresh CI run is required for the
+A22 working-tree changes after publication.

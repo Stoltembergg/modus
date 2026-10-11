@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react";
 import type { AgentEventPage, AgentEventPageOptions } from "../../../../shared/agent-events";
-import { createRunSourceCollector, type RunSource, type RunSourcesSnapshot } from "./runSources";
+import {
+  createRunSourceCollector,
+  type RunSource,
+  type RunSourceLookupSnapshot,
+  type RunSourcesSnapshot,
+} from "./runSources";
 
 const EVENT_PAGE_SIZE = 256;
 const pendingRunSources = new Map<string, Promise<RunSource[]>>();
@@ -51,24 +56,40 @@ export function useRunSources(
   sessionId: string | undefined,
   runId: string | undefined,
   enabled: boolean,
-): RunSource[] {
-  const [sources, setSources] = useState<RunSource[]>([]);
+): RunSourceLookupSnapshot {
+  const requestKey = `${sessionId ?? ""}\0${runId ?? ""}\0${enabled ? "enabled" : "disabled"}`;
+  const [snapshot, setSnapshot] = useState<RunSourceLookupSnapshot & { key: string }>(() => ({
+    key: "",
+    sources: [],
+    status: "loading",
+  }));
   useEffect(() => {
     let cancelled = false;
-    setSources([]);
-    if (!sessionId || !runId || !enabled || !window.modus?.agent?.listEventPage) return;
+    if (!sessionId || !runId || !enabled) {
+      setSnapshot({ key: requestKey, sources: [], status: "loaded" });
+      return;
+    }
+    if (!window.modus?.agent?.listEventPage) {
+      setSnapshot({ key: requestKey, sources: [], status: "unavailable" });
+      return;
+    }
+    setSnapshot({ key: requestKey, sources: [], status: "loading" });
     void loadRunSources(sessionId, runId)
       .then((sources) => {
-        if (!cancelled) setSources(sources);
+        if (!cancelled) setSnapshot({ key: requestKey, sources, status: "loaded" });
       })
       .catch(() => {
-        if (!cancelled) setSources([]);
+        if (!cancelled) setSnapshot({ key: requestKey, sources: [], status: "unavailable" });
       });
     return () => {
       cancelled = true;
     };
-  }, [enabled, runId, sessionId]);
-  return sources;
+  }, [enabled, requestKey, runId, sessionId]);
+  if (snapshot.key === requestKey) return snapshot;
+  return {
+    sources: [],
+    status: enabled && sessionId && runId ? "loading" : "loaded",
+  };
 }
 
 /** Loads complete source sets for the visible main-chat runs using run-scoped pages. */

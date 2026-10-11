@@ -192,6 +192,61 @@ describe("buildBlocks", () => {
     );
   });
 
+  it("keeps the activity timeline renderable when run-source extraction exceeds its budget", () => {
+    const blocks = buildVisibleTimelineBlocks([
+      item("run", { type: "run.started", sessionId: "s", runId: "r", delivery: "normal" }),
+      item("search-start", {
+        type: "tool.started",
+        sessionId: "s",
+        runId: "r",
+        toolCallId: "search",
+        toolName: "web_search",
+      }),
+      item("search-output", {
+        type: "tool.output",
+        sessionId: "s",
+        toolCallId: "search",
+        output: `result ${"x".repeat(1024 * 1024)}`,
+      }),
+      item("search-end", {
+        type: "tool.ended",
+        sessionId: "s",
+        runId: "r",
+        toolCallId: "search",
+        isError: false,
+      }),
+      item("answer-start", {
+        type: "message.started",
+        sessionId: "s",
+        messageId: "answer",
+        role: "assistant",
+      }),
+      item("answer-text", {
+        type: "message.delta",
+        sessionId: "s",
+        messageId: "answer",
+        delta: "The answer is still visible.",
+      }),
+      item("answer", {
+        type: "message.completed",
+        sessionId: "s",
+        messageId: "answer",
+      }),
+      item("run-end", { type: "run.completed", sessionId: "s", runId: "r" }),
+    ]);
+
+    expect(blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "message",
+          role: "assistant",
+          content: "The answer is still visible.",
+          sourceStatus: "unavailable",
+        }),
+      ]),
+    );
+  });
+
   it("renders adaptive decision and failure notices", () => {
     const blocks = buildBlocks([
       item("d1", {

@@ -94,6 +94,8 @@ const GROUP_TASK_TEXT_EN = {
   "taskDetails.dependencies": "Dependencies",
   "taskDetails.criteriaAndQa": "Criteria and QA",
   "taskDetails.sourceUnavailable": "Current source is unavailable.",
+  "message.sourcesUnavailable":
+    "Run sources could not be loaded. The source list may be incomplete.",
   "taskDetails.reviewEvidence": "Review evidence",
   "taskDetails.openQaSession": "Open QA session",
   "taskDetails.review": "Review:",
@@ -230,6 +232,8 @@ const GROUP_TASK_TEXT_PT: Record<keyof typeof GROUP_TASK_TEXT_EN, string> = {
   "taskDetails.dependencies": "Dependências",
   "taskDetails.criteriaAndQa": "Critérios e QA",
   "taskDetails.sourceUnavailable": "A origem atual está indisponível.",
+  "message.sourcesUnavailable":
+    "Não foi possível carregar as fontes da execução. A lista pode estar incompleta.",
   "taskDetails.reviewEvidence": "Evidência de revisão",
   "taskDetails.openQaSession": "Abrir sessão de QA",
   "taskDetails.review": "Revisão:",
@@ -363,6 +367,7 @@ const GROUP_TASK_TEXT_ZH: Record<keyof typeof GROUP_TASK_TEXT_EN, string> = {
   "taskDetails.dependencies": "依赖项",
   "taskDetails.criteriaAndQa": "验收标准与 QA",
   "taskDetails.sourceUnavailable": "当前来源不可用。",
+  "message.sourcesUnavailable": "无法加载本次运行的来源。来源列表可能不完整。",
   "taskDetails.reviewEvidence": "审核证据",
   "taskDetails.openQaSession": "打开 QA 会话",
   "taskDetails.review": "审核：",

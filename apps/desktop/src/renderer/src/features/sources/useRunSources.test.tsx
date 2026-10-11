@@ -91,7 +91,7 @@ describe("useRunSources", () => {
     const hook = renderHook(() => useRunSources("s", "run-target", true));
 
     await waitFor(() =>
-      expect(hook.result.current).toEqual([
+      expect(hook.result.current.sources).toEqual([
         expect.objectContaining({ path: "/repo/src/target.ts" }),
       ]),
     );
@@ -162,11 +162,11 @@ describe("useRunSources", () => {
 
     const firstView = renderHook(() => useRunSources(sessionId, runId, true));
     try {
-      await waitFor(() => expect(firstView.result.current).toHaveLength(1));
+      await waitFor(() => expect(firstView.result.current.sources).toHaveLength(1));
       firstView.unmount();
 
       const secondView = renderHook(() => useRunSources(sessionId, runId, true));
-      await waitFor(() => expect(secondView.result.current).toHaveLength(1));
+      await waitFor(() => expect(secondView.result.current.sources).toHaveLength(1));
       expect(listEventPage).toHaveBeenCalledTimes(2);
     } finally {
       clock.mockRestore();
@@ -302,6 +302,122 @@ describe("useRunSources", () => {
 
     await waitFor(() => expect(hook.result.current.failedRunIds.has("stalled-run")).toBe(true));
     expect(hook.result.current.sourcesByRun.has("stalled-run")).toBe(false);
+  });
+
+  it("marks the whole source lookup failed when unfinished calls exceed the collector budget", async () => {
+    const sessionId = "bounded-source-session";
+    const runId = "bounded-source-run";
+    const events: AgentEventPage["events"] = Array.from({ length: 257 }, (_, index) => ({
+      id: `bounded-start-${index}`,
+      event: {
+        type: "tool.started" as const,
+        sessionId,
+        runId,
+        toolCallId: `bounded-call-${index}`,
+        toolName: "web_search",
+        args: { query: "docs" },
+        eventCursor: index + 1,
+      },
+      createdAt: "2026-10-01T12:00:00.000Z",
+    }));
+    const firstPage: AgentEventPage = {
+      events: events.slice(0, 256),
+      summaryEvents: [],
+      activityEvents: [],
+      snapshotCursor: 257,
+      nextCursor: 256,
+      hasMore: true,
+    };
+    const secondPage: AgentEventPage = {
+      events: events.slice(256),
+      summaryEvents: [],
+      activityEvents: [],
+      snapshotCursor: 257,
+      nextCursor: 257,
+      hasMore: false,
+    };
+    const listEventPage = vi
+      .fn()
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce(secondPage);
+    Object.assign(window, { modus: { agent: { listEventPage } } });
+
+    const hook = renderHook(() => useRunSourcesForRuns(sessionId, [runId]));
+
+    await waitFor(() => expect(hook.result.current.failedRunIds.has(runId)).toBe(true));
+    expect(listEventPage).toHaveBeenCalledTimes(2);
+    expect(hook.result.current.sourcesByRun.has(runId)).toBe(false);
+    expect(hook.result.current.loadingRunIds.has(runId)).toBe(false);
+  });
+
+  it("fails a paged lookup when retained output crosses the run budget", async () => {
+    const sessionId = "bounded-output-session";
+    const runId = "bounded-output-run";
+    const firstPage: AgentEventPage = {
+      events: [
+        {
+          id: "bounded-output-start",
+          event: {
+            type: "tool.started",
+            sessionId,
+            runId,
+            toolCallId: "bounded-output-call",
+            toolName: "web_search",
+            eventCursor: 1,
+          },
+          createdAt: "2026-10-01T12:00:00.000Z",
+        },
+      ],
+      summaryEvents: [],
+      activityEvents: [],
+      snapshotCursor: 3,
+      nextCursor: 1,
+      hasMore: true,
+    };
+    const secondPage: AgentEventPage = {
+      events: [
+        {
+          id: "bounded-output-text",
+          event: {
+            type: "tool.output",
+            sessionId,
+            toolCallId: "bounded-output-call",
+            output: "x".repeat(1024 * 1024 + 1),
+            eventCursor: 2,
+          },
+          createdAt: "2026-10-01T12:00:01.000Z",
+        },
+        {
+          id: "bounded-output-end",
+          event: {
+            type: "tool.ended",
+            sessionId,
+            runId,
+            toolCallId: "bounded-output-call",
+            toolName: "web_search",
+            isError: false,
+            eventCursor: 3,
+          },
+          createdAt: "2026-10-01T12:00:02.000Z",
+        },
+      ],
+      summaryEvents: [],
+      activityEvents: [],
+      snapshotCursor: 3,
+      nextCursor: 3,
+      hasMore: false,
+    };
+    const listEventPage = vi
+      .fn()
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce(secondPage);
+    Object.assign(window, { modus: { agent: { listEventPage } } });
+
+    const hook = renderHook(() => useRunSourcesForRuns(sessionId, [runId]));
+
+    await waitFor(() => expect(hook.result.current.failedRunIds.has(runId)).toBe(true));
+    expect(listEventPage).toHaveBeenCalledTimes(2);
+    expect(hook.result.current.sourcesByRun.has(runId)).toBe(false);
   });
 
   it("marks run history unavailable when the page snapshot changes mid-read", async () => {
