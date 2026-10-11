@@ -10,8 +10,8 @@ use modus_plugin_execution_protocol::worker_admission::{
     WorkerTransport,
 };
 use modus_plugin_execution_protocol::{
-    decode_host_frame, encode_worker_frame, DispatchEvent, HostFrame, HostProvenance,
-    HostTrustLevel, InvocationOutcome, WorkerFrame, WorkerSession, PROTOCOL_VERSION,
+    DispatchEvent, HostFrame, HostProvenance, HostTrustLevel, InvocationOutcome, PROTOCOL_VERSION,
+    WorkerFrame, WorkerSession, decode_host_frame, encode_worker_frame,
 };
 use serde_json::json;
 
