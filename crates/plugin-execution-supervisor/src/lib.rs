@@ -14,8 +14,8 @@ use modus_plugin_execution_protocol::worker_admission::{
     HostAuthorization, PluginHostcallRateLimiterRegistry, WorkerTransport,
 };
 use modus_plugin_execution_protocol::{
-    HostProvenance, HostTrustLevel, InvocationOutcome, ProtocolError, WorkerSession,
-    MAX_IPC_FRAME_BYTES, MAX_RESULT_BYTES,
+    HostProvenance, HostTrustLevel, InvocationOutcome, MAX_IPC_FRAME_BYTES, MAX_RESULT_BYTES,
+    ProtocolError, WorkerSession,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -49,21 +49,10 @@ pub struct WorkerInvocationRequest {
     deny_unknown_fields
 )]
 pub enum WorkerInvocationResponse {
-    Completed {
-        request_id: String,
-        result: Value,
-    },
-    Failed {
-        request_id: String,
-        error: String,
-    },
-    Cancelled {
-        request_id: String,
-    },
-    Denied {
-        request_id: String,
-        reason: String,
-    },
+    Completed { request_id: String, result: Value },
+    Failed { request_id: String, error: String },
+    Cancelled { request_id: String },
+    Denied { request_id: String, reason: String },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -231,11 +220,11 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    use modus_plugin_execution_protocol::worker_admission::PlatformAssessment;
     use modus_plugin_execution_protocol::{
         DispatchEvent, HostFrame, PROTOCOL_VERSION, WorkerExecutionOutcome, WorkerFrame,
         decode_host_frame, encode_worker_frame,
     };
-    use modus_plugin_execution_protocol::worker_admission::{PlatformAssessment};
     use serde_json::json;
 
     const CHALLENGE: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -359,7 +348,9 @@ mod tests {
 
         assert_eq!(
             result,
-            Ok(InvocationOutcome::Success(json!({ "value": "synthetic result" })))
+            Ok(InvocationOutcome::Success(
+                json!({ "value": "synthetic result" })
+            ))
         );
         assert!(terminated.load(Ordering::SeqCst));
         assert!(reaped.load(Ordering::SeqCst));

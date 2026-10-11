@@ -1,8 +1,8 @@
 use std::io::{self, Read, Write};
 
 use modus_plugin_execution_supervisor::{
-    MAX_SUPERVISOR_REQUEST_BYTES, WorkerInvocationResponse,
-    encode_supervisor_response, handle_unavailable_linux_request,
+    MAX_SUPERVISOR_REQUEST_BYTES, WorkerInvocationResponse, encode_supervisor_response,
+    handle_unavailable_linux_request,
 };
 
 fn main() {
