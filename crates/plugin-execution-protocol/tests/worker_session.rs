@@ -52,7 +52,10 @@ unsafe impl WorkerTransport for FixtureTransport {
 
     fn reap_until(&mut self, deadline: Instant) -> io::Result<()> {
         if Instant::now() >= deadline {
-            return Err(io::Error::new(io::ErrorKind::TimedOut, "fixture reap deadline"));
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "fixture reap deadline",
+            ));
         }
         self.reaped.store(true, Ordering::SeqCst);
         Ok(())
@@ -140,7 +143,10 @@ fn runtime_session_keeps_handshake_invocation_and_response_on_assessed_transport
 
     let (mut session, outgoing, terminated, reaped) = session(input);
     let deadline = Instant::now() + Duration::from_secs(1);
-    assert_eq!(session.receive_until(deadline), Ok(Some(DispatchEvent::Ready)));
+    assert_eq!(
+        session.receive_until(deadline),
+        Ok(Some(DispatchEvent::Ready))
+    );
     let invocation = match session.receive_until(deadline).unwrap().unwrap() {
         DispatchEvent::Invocation(invocation) => invocation,
         DispatchEvent::Ready => panic!("hello is only accepted once"),
