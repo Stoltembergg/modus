@@ -290,6 +290,7 @@
      Text contrast on these tiers is pinned by styles/glassTokens.test.ts. */
   --glass-alpha-chrome: 78%; /* window tint: rail + sidebar, and main in Full */
   --glass-alpha-overlay: 82%; /* raised/glass surfaces, popups, pdf + mermaid chrome */
+  --glass-alpha-strip: 78%; /* sticky title strips over scrolling content: frost + enough tint to keep the label legible */
   --glass-blur: 18px;
   --glass-saturate: 1.12;
   --glass-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
@@ -1051,6 +1052,52 @@ body {
       }
       :root[data-native-glass="true"][data-transparency="sidebar"] .app-layout-row .surface-main {
         border-left-color: transparent;
+      }
+    }
+  }
+}
+
+/*
+ * Sticky title strips over scrolling content (model picker group labels, the Settings page
+ * header, Settings › Providers model-group headers). One class, three solid bases:
+ *   [data-strip="elevated"] popovers (default), [data-strip="panel"], [data-strip="canvas"]
+ *   (the Settings header keeps its fade into the page).
+ * Solid by default and in every fallback (Transparency "sidebar", reduced transparency, more
+ * contrast, forced colors, no backdrop-filter). Under native glass + Transparency "full" it is
+ * the same frost as .subagent-preview-scrim: a uniform blur of what scrolls underneath plus a
+ * light tint (--glass-alpha-strip), no border, no shadow, no mask (a masked backdrop-filter
+ * shows text twice, sharp and soft).
+ */
+.sticky-glass-strip {
+  --strip-solid: var(--color-elevated);
+  background-color: var(--strip-solid);
+}
+.sticky-glass-strip[data-strip="panel"] {
+  --strip-solid: var(--color-panel);
+}
+.sticky-glass-strip[data-strip="canvas"] {
+  --strip-solid: var(--color-canvas);
+  background-color: transparent;
+  background-image: linear-gradient(
+    to bottom,
+    var(--color-canvas) 0%,
+    var(--color-canvas) 50%,
+    color-mix(in srgb, var(--color-canvas) 0%, transparent) 100%
+  );
+}
+@media (prefers-reduced-transparency: no-preference) and (prefers-contrast: no-preference) {
+  @media (forced-colors: none) {
+    @supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+      :root[data-native-glass="true"][data-transparency="full"] .sticky-glass-strip {
+        background-image: none;
+        border-color: transparent;
+        background-color: color-mix(
+          in oklab,
+          var(--strip-solid) var(--glass-alpha-strip),
+          transparent
+        );
+        -webkit-backdrop-filter: var(--glass-filter);
+        backdrop-filter: var(--glass-filter);
       }
     }
   }

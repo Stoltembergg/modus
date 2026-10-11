@@ -522,7 +522,9 @@ export function SettingsPanel({
           {activeSection === "general" ? (
             <GeneralSettingsPanel cwd={workspaceCwd} workspaces={workspaces} />
           ) : null}
-          {activeSection === "account" ? <AccountSettingsPanel modusStatus={state?.modus} /> : null}
+          {activeSection === "account" ? (
+            <AccountSettingsPanel modusPlan={state?.modusPlan} modusStatus={state?.modus} />
+          ) : null}
           {activeSection === "appearance" ? <AppearanceSettingsPanel /> : null}
           {activeSection === "personalization" ? <PersonalizationSettingsPanel /> : null}
           {activeSection === "skills" ? <SkillsSettingsPanel cwd={workspaceCwd} /> : null}

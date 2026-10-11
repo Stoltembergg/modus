@@ -12,10 +12,12 @@ import {
   AccountBillingSection,
   BillingSectionView,
   cancelConfirmMessage,
+  creditCount,
+  creditsDescription,
   formatCredits,
   formatMoney,
-  formatPrice,
   groupCatalog,
+  packTitle,
 } from "./account-billing";
 
 afterEach(() => {
@@ -65,9 +67,18 @@ const READY: BillingState = {
 };
 
 const noop = () => undefined;
-const markup = (state: BillingState | undefined) =>
+const PACK_5K: BillingCreditPack = {
+  packId: "credits_5k",
+  name: "5,000 credits",
+  credits: 5000,
+  currency: "BRL",
+  amountMinor: 3690,
+  sortOrder: 1,
+};
+const markup = (state: BillingState | undefined, accessPlan?: string) =>
   renderToStaticMarkup(
     <BillingSectionView
+      accessPlan={accessPlan}
       busy={false}
       onCheckout={noop}
       onPortal={noop}
@@ -79,13 +90,22 @@ const markup = (state: BillingState | undefined) =>
   );
 
 describe("Account billing formatting", () => {
-  it("formats BRL from minor units with pt-BR separators", () => {
-    expect(formatMoney(4990, "BRL")).toBe("R$ 49,90");
-    expect(formatMoney(10990, "BRL")).toBe("R$ 109,90");
-    expect(formatMoney(900, "USD")).toBe("$9.00");
-    expect(formatCredits(10000)).toBe("10,000");
-    expect(formatPrice(0)).toBe("Free");
-    expect(formatPrice(1999)).toBe("$19.99/mo");
+  /** Intl may separate the currency symbol with a (narrow) no-break space. */
+  const plain = (text: string) => text.replace(/[\u00a0\u202f]/g, " ");
+
+  it("credits and money follow the given locale (the app passes the system one)", () => {
+    const pack = PACK_5K;
+    expect(plain(packTitle(pack, "pt-BR"))).toBe("5.000 credits for R$ 36,90");
+    expect(plain(packTitle(pack, "en-US"))).toBe("5,000 credits for R$36.90");
+    expect(plain(formatMoney(10990, "BRL", "pt-BR"))).toBe("R$ 109,90");
+    expect(formatMoney(900, "USD", "en-US")).toBe("$9.00");
+    expect(formatCredits(10000, "pt-BR")).toBe("10.000");
+    expect(creditCount(1, "en-US")).toBe("1 credit");
+    // No locale: the system's, exactly what Intl.NumberFormat(undefined) gives.
+    expect(formatCredits(10000)).toBe(new Intl.NumberFormat(undefined).format(10000));
+    expect(formatMoney(3690, "BRL")).toBe(
+      new Intl.NumberFormat(undefined, { style: "currency", currency: "BRL" }).format(36.9),
+    );
   });
 
   it("groups catalog rows per plan with Mercado Pago first", () => {
@@ -104,10 +124,11 @@ describe("Account billing section", () => {
 
   it("offers Starter through Mercado Pago in BRL and hides Stripe without a stripe row", () => {
     const html = markup(READY);
-    expect(html).toContain("Plan &amp; credits");
+    expect(html).toContain("Plan and credits");
     expect(html).toContain("Mercado Pago");
-    expect(html).toContain("Starter · R$ 49,90/mo");
-    expect(html).toContain("10,000 credits per month");
+    expect(html).toContain(`Starter for ${formatMoney(4990, "BRL")} a month`);
+    expect(html).toContain(`${creditCount(10000)} a month`);
+    expect(html).not.toContain(" · ");
     expect(html).toContain("Subscribe</button>");
     expect(html).not.toMatch(/Stripe|card/i);
     expect(html).not.toContain("Subscribe with");
@@ -119,7 +140,9 @@ describe("Account billing section", () => {
     const html = markup({ ...READY, catalog: [MP_STARTER, STRIPE_STARTER] });
     expect(html).toContain("Subscribe</button>");
     expect(html).toContain("Pay by card (Stripe)");
-    expect(html).toContain("R$ 49,90/mo or $9.00/mo");
+    expect(html).toContain(
+      `${formatMoney(4990, "BRL")} a month or ${formatMoney(900, "USD")} a month`,
+    );
   });
 
   it("has loading, error and empty catalog states without a buy button", () => {
@@ -127,10 +150,13 @@ describe("Account billing section", () => {
     expect(loading).toContain("Loading…");
     expect(loading).not.toContain("Subscribe</button>");
     const failed = markup({ ...READY, catalog: null });
-    expect(failed).toContain("Plans unavailable");
+    expect(failed).toContain("Credit packs couldn&#x27;t be loaded");
+    expect(failed).toContain("Try again</button>");
     expect(failed).not.toContain("Subscribe</button>");
     const empty = markup({ ...READY, catalog: [] });
-    expect(empty).toContain("No plans available");
+    expect(empty).toContain("Credit packs aren&#x27;t on sale");
+    expect(empty).toContain("Refresh</button>");
+    expect(empty).not.toContain("No plans available");
     expect(empty).not.toContain("Subscribe</button>");
     const errored = markup({ ...READY, status: "error", catalog: null, error: "Billing is down" });
     expect(errored).toContain("Billing is down");
@@ -164,7 +190,7 @@ describe("Account billing section", () => {
     expect(mp).not.toContain("Subscribe</button>");
     expect(mp).not.toContain("Manage billing");
     expect(mp).toContain("billed by Mercado Pago");
-    expect(mp).toContain("11,000");
+    expect(mp).toContain(formatCredits(11000));
     expect(mp).toContain("Payment received");
     expect(mp).not.toContain("Stripe");
 
@@ -317,7 +343,7 @@ describe("Mercado Pago cancel (L1e)", () => {
   it("L1g: cancelled but paid until the period end: Starter until <date>, no buttons, no Subscribe", () => {
     const grace = subscribed({ status: "canceled", cancelAtPeriodEnd: true });
     const html = markup(grace);
-    expect(html).toContain(`Cancelled · Starter until ${UNTIL}`);
+    expect(html).toContain(`Cancelled. You keep Starter until ${UNTIL}.`);
     expect(html).toContain("Subscription cancelled");
     expect(html).toContain(`You keep Starter until ${UNTIL}; after that you move to Free`);
     expect(html).not.toContain(">Cancel subscription</button>");
@@ -337,7 +363,7 @@ describe("Mercado Pago cancel (L1e)", () => {
     // Without a date the copy still holds.
     expect(
       markup(subscribed({ status: "canceled", cancelAtPeriodEnd: true, currentPeriodEnd: null })),
-    ).toContain("Cancelled · Starter until the period ends");
+    ).toContain("Cancelled. You keep Starter until the period ends.");
   });
 
   it("L1g: after the period end the grace row is gone and Free + Subscribe are back", async () => {
@@ -346,12 +372,12 @@ describe("Mercado Pago cancel (L1e)", () => {
     const { push } = mount(subscribed(), async () => grace);
     fireEvent.click(await screen.findByRole("button", { name: "Cancel subscription" }));
     expect(confirm).toHaveBeenCalledWith(cancelConfirmMessage("Starter", UNTIL));
-    await screen.findByText(`Cancelled · Starter until ${UNTIL}`);
+    await screen.findByText(`Cancelled. You keep Starter until ${UNTIL}.`);
     expect(screen.queryByRole("button", { name: /^Subscribe$/ })).toBeNull();
     // The next read no longer finds the row (current_period_end passed): Free.
     push(READY);
     await screen.findByRole("button", { name: /^Subscribe$/ });
-    expect(screen.getByText("No paid subscription.")).toBeTruthy();
+    expect(screen.getByText("Buying credits doesn't change your plan.")).toBeTruthy();
     confirm.mockRestore();
   });
 
@@ -434,7 +460,7 @@ describe("Mercado Pago cancel (L1e)", () => {
     const confirm = stubConfirm().mockReturnValue(true);
     const { cancel } = mount(subscribed({ status: "paused" }), async () => READY);
     // The status line and the row title; a paused subscription does not "renew".
-    expect(await screen.findAllByText("Subscription paused")).toHaveLength(2);
+    expect(await screen.findAllByText(/^Subscription paused\.?$/)).toHaveLength(2);
     expect(screen.queryByText(/renews/)).toBeNull();
     expect(screen.queryByRole("button", { name: /^Subscribe$/ })).toBeNull();
     fireEvent.click(await screen.findByRole("button", { name: "Cancel subscription" }));
@@ -520,14 +546,7 @@ describe("Mercado Pago cancel (L1e)", () => {
 
 describe("L5b credit packs", () => {
   const PACKS: BillingCreditPack[] = [
-    {
-      packId: "credits_5k",
-      name: "5,000 credits",
-      credits: 5000,
-      currency: "BRL",
-      amountMinor: 3690,
-      sortOrder: 1,
-    },
+    PACK_5K,
     {
       packId: "credits_10k",
       name: "10,000 credits",
@@ -548,17 +567,116 @@ describe("L5b credit packs", () => {
   /** Mercado Pago subscriptions off server-side: the catalog has no plan, only packs. */
   const PACKS_ONLY: BillingState = { ...READY, catalog: [], packs: PACKS };
 
-  it("subscriptions off: Buy credits for each pack, no Subscribe and no 'No plans available'", () => {
+  it("subscriptions off: Buy credits for each pack, no Subscribe and no empty-catalog row", () => {
     const html = markup(PACKS_ONLY);
-    expect(html).toContain("5,000 credits · R$ 36,90");
-    expect(html).toContain("10,000 credits · R$ 72,90");
-    expect(html).toContain("25,000 credits · R$ 181,90");
+    for (const pack of PACKS) expect(html).toContain(packTitle(pack));
     expect(html.match(/Buy credits<\/button>/g)).toHaveLength(3);
-    expect(html).toContain("One-time payment with Pix or card");
-    expect(html).toContain("Buy credit packs through Mercado Pago");
+    expect(html).toContain("One-time payment with Pix or card. Purchased credits never expire.");
+    expect(html).toContain("Credit packs</h3>");
+    expect(html).toContain(
+      "Buy credit packs in your browser with Pix or card, in Brazilian reais. Your credits are added as soon as Mercado Pago confirms the payment.",
+    );
     expect(html).not.toContain("Subscribe</button>");
+    expect(html).not.toContain("aren&#x27;t on sale");
     expect(html).not.toContain("No plans available");
     expect(html).not.toContain("billed monthly");
+    expect(html).not.toContain(" · ");
+  });
+
+  it("'billed monthly' only when a subscription plan is on sale (never while loading or failed)", () => {
+    expect(markup(READY)).toContain("billed monthly");
+    expect(markup({ ...PACKS_ONLY, status: "loading", catalog: null })).not.toContain(
+      "billed monthly",
+    );
+    expect(markup({ ...READY, catalog: null, packs: null })).not.toContain("billed monthly");
+  });
+
+  it("no packs at all: 'Credit packs aren't on sale' with a Refresh button that refreshes", () => {
+    const onRefresh = vi.fn();
+    render(
+      <BillingSectionView
+        busy={false}
+        onCheckout={noop}
+        onPortal={noop}
+        onRefresh={onRefresh}
+        onCancel={noop}
+        onBuyCredits={noop}
+        state={{ ...READY, catalog: [], packs: [] }}
+      />,
+    );
+    expect(screen.getByText("Credit packs aren't on sale")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("Free plus a Starter pack: the plan stays Free and the pack's Starter access is said plainly", () => {
+    const html = markup(PACKS_ONLY, "starter");
+    expect(html).toContain(">Free<");
+    expect(html).toContain(
+      "Buying credits doesn&#x27;t change your plan. Your credit pack unlocks Starter models.",
+    );
+  });
+
+  it("a 25k pack (router plan pro) says Pro models", () => {
+    const plans = [
+      ...PLANS,
+      { plan: "pro", name: "Pro", priceUsdCents: 0, monthlyCredits: 25000, purchasable: false },
+    ];
+    expect(markup({ ...PACKS_ONLY, plans }, "pro")).toContain(
+      "Your credit pack unlocks Pro models.",
+    );
+    // Not in the loaded plans list: the plan id, capitalized.
+    expect(markup(PACKS_ONLY, "pro")).toContain("Your credit pack unlocks Pro models.");
+  });
+
+  it("no access line when the router plan is the current plan, unknown, or a subscription grants it", () => {
+    for (const html of [markup(PACKS_ONLY, "free"), markup(PACKS_ONLY)]) {
+      expect(html).not.toContain("unlocks");
+    }
+    const subscribed = markup(
+      {
+        ...PACKS_ONLY,
+        currentPlan: "starter",
+        subscription: {
+          plan: "starter",
+          provider: "mercadopago",
+          status: "active",
+          currentPeriodEnd: null,
+          cancelAtPeriodEnd: false,
+          cancelRequestedAt: null,
+        },
+      },
+      "pro",
+    );
+    expect(subscribed).not.toContain("unlocks");
+  });
+
+  it("the Credits row uses the real remaining allowance and purchased credits, never a fixed 1,000", () => {
+    const wallet = {
+      balance: 9640,
+      reserved: 0,
+      planAllowance: 1000,
+      periodEnd: null,
+      purchased: 9000,
+      allowance: 640,
+    };
+    expect(creditsDescription(wallet, "Free", "en-US")).toBe(
+      "640 credits from your Free plan are used first, then 9,000 credits purchased, which never expire.",
+    );
+    expect(creditsDescription({ ...wallet, purchased: 0, allowance: 380 }, "Free", "pt-BR")).toBe(
+      "380 credits from your Free plan.",
+    );
+    expect(creditsDescription({ ...wallet, reserved: 1 }, "Free", "en-US")).toContain(
+      "1 credit is held for requests in progress.",
+    );
+    const { purchased: _p, allowance: _a, ...unknownLots } = wallet;
+    expect(creditsDescription(unknownLots, "Free")).toBe(
+      "Credits from your Free plan are used first, then purchased credits, which never expire.",
+    );
+    const html = markup({ ...PACKS_ONLY, wallet });
+    expect(html).toContain(creditsDescription(wallet, "Free"));
+    expect(html).not.toContain(formatCredits(1000));
+    expect(html).toContain(`>${formatCredits(9640)}<`);
   });
 
   it("with a subscription plan on sale, packs are offered next to Subscribe", () => {
@@ -605,7 +723,7 @@ describe("L5b credit packs", () => {
         />,
       );
     view(PACKS_ONLY);
-    fireEvent.click(screen.getByRole("button", { name: "Buy 10,000 credits" }));
+    fireEvent.click(screen.getByRole("button", { name: `Buy ${formatCredits(10000)} credits` }));
     expect(onBuyCredits).toHaveBeenCalledWith("credits_10k");
     cleanup();
     view({ ...PACKS_ONLY, pending: "checkout" });
@@ -629,7 +747,9 @@ describe("L5b credit packs", () => {
       },
     };
     render(<AccountBillingSection />);
-    const button = await screen.findByRole("button", { name: "Buy 25,000 credits" });
+    const button = await screen.findByRole("button", {
+      name: `Buy ${formatCredits(25000)} credits`,
+    });
     fireEvent.click(button);
     await waitFor(() => expect(buyCredits).toHaveBeenCalledWith({ packId: "credits_25k" }));
     await screen.findByText("Finish in your browser, then come back to Modus.");

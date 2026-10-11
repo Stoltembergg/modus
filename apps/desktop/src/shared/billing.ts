@@ -85,6 +85,16 @@ export type BillingWallet = {
   reserved: number;
   planAllowance: number;
   periodEnd: string | null;
+  /**
+   * Purchased credits left: the sum of the caller's credited lots' `remaining`
+   * (public.credit_lots). Absent when the lots could not be read.
+   */
+  purchased?: number;
+  /**
+   * What is left of the plan allowance: max(0, balance + reserved - purchased), the same split
+   * as private.non_purchased_credits. Absent when the lots could not be read.
+   */
+  allowance?: number;
 };
 
 export type BillingReturnStatus = "success" | "cancel" | "portal";

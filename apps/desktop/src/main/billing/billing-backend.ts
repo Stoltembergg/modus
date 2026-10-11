@@ -188,6 +188,11 @@ export function mapBillingRows(rows: {
   catalog: unknown[] | null;
   subscription: unknown;
   wallet: unknown;
+  /**
+   * The caller's credit_lots rows ({ remaining, status }); null/absent when they could not be
+   * read. Only `credited` lots count (refunded / charged back are excluded).
+   */
+  lots?: unknown[] | null;
 }): BillingSnapshot {
   const plans = rows.plans.flatMap((raw): BillingPlan[] => {
     const row = raw as Record<string, unknown>;
@@ -205,6 +210,13 @@ export function mapBillingRows(rows: {
   });
   const sub = rows.subscription as Record<string, unknown> | null;
   const wallet = rows.wallet as Record<string, unknown> | null;
+  const purchased = rows.lots
+    ? rows.lots.reduce<number>((sum, raw) => {
+        const lot = (raw ?? {}) as Record<string, unknown>;
+        const remaining = num(lot.remaining);
+        return lot.status === "credited" && remaining > 0 ? sum + remaining : sum;
+      }, 0)
+    : undefined;
   return {
     plans,
     catalog: rows.catalog ? mapCatalogRows(rows.catalog) : null,
@@ -227,6 +239,12 @@ export function mapBillingRows(rows: {
           reserved: num(wallet.reserved),
           planAllowance: num(wallet.plan_allowance),
           periodEnd: str(wallet.period_end),
+          ...(purchased === undefined
+            ? {}
+            : {
+                purchased,
+                allowance: Math.max(0, num(wallet.balance) + num(wallet.reserved) - purchased),
+              }),
         }
       : null,
   };

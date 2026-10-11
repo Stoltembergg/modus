@@ -516,6 +516,49 @@ describe("billing backend helpers", () => {
   });
 });
 
+describe("wallet breakdown from credit lots", () => {
+  const wallet = { balance: 9640, reserved: 360, plan_allowance: 1000, period_end: null };
+  const base = { plans: [], catalog: null, subscription: null, wallet };
+
+  it("purchased = credited lots' remaining; allowance = balance + reserved - purchased (>= 0)", () => {
+    const mapped = mapBillingRows({
+      ...base,
+      lots: [
+        { remaining: 6000, status: "credited" },
+        { remaining: "3000", status: "credited" },
+        { remaining: 2500, status: "refunded" },
+        { remaining: 900, status: "charged_back" },
+        { remaining: -5, status: "credited" },
+        null,
+      ],
+    });
+    expect(mapped.wallet).toMatchObject({ purchased: 9000, allowance: 1000 });
+    // Never a fixed 1,000: the allowance is what is left.
+    expect(
+      mapBillingRows({
+        ...base,
+        wallet: { ...wallet, reserved: 0 },
+        lots: [{ remaining: 9000, status: "credited" }],
+      }).wallet,
+    ).toMatchObject({ purchased: 9000, allowance: 640 });
+    expect(
+      mapBillingRows({ ...base, lots: [{ remaining: 20000, status: "credited" }] }).wallet,
+    ).toMatchObject({ purchased: 20000, allowance: 0 });
+    expect(mapBillingRows({ ...base, lots: [] }).wallet).toMatchObject({
+      purchased: 0,
+      allowance: 10000,
+    });
+  });
+
+  it("no lots read (null / absent): no purchased / allowance fields", () => {
+    for (const mapped of [mapBillingRows({ ...base, lots: null }), mapBillingRows(base)]) {
+      expect(mapped.wallet?.balance).toBe(9640);
+      expect(mapped.wallet).not.toHaveProperty("purchased");
+      expect(mapped.wallet).not.toHaveProperty("allowance");
+    }
+  });
+});
+
 describe("billing catalog mapping", () => {
   it("keeps well-formed public rows and drops anything else", () => {
     const rows = [

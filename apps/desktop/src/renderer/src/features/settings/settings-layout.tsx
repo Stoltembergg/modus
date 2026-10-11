@@ -13,7 +13,10 @@ export function SettingsPageHeader({
   title: string;
 }) {
   return (
-    <header className="sticky top-0 z-10 -mx-10 -mt-16 flex items-end justify-between gap-5 bg-gradient-to-b from-canvas via-canvas to-canvas/0 px-10 pt-16 pb-8">
+    <header
+      className="sticky-glass-strip sticky top-0 z-10 -mx-10 -mt-16 flex items-end justify-between gap-5 px-10 pt-16 pb-8"
+      data-strip="canvas"
+    >
       <div className="min-w-0">
         <h2 className="text-lg font-normal text-fg">{title}</h2>
         <p
@@ -77,5 +80,9 @@ export function SettingsRow({
 }
 
 export function ReadOnlyPill({ children }: { children: string }) {
-  return <span className="rounded-full bg-chip px-2.5 py-1 text-xs text-fg-muted">{children}</span>;
+  return (
+    <span className="rounded-full bg-chip px-2.5 py-1 text-xs text-fg-muted tabular-nums">
+      {children}
+    </span>
+  );
 }

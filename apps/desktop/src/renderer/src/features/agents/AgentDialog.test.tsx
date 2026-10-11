@@ -198,6 +198,14 @@ describe("AgentDialog", () => {
       "relay",
     ]);
     expect(groups.map(groupLabel)).toEqual(["Modus", "Acme", "OpenRouter", "Relay"]);
+    // Sticky group headers use the shared glass strip (solid unless Full transparency), not a
+    // solid bg-elevated fill.
+    for (const group of groups) {
+      const label = group.firstElementChild as HTMLElement;
+      expect(label.classList.contains("sticky-glass-strip")).toBe(true);
+      expect(label.dataset.strip).toBe("elevated");
+      expect(label.className).not.toContain("bg-elevated");
+    }
     expect(
       groups.map((group) =>
         within(group)

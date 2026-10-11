@@ -1239,11 +1239,13 @@ export function getModelSettings(): ModelSettingsState {
   const models = listModelsFromRegistry(modelRegistry);
   const defaultModel = getDefaultModelId(models);
   const modusDefaultModel = getModusTurnModelId(models);
+  const modusPlan = modusProvider?.status() === "ready" ? modusProvider.plan() : undefined;
   return {
     providers: listProvidersFromRegistry(modelRegistry),
     models,
     ...(defaultModel ? { defaultModel } : {}),
     ...(modusDefaultModel ? { modusDefaultModel } : {}),
+    ...(modusPlan ? { modusPlan } : {}),
     ...(modusProvider && modusProvider.status() !== "off" ? { modus: modusProvider.status() } : {}),
   };
 }
