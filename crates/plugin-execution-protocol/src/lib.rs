@@ -585,9 +585,9 @@ impl<T: WorkerTransport> WorkerSession<T> {
         }
         let (challenge, granted_capabilities) =
             match validate_dispatch_config(challenge, granted_capabilities) {
-            Ok(config) => config,
-            Err(error) => return Err(reject_admission(admission, error)),
-        };
+                Ok(config) => config,
+                Err(error) => return Err(reject_admission(admission, error)),
+            };
         let (provenance, approved_policy, transport) = admission.into_parts();
         let dispatcher = Dispatcher::from_validated_parts(
             provenance,
