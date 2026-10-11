@@ -507,33 +507,40 @@ impl HostWorkerIdentity {
 }
 
 fn current_host_worker_identity() -> Result<HostWorkerIdentity, io::Error> {
-    let mut uids: [libc::uid_t; 3] = [0; 3];
-    let mut gids: [libc::gid_t; 3] = [0; 3];
+    let mut real_uid: libc::uid_t = 0;
+    let mut effective_uid: libc::uid_t = 0;
+    let mut saved_uid: libc::uid_t = 0;
     // SAFETY: all output pointers refer to initialized writable stack storage.
     if unsafe {
         libc::syscall(
             libc::SYS_getresuid,
-            &mut uids[0],
-            &mut uids[1],
-            &mut uids[2],
+            &mut real_uid,
+            &mut effective_uid,
+            &mut saved_uid,
         )
     } < 0
     {
         return Err(io::Error::last_os_error());
     }
+    let mut real_gid: libc::gid_t = 0;
+    let mut effective_gid: libc::gid_t = 0;
+    let mut saved_gid: libc::gid_t = 0;
     // SAFETY: all output pointers refer to initialized writable stack storage.
     if unsafe {
         libc::syscall(
             libc::SYS_getresgid,
-            &mut gids[0],
-            &mut gids[1],
-            &mut gids[2],
+            &mut real_gid,
+            &mut effective_gid,
+            &mut saved_gid,
         )
     } < 0
     {
         return Err(io::Error::last_os_error());
     }
-    HostWorkerIdentity::from_ids(uids, gids)
+    HostWorkerIdentity::from_ids(
+        [real_uid, effective_uid, saved_uid],
+        [real_gid, effective_gid, saved_gid],
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -654,16 +661,18 @@ impl PreExecSecurityOperations for SystemPreExecSecurityOperations {
     }
 
     fn gid_is_exact(&mut self, expected: libc::gid_t) -> bool {
-        let mut gids: [libc::gid_t; 3] = [0; 3];
+        let mut real_gid: libc::gid_t = 0;
+        let mut effective_gid: libc::gid_t = 0;
+        let mut saved_gid: libc::gid_t = 0;
         // SAFETY: all output pointers refer to initialized writable stack storage.
         unsafe {
             libc::syscall(
                 libc::SYS_getresgid,
-                &mut gids[0],
-                &mut gids[1],
-                &mut gids[2],
+                &mut real_gid,
+                &mut effective_gid,
+                &mut saved_gid,
             ) == 0
-                && gids == [expected; 3]
+                && [real_gid, effective_gid, saved_gid] == [expected; 3]
         }
     }
 
@@ -680,16 +689,18 @@ impl PreExecSecurityOperations for SystemPreExecSecurityOperations {
     }
 
     fn uid_is_exact(&mut self, expected: libc::uid_t) -> bool {
-        let mut uids: [libc::uid_t; 3] = [0; 3];
+        let mut real_uid: libc::uid_t = 0;
+        let mut effective_uid: libc::uid_t = 0;
+        let mut saved_uid: libc::uid_t = 0;
         // SAFETY: all output pointers refer to initialized writable stack storage.
         unsafe {
             libc::syscall(
                 libc::SYS_getresuid,
-                &mut uids[0],
-                &mut uids[1],
-                &mut uids[2],
+                &mut real_uid,
+                &mut effective_uid,
+                &mut saved_uid,
             ) == 0
-                && uids == [expected; 3]
+                && [real_uid, effective_uid, saved_uid] == [expected; 3]
         }
     }
 
