@@ -564,6 +564,8 @@ impl Drop for Dispatcher {
 pub struct WorkerSession<T: WorkerTransport> {
     dispatcher: Dispatcher,
     transport: Option<T>,
+    reap_deadline: Option<Instant>,
+    termination_requested: bool,
 }
 
 impl<T: WorkerTransport> WorkerSession<T> {
@@ -576,10 +578,17 @@ impl<T: WorkerTransport> WorkerSession<T> {
     ) -> Result<Self, ProtocolError> {
         let (authorized_provenance, granted_capabilities) = authorization.into_parts();
         if admission.provenance() != &authorized_provenance {
-            return Err(ProtocolError::AuthorizationProvenanceMismatch);
+            return Err(reject_admission(
+                admission,
+                ProtocolError::AuthorizationProvenanceMismatch,
+            ));
         }
-        let (challenge, granted_capabilities) =
-            validate_dispatch_config(challenge, granted_capabilities)?;
+        let (challenge, granted_capabilities) = match
+            validate_dispatch_config(challenge, granted_capabilities)
+        {
+            Ok(config) => config,
+            Err(error) => return Err(reject_admission(admission, error)),
+        };
         let (provenance, approved_policy, transport) = admission.into_parts();
         let dispatcher = Dispatcher::from_validated_parts(
             provenance,
@@ -590,6 +599,8 @@ impl<T: WorkerTransport> WorkerSession<T> {
         Ok(Self {
             dispatcher,
             transport: Some(transport),
+            reap_deadline: None,
+            termination_requested: false,
         })
     }
 
@@ -670,11 +681,15 @@ impl<T: WorkerTransport> WorkerSession<T> {
             return Ok(());
         };
         let policy = self.dispatcher.approved_policy();
-        let reap_deadline = bounded_deadline(
+        let requested_deadline = bounded_deadline(
             bounded_deadline(deadline, policy.lifecycle_timeout_ms),
             policy.forced_termination_reap_deadline_ms,
         );
-        transport.request_termination();
+        let reap_deadline = *self.reap_deadline.get_or_insert(requested_deadline);
+        if !self.termination_requested {
+            transport.request_termination();
+            self.termination_requested = true;
+        }
         let result = match transport.reap_until(reap_deadline) {
             Err(error) => Err(ProtocolError::WorkerTerminationFailed(error.kind())),
             Ok(()) if Instant::now() >= reap_deadline => Err(
@@ -712,6 +727,16 @@ impl<T: WorkerTransport> WorkerSession<T> {
 impl<T: WorkerTransport> Drop for WorkerSession<T> {
     fn drop(&mut self) {
         let _ = self.stop_with_default_deadline();
+    }
+}
+
+fn reject_admission<T: WorkerTransport>(
+    admission: AdmissionAssessmentToken<T>,
+    reason: ProtocolError,
+) -> ProtocolError {
+    match admission.cleanup_rejected() {
+        Ok(()) => reason,
+        Err(kind) => ProtocolError::WorkerTerminationFailed(kind),
     }
 }
 
@@ -988,7 +1013,7 @@ fn valid_sha256(value: &str) -> bool {
 mod tests {
     use std::collections::VecDeque;
     use std::io::Read;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
 
@@ -1024,6 +1049,7 @@ mod tests {
         reaped: Arc<AtomicBool>,
         reap_timeout_ms: Arc<AtomicUsize>,
         fail_reaps_remaining: Arc<AtomicUsize>,
+        reap_deadlines: Arc<Mutex<Vec<Instant>>>,
     }
 
     impl DeadlineReader for FixtureTransport {
@@ -1062,6 +1088,7 @@ mod tests {
         }
 
         fn reap_until(&mut self, deadline: Instant) -> io::Result<()> {
+            self.reap_deadlines.lock().unwrap().push(deadline);
             if Instant::now() >= deadline {
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
@@ -1070,7 +1097,7 @@ mod tests {
             }
             if self
                 .fail_reaps_remaining
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
                     remaining.checked_sub(1)
                 })
                 .is_ok()
@@ -1108,6 +1135,25 @@ mod tests {
             "session-fixture-1",
             "workspace-fixture-1",
             "run-fixture-1",
+            1,
+        )
+        .unwrap()
+    }
+
+    fn provenance_for_scope(
+        session_id: &str,
+        workspace_id: &str,
+        run_id: &str,
+    ) -> HostProvenance {
+        HostProvenance::from_host_catalog(
+            "@modus/fixture",
+            "1.2.3",
+            DIGEST,
+            "host://bundled",
+            HostTrustLevel::Core,
+            session_id,
+            workspace_id,
+            run_id,
             1,
         )
         .unwrap()
@@ -1245,9 +1291,11 @@ mod tests {
     fn worker_session_keeps_failed_reap_state_until_a_retry_succeeds() {
         let fail_reaps_remaining = Arc::new(AtomicUsize::new(1));
         let reaped = Arc::new(AtomicBool::new(false));
+        let reap_deadlines = Arc::new(Mutex::new(Vec::new()));
         let transport = FixtureTransport {
             fail_reaps_remaining: Arc::clone(&fail_reaps_remaining),
             reaped: Arc::clone(&reaped),
+            reap_deadlines: Arc::clone(&reap_deadlines),
             ..FixtureTransport::default()
         };
         let mut session = fixture_worker_session(transport);
@@ -1258,9 +1306,15 @@ mod tests {
             Err(ProtocolError::WorkerTerminationFailed(io::ErrorKind::Other)),
         );
         assert!(!reaped.load(Ordering::SeqCst));
-        assert_eq!(session.shutdown_until(deadline), Ok(()));
+        assert_eq!(
+            session.shutdown_until(Instant::now() + Duration::from_secs(120)),
+            Ok(()),
+        );
         assert!(reaped.load(Ordering::SeqCst));
         assert_eq!(fail_reaps_remaining.load(Ordering::SeqCst), 0);
+        let deadlines = reap_deadlines.lock().unwrap();
+        assert_eq!(deadlines.len(), 2);
+        assert_eq!(deadlines[0], deadlines[1]);
     }
 
     #[test]
@@ -1289,6 +1343,54 @@ mod tests {
         );
         assert!(termination_requested.load(Ordering::SeqCst));
         assert!(reaped.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn worker_session_reports_cleanup_failure_when_authorization_is_rejected() {
+        let fail_reaps_remaining = Arc::new(AtomicUsize::new(1));
+        let transport = FixtureTransport {
+            fail_reaps_remaining: Arc::clone(&fail_reaps_remaining),
+            ..FixtureTransport::default()
+        };
+        let admission = synthetic_test_token_with_transport(provenance(), transport);
+        let authorization = unsafe {
+            HostAuthorization::from_permission_broker(
+                provenance_for_scope(
+                    "session-fixture-1",
+                    "workspace-fixture-1",
+                    "different-run-fixture",
+                ),
+                ["memory.read".to_string()],
+            )
+        };
+
+        assert_eq!(
+            WorkerSession::new(admission, authorization, CHALLENGE).err(),
+            Some(ProtocolError::WorkerTerminationFailed(io::ErrorKind::Other)),
+        );
+        assert_eq!(fail_reaps_remaining.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn worker_session_reports_cleanup_failure_when_challenge_is_rejected() {
+        let fail_reaps_remaining = Arc::new(AtomicUsize::new(1));
+        let transport = FixtureTransport {
+            fail_reaps_remaining: Arc::clone(&fail_reaps_remaining),
+            ..FixtureTransport::default()
+        };
+        let admission = synthetic_test_token_with_transport(provenance(), transport);
+        let authorization = unsafe {
+            HostAuthorization::from_permission_broker(
+                provenance(),
+                ["memory.read".to_string()],
+            )
+        };
+
+        assert_eq!(
+            WorkerSession::new(admission, authorization, "invalid-challenge").err(),
+            Some(ProtocolError::WorkerTerminationFailed(io::ErrorKind::Other)),
+        );
+        assert_eq!(fail_reaps_remaining.load(Ordering::SeqCst), 0);
     }
 
     #[test]

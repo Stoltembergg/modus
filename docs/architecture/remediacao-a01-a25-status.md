@@ -238,9 +238,12 @@ host responses, and shutdown all use the transport owned by the same session.
 Read/write deadlines are clipped to the approved handshake, execution, and
 broker budgets. Protocol/I/O/EOF/deadline failures revoke pending invocations
 and request worker-tree termination. Reap deadlines are clamped to the
-approved lifecycle and forced-reap ceilings. Failed reaps retain the transport
-and failure state for a bounded retry; a later shutdown cannot report success
-until a reap returns before its deadline.
+approved lifecycle and forced-reap ceilings. The first shutdown fixes one
+absolute cleanup deadline for the session; retries reuse that deadline and
+cannot restart or extend the total cleanup budget. Failed reaps retain the
+transport and failure state; a later shutdown cannot report success until a
+reap returns before that original deadline. Session-construction rejections
+explicitly surface cleanup failures rather than hiding them in `Drop`.
 
 The platform bridge and permission-broker authorization constructor are
 deliberately `unsafe`: adapter code must bind the transport to the assessed
@@ -261,9 +264,16 @@ macOS. The trusted in-process Harness/plugin path is unchanged.
   fixtures exercise handshake, invocation, response on the owned endpoint,
   deadline budgets, explicit shutdown, read/write timeouts, provenance-bound
   authorization, and termination/reap; unit fixtures also exercise a failed
-  reap followed by a successful retry. Independent review found the failed
-  reap-state and caller-controlled deadline issues; both are being corrected
-  before this increment is accepted. A follow-up review is pending.
+  reap followed by a successful retry using the exact same absolute deadline,
+  plus constructor rejection with both successful and failed cleanup. Remote
+  CI run `38111487901`, job `114387817216`, passed `rustfmt --check` but failed
+  compilation with two `E0367` Drop-bound errors and one missing test helper
+  (`E0425`); it also reported deprecated `fetch_update`. The current patch
+  adds the required bounds and helper, uses the stable toolchain's `try_update`,
+  and adds cleanup-failure regressions. Independent review found the retry-budget
+  reset and hidden constructor-cleanup failure; the implementation now stores
+  the first deadline and reports cleanup failure explicitly. Follow-up review
+  and green CI are pending.
 - Remaining A01–A04 proof gaps: no platform implementation of the unsafe
   adapter, no OS policy attestation, no artifact-transfer boundary, no actual
   permission-broker caller and no production lifecycle integration. Do not

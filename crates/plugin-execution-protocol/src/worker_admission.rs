@@ -145,7 +145,7 @@ impl PlatformAssessment {
 /// A started worker and the exact transport for the worker assessed by the
 /// platform adapter. The value can only be created through an unsafe adapter
 /// boundary and is consumed by admission validation.
-pub struct AssessedWorker<T> {
+pub struct AssessedWorker<T: WorkerTransport> {
     assessment: Option<PlatformAssessment>,
     transport: Option<T>,
 }
@@ -196,7 +196,7 @@ pub enum AdmissionError {
 
 /// Non-cloneable token that owns the assessed worker transport until it is
 /// consumed by `WorkerSession`. It is not a proof of OS enforcement.
-pub struct AdmissionAssessmentToken<T> {
+pub struct AdmissionAssessmentToken<T: WorkerTransport> {
     provenance: HostProvenance,
     approved_policy: ResourcePolicy,
     transport: Option<T>,
@@ -250,6 +250,16 @@ impl<T: WorkerTransport> AdmissionAssessmentToken<T> {
     pub(crate) fn provenance(&self) -> &HostProvenance {
         &self.provenance
     }
+
+    /// Explicitly report cleanup failures when a caller rejects admission
+    /// after validation. The transport is consumed exactly once so `Drop`
+    /// cannot perform an unobservable second cleanup attempt.
+    pub(crate) fn cleanup_rejected(mut self) -> Result<(), io::ErrorKind> {
+        let Some(mut transport) = self.transport.take() else {
+            return Ok(());
+        };
+        request_and_reap(&mut transport, cleanup_deadline())
+    }
 }
 
 impl<T: WorkerTransport> Drop for AdmissionAssessmentToken<T> {
@@ -301,7 +311,11 @@ fn request_and_reap<T: WorkerTransport>(
     deadline: Instant,
 ) -> Result<(), io::ErrorKind> {
     transport.request_termination();
-    transport.reap_until(deadline).map_err(|error| error.kind())
+    transport.reap_until(deadline).map_err(|error| error.kind())?;
+    if Instant::now() >= deadline {
+        return Err(io::ErrorKind::TimedOut);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
