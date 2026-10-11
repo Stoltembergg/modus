@@ -260,24 +260,25 @@ macOS. The trusted in-process Harness/plugin path is unchanged.
   `AssessedWorker`, `WorkerTransport`, and `WorkerSession` did not exist. This
   directly reproduced the missing transport/session API, without launching a
   process or executing plugin code.
-- GREEN: pending remote CI for the implementation commit. Safe integration
-  fixtures exercise handshake, invocation, response on the owned endpoint,
-  deadline budgets, explicit shutdown, read/write timeouts, provenance-bound
-  authorization, and termination/reap; unit fixtures also exercise a failed
-  reap followed by a successful retry using the exact same absolute deadline,
-  plus constructor rejection with both successful and failed cleanup. Remote
-  CI run `38111487901`, job `114387817216`, passed `rustfmt --check` but failed
-  compilation with two `E0367` Drop-bound errors and one missing test helper
-  (`E0425`); it also reported deprecated `fetch_update`. The current patch
-  adds the required bounds and helper, uses the stable toolchain's `try_update`,
-  and adds cleanup-failure regressions. Independent review found the retry-budget
-  reset and hidden constructor-cleanup failure; the implementation now stores
-  the first deadline and reports cleanup failure explicitly. Follow-up review
-  approved those scoped fixes. It also found that two compile-fail examples
-  no longer reached the invariant they intended to test after the new transport
-  bound; those examples now use generic transport bounds and the public
-  consuming `WorkerSession::new` API. Remote green CI for the current head is
-  pending.
+- GREEN: remote CI run `38111907863` on `9c519de` passed protocol formatting
+  and `cargo test --locked -p modus-plugin-execution-protocol`: 37 unit tests,
+  1 safe transport integration test, and 5 compile-fail doctests passed. The
+  tests cover handshake, invocation/result round-trip on the owned endpoint,
+  deadline budgets, read/write timeouts, fixed total reap cutoff across retries,
+  provenance-bound authorization, and cleanup failures on constructor rejection.
+  The same run passed the focused A17/A21.2 jobs, Windows/Linux containment
+  suites, and the global Biome/typecheck/Vitest job (415 files; 4,682 passed,
+  8 skipped). Supabase pgTAP passed, including test 22 in
+  `17_free_monthly_renewal.test.sql` and the fixed Jan 31/leap-day cases. The
+  macOS containment and platform packaging jobs were still queued when recorded.
+  Earlier RED evidence is CI run `38111004484`, job `114386372023`, where the
+  safe integration fixture failed to compile because `AssessedWorker`,
+  `WorkerTransport`, and `WorkerSession` did not exist. A later remote build
+  exposed two `E0367` Drop-bound errors, a missing helper (`E0425`), deprecated
+  `fetch_update`, and rustfmt issues; these were fixed before the green protocol
+  job. Independent static review approved the fixed cleanup deadline and
+  surfaced cleanup errors. A follow-up review confirmed the compile-fail docs
+  now exercise non-clonability and one-use consumption through the public API.
 - Remaining A01–A04 proof gaps: no platform implementation of the unsafe
   adapter, no OS policy attestation, no artifact-transfer boundary, no actual
   permission-broker caller and no production lifecycle integration. Do not
@@ -287,9 +288,11 @@ macOS. The trusted in-process Harness/plugin path is unchanged.
 
 **Status: implemented, locally verified, independently reviewed, and CI-green.** This is the
 incremental Supabase quality-gate fix requested for the mission, outside the
-A01–A25 finding matrix. Its pgTAP suite passed in CI run `38088870451` and in
-the earlier green Supabase run `38076843678`; Windows and macOS packaging for
-the completed PR head `7e9e835` also passed.
+A01–A25 finding matrix. Its pgTAP suite passed in CI runs `38088870451`,
+`38076843678`, and `38111907863`; the latest run includes the fixed Jan 31
+leap-year/non-leap-year cases and renewal test 22. Windows and macOS packaging
+for the completed PR head `7e9e835` also passed; the current run's packages
+remain in progress.
 
 The failure was a real month-end drift. Renewal used an already-clipped monthly
 boundary as the next anchor; for a Jan 31 grant, February clips to Feb 28/29,
@@ -2084,10 +2087,10 @@ cancellation follow-up above.
 
 | Finding | Current status | Implementation state / next evidence |
 |---|---|---|
-| A01 | Partially mitigated | Facade fails closed and Pi chat/review no longer auto-load project/user extensions. The shared protocol validates bounded frames and strict schemas; v2 adds distinct cancellation and rejects v1 on both worker handshake and host-response decode. `Dispatcher::new` now requires a non-cloneable assessment token, but the token is not bound to a process/stream, has no production adapter, and does not prove OS confinement. No productive executor exists; isolation and production wiring remain unproven. Hostile execution proof remains blocked. |
-| A02 | Partially mitigated | The shared resource-policy contract records the approved CPU, memory, time, output, IPC, process, hostcall and concurrency ceilings. No platform adapter enforces them, and no process-tree preemption/reap path is integrated. Do not run blocked probes. |
-| A03 | Partially mitigated | Chat/review auto-discovery remains blocked. Host catalog lookups, built-in catalog entries, loader results, and capability provider queries expose immutable metadata descriptors without lifecycle/implementation callbacks. `PluginLoader`, `PluginLifecycleService`, and `CapabilityRegistry` now keep trust/authorization maps, checkpoints, provenance state, source/executor references, and internal helpers in ECMAScript `#private` fields/methods; unused loader/service registry accessors were removed after full-repository callsite search found no consumers. Exact source references remain within trusted in-process wiring; this is reflective encapsulation, not process isolation. The v2 IPC contract carries host-only digest, origin, trust, session/workspace/run and generation provenance, but has no production caller and does not establish trust on its own. |
-| A04 | Partially mitigated | External Pi extension ingress is disabled for chat and review; the review callsite guard covers loader flags and session creation. Registry provider execution remains dispatched through `CapabilityRegistry.execute`; rollback uses opaque registry-owned checkpoints. Public catalog/registry lookup APIs no longer return implementation references. The shared IPC dispatcher validates exact grants and cancellation in synthetic fixtures, but built-ins remain trusted in-process and no OS-backed dispatcher/lifecycle boundary is integrated. |
+| A01 | Partially mitigated | Pi chat/review fail closed and no longer auto-load project/user extensions. The shared protocol validates bounded frames and strict schemas; v2 adds distinct cancellation and rejects v1. `WorkerSession` now owns the exact assessed transport, non-cloneable admission token, and mandatory dispatcher; synthetic integration tests cover the handshake, invocation/result round-trip, timeout, cleanup, and authorization paths. No production executor or platform adapter exists, and this API is not proof of OS confinement. Production wiring and hostile execution proof remain blocked. |
+| A02 | Partially mitigated | The shared policy records approved CPU, memory, time, output, IPC, process, hostcall and concurrency ceilings. The shared session clips I/O deadlines and fixes one total shutdown/reap cutoff; termination and reap errors remain observable. These are API contracts only: no platform adapter applies the limits or confirms process-tree termination. External execution remains blocked; enforcement probes were not run. |
+| A03 | Partially mitigated | Chat/review auto-discovery remains blocked. Host catalog lookups, built-in catalog entries, loader results, and capability provider queries expose immutable metadata descriptors without lifecycle/implementation callbacks. `PluginLoader`, `PluginLifecycleService`, and `CapabilityRegistry` keep trust/authorization maps, checkpoints, provenance state, source/executor references, and internal helpers in ECMAScript `#private` fields/methods; unused loader/service registry accessors were removed after callsite search. Exact source references remain within trusted in-process wiring. The shared admission token binds the assessed transport to host provenance, and one-use authorization must match plugin/artifact/session/workspace/run/generation. No production adapter or broker caller exists; the unsafe adapter boundary does not independently prove provenance or isolation. |
+| A04 | Partially mitigated | External Pi extension ingress is disabled for chat and review; the review callsite guard covers loader flags and session creation. Registry provider execution remains dispatched through `CapabilityRegistry.execute`; rollback uses opaque registry-owned checkpoints. Public catalog/registry lookup APIs no longer return implementation references. The shared `WorkerSession` validates exact grants and routes frames through its private dispatcher in safe synthetic tests. Built-ins remain trusted in-process and there is no OS-backed external dispatcher or lifecycle integration. |
 | A05 | Partially mitigated; unpreemptible WASM timeouts now fail closed | Both `WasmCapabilityHost.executeWasm` and its public `createInstance` factory reject positive `timeoutMs` before compilation/instantiation because synchronous in-process WASM cannot be preempted by a JavaScript timer. Trusted in-process calls without a timeout retain their behavior. Memory/callable/fuel-import protections remain; external plugin wiring and blocked enforcement proof remain unavailable. |
 | A06 | Partially mitigated; no-grant WASI denial revalidated | All imported WASI modules are denied before instantiation; exact synthetic tests ran with instantiation asserted unused. Grant-backed env/preopens and host isolation remain unavailable. |
 | A07 | Partially mitigated; FilesystemBroker now fails closed before metadata lookup | All path grants return denial before filesystem metadata or content I/O; `readFile`/`writeFile` audit and throw until a handle-bound executor exists. This is no longer a path-containment proof. No production consumer; scoped safe I/O and OS-handle binding remain open. |
