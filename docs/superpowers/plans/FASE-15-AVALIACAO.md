@@ -1,7 +1,7 @@
 # Avaliação da Fase 15 — Rollback e Safe Mode
 
-**Data:** 2026-10-05  
-**Fase Avaliada:** Fase 15 — Rollback e Safe Mode  
+**Data:** 2026-10-05\
+**Fase Avaliada:** Fase 15 — Rollback e Safe Mode\
 **Status:** ✅ **APROVADO COM DISTINÇÃO**
 
 ---

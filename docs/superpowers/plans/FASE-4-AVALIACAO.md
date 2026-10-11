@@ -1,7 +1,7 @@
 # Avaliação Técnica: Fase 4 (Compaction com Pruning Inteligente)
 
-**Data:** 2026-10-06  
-**Status:** CONCLUÍDO (100% dos testes e typecheck aprovados, Go para Fase 5)  
+**Data:** 2026-10-06\
+**Status:** CONCLUÍDO (100% dos testes e typecheck aprovados, Go para Fase 5)\
 **Escopo:** Preventive Context Pruning (Hook `context`), Headroom Restoration, Model-Aware Compaction Policies, Safe Compaction Delegation (`session_before_compact`), Evidence Preservation (MELHORIA 5), Compaction Coordinator, Harness Kernel Hook (`compact_prune`).
 
 ---

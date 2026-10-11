@@ -1,7 +1,7 @@
 # Avaliação Técnica: Fase 3 (ToolResultPolicy & Spill Storage)
 
-**Data:** 2026-10-06  
-**Status:** CONCLUÍDO (100% dos testes e typecheck aprovados)  
+**Data:** 2026-10-06\
+**Status:** CONCLUÍDO (100% dos testes e typecheck aprovados)\
 **Escopo:** Tool Result Spill Policy, Bounded In-Memory LRU Storage, Preview Generation (Head/Tail), Interception Pipeline, Tool Execution Handler (`retrieve_spilled_tool_result`), PI SDK Extension Integration, Feature Flag Safety Gating.
 
 ---

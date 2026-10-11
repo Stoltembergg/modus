@@ -1,8 +1,8 @@
 # Avaliação da Fase 1 — HarnessKernel Implementation
 
-**Data:** 2026-10-06  
-**Revisor:** Claude Opus 5.5 (1M context)  
-**Status da Fase 1:** ✅ **COMPLETA E APROVADA**  
+**Data:** 2026-10-06\
+**Revisor:** Claude Opus 5.5 (1M context)\
+**Status da Fase 1:** ✅ **COMPLETA E APROVADA**\
 **Decisão Go/No-Go para Fase 2:** ✅ **GO IMEDIATO**
 
 ---
@@ -48,7 +48,7 @@ Nenhum blocker técnico foi identificado. Todas as melhorias v3.0 (graceful degr
    if (!hookMap.has(depName)) {
      console.warn(`[modus] Hook ${hook.name} depends on missing hook: ${depName}`);
    }
-   
+
    // Circular dependency: skips circular hook and logs error
    if (visiting.has(hook.name)) {
      console.error(`[modus] Skipping hook ${hook.name} due to circular dependency...`);
@@ -288,11 +288,11 @@ for (const tool of enabledTools) {
 3. **Testing Support:**
    ```typescript
    let overrides: Partial<HarnessFeatureFlags> = {};
-   
+
    export function setFeatureFlagOverrides(newOverrides: Partial<HarnessFeatureFlags>): void {
      overrides = { ...newOverrides };
    }
-   
+
    export function resetFeatureFlagOverrides(): void {
      overrides = {};
    }
@@ -523,17 +523,17 @@ export * from "./settlement-hook";
 1. **Integrar HarnessKernel em pi-sdk-runtime:**
    ```typescript
    import { HarnessKernel, turnStartIntentHook, contextResolveHook, ... } from './harness/kernel';
-   
+
    class PiSdkRuntime {
      private kernel: HarnessKernel;
-     
+
      constructor() {
        this.kernel = new HarnessKernel();
        this.kernel.registerHook(turnStartIntentHook);
        this.kernel.registerHook(contextResolveHook);
        // ... register all 7 hooks
      }
-     
+
      async executeTurn(message: string, context: ContextItem[]) {
        const turnStart = await this.kernel.executeHooks('turn_start', { message, context, mode: 'build' }, harnessContext);
        if (!turnStart.proceed) {
@@ -596,16 +596,16 @@ export * from "./settlement-hook";
 
 ### ✅ Fase 1 é APROVADA com DISTINÇÃO
 
-**Qualidade do trabalho:** Excepcional  
-**Rigor técnico:** Excelente  
-**Test coverage:** Robusto (9 testes, 100% funcionalidades críticas)  
+**Qualidade do trabalho:** Excepcional\
+**Rigor técnico:** Excelente\
+**Test coverage:** Robusto (9 testes, 100% funcionalidades críticas)\
 **v3.0 Compliance:** Completo (graceful degradation implementado)
 
 ### ✅ GO IMEDIATO para Fase 2 (PromptRegistry)
 
-**Confiança técnica:** Alta (90%)  
-**Riscos residuais:** Baixos e mitigáveis (integração pendente)  
-**Bloqueadores:** Nenhum (kernel funcional, testes passando)  
+**Confiança técnica:** Alta (90%)\
+**Riscos residuais:** Baixos e mitigáveis (integração pendente)\
+**Bloqueadores:** Nenhum (kernel funcional, testes passando)\
 **Próximo passo:** Integration Sprint (1.1) em paralelo com Fase 2
 
 ### Feedback para Antigravity

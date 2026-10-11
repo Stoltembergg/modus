@@ -1,8 +1,8 @@
 # Avaliação da Fase 0 — Investigação e Mapeamento Completo
 
-**Data:** 2026-10-06  
-**Revisor:** Claude Opus 5.5 (1M context)  
-**Status da Fase 0:** ✅ **COMPLETA E APROVADA**  
+**Data:** 2026-10-06\
+**Revisor:** Claude Opus 5.5 (1M context)\
+**Status da Fase 0:** ✅ **COMPLETA E APROVADA**\
 **Decisão Go/No-Go para Fase 1:** ✅ **GO IMEDIATO**
 
 ---
@@ -35,7 +35,7 @@ Nenhum blocker técnico foi identificado. Todos os riscos foram mapeados com mit
 
 2. **Descoberta Crítica Confirmada:**
    > "O PI SDK expõe o hook `pi.on('tool_result', async (event) => ...)` através do pipeline `agent.afterToolCall`. Ele permite que uma extensão intercepte qualquer payload de saída de ferramenta (>100KB), salve o dado bruto no SQLite/disco e retorne um `content` sumarizado/truncado."
-   
+
    **Validação:** ✅ Código POC em `pi-sdk-poc.test.ts:11-86` comprova a afirmação. Hook executa ANTES do resultado ser persistido.
 
 3. **Compaction Ownership Definido:**
@@ -87,7 +87,7 @@ Nenhum blocker técnico foi identificado. Todos os riscos foram mapeados com mit
 **Pontos Fortes:**
 
 1. **Benchmarks Empíricos de Performance:**
-   
+
    | Payload Size | Insert Time | Fetch Time | Parse Time | Impacto |
    |--------------|-------------|------------|------------|---------|
    | 1KB | 0.12ms | 0.04ms | 0.01ms | Negligível |
@@ -99,12 +99,12 @@ Nenhum blocker técnico foi identificado. Todos os riscos foram mapeados com mit
 
 2. **Vulnerabilidade Identificada:**
    > "A tabela `agent_events` foi criada apenas com a chave primária `id text primary key`. Não há índice secundário cobrindo `session_id`... queries realizam um **FULL TABLE SCAN**."
-   
+
    **Impacto:** Sessões com 10K eventos sofrem degradação linear.
-   
+
    **Mitigação proposta:** Adicionar na Fase 1:
    ```sql
-   create index if not exists idx_agent_events_session_created 
+   create index if not exists idx_agent_events_session_created
      on agent_events(session_id, created_at asc, rowid asc);
    ```
 
@@ -198,7 +198,7 @@ Nenhum blocker técnico foi identificado. Todos os riscos foram mapeados com mit
 
 1. **Priorização de Fases Mantida:**
    - Ordem original validada pelos dados: 1 → 2 → 3 → 4 → 5 → 6 → 7
-   
+
 2. **SLOs Calibrados:**
    - Token saving mínimo: > 30% em sessões com busca intensiva ✅
    - Spill threshold: 20KB (~5.000 tokens) ✅
@@ -234,16 +234,16 @@ Nenhum blocker técnico foi identificado. Todos os riscos foram mapeados com mit
 
 ### 3. Decisões Arquiteturais Tomadas ✅
 
-**Sprint 0.1:** 4 decisões críticas (compaction, prompt, spill, retry)  
-**Sprint 0.2:** 3 decisões de storage (spill table, indexes, groups extension)  
+**Sprint 0.1:** 4 decisões críticas (compaction, prompt, spill, retry)\
+**Sprint 0.2:** 3 decisões de storage (spill table, indexes, groups extension)\
 **Sprint 0.3:** 2 decisões de threshold (20KB spill, 30% saving SLO)
 
 **Total:** 9 decisões arquiteturais fundamentadas em evidência.
 
 ### 4. Riscos Identificados e Mitigados ✅
 
-**Sprint 0.1:** 4 riscos técnicos mapeados com severidade e mitigação  
-**Sprint 0.2:** 1 vulnerabilidade crítica (missing index) identificada  
+**Sprint 0.1:** 4 riscos técnicos mapeados com severidade e mitigação\
+**Sprint 0.2:** 1 vulnerabilidade crítica (missing index) identificada\
 **Sprint 0.3:** 1 problema de comportamento (compaction late trigger)
 
 **Total:** 6 riscos/problemas descobertos e mitigados.
@@ -278,9 +278,9 @@ npm test --workspace=apps/desktop -- apps/desktop/src/main/agent/pi-sdk-poc.test
 
 **Recomendação:** Adicionar na Fase 1.1 (Schema Improvements):
 ```sql
-create index if not exists idx_agent_events_session_created 
+create index if not exists idx_agent_events_session_created
   on agent_events(session_id, created_at asc);
-create index if not exists idx_agent_events_session_type 
+create index if not exists idx_agent_events_session_type
   on agent_events(session_id, type);
 ```
 
@@ -429,16 +429,16 @@ create index if not exists idx_agent_events_session_type
 
 ### ✅ Fase 0 é APROVADA com DISTINÇÃO
 
-**Qualidade do trabalho:** Excepcional  
-**Rigor técnico:** Excelente  
-**Evidência empírica:** Robusta  
+**Qualidade do trabalho:** Excepcional\
+**Rigor técnico:** Excelente\
+**Evidência empírica:** Robusta\
 **Decisões arquiteturais:** Fundamentadas
 
 ### ✅ GO IMEDIATO para Fase 1
 
-**Confiança técnica:** Alta (95%)  
-**Riscos residuais:** Baixos e mitigáveis  
-**Bloqueadores:** Nenhum  
+**Confiança técnica:** Alta (95%)\
+**Riscos residuais:** Baixos e mitigáveis\
+**Bloqueadores:** Nenhum\
 **Oportunidades validadas:** Significativas (> 30% token saving)
 
 ### Feedback para Antigravity

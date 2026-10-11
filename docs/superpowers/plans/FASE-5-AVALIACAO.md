@@ -1,7 +1,7 @@
 # Fase 5: Repeat Guards & Circuit Breakers — Relatório de Conclusão e Avaliação
 
-**Data**: 2026-10-06  
-**Status**: Concluído com Sucesso ✅  
+**Data**: 2026-10-06\
+**Status**: Concluído com Sucesso ✅\
 **Feature Flag**: `MODUS_REPEAT_GUARDS` (requer `MODUS_USE_KERNEL`)
 
 ---

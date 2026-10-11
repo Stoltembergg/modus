@@ -1,10 +1,10 @@
 # Modus Persistent Stores Inventory & Capacity Analysis
 
-**Sprint:** 0.2 — Inventário de Stores Existentes  
-**Status:** COMPLETED  
-**Target Delivery:** `docs/architecture/modus-persistent-stores-inventory.md`  
-**Test Suite / Benchmark:** [`apps/desktop/src/main/agent/stores-inventory-poc.test.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/stores-inventory-poc.test.ts)  
-**Database Engine:** `node:sqlite` (`DatabaseSync` nativo do Node.js 22+ / Electron)  
+**Sprint:** 0.2 — Inventário de Stores Existentes\
+**Status:** COMPLETED\
+**Target Delivery:** `docs/architecture/modus-persistent-stores-inventory.md`\
+**Test Suite / Benchmark:** [`apps/desktop/src/main/agent/stores-inventory-poc.test.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/stores-inventory-poc.test.ts)\
+**Database Engine:** `node:sqlite` (`DatabaseSync` nativo do Node.js 22+ / Electron)\
 **Primary Schema Definition:** [`apps/desktop/src/main/db/database.ts`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/db/database.ts)
 
 ---
@@ -14,17 +14,17 @@
 O Sprint 0.2 realizou um levantamento detalhado de todos os repositórios persistentes (stores) do Modus, analisando schemas, índices, limites de volumetria, comportamento sob payloads massivos (>100KB até 1MB) e estratégias de retenção e deleção em cascata.
 
 ### Principais Conclusões
-1. **Mecanismo de Persistência:**  
+1. **Mecanismo de Persistência:**\
    O Modus utiliza o módulo nativo `node:sqlite` (`DatabaseSync`). O banco opera em modo WAL (Write-Ahead Logging) em arquivo único no diretório de dados do usuário (`userData/modus.db`).
-2. **Capacidade do SQLite para Payloads Grandes:**  
+2. **Capacidade do SQLite para Payloads Grandes:**\
    O SQLite suporta nativamente campos `TEXT` e `BLOB` de até 1GB (ou 2GB dependendo das flags de compilação). Nossos benchmarks comprovaram que inserções e leituras pontuais de payloads de 1MB são executadas em **< 15ms**.
-3. **O Verdadeiro Gargalo de Escalabilidade:**  
+3. **O Verdadeiro Gargalo de Escalabilidade:**\
    O gargalo de performance **NÃO é o disco ou o SQLite**, mas sim o pipeline da função [`listAgentEvents(sessionId)`](file:///C:/Users/Gabriel/Desktop/Nova%20pasta/modus/apps/desktop/src/main/agent/agent-event-store.ts#L1217-L1250):
    - A função executa `select id, payload_json, created_at, rowid as event_cursor from agent_events where session_id = ? order by created_at asc`.
    - Em seguida, executa `JSON.parse` em **cada evento** da sessão e envia todo o array deserializado através do barramento IPC do Electron para o processo de renderização.
    - Se uma sessão contiver 100 tool outputs de 50KB sem spill, a consulta carrega **> 5MB de strings JSON** e aloca dezenas de megabytes na heap do Node e do V8 do Renderer.
    - Com o mecanismo de **Tool Result Spill (Fase 3)**, esse mesmo histórico gera apenas **~50KB**, eliminando engasgos de UI e congelamentos no IPC.
-4. **Vulnerabilidade de Índice Identificada na Tabela `agent_events`:**  
+4. **Vulnerabilidade de Índice Identificada na Tabela `agent_events`:**\
    A tabela `agent_events` foi criada apenas com a chave primária `id text primary key`. Não há índice secundário cobrindo `session_id` em `database.ts`. Como consequência, queries como `listAgentEvents`, `getRunToolEvidence`, `getSessionCodeGraphDiscoveries` realizam um **FULL TABLE SCAN** por toda a tabela de eventos. Recomenda-se adicionar `idx_agent_events_session_created` na migração da Fase 1/3.
 
 ---

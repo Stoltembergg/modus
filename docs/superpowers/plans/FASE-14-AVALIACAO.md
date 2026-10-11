@@ -1,8 +1,8 @@
 # Avaliação da Fase 14 — Dependency Intelligence & Graph
 
-**Data:** 2024-01-XX  
-**Revisor:** Claude Opus 5.5  
-**Fase Avaliada:** Fase 14 — Dependency Intelligence & Graph  
+**Data:** 2024-01-XX\
+**Revisor:** Claude Opus 5.5\
+**Fase Avaliada:** Fase 14 — Dependency Intelligence & Graph\
 **Status:** ✅ **APROVADO COM DISTINÇÃO**
 
 ---
@@ -52,7 +52,7 @@ Conforme `2026-10-05-deepseek-harness-evolution-REVISED.md` (linhas 2389-2430):
 export class DependencyGraph {
   private nodes = new Map<string, DependencyNode>();
   private capabilityProviders = new Map<string, string>(); // capability -> pluginId
-  
+
   public addPlugin(manifest: PluginManifest): void
   public removePlugin(pluginId: string): void
   public rebuild(manifests: PluginManifest[]): void
@@ -106,7 +106,7 @@ const queue: Array<{ id: string; path: string[] }> = direct.map((d) => ({
 while (queue.length > 0) {
   const current = queue.shift()!;
   const currentNode = this.nodes.get(current.id);
-  
+
   for (const nextDep of currentNode.dependents) {
     if (!visited.has(nextDep)) {
       visited.add(nextDep);
@@ -166,7 +166,7 @@ const dfs = (pluginId: string) => {
   visited.add(pluginId);
   recStack.set(pluginId, currentPath.length);
   currentPath.push(pluginId);
-  
+
   const node = this.nodes.get(pluginId);
   if (node) {
     for (const depId of node.dependencies) {
@@ -181,7 +181,7 @@ const dfs = (pluginId: string) => {
       }
     }
   }
-  
+
   currentPath.pop();
   recStack.delete(pluginId);
 };
@@ -206,10 +206,10 @@ public topologicalSort(): string[] {
   if (cycles.length > 0 && cycles[0]) {
     throw new CircularDependencyError(cycles[0]);
   }
-  
+
   const order: string[] = [];
   const visited = new Set<string>();
-  
+
   const dfs = (id: string) => {
     visited.add(id);
     const node = this.nodes.get(id);
@@ -222,13 +222,13 @@ public topologicalSort(): string[] {
     }
     order.push(id); // post-order: dependências antes de dependentes
   };
-  
+
   for (const id of this.nodes.keys()) {
     if (!visited.has(id)) {
       dfs(id);
     }
   }
-  
+
   return order;
 }
 ```
@@ -252,7 +252,7 @@ export class UpdatePlanner {
     const phases: PluginUpdate[][] = [];
     const processed = new Set<string>();
     const updateMap = new Map(updates.map((u) => [u.pluginId, u]));
-    
+
     // Ordenação topológica
     let sortedIds: string[];
     try {
@@ -266,22 +266,22 @@ export class UpdatePlanner {
         warnings: ['Circular dependency detected: all updates in single phase'],
       };
     }
-    
+
     // Agrupar em fases: plugins sem dependências não-processadas vão na mesma fase
     for (const id of sortedIds) {
       if (!updateMap.has(id)) continue;
-      
+
       const node = graph.getPlugin(id);
-      const canUpdate = node?.dependencies.every((dep) => 
+      const canUpdate = node?.dependencies.every((dep) =>
         !updateMap.has(dep) || processed.has(dep)
       ) ?? true;
-      
+
       if (canUpdate) {
         // Adicionar à fase atual ou criar nova
         // ...
       }
     }
-    
+
     return { phases, totalUpdates, estimatedDurationMs, warnings };
   }
 }
@@ -304,7 +304,7 @@ export class UpdatePlanner {
 1. **`blast-radius <pluginId> [--json]`**
    - Texto: formatação legível com direct/transitive/severity
    - JSON: estrutura completa para scripts
-   
+
 2. **`tree`**
    - Visualização ASCII do grafo completo
    - Formato: `pluginId@version`, `provides:`, `depends on:`, `required by:`
@@ -334,7 +334,7 @@ export class UpdatePlanner {
 ```typescript
 public async uninstall(pluginId: string, options?: { force?: boolean }): Promise<void> {
   const blast = this.graph.calculateBlastRadius(pluginId);
-  
+
   if (blast.directDependents.length > 0 && !options?.force) {
     const dependentsList = blast.directDependents.join(', ');
     throw new PluginLifecycleError(
@@ -342,7 +342,7 @@ public async uninstall(pluginId: string, options?: { force?: boolean }): Promise
       `Use --force to override.`
     );
   }
-  
+
   // Desinstalação permitida
   await this.loader.unload(pluginId);
   this.store.deletePlugin(pluginId);
@@ -377,13 +377,13 @@ it('correctly maps capability provisions and requirements to plugin dependencies
   graph.addPlugin(baseMemoryPlugin);
   graph.addPlugin(modelRouterPlugin);
   graph.addPlugin(contextEnginePlugin);
-  
+
   const ctxNode = graph.getPlugin('@modus/context-engine');
-  
+
   // context-engine depends on memory (via capability) and model-router (via plugin)
   expect(ctxNode?.dependencies).toContain('@modus/memory');
   expect(ctxNode?.dependencies).toContain('@modus/model-router');
-  
+
   // reverse links
   expect(graph.getPlugin('@modus/memory')?.dependents).toContain('@modus/context-engine');
 });
@@ -404,15 +404,15 @@ it('computes direct and transitive blast radius accurately', () => {
     verifierPlugin,          // depends on context-engine
     hyperplanPlugin,         // depends on context-engine
   ]);
-  
+
   const blast = graph.calculateBlastRadius('@modus/memory');
-  
+
   expect(blast.directDependents).toEqual(['@modus/context-engine']);
-  
+
   const transitiveIds = blast.transitiveDependents.map((t) => t.pluginId);
   expect(transitiveIds).toContain('@modus/verifier');
   expect(transitiveIds).toContain('@modus/hyperplan');
-  
+
   expect(blast.totalAffected).toBe(3);
   expect(blast.severity).toBe('medium');
   expect(blast.critical).toBe(true);
@@ -436,27 +436,27 @@ it('returns none severity for standalone leaf plugin', () => {
 it('detects direct circular dependency and identifies the cycle', () => {
   const pluginA = { id: 'plugin-a', requires: { plugins: ['plugin-b'] }, ... };
   const pluginB = { id: 'plugin-b', requires: { plugins: ['plugin-a'] }, ... };
-  
+
   graph.rebuild([pluginA, pluginB]);
-  
+
   expect(graph.hasCycles()).toBe(true);
-  
+
   const cycles = graph.findCycles();
   expect(cycles[0]).toContain('plugin-a');
   expect(cycles[0]).toContain('plugin-b');
-  
+
   expect(() => graph.topologicalSort()).toThrow(CircularDependencyError);
 });
 
 it('produces valid topological sort order when graph is acyclic', () => {
   graph.rebuild([baseMemoryPlugin, contextEnginePlugin, verifierPlugin]);
-  
+
   const sorted = graph.topologicalSort();
-  
+
   const memIndex = sorted.indexOf('@modus/memory');
   const ctxIndex = sorted.indexOf('@modus/context-engine');
   const verIndex = sorted.indexOf('@modus/verifier');
-  
+
   // Dependencies must appear before dependents
   expect(memIndex).toBeLessThan(ctxIndex);
   expect(ctxIndex).toBeLessThan(verIndex);
@@ -477,17 +477,17 @@ it('plans updates in topological dependency phases with parallel grouping', () =
     { pluginId: '@modus/model-router', currentVersion: '1.0.0', targetVersion: '1.2.0' },
     { pluginId: '@modus/context-engine', currentVersion: '1.0.0', targetVersion: '1.3.0' },
   ];
-  
+
   const plan = planner.planUpdates(updates, graph);
-  
+
   expect(plan.totalUpdates).toBe(4);
   expect(plan.phases.length).toBeGreaterThanOrEqual(2);
-  
+
   // Phase 1: memory and model-router (independent roots) in parallel
   const phase1Ids = plan.phases[0]!.map((u) => u.pluginId);
   expect(phase1Ids).toContain('@modus/memory');
   expect(phase1Ids).toContain('@modus/model-router');
-  
+
   // Later phases: context-engine before verifier
   const laterPhases = plan.phases.slice(1).flatMap((p) => p.map((u) => u.pluginId));
   expect(laterPhases.indexOf('@modus/context-engine')).toBeLessThan(
@@ -506,15 +506,15 @@ it('plans updates in topological dependency phases with parallel grouping', () =
 it('blocks uninstall of a plugin that has active dependents unless forced', async () => {
   await service.install(baseMemoryPlugin);
   await service.install(contextEnginePlugin);
-  
+
   // Sem --force: deve falhar
   await expect(service.uninstall('@modus/memory')).rejects.toThrow(PluginLifecycleError);
   await expect(service.uninstall('@modus/memory')).rejects.toThrow(
     /is required by @modus\/context-engine/,
   );
-  
+
   expect(store.getPlugin('@modus/memory')).not.toBeNull();
-  
+
   // Com --force: deve suceder
   await service.uninstall('@modus/memory', { force: true });
   expect(store.getPlugin('@modus/memory')).toBeNull();
@@ -523,9 +523,9 @@ it('blocks uninstall of a plugin that has active dependents unless forced', asyn
 it('executes blast-radius CLI command and outputs structured report', async () => {
   await service.install(baseMemoryPlugin);
   await service.install(contextEnginePlugin);
-  
+
   const cliResult = await executePluginCli(['blast-radius', '@modus/memory'], service);
-  
+
   expect(cliResult.success).toBe(true);
   expect(cliResult.output).toContain('Removing @modus/memory would affect:');
   expect(cliResult.output).toContain('Direct dependents:');
@@ -554,7 +554,7 @@ it('validates feature flag dependencies for MODUS_PLUGIN_DEPENDENCY_INTELLIGENCE
     MODUS_PLUGIN_DEPENDENCY_INTELLIGENCE: true,
     MODUS_PLUGINS: false,
   });
-  
+
   expect(errors).toContain(
     'MODUS_PLUGIN_DEPENDENCY_INTELLIGENCE requires MODUS_PLUGINS to be enabled',
   );
@@ -566,7 +566,7 @@ it('accesses live dependency graph through PiSdkRuntime', () => {
     MODUS_PLUGINS: true,
     MODUS_PLUGIN_DEPENDENCY_INTELLIGENCE: true,
   });
-  
+
   const runtime = new PiSdkRuntime();
   const graph = runtime.getDependencyGraph();
   expect(graph).toBeInstanceOf(DependencyGraph);
@@ -584,9 +584,9 @@ it('refreshes the graph node on downgrade instead of keeping rolled-back version
   await service.install(capManifest('1.0.0', ['cap.a']));
   await service.upgrade(capManifest('2.0.0', ['cap.b']));
   expect(service.getDependencyGraph().getPlugin('@test/svc')?.provides).toEqual(['cap.b']);
-  
+
   await service.downgrade('@test/svc', '1.0.0');
-  
+
   const node = service.getDependencyGraph().getPlugin('@test/svc');
   expect(node?.version).toBe('1.0.0');
   expect(node?.provides).toEqual(['cap.a']); // FIX: agora atualiza corretamente
@@ -595,7 +595,7 @@ it('refreshes the graph node on downgrade instead of keeping rolled-back version
 it('sweeps versioned catalog keys on uninstall', async () => {
   await service.install(capManifest('1.0.0', ['cap.a']));
   await service.uninstall('@test/svc');
-  
+
   expect(service.resolveManifest('@test/svc', '1.0.0')).toBeUndefined();
   expect(service.resolveManifest('@test/svc')).toBeUndefined();
 });
@@ -603,7 +603,7 @@ it('sweeps versioned catalog keys on uninstall', async () => {
 it('plans updates across cyclic graphs without throwing', () => {
   graph.rebuild([mk('a', ['b']), mk('b', ['a'])]);
   expect(graph.hasCycles()).toBe(true);
-  
+
   const plan = planner.planUpdates([...], graph);
   expect(plan.phases.flat().length).toBe(2); // fallback: fase única
 });
@@ -830,9 +830,9 @@ Critical: true
 ```
 
 **Análise:**
-✅ Formato idêntico ao especificado  
-✅ Transitive dependents incluem caminho (`via`)  
-✅ Severidade calculada corretamente  
+✅ Formato idêntico ao especificado\
+✅ Transitive dependents incluem caminho (`via`)\
+✅ Severidade calculada corretamente\
 ✅ `--json` flag funcional
 
 ---
@@ -866,9 +866,9 @@ Critical: true
 
 **FASE 14 APROVADA COM DISTINÇÃO**
 
-**Confiança técnica:** 95%  
-**Bloqueadores:** Nenhum  
-**Gaps críticos:** Nenhum  
+**Confiança técnica:** 95%\
+**Bloqueadores:** Nenhum\
+**Gaps críticos:** Nenhum\
 **Recomendação:** ✅ **GO IMEDIATO para Fase 15 (Rollback & Safe Mode)**
 
 ---
@@ -1000,8 +1000,8 @@ Estimated duration: 10 seconds
 
 ---
 
-**Documento criado:** 2024-01-XX  
-**Próxima revisão:** Após Fase 15 (Rollback & Safe Mode)  
+**Documento criado:** 2024-01-XX\
+**Próxima revisão:** Após Fase 15 (Rollback & Safe Mode)\
 **Autor:** Claude Opus 5.5 (Code Review Agent)
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>

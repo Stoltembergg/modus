@@ -1,7 +1,7 @@
 # Fase 6: Groups Mailbox & Revisão Otimista — Relatório de Conclusão e Avaliação
 
-**Data**: 2026-10-06  
-**Status**: Concluído com Sucesso ✅  
+**Data**: 2026-10-06\
+**Status**: Concluído com Sucesso ✅\
 **Feature Flag**: `MODUS_GROUPS_MAILBOX` (requer `MODUS_USE_KERNEL`)
 
 ---
@@ -123,7 +123,7 @@ A Fase 6 introduziu a camada de comunicação durável e concorrência otimista 
 
 ## 5. Próximos Passos
 
-A Fase 6 concluiu todos os requisitos de correio durável de agentes e revisão otimista.  
+A Fase 6 concluiu todos os requisitos de correio durável de agentes e revisão otimista.\
 A arquitetura do Harness está pronta para a **Fase 7: Response Policy DSL & Formatting Unification** (ou fases de encerramento do plano geral).
 
 ---

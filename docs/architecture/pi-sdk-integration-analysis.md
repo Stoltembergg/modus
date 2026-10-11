@@ -1,8 +1,8 @@
 # PI SDK Integration & Architecture Analysis: Modus Harness Evolution v3.0
 
-**Sprint:** 0.1 — Análise Crítica do PI SDK  
-**Status:** COMPLETED  
-**Target Delivery:** `docs/architecture/pi-sdk-integration-analysis.md`  
+**Sprint:** 0.1 — Análise Crítica do PI SDK\
+**Status:** COMPLETED\
+**Target Delivery:** `docs/architecture/pi-sdk-integration-analysis.md`\
 **Packages Analyzed:**
 - `@earendil-works/pi-coding-agent@0.80.6`
 - `@earendil-works/pi-agent-core@0.80.6`
@@ -16,13 +16,13 @@
 O objetivo do Sprint 0.1 era conduzir uma auditoria rigorosa de caixa-branca no PI SDK para determinar a viabilidade e o padrão arquitetural ideal das Fases 2 (Prompt Layering & Caching), 3 (Tool Result Spill & Ephemeral Context) e 4 (Architectural Context Compactor).
 
 ### Key Architectural Findings
-1. **Tool Result Spill (Fase 3): 100% NATIVO VIA EXTENSION HOOK — ZERO FORK NECESSÁRIO.**  
+1. **Tool Result Spill (Fase 3): 100% NATIVO VIA EXTENSION HOOK — ZERO FORK NECESSÁRIO.**\
    O PI SDK expõe o hook `pi.on("tool_result", async (event) => ...)` através do pipeline `agent.afterToolCall` (`agent-loop.js`). Ele permite que uma extensão intercepte qualquer payload de saída de ferramenta (>100KB), salve o dado bruto no SQLite/disco e retorne um `content` sumarizado/truncado. Esse `content` truncado é o que é persistido no histórico de mensagens do agente e encaminhado ao LLM.
-2. **Compaction Ownership (Fase 4): SUPORTA HOOK-BASED & CONTROLE MANUAL.**  
+2. **Compaction Ownership (Fase 4): SUPORTA HOOK-BASED & CONTROLE MANUAL.**\
    O evento `session_before_compact` permite cancelar a compactação padrão (`{ cancel: true }`) ou injetar um resumo customizado com metadados estruturados (`{ compaction: { summary, firstKeptEntryId, tokensBefore, details } }`), dispensando o prompt de sumarização padrão do PI SDK. O recurso também pode ser completamente desativado no `SettingsManager` (`compaction.enabled = false`) se o Modus desejar gerenciar o ciclo de vida 100% de forma autônoma.
-3. **Context & System Prompt Building (Fase 2): SUPORTA EMULAÇÃO ESTRUTURADA E HOOK DUMMY.**  
+3. **Context & System Prompt Building (Fase 2): SUPORTA EMULAÇÃO ESTRUTURADA E HOOK DUMMY.**\
    O PI SDK aceita internamente uma string monolítica para `systemPrompt`, mas disponibiliza `before_agent_start` (que permite recompor dinamicamente o `systemPrompt` a cada turno) e o hook `context` (que permite inspecionar, reordenar ou podar o array de `messages` antes de ser enviado ao provedor de IA). Um `PromptRegistry` modular com seções empilhadas e cache breakpoints (estilo Anthropic/DeepSeek) é perfeitamente viável sem tocar no core do PI SDK.
-4. **Tool Lifecycle & Throttling (Fase 1/3): TOTALMENTE MAPEADO.**  
+4. **Tool Lifecycle & Throttling (Fase 1/3): TOTALMENTE MAPEADO.**\
    O streaming de ferramentas acumula deltas via `message_update` (`toolcall_start` e `toolcall_delta`). O Modus já implementa `TOOL_DELTA_THROTTLE_MS = 100` e controla o bounded auto-continue com `MAX_THRESHOLD_CONTINUES = 2`.
 
 **Verdict Geral:** **GO para todas as Fases subsequentes (Fases 1, 2, 3 e 4).** Nenhuma necessidade de fork de dependência upstream identificada.
@@ -35,7 +35,7 @@ O objetivo do Sprint 0.1 era conduzir uma auditoria rigorosa de caixa-branca no 
 
 #### Quem dispara: PI SDK ou Modus?
 Ambos.
-1. **PI SDK (Automático):** Disparado em `AgentSession._checkCompaction(willRetry, isRetry)` (`agent-session.js:1480-1560`).  
+1. **PI SDK (Automático):** Disparado em `AgentSession._checkCompaction(willRetry, isRetry)` (`agent-session.js:1480-1560`).\
    - Ocorre no final de cada turno ou após um overflow de contexto do provedor.
    - Fórmula de trigger: `tokens > contextWindow - reserveTokens`.
 2. **Modus (Manual):** Disparado via `AgentSession.compact()` (`agent-session.js:1396`). Modus chama explicitamente em `pi-sdk-runtime.ts:3516` quando invocado via UI/comando.

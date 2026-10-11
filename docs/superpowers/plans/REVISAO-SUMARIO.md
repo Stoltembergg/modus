@@ -1,18 +1,18 @@
 # Sumário da Revisão v3.0 do Plano DeepSeek-Inspired
 
-**Data:** 2026-10-06  
-**Documento revisado:** `2026-10-05-deepseek-harness-evolution-REVISED.md`  
+**Data:** 2026-10-06\
+**Documento revisado:** `2026-10-05-deepseek-harness-evolution-REVISED.md`\
 **Versão:** 2.0 → 3.0
 
 ## Problemas Identificados e Corrigidos
 
 ### 1. ✅ Erro de Digitação (Linha 1585)
-**Problema:** `tokensS saved: number;`  
-**Correção:** `tokensSaved: number;`  
+**Problema:** `tokensS saved: number;`\
+**Correção:** `tokensSaved: number;`\
 **Impacto:** Erro de compilação TypeScript
 
 ### 2. ✅ Fase 0 - Escopo Muito Amplo
-**Problema:** Investigação monolítica, sem priorização clara  
+**Problema:** Investigação monolítica, sem priorização clara\
 **Correção:** Dividida em 3 sprints priorizados:
 - **Sprint 0.1:** PI SDK Analysis (CRÍTICO, com POCs)
 - **Sprint 0.2:** Stores Inventory (com capacidades e performance)
@@ -25,7 +25,7 @@
 - Exit criteria claros para cada sprint
 
 ### 3. ✅ Hook Dependencies - Recovery Strategy
-**Problema:** Circular dependency detectada mas sem recovery  
+**Problema:** Circular dependency detectada mas sem recovery\
 **Correção:** Adicionado graceful degradation:
 ```typescript
 // Missing dependency: log warning mas continue
@@ -43,7 +43,7 @@ catch (error) {
 - Observability para debug
 
 ### 4. ✅ ResponsePolicy - Enforcement Fortalecido
-**Problema:** Apenas prompt guidelines, modelo pode ignorar  
+**Problema:** Apenas prompt guidelines, modelo pode ignorar\
 **Correção:** Adicionado validation pós-geração:
 - `validateResponsePolicy()`: detecta violações
 - `extractCriticalSections()`: identifica omissões críticas
@@ -56,7 +56,7 @@ catch (error) {
 - Feedback loop para ajustar guidelines
 
 ### 5. ✅ Feature Flags - Cobertura Completa
-**Problema:** Apenas 2 features com flags (Fase 4 e 6)  
+**Problema:** Apenas 2 features com flags (Fase 4 e 6)\
 **Correção:** Todas as 7 fases têm feature flags:
 - `MODUS_USE_KERNEL` (Fase 1)
 - `MODUS_PROMPT_REGISTRY` (Fase 2)
@@ -72,7 +72,7 @@ catch (error) {
 - Thresholds configuráveis via env vars
 
 ### 6. ✅ Validation Gates - Performance Benchmarks
-**Problema:** Apenas funcionalidade, sem performance  
+**Problema:** Apenas funcionalidade, sem performance\
 **Correção:** Adicionados SLOs para cada operação:
 - Hook system overhead: < 5% per turn
 - Prompt rebuild: < 100ms
@@ -90,7 +90,7 @@ catch (error) {
 - `it("memory usage stable across 100 turns")`
 
 ### 7. ✅ Cronograma - Checkpoints Incrementais
-**Problema:** Checkpoint apenas após Fase 2 (~40% do trabalho)  
+**Problema:** Checkpoint apenas após Fase 2 (~40% do trabalho)\
 **Correção:** Checkpoint após CADA fase com Go/No-Go:
 - **Sprint 0.3:** Re-priorizar baseado em dados
 - **Fase 2:** 30%+ token saving ou investigate
@@ -110,7 +110,7 @@ catch (error) {
 | 5 | < 5% false+ | > 10% false+ | Adjust |
 
 ### 8. ✅ Groups Mailbox - Simplificação
-**Problema:** Schema complexo (revision, fingerprint, CAS)  
+**Problema:** Schema complexo (revision, fingerprint, CAS)\
 **Correção:** Removido revisão otimista:
 - ❌ Removed: CAS, files fingerprint, group revisions
 - ✅ Kept: Durabilidade, dedupe, ack, expiration

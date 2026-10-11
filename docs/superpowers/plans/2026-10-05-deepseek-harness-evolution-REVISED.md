@@ -1,12 +1,12 @@
 # Plano de Evolução do Modus Harness — Arquitetura DeepSeek-Inspired (REVISADO)
 
-**Data:** 2026-10-05  
-**Versão:** 2.0 — Aprovado com Ajustes  
+**Data:** 2026-10-05\
+**Versão:** 2.0 — Aprovado com Ajustes\
 **Objetivo:** Modularizar o harness do Modus inspirando-se na arquitetura do DeepSeek Harness, tornando-o mais econômico em tokens, silencioso para o usuário, e mantendo seus diferenciais (Meta Controller, Context Engine, Project Model, Memory, HyperPlan, Verifier-First, Failure Intelligence).
 
 ## Checklist de Fases
 
-**Revisado em:** 2026-10-07  
+**Revisado em:** 2026-10-07\
 **Legenda:** `[x]` conclusão confirmada por relatório de avaliação e evidências de implementação/testes; `[ ]` sem evidência suficiente de conclusão no repositório (pode estar pendente ou em andamento).
 
 ### Ciclo 1 — Harness Core & Token Optimization
@@ -275,7 +275,7 @@ export class HarnessKernel {
       try {
         const result = await this.executeWithTimeout(hook, input, context);
         results.set(hook.name, result);
-        
+
         this.observer.recordHookExecution({
           phase,
           hookName: hook.name,
@@ -326,8 +326,8 @@ export class HarnessKernel {
     input: any,
     context: HarnessContext
   ): Promise<HookResult<T>> {
-    const timeout = process.env.HARNESS_HOOK_TIMEOUT_MS 
-      ? Number.parseInt(process.env.HARNESS_HOOK_TIMEOUT_MS) 
+    const timeout = process.env.HARNESS_HOOK_TIMEOUT_MS
+      ? Number.parseInt(process.env.HARNESS_HOOK_TIMEOUT_MS)
       : 30_000;
 
     return Promise.race([
@@ -370,7 +370,7 @@ async promptAgent(input: PromptAgentInput): Promise<PromptTurnResult> {
 // DEPOIS
 async promptAgent(input: PromptAgentInput): Promise<PromptTurnResult> {
   const context = this.createHarnessContext(input);
-  
+
   if (USE_HARNESS_KERNEL) {
     const results = await this.kernel.executePhase("turn_start", input, context);
     const intentGateResult = results.get("intent_gate");
@@ -495,7 +495,7 @@ export class PromptRegistry {
   ): Promise<{ prompt: string; sectionsIncluded: string[] }> {
     const sortedSections = [...this.sections.values()].sort((a, b) => a.priority - b.priority);
     const sessionFingerprints = this.lastSentFingerprints.get(sessionId) ?? new Map();
-    
+
     const parts: string[] = [];
     const included: string[] = [];
 
@@ -671,7 +671,7 @@ export function spillToolResult(input: {
 }): string {
   const spillId = randomUUID();
   const contentHash = createHash("sha256").update(input.fullContent, "utf8").digest("hex").slice(0, 16);
-  
+
   const spillEvent: SpilledToolResultEvent = {
     type: "tool.result.spilled",
     id: spillId,
@@ -695,7 +695,7 @@ export function retrieveSpilledResult(spillId: string): string | undefined {
   // Query agent_events onde id = spillId e type = "tool.result.spilled"
   const events = listAgentEvents(/* sessionId needed */);
   const spillEvent = events.find(e => e.id === spillId && e.type === "tool.result.spilled");
-  
+
   if (!spillEvent || spillEvent.type !== "tool.result.spilled") {
     return undefined;
   }
@@ -922,7 +922,7 @@ export async function pruneBeforeCompaction(
 ): Promise<PruneResult[]> {
   const candidates = await identifyPruneCandidates(sessionId, runId);
   const results: PruneResult[] = [];
-  
+
   let prunedBytes = 0;
 
   // Estratégia 1: Remover logs não referenciados
@@ -1506,7 +1506,7 @@ export function extractCriticalSections(response: string): CriticalSection[] {
 export const HARNESS_FEATURES = {
   // Fase 4: Compaction pruning (alto risco de conflito com PI SDK)
   enableCompactionPruning: process.env.MODUS_COMPACTION_PRUNING === "true",
-  
+
   // Fase 6: Groups mailbox (mudança de persistência)
   enableGroupsMailbox: process.env.MODUS_GROUPS_MAILBOX === "true",
 };
@@ -1563,9 +1563,9 @@ describe("Compaction with pruning", () => {
   it("prunes before PI SDK compaction", async () => {
     const session = createSessionWithLargeContext();
     const beforePrune = countTokens(session.context);
-    
+
     await pruneBeforeCompaction(session.id, session.runId, 10_000);
-    
+
     const afterPrune = countTokens(session.context);
     expect(afterPrune).toBeLessThan(beforePrune);
   });
@@ -1573,7 +1573,7 @@ describe("Compaction with pruning", () => {
   it("preserves evidence events", async () => {
     const session = createSessionWithEvidenceEvents();
     await pruneBeforeCompaction(session.id, session.runId, 50_000);
-    
+
     const qaEvidence = getQAEvidence(session.id);
     expect(qaEvidence).toHaveLength(/* original count */);
   });
@@ -1928,23 +1928,23 @@ class CapabilityRegistry {
   private capabilities = new Map<string, Capability>();
   private providers = new Map<string, CapabilityProvider[]>(); // capability -> providers[]
   private activeProviders = new Map<string, string>(); // capability -> active providerId
-  
+
   // Capability management
   registerCapability(capability: Capability): void;
   getCapability(id: string): Capability | undefined;
   listCapabilities(): Capability[];
-  
+
   // Provider management
   registerProvider(provider: CapabilityProvider): void;
   activateProvider(capabilityId: string, providerId: string): void;
   getActiveProvider(capabilityId: string): CapabilityProvider | undefined;
   listProviders(capabilityId: string): CapabilityProvider[];
-  
+
   // Execution
   async execute<T>(capabilityId: string, context: unknown): Promise<T> {
     const provider = this.getActiveProvider(capabilityId);
     if (!provider) throw new NoProviderError(capabilityId);
-    
+
     // Provenance tracking
     const trace = {
       traceId: generateTraceId(),
@@ -1954,7 +1954,7 @@ class CapabilityRegistry {
       providerVersion: provider.providerVersion,
       startTime: Date.now()
     };
-    
+
     try {
       const result = await provider.implementation.execute(context);
       this.recordSuccess(trace);
@@ -1964,7 +1964,7 @@ class CapabilityRegistry {
       throw error;
     }
   }
-  
+
   // Provenance
   getProvenance(capabilityId: string): CapabilityProvenance;
 }
@@ -2006,7 +2006,7 @@ export function registerCapabilitiesAndProviders(registry: CapabilityRegistry) {
       stability: 'stable'
     }
   });
-  
+
   // 2. Register as provider
   registry.registerProvider({
     providerId: '@modus/project-memory',
@@ -2028,7 +2028,7 @@ export function registerCapabilitiesAndProviders(registry: CapabilityRegistry) {
       performance: {}
     }
   });
-  
+
   // 3. Activate as default
   registry.activateProvider('memory.retrieve', '@modus/project-memory');
 }
@@ -2152,19 +2152,19 @@ interface PluginManifest {
   author: string;
   description: string;
   trustLevel: TrustLevel;          // core | official | verified | community | local
-  
+
   provides: CapabilityProvision[];
   requires: {
     modus: string;                 // >=0.8.0
     capabilities?: CapabilityRequirement[];
   };
-  
+
   permissions: {
     required: PluginPermissions;
     optional?: PluginPermissions;
     reason: Record<string, string>;
   };
-  
+
   lifecycle: {
     onLoad?: () => Promise<void>;
     onUnload?: () => Promise<void>;
@@ -2193,28 +2193,28 @@ interface CapabilityProvision {
 
 class PluginLoader {
   private plugins = new Map<string, LoadedPlugin>();
-  
+
   async load(manifest: PluginManifest): Promise<void> {
     // 1. Validate manifest
     this.validateManifest(manifest);
-    
+
     // 2. Check dependencies
     await this.checkDependencies(manifest.requires);
-    
+
     // 3. Load implementation
     const plugin = await this.loadImplementation(manifest);
-    
+
     // 4. Register as provider for each capability
     for (const provision of manifest.provides) {
       const capability = this.registry.getCapability(provision.capability);
       if (!capability) {
         throw new Error(`Capability ${provision.capability} not registered. Register capability first.`);
       }
-      
+
       if (capability.apiVersion !== provision.apiVersion) {
         console.warn(`Plugin ${manifest.id} implements ${provision.capability}@${provision.apiVersion}, but registry has @${capability.apiVersion}`);
       }
-      
+
       this.registry.registerProvider({
         providerId: manifest.id,
         providerVersion: manifest.version,
@@ -2228,18 +2228,18 @@ class PluginLoader {
           performance: {}
         }
       });
-      
+
       const activeProvider = this.registry.getActiveProvider(provision.capability);
       if (!activeProvider) {
         this.registry.activateProvider(provision.capability, manifest.id);
       }
     }
-    
+
     // 5. Run lifecycle hook
     if (manifest.lifecycle.onLoad) {
       await manifest.lifecycle.onLoad();
     }
-    
+
     this.plugins.set(manifest.id, plugin);
   }
 }
@@ -2254,7 +2254,7 @@ async function bootstrapModus() {
   const kernel = new ModusKernel();
   const registry = new CapabilityRegistry();
   const loader = new PluginLoader(registry);
-  
+
   // Ordem importa por dependências de capability
   await loader.load(memoryManifest);           // sem dependências
   await loader.load(contextEngineManifest);    // depende de memory
@@ -2263,7 +2263,7 @@ async function bootstrapModus() {
   await loader.load(failureIntelManifest);     // depende de verifier
   await loader.load(groupsManifest);           // depende de context
   await loader.load(hyperplanManifest);        // depende de context, groups
-  
+
   const harness = new Harness(kernel, registry);
   await harness.start();
 }
@@ -2414,7 +2414,7 @@ class PluginInstrumentation {
       status: 'success',
       metadata: {}
     };
-    
+
     try {
       const result = await fn();
       trace.endTime = Date.now();
@@ -2488,14 +2488,14 @@ class FilesystemBroker {
         }
         this.audit.log('filesystem.read', request.pluginId, request.path);
         return fs.readFile(request.path, 'utf-8');
-        
+
       case 'writeFile':
         if (!this.canWrite(request.path, permissions)) {
           throw new PermissionDeniedError('filesystem.write', request.path);
         }
         this.audit.log('filesystem.write', request.pluginId, request.path);
         return fs.writeFile(request.path, request.content);
-        
+
       default:
         throw new Error(`Unknown operation: ${request.operation}`);
     }
@@ -3041,8 +3041,8 @@ src/plugin/lifecycle.ts                 → Unregister UI on disable
 </div>
 
 // AFTER (slot-based)
-<UISlot 
-  slot="ui.session.header.action" 
+<UISlot
+  slot="ui.session.header.action"
   context={{ sessionId, sessionState }}
 />
 ```
@@ -3098,25 +3098,25 @@ class IsolatedContributionRenderer {
       maxRenderTime: 100, // ms
       maxMemory: 10 * 1024 * 1024 // 10MB
     });
-    
+
     monitor.start();
-    
+
     try {
       const result = await Promise.race([
         this.renderDeclarative(contribution, context),
         this.timeout(100)
       ]);
-      
+
       const usage = monitor.stop();
-      
+
       if (usage.memory > 10 * 1024 * 1024) {
         throw new MemoryLimitExceededError();
       }
-      
+
       return result;
     } catch (error) {
       monitor.stop();
-      
+
       // Record failure
       this.failureIntelligence.recordUIFailure({
         providerId: contribution.providerId,
@@ -3124,7 +3124,7 @@ class IsolatedContributionRenderer {
         error,
         context
       });
-      
+
       // Graceful degradation
       return this.renderFallback(contribution, error);
     }
@@ -3138,15 +3138,15 @@ class IsolatedContributionRenderer {
 class ContributionErrorBoundary extends React.Component {
   componentDidCatch(error: Error) {
     this.props.onError(error);
-    
+
     const errorCount = this.props.getErrorCount(this.props.providerId);
-    
+
     if (errorCount > 5) {
       // Auto-disable problematic provider
       this.props.disableProvider(this.props.providerId);
     }
   }
-  
+
   render() {
     if (this.state.hasError) {
       return <ContributionError providerId={this.props.providerId} />;
@@ -3196,7 +3196,7 @@ src/failure/ui-failure-correlation.ts     → NEW: UI failure analysis
 
 ```typescript
 interface AdaptationTrigger {
-  type: 
+  type:
     | 'session.state.changed'
     | 'tool.started'
     | 'tool.completed'
@@ -3204,7 +3204,7 @@ interface AdaptationTrigger {
     | 'verification.completed'
     | 'group.state.changed'
     | 'capability.activated';
-  
+
   data: Record<string, unknown>;
 }
 ```
@@ -3298,7 +3298,7 @@ interface ContributionInspection {
   providerVersion: string;
   trustLevel: TrustLevel;
   slot: UISlotId;
-  
+
   renderCount: number;
   avgRenderTime: number;
   maxRenderTime: number;
@@ -3336,7 +3336,7 @@ function ContributionDevTools() {
 ```typescript
 interface ExtendedHarnessEvent {
   // ... campos existentes
-  
+
   ui?: {
     contributionsRendered: number;
     slowContributions: Array<{
@@ -3393,22 +3393,22 @@ class SafeModeUIController {
   async enterSafeMode(level: SafeModeLevel): Promise<void> {
     // 1. Snapshot current UI state
     const snapshot = this.stateManager.snapshot('safe-mode-entry');
-    
+
     // 2. Get trust levels for this mode
     const allowedTrust = this.getTrustLevelsForMode(level);
     // 'core' → ['core']
     // 'official' → ['core', 'official']
     // 'verified' → ['core', 'official', 'verified']
-    
+
     // 3. Disable contributions from untrusted providers
     const allContributions = this.registry.listAll();
-    
+
     for (const contribution of allContributions) {
       if (!allowedTrust.includes(contribution.trustLevel)) {
         this.registry.unregister(contribution.providerId);
       }
     }
-    
+
     // 4. Force re-render of all slots
     this.forceReRenderAllSlots();
   }
@@ -3422,16 +3422,16 @@ class UIContributionVersionManager {
   async rollbackProvider(providerId: string, targetVersion: string): Promise<void> {
     // 1. Snapshot current UI
     const snapshot = this.stateManager.snapshot(`rollback-${providerId}`);
-    
+
     // 2. Unregister current contributions
     this.registry.unregister(providerId);
-    
+
     // 3. Rollback plugin (reuses Fase 15 infrastructure)
     await this.pluginVersionManager.rollback(providerId, targetVersion);
-    
+
     // 4. Plugin loader re-registers contributions from old version
     // This happens automatically through plugin lifecycle
-    
+
     // 5. Verify UI restored correctly
     const restored = this.registry.getByProvider(providerId);
     if (restored.length === 0) {
@@ -3481,10 +3481,10 @@ interface JITUIContribution {
   capabilityId: string;           // Linked to JIT capability
   slot: UISlotId;
   render: DeclarativeUI;
-  
+
   ttl: number;                    // Seconds
   destroyOnCapabilityEnd: boolean; // true default
-  
+
   permissions: UIContributionPermissions;
   requestedBy: string;            // Which agent/tool
   requestedAt: Date;
@@ -3500,22 +3500,22 @@ class JITUIManager {
     if (!capability?.isJIT) {
       throw new Error('Not a JIT capability');
     }
-    
+
     // 2. Validate permissions
     if (!this.permissionBroker.canShowUI(contribution.permissions)) {
       throw new PermissionDeniedError('ui.show');
     }
-    
+
     // 3. Validate declarative schema
     this.validateDeclarativeUI(contribution.render);
-    
+
     // 4. Register ephemeral contribution
     const contributionId = generateContributionId();
     this.registry.registerJIT(contributionId, contribution);
-    
+
     // 5. Schedule destruction
     this.scheduleDestruction(contributionId, contribution.ttl);
-    
+
     // 6. Audit
     this.audit.log({
       type: 'jit_ui_requested',
@@ -3524,7 +3524,7 @@ class JITUIManager {
       slot: contribution.slot,
       ttl: contribution.ttl
     });
-    
+
     return contributionId;
   }
 }
