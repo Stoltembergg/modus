@@ -191,7 +191,7 @@ impl<T: WorkerTransport> AssessedWorker<T> {
 impl<T: WorkerTransport> Drop for AssessedWorker<T> {
     fn drop(&mut self) {
         if let Some(transport) = self.transport.as_mut() {
-            request_and_reap(transport, cleanup_deadline());
+            let _ = reap_on_drop(transport, "AssessedWorker");
         }
     }
 }
@@ -375,7 +375,7 @@ impl<T: WorkerTransport> AdmissionAssessmentToken<T> {
 impl<T: WorkerTransport> Drop for AdmissionAssessmentToken<T> {
     fn drop(&mut self) {
         if let Some(transport) = self.transport.as_mut() {
-            request_and_reap(transport, cleanup_deadline());
+            let _ = reap_on_drop(transport, "AdmissionAssessmentToken");
         }
     }
 }
@@ -430,6 +430,22 @@ impl HostAuthorization {
 fn cleanup_deadline() -> Instant {
     Instant::now()
         + Duration::from_millis(APPROVED_RESOURCE_POLICY.forced_termination_reap_deadline_ms)
+}
+
+/// Best-effort cleanup from `Drop`, which cannot return an error. A failed
+/// termination or reap is reported on stderr instead of being discarded
+/// silently; callers that must observe the outcome use `cleanup_rejected`.
+fn reap_on_drop<T: WorkerTransport>(
+    transport: &mut T,
+    owner: &'static str,
+) -> Result<(), io::ErrorKind> {
+    let result = request_and_reap(transport, cleanup_deadline());
+    if let Err(kind) = result {
+        eprintln!(
+            "[modus-plugin-execution-protocol] {owner} dropped without a confirmed worker reap: {kind:?}"
+        );
+    }
+    result
 }
 
 fn request_and_reap<T: WorkerTransport>(
@@ -496,6 +512,64 @@ pub(crate) fn synthetic_test_token_with_transport<T: WorkerTransport>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct FailingReapTransport {
+        termination_requested: Arc<AtomicBool>,
+    }
+
+    impl DeadlineReader for FailingReapTransport {
+        fn read_with_deadline(
+            &mut self,
+            _buffer: &mut [u8],
+            _deadline: Instant,
+        ) -> io::Result<usize> {
+            Ok(0)
+        }
+    }
+
+    unsafe impl WorkerTransport for FailingReapTransport {
+        fn write_with_deadline(&mut self, _frame: &[u8], _deadline: Instant) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn request_termination(&mut self) {
+            self.termination_requested.store(true, Ordering::SeqCst);
+        }
+
+        fn reap_until(&mut self, _deadline: Instant) -> io::Result<()> {
+            Err(io::Error::from(io::ErrorKind::TimedOut))
+        }
+    }
+
+    #[test]
+    fn drop_cleanup_reports_a_failed_reap_instead_of_discarding_it() {
+        let termination_requested = Arc::new(AtomicBool::new(false));
+        let mut transport = FailingReapTransport {
+            termination_requested: Arc::clone(&termination_requested),
+        };
+
+        assert_eq!(
+            reap_on_drop(&mut transport, "test"),
+            Err(io::ErrorKind::TimedOut)
+        );
+        assert!(termination_requested.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn dropping_a_token_with_a_failing_reap_requests_termination_without_panicking() {
+        let termination_requested = Arc::new(AtomicBool::new(false));
+        let token = synthetic_test_token_with_transport(
+            provenance(),
+            FailingReapTransport {
+                termination_requested: Arc::clone(&termination_requested),
+            },
+        );
+
+        drop(token);
+
+        assert!(termination_requested.load(Ordering::SeqCst));
+    }
 
     fn provenance() -> HostProvenance {
         provenance_for_scope("session-fixture", "workspace-fixture", "run-fixture")
