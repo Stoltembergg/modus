@@ -204,7 +204,9 @@ fn runtime_invocation_is_dispatched_through_worker_session_and_returns_result() 
 
     assert_eq!(
         result,
-        Ok(InvocationOutcome::Success(json!({ "value": "plugin result" })))
+        Ok(InvocationOutcome::Success(
+            json!({ "value": "plugin result" })
+        ))
     );
     assert_eq!(
         brokered,

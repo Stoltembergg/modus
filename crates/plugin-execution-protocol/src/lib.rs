@@ -1022,7 +1022,9 @@ pub fn decode_host_frame(frame: &[u8]) -> Result<HostFrame, ProtocolError> {
 
     match &message {
         HostFrame::Execute {
-            capability, payload, ..
+            capability,
+            payload,
+            ..
         } => {
             if !valid_capability(capability) {
                 return Err(ProtocolError::InvalidCapability);
