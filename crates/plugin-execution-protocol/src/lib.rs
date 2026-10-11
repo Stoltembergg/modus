@@ -1533,11 +1533,8 @@ mod tests {
             reaped: Arc::clone(&reaped),
             ..FixtureTransport::default()
         };
-        let mut session = fixture_worker_session_with_rate_limiter(
-            transport,
-            provenance,
-            hostcall_rate_limiter,
-        );
+        let mut session =
+            fixture_worker_session_with_rate_limiter(transport, provenance, hostcall_rate_limiter);
         let deadline = Instant::now() + Duration::from_secs(1);
 
         assert_eq!(
