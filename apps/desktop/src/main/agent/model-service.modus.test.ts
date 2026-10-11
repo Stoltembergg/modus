@@ -455,4 +455,131 @@ describe("Modus provider in the model service", () => {
     await expect(ms.disconnectProvider("modus")).rejects.toThrow(/Modus account/);
     expect(() => ms.startProviderAuth("modus", async () => undefined)).toThrow(/Modus account/);
   });
+
+  it("a thinking change keeps every allowed Modus model listed, incl. one whose router id is also a bundled model id", async () => {
+    const auth = authSource("signed-in");
+    // Gabriel's Starter plan: deepseek/deepseek-flash is also pi's bundled deepseek model.
+    const modus = installModus(auth, () => ({
+      ok: true,
+      plan: "starter",
+      defaultModel: "deepseek/deepseek-flash",
+      models: [
+        {
+          id: "deepseek/deepseek-flash",
+          name: "DeepSeek V4.1 Flash",
+          ownedBy: "deepseek",
+          allowed: true,
+        },
+        { id: "zai/glm-5.3-flash", name: "GLM-5.3-Flash", ownedBy: "zai", allowed: true },
+        {
+          id: "anthropic/claude-opus-5-5",
+          name: "Claude Opus 5.5",
+          ownedBy: "anthropic",
+          allowed: true,
+        },
+        {
+          id: "anthropic/claude-fable-5-1",
+          name: "Claude Fable 5.1",
+          ownedBy: "anthropic",
+          allowed: false,
+        },
+      ],
+    }));
+    await vi.waitFor(() => expect(modus.status()).toBe("ready"));
+    expect(ms.getModelRegistry().find("deepseek", "deepseek-flash")).toBeDefined();
+    const allowed = () =>
+      ms
+        .listModels()
+        .filter((model) => model.provider === "modus" && !model.locked)
+        .map((model) => model.id)
+        .sort();
+    const ALL_ALLOWED = [
+      "modus/anthropic/claude-opus-5-5",
+      "modus/deepseek/deepseek-flash",
+      "modus/zai/glm-5.3-flash",
+    ];
+    expect(allowed()).toEqual(ALL_ALLOWED);
+
+    // The composer's thinking selector (App.updateModelThinking) sends no `enabled`. With no
+    // config row yet it used to write enabled = false and the model left every picker.
+    const updated = ms.updateModelConfig({
+      model: "modus/deepseek/deepseek-flash",
+      thinkingVariant: "off",
+    });
+    expect(updated.enabled).toBe(true);
+    expect(allowed()).toEqual(ALL_ALLOWED);
+    // An explicit toggle still works, both ways.
+    ms.updateModelConfig({ model: "modus/zai/glm-5.3-flash", enabled: false });
+    expect(allowed()).not.toContain("modus/zai/glm-5.3-flash");
+    ms.updateModelConfig({ model: "modus/zai/glm-5.3-flash", enabled: true });
+    expect(allowed()).toEqual(ALL_ALLOWED);
+    // A BYOK model without a row keeps its default (off until enabled), as before.
+    expect(
+      ms.updateModelConfig({ model: "deepseek/deepseek-flash", thinkingVariant: "off" }).enabled,
+    ).toBe(false);
+  });
+
+  /** A fresh Modus install: no Modus provider or model config rows yet. */
+  function clearModusConfigRows() {
+    const db = getDatabase();
+    db.prepare("delete from model_configs where provider_id = 'modus'").run();
+    db.prepare("delete from model_provider_configs where provider_id = 'modus'").run();
+  }
+
+  it("Settings › Providers › Modus agrees with listModels for a model with no config row, and its toggle turns it off", async () => {
+    clearModusConfigRows();
+    const modus = installModus(authSource("signed-in"), () => READY);
+    await vi.waitFor(() => expect(modus.status()).toBe("ready"));
+    const listed = () =>
+      ms
+        .listModels()
+        .filter((model) => model.provider === "modus")
+        .map((model) => [model.id, model.enabled]);
+    const settings = () => {
+      const detail = ms.getProviderDetail("modus");
+      return {
+        enabledModelCount: detail?.enabledModelCount,
+        models: detail?.models.map((model) => [`modus/${model.id}`, model.enabled]),
+      };
+    };
+    expect(listed()).toEqual([
+      ["modus/deepseek/deepseek-flash", true],
+      ["modus/zai/glm-4.6", true],
+    ]);
+    expect(settings()).toEqual({ enabledModelCount: 2, models: listed() });
+
+    // SettingsPanel.toggleModel: updateConfig({ model: `${detail.id}/${model.id}`, enabled: !model.enabled })
+    const flash = ms
+      .getProviderDetail("modus")
+      ?.models.find((m) => m.id === "deepseek/deepseek-flash");
+    expect(flash?.enabled).toBe(true);
+    ms.updateModelConfig({ model: `modus/${flash?.id}`, enabled: !flash?.enabled });
+    expect(ms.listModels().map((model) => model.id)).not.toContain("modus/deepseek/deepseek-flash");
+    expect(settings()).toEqual({
+      enabledModelCount: 1,
+      models: [
+        ["modus/deepseek/deepseek-flash", false],
+        ["modus/zai/glm-4.6", true],
+      ],
+    });
+  });
+
+  it("setProviderModelsEnabled('modus', …) works on a fresh install (no Modus provider row) both ways", async () => {
+    clearModusConfigRows();
+    const modus = installModus(authSource("signed-in"), () => READY);
+    await vi.waitFor(() => expect(modus.status()).toBe("ready"));
+    const off = ms.setProviderModelsEnabled("modus", false);
+    expect(off.enabledModelCount).toBe(0);
+    expect(off.models.map((model) => model.enabled)).toEqual([false, false]);
+    expect(ms.listModels().filter((model) => model.provider === "modus")).toEqual([]);
+    const on = ms.setProviderModelsEnabled("modus", true);
+    expect(on.enabledModelCount).toBe(2);
+    expect(on.models.map((model) => model.enabled)).toEqual([true, true]);
+    expect(
+      ms
+        .listModels()
+        .filter((model) => model.provider === "modus")
+        .map((model) => model.id),
+    ).toEqual(["modus/deepseek/deepseek-flash", "modus/zai/glm-4.6"]);
+  });
 });

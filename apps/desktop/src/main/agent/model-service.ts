@@ -718,6 +718,17 @@ function upsertProviderConfig(input: {
     );
 }
 
+/**
+ * The one rule for whether a model is enabled: its config row decides; with no row a Modus
+ * model is on by default (no BYOK step) and any other model is off until enabled.
+ */
+function isModelEnabled(
+  provider: string,
+  config: Pick<ModelConfigRow, "enabled"> | undefined,
+): boolean {
+  return config ? Boolean(config.enabled) : provider === MODUS_PROVIDER_ID;
+}
+
 function upsertModelConfig(input: {
   provider: string;
   modelId: string;
@@ -758,7 +769,7 @@ function upsertModelConfig(input: {
       input.modelId,
       input.displayName,
       input.source,
-      (input.enabled ?? Boolean(existing?.enabled)) ? 1 : 0,
+      (input.enabled ?? isModelEnabled(input.provider, existing)) ? 1 : 0,
       input.contextWindow ?? existing?.context_window ?? null,
       input.maxTokens ?? existing?.max_tokens ?? null,
       (input.reasoning ?? Boolean(existing?.reasoning)) ? 1 : 0,
@@ -1038,8 +1049,7 @@ function modelToInfo(
     providerName: providerDisplayName(model.provider, providerRow),
     name: config?.display_name ?? model.name ?? model.id,
     available,
-    // Modus models are on by default (no BYOK step); a config row can still turn one off.
-    enabled: config ? Boolean(config.enabled) : modus,
+    enabled: isModelEnabled(model.provider, config),
     configured: Boolean(config),
     source,
     ...(contextWindow !== undefined ? { contextWindow } : {}),
@@ -1105,7 +1115,7 @@ export function listAllProviderModels(provider: string): ProviderModelConfig[] {
       return {
         id: model.id,
         name: config?.display_name ?? model.name ?? model.id,
-        enabled: Boolean(config?.enabled),
+        enabled: isModelEnabled(model.provider, config),
         ...(contextWindow !== undefined ? { contextWindow } : {}),
         ...(maxTokens !== undefined ? { maxTokens } : {}),
         reasoning: config?.reasoning ? true : Boolean(model.reasoning),
@@ -1138,7 +1148,6 @@ function listProvidersFromRegistry(modelRegistry: ModelRegistry): ModelProviderI
   const providers = [...providerIds].map((provider) => {
     const row = providerConfigs.get(provider);
     const providerModels = modelRegistry.getAll().filter((model) => model.provider === provider);
-    const providerModelIds = new Set(providerModels.map(modelToId));
     const configuredModels = modelConfigs.filter((config) => config.provider_id === provider);
     const authStatus = modelRegistry.getProviderAuthStatus(provider);
     const credential =
@@ -1175,9 +1184,11 @@ function listProvidersFromRegistry(modelRegistry: ModelRegistry): ModelProviderI
     const resolvedAuthLabel = nativeAuthLabel ?? authLabel;
     const configured =
       authStatus.configured || (row?.source === "custom" && configuredModels.length > 0);
+    const configsById = new Map(configuredModels.map((config) => [config.id, config]));
     const enabledModelCount = configured
-      ? configuredModels.filter((config) => config.enabled && providerModelIds.has(config.id))
-          .length
+      ? providerModels.filter((model) =>
+          isModelEnabled(provider, configsById.get(modelToId(model))),
+        ).length
       : 0;
     const loadError = modelRegistry.getError();
     const native =
@@ -2122,7 +2133,8 @@ export function updateModelConfig(input: UpdateModelConfigInput): ModelInfo {
     modelId: parsed.id,
     displayName: existing?.display_name ?? model?.name ?? parsed.id,
     source: existing?.source ?? "builtin",
-    enabled: input.enabled ?? Boolean(existing?.enabled),
+    // No `enabled` (e.g. a thinking change): keep the model's current state.
+    enabled: input.enabled ?? isModelEnabled(model.provider, existing),
     reasoning: Boolean(existing?.reasoning ?? model?.reasoning),
     thinkingLevel: selected.level,
     thinkingVariant: selected.value,
@@ -2155,6 +2167,14 @@ export function setProviderModelsEnabled(provider: string, enabled: boolean): Mo
   const configs = new Map(listModelConfigRows().map((row) => [row.id, row]));
   const providerConfig = getProviderConfig(id);
   const source = providerConfig?.source === "custom" ? "custom" : "builtin";
+  // model_configs.provider_id references provider_configs: make sure the row exists (Modus
+  // has none until something writes one), as updateModelConfig does.
+  upsertProviderConfig({
+    provider: id,
+    displayName: providerConfig?.display_name ?? modelRegistry.getProviderDisplayName(id),
+    source,
+    preserveExisting: true,
+  });
 
   for (const model of modelRegistry.getAll().filter((entry) => entry.provider === id)) {
     const existing = configs.get(modelToId(model));
