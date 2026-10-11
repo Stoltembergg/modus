@@ -68,18 +68,18 @@ descriptors. The IPC-related values reuse the codec constants so they cannot
 drift, and `MAX_IPC_FRAME_BYTES` includes the length prefix. Fixed-value tests
 failed RED when the artifact cap was zero and when cancel/reap limits were
 missing; both now match the approved values. The protocol plus policy crate
-tests pass **14/14** locally. This is a policy contract, not enforcement: no
-platform adapter or runtime gate consumes it yet. In particular the Linux cgroup
-memory ceiling is not the required RSS ceiling, and the reviewed Windows
-mechanisms do not enforce the required general handle cap or strict RSS; no
-macOS adapter is present. All three platforms therefore remain blocked for
-external execution.
+tests pass **14/14** locally. The Linux supervisor now consumes part of this
+policy through delegated cgroup v2 controls, but this remains a partial
+enforcement adapter: `memory.max` is charged memory, not the required RSS
+ceiling. The reviewed Windows mechanisms do not enforce the required general
+handle cap or strict RSS; no macOS adapter is present. All three platforms
+remain blocked for external execution.
 
 Platform split for the next executor tranche:
 
 | Platform | Existing component | Verified gap | Admission state |
 |---|---|---|---|
-| Linux | `plugin-sandbox-probe/src/platform/linux.rs` performs read-only cgroup/namespace preflight. | No child process is placed into a configured policy; `memory.max` is not treated as proof of the approved RSS-only ceiling; no installed and verified seccomp/Landlock policy or bounded reap path. | External worker denied. A production adapter must require delegated cgroup v2 controls, install the complete policy before exec, and fail closed when any controller or reap guarantee is missing. |
+| Linux | `plugin-sandbox-probe/src/platform/linux.rs` remains read-only; the Rust supervisor's `linux_cgroup.rs` now applies and reads back `memory.max`, `cpu.max`, and `pids.max` for the bundled inert worker when those controllers are already delegated. | The runtime verifies configured limits, task membership, and cleanup; it does not measure actual memory consumption, and `memory.max` is not RSS. Namespaces, seccomp/Landlock, descriptor policy, process-tree control, and full `PlatformAssessment` are absent. Placement occurs immediately after trusted worker start; no plugin artifact is transferred. | External worker denied. The adapter fails closed unless the current cgroup already exposes the required controllers. Enforcement is not validated on this read-only host. Full controls and assessment remain required before admission. |
 | Windows | `plugin-sandbox-probe/src/platform/windows.rs` reports diagnostic Job Object and process-tree evidence. | Job memory limits constrain commit rather than strict RSS; no tamper-resistant general kernel-handle cap of 64; diagnostic tree handling is not an integrated worker lifecycle supervisor. | External worker denied. A production adapter must enforce the exact RSS and handle ceilings, own the process tree, and meet the termination/reap deadline before admission. |
 | macOS | No process-isolation adapter is present. | No supported mechanism has been implemented and reviewed against the full shared policy. | External worker denied. The adapter must meet every shared limit and preemptible process-tree cleanup before admission. |
 
@@ -88,29 +88,27 @@ synthetic frames. The platform rows above are separate from the trusted
 in-process HostPluginCatalog path; they do not disable built-in Harness
 plugins, Pi-owned extension factories, or existing trusted providers.
 
-No external-plugin child process is launched and no plugin/WASM bytes are
-handled by an executor; no OS adapter or Pi SDK callsite was added. The worker
-message has no `plugin_id` field; the dispatcher copies identity from the
-host-bound session. Windows, Linux, and macOS enforcement of the shared policy
-and preemptible process-tree termination remain unimplemented. External plugin
-execution stays blocked, while built-in Harness execution remains on the
-existing trusted host-catalog path.
+The supervisor may launch only the bundled inert bootstrap worker when Linux
+cgroup v2 admission checks succeed; it never sends plugin/WASM bytes to that
+worker. The worker message has no `plugin_id` field; the dispatcher copies
+identity from the host-bound session. Linux enforces only a cgroup subset and
+has not been validated against a writable delegated hierarchy. Windows and
+macOS enforcement remain unimplemented. External plugin execution stays
+blocked, while built-in Harness execution remains on the existing trusted
+host-catalog path.
 
 #### Current A01–A04 source-only recheck
 
-The current desktop dependency graph still does not include
-`modus-plugin-execution-protocol`; the dispatcher and resource policy remain
-library contracts. `PluginIsolationHost` denies external JavaScript/WASM
-execution but is not the executor for trusted built-ins. Trusted catalogued
-providers and lifecycle callbacks still execute in the host process, so the
-existing Harness path must remain available during migration. Linux remains a
-read-only preflight, Windows diagnostics do not establish the approved RSS and
-handle limits, and no macOS adapter exists. No process probes or enforcement
-tests were run. The platform source work can proceed independently, but the
-external-worker admission gate remains closed everywhere until each adapter
-implements and proves the complete policy. This is an implementation and
-evidence gap, not a claim that unavailable hostile tests alone block an
-otherwise complete executor.
+`PluginIsolationHost` denies external JavaScript/WASM execution but is not the
+executor for trusted built-ins. Trusted catalogued providers and lifecycle
+callbacks still execute in the host process, so the existing Harness path must
+remain available during migration. The Rust supervisor now consumes its policy
+contract for a partial Linux cgroup adapter; Windows diagnostics do not
+establish the approved RSS and handle limits, and no macOS adapter exists. Tests
+use synthetic filesystems and processes only. The external-worker admission
+gate remains closed everywhere until each adapter implements and proves the
+complete policy. This is an implementation and evidence gap, not a claim that
+unavailable hostile tests alone block an otherwise complete executor.
 
 The next A03 increment extends host-only provenance with exact plugin version,
 artifact origin, catalog-resolved trust level, session id, and workspace id in
@@ -3372,32 +3370,46 @@ Marco 2 therefore completes persistent lifecycle and structural session/budget
 ownership, not Linux enforcement. External plugin admission remains blocked;
 Windows and macOS were untouched.
 
-### A01–A04 Marco 3.1 — blocked before cgroup implementation
+### A01–A04 Marco 3.1 — partial Linux cgroup v2 enforcement integrated
 
-**Status: BLOCKED. No cgroup enforcement is implemented or claimed.** The Rust
-supervisor source explicitly has no Linux process launcher. Its production
-`SupervisorService::handle_command` validates provenance and then returns a
-deny response; `execute_assessed_worker` is not called by that path. The only
-`WorkerTransport` implementations found are synthetic fixtures. The IPC request
-contains plugin metadata and a capability payload, but no host-owned worker
-executable identity or artifact handoff contract that could safely start a
-specific process.
+**Status: PARTIAL; external admission remains blocked and no isolation claim is
+made.** The production bundled-worker bootstrap now uses the Linux supervisor
+adapter rather than the inert worker launcher alone. The adapter requires the
+current host cgroup to already expose `cpu`, `memory`, and `pids` and to have
+those controllers enabled for children; it never enables controllers or changes
+the host's parent cgroup. It creates a host-named worker group, applies and
+reads back `memory.max`, `cpu.max`, and `pids.max`, associates the spawned
+trusted worker PID, and verifies `cgroup.procs`, `cgroup.events`, and
+`pids.current` before accepting the bootstrap handshake. No plugin artifact or
+external code is sent to the worker, and the supervisor still returns an
+explicit denial after bootstrap.
 
-This execution environment reports the process in the cgroup-v2 root and has
-no writable delegated cgroup subtree (`/sys/fs/cgroup` is not writable to the
-task). Therefore it cannot validate applying `memory.max`, `cpu.max`,
-`pids.max`, or associating/reaping an exact worker PID. Tests that mock these
-operations cannot supply the missing productive process owner. Adding a
-generic child command or a placeholder worker here would invent the executable
-and artifact ABI and would not enforce limits on a real plugin worker, so no
-such path was added.
+For the approved policy, the current mapping is `memory.max = 268435456` bytes,
+`cpu.max = 25000 100000` (25% of one CPU over a 100 ms period), and `pids.max =
+1` task. Linux `memory.max` accounts cgroup-charged memory, not process RSS; the
+mapping therefore does not satisfy the approved strict RSS requirement. The
+task-count cap counts threads as well as processes. The host supervisor also
+serializes commands; this adapter does not independently enforce global helper
+concurrency.
 
-External admission remains fail-closed and disabled. A future authorized
-implementation first needs a host-owned Linux worker executable and explicit
-artifact handoff/process identity contract consumed by the supervisor; cgroup
-v2 preparation can then attach that exact child before artifact transfer.
-Namespaces, seccomp/Landlock, filesystem/network denial, descriptor limits,
-and process-tree enforcement remain unimplemented and unproven.
+On worker exit or failure, the host reaps the child under the approved deadline,
+then requires an empty `cgroup.procs`, `populated 0`, and `pids.current = 0`
+before removing the group. The next supervisor startup may remove an abandoned
+group only after its recorded owner PID is gone and the group is empty. Any
+unconfirmed cleanup poisons the persistent supervisor and blocks later
+bootstraps until restart. Failure at any setup step denies the request.
+
+The tests exercise the adapter through an in-memory fake cgroup filesystem and
+synthetic process terminator only. This environment's `/sys/fs/cgroup` is not
+writable, and no cgroup writes, worker processes, or plugins were run; actual
+kernel enforcement and production package behavior remain unverified.
+
+**Still absent:** strict RSS and aggregate resource enforcement, namespaces,
+seccomp/Landlock, filesystem/network/credential denial, inherited descriptor
+closure and limits, process-tree control, and a full `PlatformAssessment` that
+proves every required control. Process placement currently follows trusted
+worker `exec` and precedes handshake; the missing controls remain mandatory
+before any artifact transfer. External execution stays disabled and denied.
 
 ### A01–A04 Marco 3.0 — bundled Linux worker bootstrap
 

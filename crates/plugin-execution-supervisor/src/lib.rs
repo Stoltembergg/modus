@@ -1,14 +1,20 @@
 //! Host-side execution dispatcher for process-isolated plugin workers.
 //!
 //! This crate consumes the shared protocol's one-use admission token and
-//! `WorkerSession`. Its Linux bootstrap starts only the bundled inert worker;
-//! no platform adapter can yet assess the required controls, so plugin
-//! admission remains denied before artifact transfer.
+//! `WorkerSession`. Its Linux bootstrap starts only the bundled inert worker
+//! and applies a verified subset of delegated cgroup v2 controls. The full
+//! required control set is not assessed, so plugin admission remains denied
+//! before artifact transfer.
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 use std::time::Instant;
 
+#[cfg(target_os = "linux")]
+use linux_cgroup::{
+    CgroupV2Error, LinuxCgroupV2, WorkerCgroupIdentity, WorkerCgroupLease,
+    terminate_worker_and_cleanup,
+};
 #[cfg(target_os = "linux")]
 use std::fs::{self, File};
 #[cfg(target_os = "linux")]
@@ -36,6 +42,9 @@ use modus_plugin_execution_protocol::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[cfg(target_os = "linux")]
+mod linux_cgroup;
+
 pub const MAX_SUPERVISOR_REQUEST_BYTES: usize = MAX_IPC_FRAME_BYTES - 4;
 pub const MAX_SUPERVISOR_RESPONSE_BYTES: usize = MAX_IPC_FRAME_BYTES - 4;
 #[cfg(target_os = "linux")]
@@ -52,6 +61,7 @@ enum WorkerBootstrapFailure {
     UnsupportedPlatform,
     BinaryUnavailable,
     BinaryIdentityInvalid,
+    CgroupUnavailable,
     StartFailed,
     HandshakeFailed,
     TimedOut,
@@ -65,11 +75,20 @@ impl WorkerBootstrapFailure {
             Self::UnsupportedPlatform => "platform is not enabled",
             Self::BinaryUnavailable => "bundled worker binary is unavailable",
             Self::BinaryIdentityInvalid => "bundled worker identity is invalid",
+            Self::CgroupUnavailable => "required delegated cgroup v2 controls are unavailable",
             Self::StartFailed => "bundled worker failed to start",
             Self::HandshakeFailed => "bundled worker handshake failed",
             Self::TimedOut => "bundled worker bootstrap timed out",
             Self::CleanupFailed => "bundled worker cleanup failed",
         }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn map_cgroup_failure(error: CgroupV2Error) -> WorkerBootstrapFailure {
+    match error {
+        CgroupV2Error::CleanupFailed => WorkerBootstrapFailure::CleanupFailed,
+        _ => WorkerBootstrapFailure::CgroupUnavailable,
     }
 }
 
@@ -134,6 +153,7 @@ struct SessionProvenance {
 pub struct SupervisorService {
     sessions: HashMap<(String, String), SessionProvenance>,
     hostcall_rate_limiters: PluginHostcallRateLimiterRegistry,
+    worker_cleanup_failed: bool,
 }
 
 impl SupervisorService {
@@ -173,6 +193,12 @@ impl SupervisorService {
                     ));
                 }
                 let request_id = request.request_id.clone();
+                if self.worker_cleanup_failed {
+                    return Some(denied(
+                        request_id,
+                        "Worker cleanup could not be confirmed; the supervisor remains fail-closed until restart.",
+                    ));
+                }
                 let provenance = match validate_invocation(&request) {
                     Ok(provenance) => provenance,
                     Err(error) => {
@@ -207,7 +233,11 @@ impl SupervisorService {
                 }
                 self.sessions.entry(key).or_insert(identity);
 
-                Some(match bootstrap(&provenance) {
+                let outcome = bootstrap(&provenance);
+                if matches!(outcome, Err(WorkerBootstrapFailure::CleanupFailed)) {
+                    self.worker_cleanup_failed = true;
+                }
+                Some(match outcome {
                     Ok(()) => denied(
                         request_id,
                         "Linux isolation enforcement is unavailable; plugin admission is denied before artifact transfer.",
@@ -244,7 +274,7 @@ impl SupervisorService {
 
     /// Execute through the shared Rust protocol while retaining this service's
     /// per-plugin hostcall budgets. No production adapter calls this until all
-    /// Linux controls are implemented and assessed.
+    /// required Linux controls are implemented and assessed.
     pub fn execute_assessed_worker<T: WorkerTransport>(
         &self,
         assessed_worker: AssessedWorker<T>,
@@ -320,10 +350,10 @@ where
     }
 }
 
-fn bootstrap_bundled_worker(_provenance: &HostProvenance) -> Result<(), WorkerBootstrapFailure> {
+fn bootstrap_bundled_worker(provenance: &HostProvenance) -> Result<(), WorkerBootstrapFailure> {
     #[cfg(target_os = "linux")]
     {
-        bootstrap_linux_worker()
+        bootstrap_linux_worker(provenance)
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -332,39 +362,60 @@ fn bootstrap_bundled_worker(_provenance: &HostProvenance) -> Result<(), WorkerBo
 }
 
 #[cfg(target_os = "linux")]
-fn bootstrap_linux_worker() -> Result<(), WorkerBootstrapFailure> {
+fn bootstrap_linux_worker(provenance: &HostProvenance) -> Result<(), WorkerBootstrapFailure> {
     let supervisor_path =
         std::env::current_exe().map_err(|_| WorkerBootstrapFailure::BinaryUnavailable)?;
     let worker_path = resolve_bundled_worker_path(&supervisor_path)?;
     let challenge = create_bootstrap_challenge()?;
-    let mut child = Command::new(worker_path)
+    let identity = WorkerCgroupIdentity::from_provenance(provenance);
+    let cgroup_manager = LinuxCgroupV2::discover().map_err(map_cgroup_failure)?;
+    let mut cgroup = cgroup_manager
+        .prepare_worker(identity.clone(), REQUIRED_POLICY)
+        .map_err(map_cgroup_failure)?;
+    let child = Command::new(worker_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .env_clear()
         .env(WORKER_BOOTSTRAP_CHALLENGE_ENV, &challenge)
-        .spawn()
-        .map_err(|_| WorkerBootstrapFailure::StartFailed)?;
+        .spawn();
+    let mut child = match child {
+        Ok(child) => child,
+        Err(_) => {
+            return Err(cleanup_unstarted_cgroup(
+                &mut cgroup,
+                WorkerBootstrapFailure::StartFailed,
+            ));
+        }
+    };
+
+    if cgroup.attach_process(&identity, child.id()).is_err() {
+        return Err(cleanup_worker_after_error(
+            &mut child,
+            &mut cgroup,
+            WorkerBootstrapFailure::CgroupUnavailable,
+        ));
+    }
 
     let input = match child.stdin.take() {
         Some(input) => input,
         None => {
-            return if terminate_and_reap(&mut child).is_ok() {
-                Err(WorkerBootstrapFailure::StartFailed)
-            } else {
-                Err(WorkerBootstrapFailure::CleanupFailed)
-            };
+            return Err(cleanup_worker_after_error(
+                &mut child,
+                &mut cgroup,
+                WorkerBootstrapFailure::StartFailed,
+            ));
         }
     };
     let output = match child.stdout.take() {
         Some(output) => output,
         None => {
             drop(input);
-            return if terminate_and_reap(&mut child).is_ok() {
-                Err(WorkerBootstrapFailure::StartFailed)
-            } else {
-                Err(WorkerBootstrapFailure::CleanupFailed)
-            };
+            return Err(cleanup_worker_after_error(
+                &mut child,
+                &mut cgroup,
+                WorkerBootstrapFailure::StartFailed,
+            ));
         }
     };
 
@@ -379,11 +430,11 @@ fn bootstrap_linux_worker() -> Result<(), WorkerBootstrapFailure> {
     let reader = match reader {
         Ok(reader) => reader,
         Err(_) => {
-            return if terminate_and_reap(&mut child).is_ok() {
-                Err(WorkerBootstrapFailure::StartFailed)
-            } else {
-                Err(WorkerBootstrapFailure::CleanupFailed)
-            };
+            return Err(cleanup_worker_after_error(
+                &mut child,
+                &mut cgroup,
+                WorkerBootstrapFailure::StartFailed,
+            ));
         }
     };
 
@@ -391,10 +442,10 @@ fn bootstrap_linux_worker() -> Result<(), WorkerBootstrapFailure> {
         Ok(Ok(frame)) => frame,
         Ok(Err(failure)) => {
             drop(input);
-            let cleanup = terminate_and_reap(&mut child);
-            if cleanup.is_err() {
+            let failure = cleanup_worker_after_error(&mut child, &mut cgroup, failure);
+            if failure == WorkerBootstrapFailure::CleanupFailed {
                 drop(reader);
-                return Err(WorkerBootstrapFailure::CleanupFailed);
+                return Err(failure);
             }
             return if reader.join().is_err() {
                 Err(WorkerBootstrapFailure::CleanupFailed)
@@ -404,67 +455,100 @@ fn bootstrap_linux_worker() -> Result<(), WorkerBootstrapFailure> {
         }
         Err(mpsc::RecvTimeoutError::Timeout) => {
             drop(input);
-            let cleanup = terminate_and_reap(&mut child);
-            if cleanup.is_err() {
+            let failure = cleanup_worker_after_error(
+                &mut child,
+                &mut cgroup,
+                WorkerBootstrapFailure::TimedOut,
+            );
+            if failure == WorkerBootstrapFailure::CleanupFailed {
                 drop(reader);
-                return Err(WorkerBootstrapFailure::CleanupFailed);
+                return Err(failure);
             }
             return if reader.join().is_err() {
                 Err(WorkerBootstrapFailure::CleanupFailed)
             } else {
-                Err(WorkerBootstrapFailure::TimedOut)
+                Err(failure)
             };
         }
         Err(mpsc::RecvTimeoutError::Disconnected) => {
             drop(input);
-            let cleanup = terminate_and_reap(&mut child);
-            if cleanup.is_err() {
+            let failure = cleanup_worker_after_error(
+                &mut child,
+                &mut cgroup,
+                WorkerBootstrapFailure::HandshakeFailed,
+            );
+            if failure == WorkerBootstrapFailure::CleanupFailed {
                 drop(reader);
-                return Err(WorkerBootstrapFailure::CleanupFailed);
+                return Err(failure);
             }
             return if reader.join().is_err() {
                 Err(WorkerBootstrapFailure::CleanupFailed)
             } else {
-                Err(WorkerBootstrapFailure::HandshakeFailed)
+                Err(failure)
             };
         }
     };
     if reader.join().is_err() {
         drop(input);
-        return if terminate_and_reap(&mut child).is_ok() {
-            Err(WorkerBootstrapFailure::HandshakeFailed)
-        } else {
-            Err(WorkerBootstrapFailure::CleanupFailed)
-        };
+        return Err(cleanup_worker_after_error(
+            &mut child,
+            &mut cgroup,
+            WorkerBootstrapFailure::HandshakeFailed,
+        ));
     }
     let mut input = input;
     if acknowledge_worker_bootstrap(&frame, &challenge, &mut input).is_err() {
         drop(input);
-        return if terminate_and_reap(&mut child).is_ok() {
-            Err(WorkerBootstrapFailure::HandshakeFailed)
-        } else {
-            Err(WorkerBootstrapFailure::CleanupFailed)
-        };
+        return Err(cleanup_worker_after_error(
+            &mut child,
+            &mut cgroup,
+            WorkerBootstrapFailure::HandshakeFailed,
+        ));
     }
     drop(input);
 
     match wait_for_worker_exit(&mut child, Instant::now() + WORKER_BOOTSTRAP_TIMEOUT) {
-        Ok(status) if status.success() => Ok(()),
-        Ok(_) => Err(WorkerBootstrapFailure::HandshakeFailed),
-        Err(WorkerBootstrapFailure::TimedOut) => {
-            if terminate_and_reap(&mut child).is_ok() {
-                Err(WorkerBootstrapFailure::TimedOut)
-            } else {
+        Ok(status) if status.success() => cgroup.cleanup().map_err(map_cgroup_failure),
+        Ok(_) => {
+            if cgroup.cleanup().is_err() {
                 Err(WorkerBootstrapFailure::CleanupFailed)
+            } else {
+                Err(WorkerBootstrapFailure::HandshakeFailed)
             }
         }
-        Err(failure) => {
-            if terminate_and_reap(&mut child).is_ok() {
-                Err(failure)
-            } else {
-                Err(WorkerBootstrapFailure::CleanupFailed)
-            }
-        }
+        Err(WorkerBootstrapFailure::TimedOut) => Err(cleanup_worker_after_error(
+            &mut child,
+            &mut cgroup,
+            WorkerBootstrapFailure::TimedOut,
+        )),
+        Err(failure) => Err(cleanup_worker_after_error(&mut child, &mut cgroup, failure)),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn cleanup_unstarted_cgroup(
+    group: &mut WorkerCgroupLease,
+    failure: WorkerBootstrapFailure,
+) -> WorkerBootstrapFailure {
+    if group.cleanup().is_ok() {
+        failure
+    } else {
+        WorkerBootstrapFailure::CleanupFailed
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn cleanup_worker_after_error(
+    child: &mut Child,
+    group: &mut WorkerCgroupLease,
+    failure: WorkerBootstrapFailure,
+) -> WorkerBootstrapFailure {
+    let deadline = Instant::now()
+        + Duration::from_millis(APPROVED_RESOURCE_POLICY.forced_termination_reap_deadline_ms);
+    if terminate_worker_and_cleanup(child, group, deadline).is_ok() {
+        failure
+    } else {
+        WorkerBootstrapFailure::CleanupFailed
     }
 }
 
@@ -577,28 +661,6 @@ fn wait_for_worker_exit(
             Ok(None) => return Err(WorkerBootstrapFailure::TimedOut),
             Err(_) => return Err(WorkerBootstrapFailure::CleanupFailed),
         }
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn terminate_and_reap(child: &mut Child) -> Result<(), WorkerBootstrapFailure> {
-    match child.try_wait() {
-        Ok(Some(_)) => Ok(()),
-        Ok(None) => {
-            child
-                .kill()
-                .map_err(|_| WorkerBootstrapFailure::CleanupFailed)?;
-            wait_for_worker_exit(
-                child,
-                Instant::now()
-                    + Duration::from_millis(
-                        APPROVED_RESOURCE_POLICY.forced_termination_reap_deadline_ms,
-                    ),
-            )
-            .map(|_| ())
-            .map_err(|_| WorkerBootstrapFailure::CleanupFailed)
-        }
-        Err(_) => Err(WorkerBootstrapFailure::CleanupFailed),
     }
 }
 
@@ -1267,6 +1329,40 @@ mod tests {
                 .windows(b"invalid IPC command".len())
                 .any(|window| window == b"invalid IPC command")
         );
+    }
+
+    #[test]
+    fn supervisor_stops_starting_workers_after_unconfirmed_cleanup() {
+        let mut service = SupervisorService::default();
+        let first = service.handle_command_with_bootstrap(
+            &invocation_command("request-cleanup-failed", "session", "workspace", "run"),
+            &mut |_| Err(WorkerBootstrapFailure::CleanupFailed),
+        );
+        assert!(matches!(
+            first,
+            Some(WorkerInvocationResponse::Denied { reason, .. })
+                if reason.contains("cleanup failed")
+        ));
+
+        let mut bootstrap_calls = 0;
+        let second = service.handle_command_with_bootstrap(
+            &invocation_command(
+                "request-after-cleanup-failed",
+                "session",
+                "workspace",
+                "run",
+            ),
+            &mut |_| {
+                bootstrap_calls += 1;
+                Ok(())
+            },
+        );
+        assert_eq!(bootstrap_calls, 0);
+        assert!(matches!(
+            second,
+            Some(WorkerInvocationResponse::Denied { reason, .. })
+                if reason.contains("remains fail-closed until restart")
+        ));
     }
 
     #[cfg(target_os = "linux")]

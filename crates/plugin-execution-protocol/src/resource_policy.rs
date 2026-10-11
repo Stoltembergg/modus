@@ -1,8 +1,9 @@
 //! Shared limits approved in the plugin-isolation design.
 //!
-//! These values are requirements for platform adapters, not evidence that any
-//! adapter enforces them. External execution must remain unavailable until a
-//! host-side supervisor applies and verifies every required limit.
+//! These values are requirements for platform adapters, not evidence that all
+//! requirements are enforced. The Linux supervisor currently applies only a
+//! subset through delegated cgroup v2 controls; external execution remains
+//! unavailable until every required limit is applied and verified.
 
 use crate::{MAX_IPC_FRAME_BYTES, MAX_PENDING_REQUESTS, MAX_RESULT_BYTES};
 
