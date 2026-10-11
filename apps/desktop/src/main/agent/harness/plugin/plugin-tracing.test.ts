@@ -15,6 +15,7 @@ import { PluginInstrumentation } from "./plugin-instrumentation";
 import { PluginStateStore } from "./plugin-state-store";
 import type { PluginTrace } from "./plugin-tracing-types";
 import type { PluginManifest } from "./plugin-types";
+import { registerTestCapability } from "../../../../../test-support/capability-registry-test-helpers";
 
 describe("Fase 12 — Plugin Tracing & Observability", () => {
   beforeEach(() => {
@@ -419,7 +420,7 @@ describe("Fase 12 — Plugin Tracing & Observability", () => {
           description: "Math capability",
         },
       };
-      registry.registerCapability(cap);
+      registerTestCapability(registry, cap);
 
       const provider: CapabilityProvider = {
         providerId: "@plugins/math-pack",

@@ -12,6 +12,7 @@ import {
   NoProviderError,
 } from "./capability-types";
 import { CORE_CAPABILITIES, registerCoreCapabilities } from "./core-capabilities";
+import { registerTestCapability } from "../../../../../test-support/capability-registry-test-helpers";
 
 describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
   let registry: CapabilityRegistry;
@@ -68,7 +69,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
 
     it("keeps provider implementations behind the registry execution dispatcher", async () => {
       const execute = vi.fn(() => "dispatched result");
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: "dispatcher.boundary",
         apiVersion: "1.0",
         replaceable: true,
@@ -101,7 +102,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
     });
 
     it("omits extra callable properties from provider descriptors", () => {
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: "dispatcher.extra-alias",
         apiVersion: "1.0",
         replaceable: true,
@@ -134,7 +135,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
     });
 
     it("captures rollback state without exposing a callable provider implementation", async () => {
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: "dispatcher.rollback",
         apiVersion: "1.0",
         replaceable: true,
@@ -198,7 +199,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
         dependencies: ["base.cap"],
         metadata: { description: "original", tags: ["safe"] },
       };
-      registry.registerCapability(cap);
+      registerTestCapability(registry, cap);
       const called = vi.fn(() => "original implementation");
       const implementation = { execute: called };
       const registeredAt = new Date("2025-01-01T00:00:00.000Z");
@@ -277,7 +278,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
 
     it("passes the caller AbortSignal through the registered provider wrapper", async () => {
       const signalSeen = vi.fn();
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: "cancel.propagation",
         apiVersion: "1.0",
         replaceable: true,
@@ -324,7 +325,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
         dependencies: [],
         metadata: {},
       };
-      registry.registerCapability(cap);
+      registerTestCapability(registry, cap);
       cap.replaceable = !replaceable;
       const provider: CapabilityProvider = {
         providerId: "@host/first",
@@ -370,7 +371,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
         },
       };
 
-      registry.registerCapability(cap);
+      registerTestCapability(registry, cap);
       const retrieved = registry.getCapability("memory.retrieve");
 
       expect(retrieved).toBeDefined();
@@ -380,7 +381,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
     });
 
     it("rejects re-registration with conflicting API version", () => {
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: "memory.retrieve",
         apiVersion: "1.0",
         replaceable: true,
@@ -389,7 +390,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
       });
 
       expect(() => {
-        registry.registerCapability({
+        registerTestCapability(registry, {
           id: "memory.retrieve",
           apiVersion: "2.0",
           replaceable: true,
@@ -400,7 +401,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
     });
 
     it("registers a provider matching the capability API version", () => {
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: "context.resolve",
         apiVersion: "1.2",
         replaceable: true,
@@ -429,7 +430,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
     });
 
     it("rejects a provider with incompatible major API version", () => {
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: "context.resolve",
         apiVersion: "1.0",
         replaceable: true,
@@ -457,7 +458,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
 
   describe("9.2 — Multi-Provider Support and Provider Switching", () => {
     it("does not expose caller receivers and captures the registered arrow implementation", async () => {
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: "immutable.impl",
         apiVersion: "1.0",
         replaceable: true,
@@ -488,7 +489,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
         HOST_CAPABILITY_REGISTRATION_AUTHORITY,
       );
 
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: "receiver.impl",
         apiVersion: "1.0",
         replaceable: true,
@@ -525,7 +526,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
     });
 
     it("quarantines providers against dispatch, queries, and activation until host recovery", async () => {
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: "quarantine.cap",
         apiVersion: "1.0",
         replaceable: true,
@@ -579,7 +580,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
     });
 
     it("rejects caller-authorized trust and same-ID provider replacement for replaceable capabilities", () => {
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: "memory.retrieve",
         apiVersion: "1.0",
         replaceable: true,
@@ -611,7 +612,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
     });
 
     it("rejects unauthenticated same-ID attempts on non-replaceable capabilities", () => {
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: "agent.loop",
         apiVersion: "1.0",
         replaceable: false,
@@ -644,7 +645,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
     });
 
     it("supports multiple providers for the same capability and allows switching", () => {
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: "memory.retrieve",
         apiVersion: "1.0",
         replaceable: true,
@@ -693,7 +694,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
     });
 
     it("prohibits switching active provider on non-replaceable capabilities", () => {
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: "agent.loop",
         apiVersion: "1.0",
         replaceable: false, // Invariant: runtime core loop cannot be replaced
@@ -742,7 +743,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
 
     it("rejects replacement by the same provider ID on a non-replaceable capability", () => {
       const implementation = { execute: () => "core" };
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: "agent.loop",
         apiVersion: "1.0",
         replaceable: false,
@@ -785,7 +786,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
     });
 
     it("prohibits changing the active provider on non-replaceable capabilities", () => {
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: "agent.loop",
         apiVersion: "1.0",
         replaceable: false,
@@ -816,7 +817,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
 
       // Initial activation and idempotent re-activation stay allowed.
       const fresh = new CapabilityRegistry();
-      fresh.registerCapability({
+      registerTestCapability(fresh, {
         id: "agent.loop",
         apiVersion: "1.0",
         replaceable: false,
@@ -844,7 +845,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
     });
 
     it("ignores attempts to flip the replaceable flag via re-registration", () => {
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: "agent.loop",
         apiVersion: "1.0",
         replaceable: false,
@@ -853,7 +854,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
       });
 
       // Same id + version is a silent no-op: the invariant cannot be flipped.
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: "agent.loop",
         apiVersion: "1.0",
         replaceable: true,
@@ -867,7 +868,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
 
   describe("9.3 — Execution and Provenance Tracking", () => {
     it("executes capability, records execution trace, and measures latency", async () => {
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: "model.select",
         apiVersion: "1.0",
         replaceable: true,
@@ -913,7 +914,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
     });
 
     it("records error provenance when a provider execution fails", async () => {
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: "tools.search",
         apiVersion: "1.0",
         replaceable: true,
@@ -958,7 +959,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
 
   describe("9.4 — Discovery API and CLI Presentation", () => {
     it("produces structured JSON discovery output and CLI table format", () => {
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: "memory.retrieve",
         apiVersion: "1.0",
         replaceable: true,

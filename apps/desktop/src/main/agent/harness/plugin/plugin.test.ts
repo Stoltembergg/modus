@@ -25,6 +25,7 @@ import { groupsPluginManifest } from "./plugins/groups-plugin";
 import { memoryPluginManifest, memoryStore } from "./plugins/memory-plugin";
 import { modelRouterPluginManifest } from "./plugins/model-router-plugin";
 import { verifierPluginManifest } from "./plugins/verifier-plugin";
+import { registerTestCapability } from "../../../../../test-support/capability-registry-test-helpers";
 
 const runtimeElectronState = vi.hoisted(() => ({ userData: "" }));
 vi.mock("electron", () => ({ app: { getPath: () => runtimeElectronState.userData } }));
@@ -931,7 +932,7 @@ describe("Fase 10 — Modus Internal Plugins", () => {
       const capability = "test.transaction.executor-snapshot";
       const pluginId = "@test/mutated-executor";
       const originalImplementation = { execute: () => "original" };
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: capability,
         apiVersion: "1.0",
         replaceable: true,
@@ -988,7 +989,7 @@ describe("Fase 10 — Modus Internal Plugins", () => {
 
     it("rolls back earlier providers when a later non-replaceable registration fails", async () => {
       const lockedCapability = "test.transaction.locked";
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: lockedCapability,
         apiVersion: "1.0",
         replaceable: false,
@@ -1040,14 +1041,14 @@ describe("Fase 10 — Modus Internal Plugins", () => {
       const replaceableCapability = "test.transaction.replaceable";
       const lockedCapability = "test.transaction.same-id-locked";
       const pluginId = "@test/mixed-registration-failure";
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: replaceableCapability,
         apiVersion: "1.0",
         replaceable: true,
         dependencies: [],
         metadata: {},
       });
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: lockedCapability,
         apiVersion: "1.0",
         replaceable: false,
@@ -1150,7 +1151,7 @@ describe("Fase 10 — Modus Internal Plugins", () => {
 
     it("refuses to remove the last provider of a non-replaceable capability", () => {
       const solo = new CapabilityRegistry();
-      solo.registerCapability({
+      registerTestCapability(solo, {
         id: "agent.loop",
         apiVersion: "1.0",
         replaceable: false,

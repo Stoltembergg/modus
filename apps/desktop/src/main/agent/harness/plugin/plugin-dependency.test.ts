@@ -19,6 +19,7 @@ import { PluginStateStore } from "./plugin-state-store";
 import { TestPluginCatalog } from "./plugin-test-catalog";
 import { PluginDependencyError, PluginLifecycleError, type PluginManifest } from "./plugin-types";
 import { UpdatePlanner } from "./update-planner";
+import { registerTestCapability } from "../../../../../test-support/capability-registry-test-helpers";
 
 const runtimeElectronState = vi.hoisted(() => ({ userData: "" }));
 vi.mock("electron", () => ({ app: { getPath: () => runtimeElectronState.userData } }));
@@ -454,7 +455,7 @@ describe("Fase 14 — Dependency Intelligence", () => {
     });
 
     it("rejects malformed capability version constraints before registering a provider", async () => {
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: "dependency.range.base",
         apiVersion: "1.0",
         replaceable: true,
@@ -764,7 +765,7 @@ describe("Fase 14 — Dependency Intelligence", () => {
         permissions: mockPerms,
       };
       catalog.add(runtimeDependent);
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: "runtime.only.dependent",
         apiVersion: "1.0",
         replaceable: true,

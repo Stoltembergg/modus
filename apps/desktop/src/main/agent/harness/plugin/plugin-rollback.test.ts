@@ -26,6 +26,7 @@ import { TestPluginCatalog } from "./plugin-test-catalog";
 import type { PluginManifest } from "./plugin-types";
 import { PluginSafeModeManager } from "./safe-mode";
 import type { PluginVersionManager } from "./version-manager";
+import { registerTestCapability } from "../../../../../test-support/capability-registry-test-helpers";
 
 describe("Fase 15 — Rollback e Safe Mode", () => {
   let store: PluginStateStore;
@@ -86,7 +87,7 @@ describe("Fase 15 — Rollback e Safe Mode", () => {
     db = new DatabaseSync(":memory:");
     store = new PluginStateStore(db);
     registry = new CapabilityRegistry();
-    registry.registerCapability({
+    registerTestCapability(registry, {
       id: "test.run",
       apiVersion: "1.0",
       replaceable: true,
@@ -378,21 +379,21 @@ describe("Fase 15 — Rollback e Safe Mode", () => {
       catalog.add(corePlugin);
       catalog.add(officialPlugin, "official");
       catalog.add(communityPlugin, "official");
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: "cap.core",
         apiVersion: "1.0",
         replaceable: true,
         dependencies: [],
         metadata: { description: "Core cap" },
       });
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: "cap.official",
         apiVersion: "1.0",
         replaceable: true,
         dependencies: [],
         metadata: { description: "Official cap" },
       });
-      registry.registerCapability({
+      registerTestCapability(registry, {
         id: "cap.community",
         apiVersion: "1.0",
         replaceable: true,
@@ -603,7 +604,7 @@ describe("Fase 15 — Rollback e Safe Mode", () => {
       catalog.add(dependent, "official");
       catalog.add(dependency, "official");
       for (const id of ["safe-order.base", "safe-order.deep", "safe-order.middle"]) {
-        registry.registerCapability({
+        registerTestCapability(registry, {
           id,
           apiVersion: "1.0",
           replaceable: true,

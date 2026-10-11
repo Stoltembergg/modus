@@ -285,7 +285,7 @@ export function registerCoreCapabilities(
   customImplementations: Partial<Record<string, CapabilityImplementation>> = {},
 ): void {
   for (const capability of CORE_CAPABILITIES) {
-    registry.registerCapability(capability);
+    registry.registerCapability(capability, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
 
     const providerId = `@modus/${capability.id.split(".")[0]}`;
     const implementation =

@@ -309,7 +309,7 @@ export class PluginLoader {
                 tags: [provision.capability.split(".")[0] ?? "plugin"],
               },
             };
-            this.#registry.registerCapability(newCap);
+            this.#registry.registerCapability(newCap, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
             createdCapabilities.push(provision.capability);
             capability = newCap;
           } else {
