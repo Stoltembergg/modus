@@ -1525,8 +1525,7 @@ mod tests {
             reaped: Arc::clone(&reaped),
             ..FixtureTransport::default()
         };
-        let mut session =
-            fixture_worker_session_with_registry(transport, provenance, &registry);
+        let mut session = fixture_worker_session_with_registry(transport, provenance, &registry);
         let deadline = Instant::now() + Duration::from_secs(1);
 
         assert_eq!(

@@ -530,10 +530,7 @@ mod tests {
         drop(first_limiter);
         let second_limiter = registry.for_plugin(&second).unwrap();
 
-        assert!(Arc::ptr_eq(
-            &first_weak.upgrade().unwrap(),
-            &second_limiter
-        ));
+        assert!(Arc::ptr_eq(&first_weak.upgrade().unwrap(), &second_limiter));
     }
 
     #[test]
