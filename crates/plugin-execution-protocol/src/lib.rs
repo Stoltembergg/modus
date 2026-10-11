@@ -1204,6 +1204,14 @@ mod tests {
     fn fixture_worker_session(transport: FixtureTransport) -> WorkerSession<FixtureTransport> {
         let provenance = provenance();
         let hostcall_rate_limiter = PluginHostcallRateLimiter::for_plugin(&provenance);
+        fixture_worker_session_with_rate_limiter(transport, provenance, hostcall_rate_limiter)
+    }
+
+    fn fixture_worker_session_with_rate_limiter(
+        transport: FixtureTransport,
+        provenance: HostProvenance,
+        hostcall_rate_limiter: Arc<PluginHostcallRateLimiter>,
+    ) -> WorkerSession<FixtureTransport> {
         let authorization = unsafe {
             HostAuthorization::from_permission_broker(
                 provenance.clone(),
@@ -1496,6 +1504,49 @@ mod tests {
                 Instant::now(),
             ),
             Err(ProtocolError::WriteDeadlineExceeded),
+        );
+        assert!(session.is_closed());
+        assert!(termination_requested.load(Ordering::SeqCst));
+        assert!(reaped.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn worker_session_rejects_over_budget_invocation_and_reaps_worker() {
+        let provenance = provenance();
+        let hostcall_rate_limiter = PluginHostcallRateLimiter::for_plugin(&provenance);
+        // Preload a future timestamp so the test remains deterministic even if
+        // the runner pauses: production still reserves using Instant::now().
+        let fixed_time = Instant::now() + Duration::from_secs(3_600);
+        for _ in 0..APPROVED_RESOURCE_POLICY.max_hostcalls_per_plugin_second {
+            hostcall_rate_limiter
+                .reserve_at(&provenance, fixed_time)
+                .unwrap();
+        }
+
+        let mut incoming = hello();
+        incoming.extend(invoke(1, "memory.read", json!({ "key": "fixture" })));
+        let termination_requested = Arc::new(AtomicBool::new(false));
+        let reaped = Arc::new(AtomicBool::new(false));
+        let transport = FixtureTransport {
+            incoming: incoming.into(),
+            termination_requested: Arc::clone(&termination_requested),
+            reaped: Arc::clone(&reaped),
+            ..FixtureTransport::default()
+        };
+        let mut session = fixture_worker_session_with_rate_limiter(
+            transport,
+            provenance,
+            hostcall_rate_limiter,
+        );
+        let deadline = Instant::now() + Duration::from_secs(1);
+
+        assert_eq!(
+            session.receive_until(deadline),
+            Ok(Some(DispatchEvent::Ready)),
+        );
+        assert_eq!(
+            session.receive_until(deadline),
+            Err(ProtocolError::PluginHostcallRateLimitExceeded),
         );
         assert!(session.is_closed());
         assert!(termination_requested.load(Ordering::SeqCst));

@@ -100,6 +100,7 @@ fn session(
     Arc<Mutex<Vec<u128>>>,
 ) {
     let provenance = provenance();
+    let hostcall_rate_limiter = PluginHostcallRateLimiter::for_plugin(&provenance);
     let outgoing = Arc::new(Mutex::new(Vec::new()));
     let terminated = Arc::new(AtomicBool::new(false));
     let reaped = Arc::new(AtomicBool::new(false));
@@ -131,7 +132,6 @@ fn session(
     };
     let worker = unsafe { AssessedWorker::from_adapter(assessment, transport) };
     let token = AdmissionAssessmentToken::validate(worker, provenance.clone()).unwrap();
-    let hostcall_rate_limiter = PluginHostcallRateLimiter::for_plugin(&provenance);
     let authorization = unsafe {
         HostAuthorization::from_permission_broker(
             provenance.clone(),
