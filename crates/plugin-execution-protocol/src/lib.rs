@@ -15,8 +15,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::worker_admission::{AdmissionAssessmentToken, HostAuthorization};
 use crate::worker_admission::WorkerTransport;
+use crate::worker_admission::{AdmissionAssessmentToken, HostAuthorization};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -1266,11 +1266,8 @@ mod tests {
     #[test]
     fn worker_session_rejects_grants_bound_to_a_different_run() {
         let worker_provenance = provenance();
-        let authorization_provenance = provenance_for_scope(
-            "session-fixture",
-            "workspace-fixture",
-            "other-run-fixture",
-        );
+        let authorization_provenance =
+            provenance_for_scope("session-fixture", "workspace-fixture", "other-run-fixture");
         let termination_requested = Arc::new(AtomicBool::new(false));
         let reaped = Arc::new(AtomicBool::new(false));
         let transport = FixtureTransport {

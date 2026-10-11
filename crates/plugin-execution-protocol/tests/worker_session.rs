@@ -28,10 +28,11 @@ struct FixtureTransport {
 
 impl modus_plugin_execution_protocol::DeadlineReader for FixtureTransport {
     fn read_with_deadline(&mut self, buffer: &mut [u8], deadline: Instant) -> io::Result<usize> {
-        self.read_deadlines_ms
-            .lock()
-            .unwrap()
-            .push(deadline.saturating_duration_since(Instant::now()).as_millis());
+        self.read_deadlines_ms.lock().unwrap().push(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis(),
+        );
         if Instant::now() >= deadline {
             return Err(io::Error::new(io::ErrorKind::TimedOut, "fixture deadline"));
         }
@@ -45,10 +46,11 @@ impl modus_plugin_execution_protocol::DeadlineReader for FixtureTransport {
 
 unsafe impl WorkerTransport for FixtureTransport {
     fn write_with_deadline(&mut self, frame: &[u8], deadline: Instant) -> io::Result<()> {
-        self.write_deadlines_ms
-            .lock()
-            .unwrap()
-            .push(deadline.saturating_duration_since(Instant::now()).as_millis());
+        self.write_deadlines_ms.lock().unwrap().push(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis(),
+        );
         if Instant::now() >= deadline {
             return Err(io::Error::new(io::ErrorKind::TimedOut, "fixture deadline"));
         }
@@ -128,12 +130,9 @@ fn session(
         PlatformAssessment::from_adapter(provenance.clone(), APPROVED_RESOURCE_POLICY, controls)
     };
     let worker = unsafe { AssessedWorker::from_adapter(assessment, transport) };
-    let token = AdmissionAssessmentToken::validate(worker, provenance).unwrap();
+    let token = AdmissionAssessmentToken::validate(worker, provenance.clone()).unwrap();
     let authorization = unsafe {
-        HostAuthorization::from_permission_broker(
-            provenance(),
-            ["memory.read".to_owned()],
-        )
+        HostAuthorization::from_permission_broker(provenance.clone(), ["memory.read".to_owned()])
     };
     let session = WorkerSession::new(token, authorization, CHALLENGE).unwrap();
     (
@@ -170,7 +169,8 @@ fn runtime_session_keeps_handshake_invocation_and_response_on_assessed_transport
         },
     );
 
-    let (mut session, outgoing, terminated, reaped, read_deadlines, write_deadlines) = session(input);
+    let (mut session, outgoing, terminated, reaped, read_deadlines, write_deadlines) =
+        session(input);
     let deadline = Instant::now() + Duration::from_secs(60);
     assert_eq!(
         session.receive_until(deadline),
@@ -192,8 +192,16 @@ fn runtime_session_keeps_handshake_invocation_and_response_on_assessed_transport
 
     let read_deadlines = read_deadlines.lock().unwrap();
     assert!(read_deadlines.len() >= 4);
-    assert!(read_deadlines[..2].iter().all(|remaining| *remaining <= 2_000));
-    assert!(read_deadlines[2..].iter().all(|remaining| *remaining <= 10_000));
+    assert!(
+        read_deadlines[..2]
+            .iter()
+            .all(|remaining| *remaining <= 2_000)
+    );
+    assert!(
+        read_deadlines[2..]
+            .iter()
+            .all(|remaining| *remaining <= 10_000)
+    );
     let write_deadlines = write_deadlines.lock().unwrap();
     assert!(write_deadlines.len() >= 2);
     assert!(write_deadlines[0] <= 2_000);
