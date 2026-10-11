@@ -152,8 +152,9 @@ impl SupervisorService {
 
                 Some(WorkerInvocationResponse::Denied {
                     request_id,
-                    reason: "Linux process isolation is not implemented; worker admission is denied."
-                        .into(),
+                    reason:
+                        "Linux process isolation is not implemented; worker admission is denied."
+                            .into(),
                 })
             }
             SupervisorCommand::ReleaseSession { session_id } => {
@@ -673,9 +674,7 @@ mod tests {
         assert_eq!(service.session_count(), 1);
 
         assert_eq!(
-            service.handle_command(
-                br#"{"type":"release_session","sessionId":"session-1"}"#
-            ),
+            service.handle_command(br#"{"type":"release_session","sessionId":"session-1"}"#),
             None,
         );
         assert_eq!(service.session_count(), 0);
@@ -725,7 +724,9 @@ mod tests {
         .collect::<Vec<_>>();
         let mut output = Vec::new();
         serve_supervisor(&input[..], &mut output).unwrap();
-        let lines = output.split(|byte| *byte == b'\n').filter(|line| !line.is_empty());
+        let lines = output
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty());
         let responses = lines
             .map(|line| serde_json::from_slice::<WorkerInvocationResponse>(line).unwrap())
             .collect::<Vec<_>>();
@@ -734,13 +735,15 @@ mod tests {
             vec![
                 WorkerInvocationResponse::Denied {
                     request_id: "request-1".into(),
-                    reason: "Linux process isolation is not implemented; worker admission is denied."
-                        .into(),
+                    reason:
+                        "Linux process isolation is not implemented; worker admission is denied."
+                            .into(),
                 },
                 WorkerInvocationResponse::Denied {
                     request_id: "request-2".into(),
-                    reason: "Linux process isolation is not implemented; worker admission is denied."
-                        .into(),
+                    reason:
+                        "Linux process isolation is not implemented; worker admission is denied."
+                            .into(),
                 },
             ],
         );
@@ -750,7 +753,12 @@ mod tests {
     fn persistent_ipc_bounds_each_line_and_keeps_later_requests_fail_closed() {
         let mut input = vec![b'x'; MAX_SUPERVISOR_REQUEST_BYTES + 1];
         input.push(b'\n');
-        input.extend(invocation_command("request-1", "session-1", "workspace-1", "run-1"));
+        input.extend(invocation_command(
+            "request-1",
+            "session-1",
+            "workspace-1",
+            "run-1",
+        ));
         input.push(b'\n');
         let mut output = Vec::new();
         serve_supervisor(&input[..], &mut output).unwrap();
