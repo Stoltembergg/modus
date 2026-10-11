@@ -178,14 +178,20 @@ jobs:
       - name: Check Linux supervisor formatting
         run: cargo fmt --manifest-path crates/plugin-execution-supervisor/Cargo.toml -- --check
 
+      - name: Check Linux worker formatting
+        run: cargo fmt --manifest-path crates/plugin-execution-worker/Cargo.toml -- --check
+
       - name: Test shared protocol using synthetic frames only
         run: cargo test --locked -p modus-plugin-execution-protocol
 
       - name: Test supervisor using synthetic transports only
         run: cargo test --locked -p modus-plugin-execution-supervisor
 
-      - name: Build deny-only Linux supervisor for packaging
-        run: cargo build --locked --release -p modus-plugin-execution-supervisor
+      - name: Test inert worker bootstrap using synthetic IPC only
+        run: cargo test --locked -p modus-plugin-execution-worker
+
+      - name: Build deny-only Linux supervisor and worker for packaging
+        run: cargo build --locked --release -p modus-plugin-execution-supervisor -p modus-plugin-execution-worker
 
   plugin-containment:
     name: plugin-containment · ${{ matrix.os }}

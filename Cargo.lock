@@ -106,6 +106,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "modus-plugin-execution-worker"
+version = "0.1.0"
+dependencies = [
+ "modus-plugin-execution-protocol",
+]
+
+[[package]]
 name = "modus-pty-host"
 version = "0.1.0"
 dependencies = [

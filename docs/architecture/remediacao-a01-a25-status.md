@@ -3398,3 +3398,54 @@ artifact handoff/process identity contract consumed by the supervisor; cgroup
 v2 preparation can then attach that exact child before artifact transfer.
 Namespaces, seccomp/Landlock, filesystem/network denial, descriptor limits,
 and process-tree enforcement remain unimplemented and unproven.
+
+### A01–A04 Marco 3.0 — bundled Linux worker bootstrap
+
+**Marco 3.1's missing-executable blocker is resolved structurally; Linux
+isolation and admission remain unproved and blocked.** The workspace now builds
+`modus-plugin-worker`, an inert bootstrap executable that sends only the shared
+protocol's challenged `hello`, accepts only the matching `ready` frame, and
+exits. It has no artifact loader, interpreter, plugin entrypoint, or capability
+dispatcher. The persistent Rust supervisor resolves the fixed worker sibling
+of its own canonical executable path, rejects symlinks/non-regular files and
+unsafe ownership or mode, starts it with a clean environment and host-created
+challenge, validates the bounded handshake, closes/reaps it, then denies
+admission because Linux enforcement is absent.
+
+The desktop host still reaches the Rust supervisor only through the existing
+Pi SDK tool, permission broker, dispatcher, and persistent supervisor client.
+The host catalog supplies plugin id/version/origin/digest/trust and generation;
+session, workspace, and run come from the current host context. The supervisor
+schema has no worker executable path, artifact path, or artifact bytes, and
+`deny_unknown_fields` rejects such additions. The handshake does not accept
+identity asserted by the worker: provenance stays in the host supervisor and
+the challenge only correlates this bootstrap. No plugin artifact or invocation
+payload is sent to the worker. After a successful bootstrap, the response is
+still `Denied` until every required Linux control is installed and assessed;
+`WorkerSession` remains admission-gated and is not constructed by this
+bootstrap path.
+
+Normal shutdown closes the worker's input after `ready`, waits under the
+existing handshake deadline, and confirms exit through the child handle;
+timeout/error paths kill and reap under the approved reap deadline. The current
+desktop client handles cancellation by invalidating the supervisor process;
+closing its pipe makes this inert worker's bootstrap read return EOF and exit.
+That forced-parent-death path cannot report a child reap back to the dead
+supervisor, so exact reap confirmation on parent cancellation remains a
+pre-enforcement lifecycle requirement.
+
+The worker identity check is package-path and filesystem-metadata based, not a
+cryptographic signature or an independent pinned digest. It prevents a plugin
+request from selecting an executable and rejects symlink/path escape; it relies
+on the desktop package/install location for integrity. This check is not proof
+of isolation. No worker process or plugin is executed by tests. Linux package
+builds now include both binaries in AppImage/deb resources; Windows/macOS
+packaging and adapters are unchanged.
+
+**Still absent:** cgroups v2 placement and required `memory.max`, `cpu.max`,
+and `pids.max` application; mandatory controllers/delegation and child
+verification; namespaces plus seccomp/Landlock filesystem/network/credential
+denial; strict CPU, RSS, descriptor, and process-tree limits; bounded
+termination/reap evidence; and a reviewed host-owned artifact resolver and
+post-admission transfer contract. The worker does not execute external code.
+External plugins remain blocked, and no isolation claim is made.

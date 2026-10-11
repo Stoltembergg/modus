@@ -27,8 +27,12 @@ on:
       - "apps/desktop/src/main/agent/pi-sdk-runtime.ts"
       - "apps/desktop/src/main/agent/runtime-registry.ts"
       - "apps/desktop/src/main/index.ts"
+      - "apps/desktop/scripts/build-plugin-supervisor.mjs"
       - "crates/plugin-execution-protocol/**"
       - "crates/plugin-execution-supervisor/**"
+      - "crates/plugin-execution-worker/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
 
 # Default for every job. Only the tag-only draft-release / publish-assets jobs raise
 # this to contents: write, so pull request runs never get a write token.

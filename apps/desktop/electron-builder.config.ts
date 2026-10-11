@@ -66,6 +66,10 @@ const config: Configuration = {
             from: "../../target/release/modus-plugin-execution-supervisor",
             to: "bin/modus-plugin-execution-supervisor",
           },
+          {
+            from: "../../target/release/modus-plugin-worker",
+            to: "bin/modus-plugin-worker",
+          },
         ]
       : []),
     ...(existsSync(fastCodebaseResource)

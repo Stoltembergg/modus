@@ -1,13 +1,28 @@
 //! Host-side execution dispatcher for process-isolated plugin workers.
 //!
 //! This crate consumes the shared protocol's one-use admission token and
-//! `WorkerSession`. It deliberately has no Linux process launcher yet. The
-//! packaged supervisor therefore denies requests until a Linux adapter can
-//! report every required control for the exact worker process.
+//! `WorkerSession`. Its Linux bootstrap starts only the bundled inert worker;
+//! no platform adapter can yet assess the required controls, so plugin
+//! admission remains denied before artifact transfer.
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 use std::time::Instant;
+
+#[cfg(target_os = "linux")]
+use std::fs::{self, File};
+#[cfg(target_os = "linux")]
+use std::io::Read;
+#[cfg(target_os = "linux")]
+use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
+use std::process::{Child, Command, Stdio};
+#[cfg(target_os = "linux")]
+use std::sync::mpsc;
+#[cfg(target_os = "linux")]
+use std::thread;
+#[cfg(target_os = "linux")]
+use std::time::Duration;
 
 use modus_plugin_execution_protocol::resource_policy::APPROVED_RESOURCE_POLICY;
 use modus_plugin_execution_protocol::worker_admission::{
@@ -16,13 +31,47 @@ use modus_plugin_execution_protocol::worker_admission::{
 };
 use modus_plugin_execution_protocol::{
     HostProvenance, HostTrustLevel, InvocationOutcome, MAX_IPC_FRAME_BYTES, MAX_RESULT_BYTES,
-    ProtocolError, WorkerSession,
+    ProtocolError, WorkerSession, encode_worker_bootstrap_ready, validate_worker_bootstrap_hello,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const MAX_SUPERVISOR_REQUEST_BYTES: usize = MAX_IPC_FRAME_BYTES - 4;
 pub const MAX_SUPERVISOR_RESPONSE_BYTES: usize = MAX_IPC_FRAME_BYTES - 4;
+#[cfg(target_os = "linux")]
+const TRUSTED_WORKER_EXECUTABLE: &str = "modus-plugin-worker";
+#[cfg(target_os = "linux")]
+const WORKER_BOOTSTRAP_CHALLENGE_ENV: &str = "MODUS_WORKER_BOOTSTRAP_CHALLENGE";
+#[cfg(target_os = "linux")]
+const WORKER_BOOTSTRAP_TIMEOUT: Duration =
+    Duration::from_millis(APPROVED_RESOURCE_POLICY.handshake_timeout_ms);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WorkerBootstrapFailure {
+    #[cfg(not(target_os = "linux"))]
+    UnsupportedPlatform,
+    BinaryUnavailable,
+    BinaryIdentityInvalid,
+    StartFailed,
+    HandshakeFailed,
+    TimedOut,
+    CleanupFailed,
+}
+
+impl WorkerBootstrapFailure {
+    fn description(self) -> &'static str {
+        match self {
+            #[cfg(not(target_os = "linux"))]
+            Self::UnsupportedPlatform => "platform is not enabled",
+            Self::BinaryUnavailable => "bundled worker binary is unavailable",
+            Self::BinaryIdentityInvalid => "bundled worker identity is invalid",
+            Self::StartFailed => "bundled worker failed to start",
+            Self::HandshakeFailed => "bundled worker handshake failed",
+            Self::TimedOut => "bundled worker bootstrap timed out",
+            Self::CleanupFailed => "bundled worker cleanup failed",
+        }
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(
@@ -91,6 +140,14 @@ impl SupervisorService {
     /// Handle one newline-delimited desktop IPC command. Session release is
     /// one-way; invocations always receive an explicit response.
     pub fn handle_command(&mut self, bytes: &[u8]) -> Option<WorkerInvocationResponse> {
+        self.handle_command_with_bootstrap(bytes, &mut |_| Ok(()))
+    }
+
+    fn handle_command_with_bootstrap(
+        &mut self,
+        bytes: &[u8],
+        bootstrap: &mut impl FnMut(&HostProvenance) -> Result<(), WorkerBootstrapFailure>,
+    ) -> Option<WorkerInvocationResponse> {
         if bytes.len() > MAX_SUPERVISOR_REQUEST_BYTES {
             return Some(denied(
                 "invalid-request",
@@ -150,11 +207,18 @@ impl SupervisorService {
                 }
                 self.sessions.entry(key).or_insert(identity);
 
-                Some(WorkerInvocationResponse::Denied {
-                    request_id,
-                    reason:
-                        "Linux process isolation is not implemented; worker admission is denied."
-                            .into(),
+                Some(match bootstrap(&provenance) {
+                    Ok(()) => denied(
+                        request_id,
+                        "Linux isolation enforcement is unavailable; plugin admission is denied before artifact transfer.",
+                    ),
+                    Err(failure) => denied(
+                        request_id,
+                        &format!(
+                            "Trusted Linux worker bootstrap failed ({}); plugin admission is denied.",
+                            failure.description(),
+                        ),
+                    ),
                 })
             }
             SupervisorCommand::ReleaseSession { session_id } => {
@@ -218,6 +282,19 @@ enum RequestLine {
 
 /// Serve bounded newline-delimited IPC until the host closes stdin.
 pub fn serve_supervisor<R: BufRead, W: Write>(mut reader: R, mut writer: W) -> io::Result<()> {
+    serve_supervisor_with_bootstrap(&mut reader, &mut writer, bootstrap_bundled_worker)
+}
+
+fn serve_supervisor_with_bootstrap<R, W, F>(
+    mut reader: R,
+    mut writer: W,
+    mut bootstrap: F,
+) -> io::Result<()>
+where
+    R: BufRead,
+    W: Write,
+    F: FnMut(&HostProvenance) -> Result<(), WorkerBootstrapFailure>,
+{
     let mut service = SupervisorService::default();
     loop {
         let Some(line) = read_request_line(&mut reader)? else {
@@ -229,7 +306,9 @@ pub fn serve_supervisor<R: BufRead, W: Write>(mut reader: R, mut writer: W) -> i
                 "Supervisor request exceeded its bounded input size.",
             )),
             RequestLine::Data(bytes) if bytes.is_empty() => None,
-            RequestLine::Data(bytes) => service.handle_command(&bytes),
+            RequestLine::Data(bytes) => {
+                service.handle_command_with_bootstrap(&bytes, &mut bootstrap)
+            }
         };
         if let Some(response) = response {
             let bytes = encode_supervisor_response(&response)
@@ -238,6 +317,288 @@ pub fn serve_supervisor<R: BufRead, W: Write>(mut reader: R, mut writer: W) -> i
             writer.write_all(b"\n")?;
             writer.flush()?;
         }
+    }
+}
+
+fn bootstrap_bundled_worker(_provenance: &HostProvenance) -> Result<(), WorkerBootstrapFailure> {
+    #[cfg(target_os = "linux")]
+    {
+        bootstrap_linux_worker()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err(WorkerBootstrapFailure::UnsupportedPlatform)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn bootstrap_linux_worker() -> Result<(), WorkerBootstrapFailure> {
+    let supervisor_path =
+        std::env::current_exe().map_err(|_| WorkerBootstrapFailure::BinaryUnavailable)?;
+    let worker_path = resolve_bundled_worker_path(&supervisor_path)?;
+    let challenge = create_bootstrap_challenge()?;
+    let mut child = Command::new(worker_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .env_clear()
+        .env(WORKER_BOOTSTRAP_CHALLENGE_ENV, &challenge)
+        .spawn()
+        .map_err(|_| WorkerBootstrapFailure::StartFailed)?;
+
+    let input = match child.stdin.take() {
+        Some(input) => input,
+        None => {
+            return if terminate_and_reap(&mut child).is_ok() {
+                Err(WorkerBootstrapFailure::StartFailed)
+            } else {
+                Err(WorkerBootstrapFailure::CleanupFailed)
+            };
+        }
+    };
+    let output = match child.stdout.take() {
+        Some(output) => output,
+        None => {
+            drop(input);
+            return if terminate_and_reap(&mut child).is_ok() {
+                Err(WorkerBootstrapFailure::StartFailed)
+            } else {
+                Err(WorkerBootstrapFailure::CleanupFailed)
+            };
+        }
+    };
+
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let reader = thread::Builder::new()
+        .name("modus-worker-bootstrap-reader".into())
+        .spawn(move || {
+            let result = read_bounded_worker_frame(output)
+                .map_err(|_| WorkerBootstrapFailure::HandshakeFailed);
+            let _ = sender.send(result);
+        });
+    let reader = match reader {
+        Ok(reader) => reader,
+        Err(_) => {
+            return if terminate_and_reap(&mut child).is_ok() {
+                Err(WorkerBootstrapFailure::StartFailed)
+            } else {
+                Err(WorkerBootstrapFailure::CleanupFailed)
+            };
+        }
+    };
+
+    let frame = match receiver.recv_timeout(WORKER_BOOTSTRAP_TIMEOUT) {
+        Ok(Ok(frame)) => frame,
+        Ok(Err(failure)) => {
+            drop(input);
+            let cleanup = terminate_and_reap(&mut child);
+            if cleanup.is_err() {
+                drop(reader);
+                return Err(WorkerBootstrapFailure::CleanupFailed);
+            }
+            return if reader.join().is_err() {
+                Err(WorkerBootstrapFailure::CleanupFailed)
+            } else {
+                Err(failure)
+            };
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            drop(input);
+            let cleanup = terminate_and_reap(&mut child);
+            if cleanup.is_err() {
+                drop(reader);
+                return Err(WorkerBootstrapFailure::CleanupFailed);
+            }
+            return if reader.join().is_err() {
+                Err(WorkerBootstrapFailure::CleanupFailed)
+            } else {
+                Err(WorkerBootstrapFailure::TimedOut)
+            };
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            drop(input);
+            let cleanup = terminate_and_reap(&mut child);
+            if cleanup.is_err() {
+                drop(reader);
+                return Err(WorkerBootstrapFailure::CleanupFailed);
+            }
+            return if reader.join().is_err() {
+                Err(WorkerBootstrapFailure::CleanupFailed)
+            } else {
+                Err(WorkerBootstrapFailure::HandshakeFailed)
+            };
+        }
+    };
+    if reader.join().is_err() {
+        drop(input);
+        return if terminate_and_reap(&mut child).is_ok() {
+            Err(WorkerBootstrapFailure::HandshakeFailed)
+        } else {
+            Err(WorkerBootstrapFailure::CleanupFailed)
+        };
+    }
+    let mut input = input;
+    if acknowledge_worker_bootstrap(&frame, &challenge, &mut input).is_err() {
+        drop(input);
+        return if terminate_and_reap(&mut child).is_ok() {
+            Err(WorkerBootstrapFailure::HandshakeFailed)
+        } else {
+            Err(WorkerBootstrapFailure::CleanupFailed)
+        };
+    }
+    drop(input);
+
+    match wait_for_worker_exit(&mut child, Instant::now() + WORKER_BOOTSTRAP_TIMEOUT) {
+        Ok(status) if status.success() => Ok(()),
+        Ok(_) => Err(WorkerBootstrapFailure::HandshakeFailed),
+        Err(WorkerBootstrapFailure::TimedOut) => {
+            if terminate_and_reap(&mut child).is_ok() {
+                Err(WorkerBootstrapFailure::TimedOut)
+            } else {
+                Err(WorkerBootstrapFailure::CleanupFailed)
+            }
+        }
+        Err(failure) => {
+            if terminate_and_reap(&mut child).is_ok() {
+                Err(failure)
+            } else {
+                Err(WorkerBootstrapFailure::CleanupFailed)
+            }
+        }
+    }
+}
+
+fn acknowledge_worker_bootstrap(
+    worker_hello: &[u8],
+    challenge: &str,
+    host_output: &mut impl Write,
+) -> Result<(), WorkerBootstrapFailure> {
+    validate_worker_bootstrap_hello(worker_hello, challenge)
+        .map_err(|_| WorkerBootstrapFailure::HandshakeFailed)?;
+    let ready =
+        encode_worker_bootstrap_ready().map_err(|_| WorkerBootstrapFailure::HandshakeFailed)?;
+    host_output
+        .write_all(&ready)
+        .and_then(|()| host_output.flush())
+        .map_err(|_| WorkerBootstrapFailure::HandshakeFailed)
+}
+
+#[cfg(target_os = "linux")]
+fn resolve_bundled_worker_path(
+    supervisor_executable: &Path,
+) -> Result<PathBuf, WorkerBootstrapFailure> {
+    let supervisor = fs::canonicalize(supervisor_executable)
+        .map_err(|_| WorkerBootstrapFailure::BinaryUnavailable)?;
+    let resources_dir = supervisor
+        .parent()
+        .ok_or(WorkerBootstrapFailure::BinaryIdentityInvalid)?;
+    let worker_candidate = resources_dir.join(TRUSTED_WORKER_EXECUTABLE);
+    let worker_link_metadata = fs::symlink_metadata(&worker_candidate)
+        .map_err(|_| WorkerBootstrapFailure::BinaryUnavailable)?;
+    if worker_link_metadata.file_type().is_symlink() || !worker_link_metadata.is_file() {
+        return Err(WorkerBootstrapFailure::BinaryIdentityInvalid);
+    }
+    let worker = fs::canonicalize(&worker_candidate)
+        .map_err(|_| WorkerBootstrapFailure::BinaryUnavailable)?;
+    if worker.parent() != Some(resources_dir)
+        || worker
+            .file_name()
+            .is_none_or(|name| name != TRUSTED_WORKER_EXECUTABLE)
+    {
+        return Err(WorkerBootstrapFailure::BinaryIdentityInvalid);
+    }
+
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let directory_metadata =
+        fs::metadata(resources_dir).map_err(|_| WorkerBootstrapFailure::BinaryIdentityInvalid)?;
+    let worker_metadata =
+        fs::metadata(&worker).map_err(|_| WorkerBootstrapFailure::BinaryIdentityInvalid)?;
+    let mode = worker_metadata.permissions().mode();
+    if mode & 0o111 == 0
+        || mode & 0o022 != 0
+        || worker_metadata.uid() != directory_metadata.uid()
+        || directory_metadata.permissions().mode() & 0o022 != 0
+    {
+        return Err(WorkerBootstrapFailure::BinaryIdentityInvalid);
+    }
+
+    Ok(worker)
+}
+
+#[cfg(target_os = "linux")]
+fn create_bootstrap_challenge() -> Result<String, WorkerBootstrapFailure> {
+    let mut random = [0; 32];
+    File::open("/dev/urandom")
+        .and_then(|mut source| source.read_exact(&mut random))
+        .map_err(|_| WorkerBootstrapFailure::StartFailed)?;
+    let mut challenge = String::with_capacity(64);
+    for byte in random {
+        use std::fmt::Write as _;
+        write!(&mut challenge, "{byte:02x}").map_err(|_| WorkerBootstrapFailure::StartFailed)?;
+    }
+    Ok(challenge)
+}
+
+#[cfg(target_os = "linux")]
+fn read_bounded_worker_frame<R: Read>(mut reader: R) -> Result<Vec<u8>, ProtocolError> {
+    let mut header = [0; 4];
+    reader
+        .read_exact(&mut header)
+        .map_err(|error| ProtocolError::IoFailure(error.kind()))?;
+    let payload_length = u32::from_be_bytes(header) as usize;
+    let frame_length = payload_length
+        .checked_add(header.len())
+        .ok_or(ProtocolError::FrameTooLarge)?;
+    if payload_length == 0 {
+        return Err(ProtocolError::InvalidLength);
+    }
+    if frame_length > MAX_IPC_FRAME_BYTES {
+        return Err(ProtocolError::FrameTooLarge);
+    }
+    let mut frame = Vec::with_capacity(frame_length);
+    frame.extend_from_slice(&header);
+    frame.resize(frame_length, 0);
+    reader
+        .read_exact(&mut frame[header.len()..])
+        .map_err(|error| ProtocolError::IoFailure(error.kind()))?;
+    Ok(frame)
+}
+
+#[cfg(target_os = "linux")]
+fn wait_for_worker_exit(
+    child: &mut Child,
+    deadline: Instant,
+) -> Result<std::process::ExitStatus, WorkerBootstrapFailure> {
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(5)),
+            Ok(None) => return Err(WorkerBootstrapFailure::TimedOut),
+            Err(_) => return Err(WorkerBootstrapFailure::CleanupFailed),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn terminate_and_reap(child: &mut Child) -> Result<(), WorkerBootstrapFailure> {
+    match child.try_wait() {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => {
+            child
+                .kill()
+                .map_err(|_| WorkerBootstrapFailure::CleanupFailed)?;
+            wait_for_worker_exit(
+                child,
+                Instant::now()
+                    + Duration::from_millis(
+                        APPROVED_RESOURCE_POLICY.forced_termination_reap_deadline_ms,
+                    ),
+            )
+            .map(|_| ())
+            .map_err(|_| WorkerBootstrapFailure::CleanupFailed)
+        }
+        Err(_) => Err(WorkerBootstrapFailure::CleanupFailed),
     }
 }
 
@@ -340,7 +701,7 @@ pub fn handle_unavailable_linux_request(
 
     Ok(WorkerInvocationResponse::Denied {
         request_id: request.request_id,
-        reason: "Linux process isolation is not implemented; worker admission is denied.".into(),
+        reason: "Linux isolation enforcement is unavailable; plugin admission is denied before artifact transfer.".into(),
     })
 }
 
@@ -458,7 +819,7 @@ mod tests {
     use modus_plugin_execution_protocol::worker_admission::PlatformAssessment;
     use modus_plugin_execution_protocol::{
         HostFrame, PROTOCOL_VERSION, WorkerExecutionOutcome, WorkerFrame, decode_host_frame,
-        encode_worker_frame,
+        decode_worker_bootstrap_ready, encode_worker_frame,
     };
     use serde_json::json;
 
@@ -624,7 +985,7 @@ mod tests {
             handle_unavailable_linux_request(&bytes),
             Ok(WorkerInvocationResponse::Denied {
                 request_id: "fixture-request".into(),
-                reason: "Linux process isolation is not implemented; worker admission is denied."
+                reason: "Linux isolation enforcement is unavailable; plugin admission is denied before artifact transfer."
                     .into(),
             }),
         );
@@ -700,7 +1061,7 @@ mod tests {
                 "workspace-1",
                 "run-1",
             )),
-            Some(WorkerInvocationResponse::Denied { reason, .. }) if reason.contains("is not implemented")
+            Some(WorkerInvocationResponse::Denied { reason, .. }) if reason.contains("before artifact transfer")
         ));
         let changed = invocation_command("request-2", "session-1", "workspace-2", "run-2");
         assert!(matches!(
@@ -723,7 +1084,7 @@ mod tests {
         })
         .collect::<Vec<_>>();
         let mut output = Vec::new();
-        serve_supervisor(&input[..], &mut output).unwrap();
+        serve_supervisor_with_bootstrap(&input[..], &mut output, |_| Ok(())).unwrap();
         let lines = output
             .split(|byte| *byte == b'\n')
             .filter(|line| !line.is_empty());
@@ -735,15 +1096,11 @@ mod tests {
             vec![
                 WorkerInvocationResponse::Denied {
                     request_id: "request-1".into(),
-                    reason:
-                        "Linux process isolation is not implemented; worker admission is denied."
-                            .into(),
+                    reason: "Linux isolation enforcement is unavailable; plugin admission is denied before artifact transfer.".into(),
                 },
                 WorkerInvocationResponse::Denied {
                     request_id: "request-2".into(),
-                    reason:
-                        "Linux process isolation is not implemented; worker admission is denied."
-                            .into(),
+                    reason: "Linux isolation enforcement is unavailable; plugin admission is denied before artifact transfer.".into(),
                 },
             ],
         );
@@ -761,7 +1118,7 @@ mod tests {
         ));
         input.push(b'\n');
         let mut output = Vec::new();
-        serve_supervisor(&input[..], &mut output).unwrap();
+        serve_supervisor_with_bootstrap(&input[..], &mut output, |_| Ok(())).unwrap();
         let responses = output
             .split(|byte| *byte == b'\n')
             .filter(|line| !line.is_empty())
@@ -775,7 +1132,190 @@ mod tests {
         assert!(matches!(
             responses.get(1),
             Some(WorkerInvocationResponse::Denied { request_id, reason })
-                if request_id == "request-1" && reason.contains("is not implemented")
+                if request_id == "request-1" && reason.contains("before artifact transfer")
         ));
+    }
+
+    #[test]
+    fn supervisor_bootstrap_receives_host_provenance_and_never_transfers_artifacts() {
+        let input = invocation_command(
+            "request-bootstrap",
+            "session-host",
+            "workspace-host",
+            "run-host",
+        );
+        let mut line = input;
+        line.push(b'\n');
+        let mut output = Vec::new();
+        let mut observed = None;
+        let mut host_output = Vec::new();
+
+        serve_supervisor_with_bootstrap(&line[..], &mut output, |provenance| {
+            observed = Some((
+                provenance.plugin_id().to_owned(),
+                provenance.session_id().to_owned(),
+                provenance.workspace_id().to_owned(),
+                provenance.run_id().to_owned(),
+                provenance.generation(),
+            ));
+            let hello = encode_worker_frame(&WorkerFrame::Hello {
+                protocol_version: PROTOCOL_VERSION,
+                challenge: CHALLENGE.into(),
+            })
+            .unwrap();
+            acknowledge_worker_bootstrap(&hello, CHALLENGE, &mut host_output)
+        })
+        .unwrap();
+
+        assert_eq!(
+            observed,
+            Some((
+                "fixture/plugin".into(),
+                "session-host".into(),
+                "workspace-host".into(),
+                "run-host".into(),
+                1,
+            )),
+        );
+        let response: WorkerInvocationResponse =
+            serde_json::from_slice(output.split(|byte| *byte == b'\n').next().unwrap()).unwrap();
+        assert_eq!(
+            response,
+            WorkerInvocationResponse::Denied {
+                request_id: "request-bootstrap".into(),
+                reason: "Linux isolation enforcement is unavailable; plugin admission is denied before artifact transfer.".into(),
+            },
+        );
+        assert_eq!(decode_worker_bootstrap_ready(&host_output), Ok(()));
+    }
+
+    #[test]
+    fn supervisor_bootstrap_rejects_wrong_challenge_without_replying_ready() {
+        let hello = encode_worker_frame(&WorkerFrame::Hello {
+            protocol_version: PROTOCOL_VERSION,
+            challenge: CHALLENGE.into(),
+        })
+        .unwrap();
+        let mut host_output = Vec::new();
+        assert_eq!(
+            acknowledge_worker_bootstrap(&hello, &"b".repeat(64), &mut host_output),
+            Err(WorkerBootstrapFailure::HandshakeFailed),
+        );
+        assert!(host_output.is_empty());
+    }
+
+    #[test]
+    fn supervisor_bootstrap_failure_and_untrusted_artifact_path_fail_closed() {
+        let mut timeout_input = invocation_command(
+            "request-timeout",
+            "session-timeout",
+            "workspace-timeout",
+            "run-timeout",
+        );
+        timeout_input.push(b'\n');
+        let mut output = Vec::new();
+        serve_supervisor_with_bootstrap(&timeout_input[..], &mut output, |_| {
+            Err(WorkerBootstrapFailure::TimedOut)
+        })
+        .unwrap();
+        let timeout_response: WorkerInvocationResponse =
+            serde_json::from_slice(output.split(|byte| *byte == b'\n').next().unwrap()).unwrap();
+        assert!(matches!(
+            timeout_response,
+            WorkerInvocationResponse::Denied { reason, .. }
+                if reason.contains("bootstrap timed out") && reason.contains("admission is denied")
+        ));
+
+        let mut cleanup_input = invocation_command(
+            "request-cleanup",
+            "session-cleanup",
+            "workspace-cleanup",
+            "run-cleanup",
+        );
+        cleanup_input.push(b'\n');
+        let mut cleanup_output = Vec::new();
+        serve_supervisor_with_bootstrap(&cleanup_input[..], &mut cleanup_output, |_| {
+            Err(WorkerBootstrapFailure::CleanupFailed)
+        })
+        .unwrap();
+        assert!(
+            cleanup_output
+                .windows(b"cleanup failed".len())
+                .any(|window| window == b"cleanup failed")
+        );
+
+        let mut request: serde_json::Value = serde_json::from_slice(&invocation_command(
+            "request-path",
+            "session-path",
+            "workspace-path",
+            "run-path",
+        ))
+        .unwrap();
+        request["request"]["artifactPath"] = serde_json::json!("/tmp/plugin-provided-worker");
+        let mut input = serde_json::to_vec(&request).unwrap();
+        input.push(b'\n');
+        let mut bootstrap_calls = 0;
+        let mut output = Vec::new();
+        serve_supervisor_with_bootstrap(&input[..], &mut output, |_| {
+            bootstrap_calls += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(bootstrap_calls, 0);
+        assert!(
+            output
+                .windows(b"invalid IPC command".len())
+                .any(|window| window == b"invalid IPC command")
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn bundled_worker_path_is_host_relative_regular_executable_only() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let root = std::env::temp_dir().join(format!(
+            "modus-worker-path-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        fs::create_dir(&root).unwrap();
+        let supervisor = root.join("modus-plugin-execution-supervisor");
+        let worker = root.join(TRUSTED_WORKER_EXECUTABLE);
+        fs::write(&supervisor, b"synthetic host supervisor").unwrap();
+        fs::write(&worker, b"synthetic bundled worker").unwrap();
+        fs::set_permissions(&supervisor, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&worker, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(
+            resolve_bundled_worker_path(&supervisor).unwrap(),
+            fs::canonicalize(&worker).unwrap(),
+        );
+
+        fs::set_permissions(&worker, fs::Permissions::from_mode(0o666)).unwrap();
+        assert_eq!(
+            resolve_bundled_worker_path(&supervisor),
+            Err(WorkerBootstrapFailure::BinaryIdentityInvalid),
+        );
+
+        fs::remove_file(&worker).unwrap();
+        let outside = root.join("arbitrary-worker");
+        fs::write(&outside, b"synthetic arbitrary executable").unwrap();
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            resolve_bundled_worker_path(&supervisor),
+            Err(WorkerBootstrapFailure::BinaryUnavailable),
+        );
+        symlink(&outside, &worker).unwrap();
+        assert_eq!(
+            resolve_bundled_worker_path(&supervisor),
+            Err(WorkerBootstrapFailure::BinaryIdentityInvalid),
+        );
+
+        fs::remove_dir_all(root).unwrap();
     }
 }

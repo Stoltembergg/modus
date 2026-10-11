@@ -98,6 +98,21 @@ enum InboundWorkerFrame {
     },
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum WorkerBootstrapHello {
+    Hello {
+        protocol_version: u16,
+        challenge: String,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum WorkerBootstrapReady {
+    Ready { protocol_version: u16 },
+}
+
 /// Message schema for host responses. It is not accepted as worker input.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -750,9 +765,7 @@ impl<T: WorkerTransport> WorkerSession<T> {
         };
 
         if event == DispatchEvent::Ready {
-            let ready = match encode_host_frame(&HostFrame::Ready {
-                protocol_version: PROTOCOL_VERSION,
-            }) {
+            let ready = match encode_worker_bootstrap_ready() {
                 Ok(frame) => frame,
                 Err(error) => return Err(self.finish_error(error)),
             };
@@ -991,6 +1004,56 @@ pub fn encode_worker_frame(message: &WorkerFrame) -> Result<Vec<u8>, ProtocolErr
         _ => {}
     }
     encode_message(message)
+}
+
+/// Encode the only host frame accepted during trusted worker bootstrap.
+/// This does not authorize execution or carry plugin data.
+pub fn encode_worker_bootstrap_ready() -> Result<Vec<u8>, ProtocolError> {
+    encode_host_frame(&HostFrame::Ready {
+        protocol_version: PROTOCOL_VERSION,
+    })
+}
+
+/// Validate the bundled worker's bounded bootstrap hello against the
+/// host-generated challenge. Identity and provenance remain host-owned and
+/// are intentionally not accepted from the worker.
+pub fn validate_worker_bootstrap_hello(
+    frame: &[u8],
+    expected_challenge: &str,
+) -> Result<(), ProtocolError> {
+    if !valid_sha256(expected_challenge) {
+        return Err(ProtocolError::InvalidChallenge);
+    }
+    match decode_message::<WorkerBootstrapHello>(frame)? {
+        WorkerBootstrapHello::Hello {
+            protocol_version,
+            challenge,
+        } => {
+            if protocol_version != PROTOCOL_VERSION {
+                return Err(ProtocolError::UnsupportedVersion);
+            }
+            if !valid_sha256(&challenge) {
+                return Err(ProtocolError::InvalidChallenge);
+            }
+            if challenge != expected_challenge {
+                return Err(ProtocolError::ChallengeMismatch);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Decode only the bootstrap `ready` frame. An `execute` frame, artifact, or
+/// any guest-selected identity is rejected before the worker can act on it.
+pub fn decode_worker_bootstrap_ready(frame: &[u8]) -> Result<(), ProtocolError> {
+    match decode_message::<WorkerBootstrapReady>(frame)? {
+        WorkerBootstrapReady::Ready { protocol_version }
+            if protocol_version == PROTOCOL_VERSION =>
+        {
+            Ok(())
+        }
+        WorkerBootstrapReady::Ready { .. } => Err(ProtocolError::UnsupportedVersion),
+    }
 }
 
 fn decode_worker_frame(frame: &[u8]) -> Result<InboundWorkerFrame, ProtocolError> {
@@ -2463,6 +2526,50 @@ mod tests {
         assert_eq!(
             dispatcher.receive(&invoke(2, "memory.read", json!({}))),
             Err(ProtocolError::InvalidState),
+        );
+    }
+
+    #[test]
+    fn bootstrap_handshake_accepts_only_host_challenged_hello_and_ready() {
+        let challenge = "a".repeat(64);
+        let hello = encode_worker_frame(&WorkerFrame::Hello {
+            protocol_version: PROTOCOL_VERSION,
+            challenge: challenge.clone(),
+        })
+        .unwrap();
+        assert_eq!(validate_worker_bootstrap_hello(&hello, &challenge), Ok(()));
+        assert_eq!(
+            validate_worker_bootstrap_hello(&hello, &"b".repeat(64)),
+            Err(ProtocolError::ChallengeMismatch)
+        );
+
+        let ready = encode_worker_bootstrap_ready().unwrap();
+        assert_eq!(decode_worker_bootstrap_ready(&ready), Ok(()));
+
+        let execute = encode_host_frame(&HostFrame::Execute {
+            protocol_version: PROTOCOL_VERSION,
+            sequence: 1,
+            capability: "plugin.transform".into(),
+            payload: json!({"artifact": "must not be delivered"}),
+        })
+        .unwrap();
+        assert_eq!(
+            decode_worker_bootstrap_ready(&execute),
+            Err(ProtocolError::InvalidJson)
+        );
+
+        let payload = serde_json::to_vec(&json!({
+            "type": "hello",
+            "protocol_version": PROTOCOL_VERSION,
+            "challenge": challenge,
+            "session_id": "guest-claimed-session"
+        }))
+        .unwrap();
+        let mut guest_identity_frame = (payload.len() as u32).to_be_bytes().to_vec();
+        guest_identity_frame.extend(payload);
+        assert_eq!(
+            validate_worker_bootstrap_hello(&guest_identity_frame, &"a".repeat(64)),
+            Err(ProtocolError::InvalidJson)
         );
     }
 }

@@ -927,6 +927,10 @@ describe("PiSdkRuntime", () => {
         expect.any(AbortSignal),
       );
       expect(supervisor.mock.calls[0]?.[0]).not.toHaveProperty("capabilities");
+      expect(supervisor.mock.calls[0]?.[0]).not.toHaveProperty("artifactPath");
+      expect(supervisor.mock.calls[0]?.[0]).not.toHaveProperty("artifactBytes");
+      expect(supervisor.mock.calls[0]?.[0]).not.toHaveProperty("workerPath");
+      expect(supervisor.mock.calls[0]?.[0]).not.toHaveProperty("executablePath");
       expect(
         sessionAt().state.messages.some(
           (message) =>

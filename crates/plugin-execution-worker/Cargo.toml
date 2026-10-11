@@ -1,0 +1,12 @@
+[package]
+name = "modus-plugin-execution-worker"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+modus-plugin-execution-protocol = { path = "../plugin-execution-protocol" }
+
+[[bin]]
+name = "modus-plugin-worker"
+path = "src/main.rs"
