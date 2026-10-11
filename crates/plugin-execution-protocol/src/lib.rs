@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use crate::worker_admission::WorkerTransport;
 use crate::worker_admission::{
     AdmissionAssessmentToken, HostAuthorization, PluginHostcallRateLimiter,
+    PluginHostcallRateLimiterRegistry,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
