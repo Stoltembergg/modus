@@ -311,7 +311,9 @@ fn request_and_reap<T: WorkerTransport>(
     deadline: Instant,
 ) -> Result<(), io::ErrorKind> {
     transport.request_termination();
-    transport.reap_until(deadline).map_err(|error| error.kind())?;
+    transport
+        .reap_until(deadline)
+        .map_err(|error| error.kind())?;
     if Instant::now() >= deadline {
         return Err(io::ErrorKind::TimedOut);
     }

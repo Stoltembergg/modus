@@ -583,9 +583,8 @@ impl<T: WorkerTransport> WorkerSession<T> {
                 ProtocolError::AuthorizationProvenanceMismatch,
             ));
         }
-        let (challenge, granted_capabilities) = match
-            validate_dispatch_config(challenge, granted_capabilities)
-        {
+        let (challenge, granted_capabilities) =
+            match validate_dispatch_config(challenge, granted_capabilities) {
             Ok(config) => config,
             Err(error) => return Err(reject_admission(admission, error)),
         };
@@ -1013,8 +1012,8 @@ fn valid_sha256(value: &str) -> bool {
 mod tests {
     use std::collections::VecDeque;
     use std::io::Read;
-    use std::sync::{Arc, Mutex};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use serde::ser::SerializeSeq;
@@ -1140,11 +1139,7 @@ mod tests {
         .unwrap()
     }
 
-    fn provenance_for_scope(
-        session_id: &str,
-        workspace_id: &str,
-        run_id: &str,
-    ) -> HostProvenance {
+    fn provenance_for_scope(session_id: &str, workspace_id: &str, run_id: &str) -> HostProvenance {
         HostProvenance::from_host_catalog(
             "@modus/fixture",
             "1.2.3",
@@ -1380,10 +1375,7 @@ mod tests {
         };
         let admission = synthetic_test_token_with_transport(provenance(), transport);
         let authorization = unsafe {
-            HostAuthorization::from_permission_broker(
-                provenance(),
-                ["memory.read".to_string()],
-            )
+            HostAuthorization::from_permission_broker(provenance(), ["memory.read".to_string()])
         };
 
         assert_eq!(
