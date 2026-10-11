@@ -808,6 +808,26 @@ describe("provider disconnection", () => {
     expect(modelsJson.providers?.[provider]).toBeUndefined();
   });
 
+  it("names a model's provider exactly as Settings › Providers does (picker groups)", async () => {
+    const provider = `picker-${crypto.randomUUID().slice(0, 8)}`;
+    await upsertCustomProvider({
+      provider,
+      name: "Picker relay",
+      baseUrl: "https://relay.example.test/v1",
+      apiKey: "sk-picker-relay",
+      models: [{ id: "relay-model", name: "Relay model" }],
+    });
+    // The provider row's display_name wins over the registry's name, as in the providers list.
+    getDatabase()
+      .prepare("update model_provider_configs set display_name = ? where provider_id = ?")
+      .run("Renamed relay", provider);
+
+    const settingsName = getModelSettings().providers.find((item) => item.id === provider)?.name;
+    const model = listModels().find((item) => item.id === `${provider}/relay-model`);
+    expect(settingsName).toBe("Renamed relay");
+    expect(model).toMatchObject({ provider, providerName: "Renamed relay" });
+  });
+
   it("keeps a custom provider definition after disconnecting its stored key", async () => {
     const provider = `disconnect-${crypto.randomUUID().slice(0, 8)}`;
     await upsertCustomProvider({

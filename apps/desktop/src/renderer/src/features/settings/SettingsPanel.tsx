@@ -625,7 +625,6 @@ export function SettingsPanel({
                     setError(err instanceof Error ? err.message : String(err)),
                   );
               }}
-              onBuyCredits={() => setActiveSection("account")}
               popular={popular}
             />
           ) : null}

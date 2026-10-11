@@ -1,19 +1,23 @@
 import type { ModusModelsStatus } from "../../../shared/contracts";
-import { resolveGroupRoomLocale } from "../../../shared/group-room-locale";
-import { modusText } from "../../../shared/modus-text";
 
 /**
- * L3b0: Modus models in the renderer pickers (Settings default model, AgentDialog,
- * NewGroupModal, CreateGroupDialog) and the "Modus unavailable" notice.
- * - A locked model (router `/v1/models` `allowed: false`, ModelInfo.locked) is listed with a
- *   lock and the unlock text, but choosing it never selects it: it opens Buy credits
- *   (Settings › Account) instead. The main process rejects it too (setDefaultModel,
- *   isModelAvailable).
- * - Unlock text is generic: `/v1/models` only says "not in your plan", not which pack unlocks.
+ * Modus models in the renderer pickers (Settings default model, AgentDialog, NewGroupModal,
+ * CreateGroupDialog) and the "Modus unavailable" notice.
+ * - The pickers list models grouped by provider (`buildModelPickerGroups`): the Modus group
+ *   first, then one group per user provider, alphabetical by the name Settings › Providers
+ *   shows (ModelInfo.providerName).
+ * - A locked Modus model (router `/v1/models` `allowed: false`, ModelInfo.locked) is not
+ *   listed at all. The main process still rejects it (setDefaultModel, isModelAvailable).
+ *   Only `modus/…` ids can be hidden: a BYOK provider's model is always listed.
+ * - A saved model that is no longer listed (locked, or its provider went away) stays as a
+ *   loose "<name or id> (unavailable)" option, so the saved value never changes silently.
  */
 
 /** Registry ids of the Modus provider are `modus/<provider>/<id>` (main MODUS_PROVIDER_ID). */
 export const MODUS_MODEL_PREFIX = "modus/";
+
+const MODUS_PROVIDER_ID = "modus";
+const MODUS_GROUP_LABEL = "Modus";
 
 export function isModusModelId(id: string | null | undefined): boolean {
   return typeof id === "string" && id.startsWith(MODUS_MODEL_PREFIX);
@@ -22,81 +26,108 @@ export function isModusModelId(id: string | null | undefined): boolean {
 export type PickableModel = {
   id: string;
   name: string;
+  /** Registry provider id (ModelInfo.provider); else the `<providerId>/` id prefix. */
+  provider?: string | undefined;
+  /** The provider's name as Settings › Providers shows it (ModelInfo.providerName). */
+  providerName?: string | undefined;
   locked?: boolean | undefined;
-  unlockPack?: { id: string; credits: number } | null | undefined;
 };
 
+export type ModelPickerGroup<M extends PickableModel = PickableModel> = {
+  /** Registry provider id (`modus` for the Modus group), e.g. for ProviderLogo. */
+  providerId: string;
+  label: string;
+  models: M[];
+};
+
+export type ModelPickerGroups<M extends PickableModel = PickableModel> = {
+  /** Options outside any group, before the groups: the saved model that is no longer listed. */
+  loose: { id: string; label: string }[];
+  groups: ModelPickerGroup<M>[];
+};
+
+/** Hidden from the pickers: a locked Modus model. A BYOK model is never hidden. */
+export function isHiddenPickerModel(model: PickableModel): boolean {
+  return Boolean(model.locked) && isModusModelId(model.id);
+}
+
+/** The models a picker offers (and that a draft may pick), in the given order. */
+export function selectableModels<M extends PickableModel>(models: readonly M[]): M[] {
+  return models.filter((model) => !isHiddenPickerModel(model));
+}
+
+function providerIdOf(model: PickableModel): string {
+  if (isModusModelId(model.id)) return MODUS_PROVIDER_ID;
+  if (model.provider) return model.provider;
+  const slash = model.id.indexOf("/");
+  return slash > 0 ? model.id.slice(0, slash) : model.id;
+}
+
 /**
- * L3b: "Disponível no pacote de 25 mil" from the router's unlock_pack (credits / 1000,
- * locale digits); the generic text when the router names no pack.
+ * The picker content: hides locked Modus models, groups the rest by provider (Modus first,
+ * then the user's providers alphabetical by display name; empty groups dropped; the given
+ * order kept inside a group) and keeps `savedModelId` as a loose "(unavailable)" option
+ * when it is not among the listed models. Callers render their own placeholder /
+ * "App default" option before `loose`.
  */
-export function unlockText(model: PickableModel, locale?: string | null): string {
-  const credits = model.unlockPack?.credits;
-  if (!credits || credits <= 0) return modusText("modus.locked.unlock", locale);
-  const thousands = new Intl.NumberFormat(resolveGroupRoomLocale(locale), {
-    maximumFractionDigits: 1,
-  }).format(credits / 1000);
-  return modusText("modus.locked.unlockPack", locale, { thousands });
+export function buildModelPickerGroups<M extends PickableModel>(
+  models: readonly M[],
+  savedModelId?: string | null,
+): ModelPickerGroups<M> {
+  const visible = selectableModels(models);
+  const byProvider = new Map<string, ModelPickerGroup<M>>();
+  for (const model of visible) {
+    const providerId = providerIdOf(model);
+    let group = byProvider.get(providerId);
+    if (!group) {
+      const label =
+        providerId === MODUS_PROVIDER_ID ? MODUS_GROUP_LABEL : model.providerName || providerId;
+      group = { providerId, label, models: [] };
+      byProvider.set(providerId, group);
+    }
+    group.models.push(model);
+  }
+  const groups = [...byProvider.values()].sort(
+    (a, b) =>
+      Number(b.providerId === MODUS_PROVIDER_ID) - Number(a.providerId === MODUS_PROVIDER_ID) ||
+      a.label.localeCompare(b.label) ||
+      a.providerId.localeCompare(b.providerId),
+  );
+  const loose: ModelPickerGroups<M>["loose"] = [];
+  if (savedModelId && !visible.some((model) => model.id === savedModelId)) {
+    const known = models.find((model) => model.id === savedModelId);
+    loose.push({ id: savedModelId, label: `${known?.name ?? savedModelId} (unavailable)` });
+  }
+  return { loose, groups };
 }
 
-export function modelOptionLabel(model: PickableModel, locale?: string | null): string {
-  return model.locked ? `🔒 ${model.name} · ${unlockText(model, locale)}` : model.name;
-}
-
-/** `<option>`s for a native model `<select>`; locked ones carry `data-locked`. */
+/** `<option>`s / `<optgroup>`s of a native model `<select>` (see buildModelPickerGroups). */
 export function ModelOptions({
   models,
-  locale,
+  savedModelId,
 }: {
   models: readonly PickableModel[];
-  locale?: string | null | undefined;
+  savedModelId?: string | null | undefined;
 }) {
+  const { loose, groups } = buildModelPickerGroups(models, savedModelId);
   return (
     <>
-      {models.map((model) => (
-        <option
-          aria-label={
-            model.locked
-              ? modusText("modus.locked.buyCredits", locale, { model: model.name })
-              : undefined
-          }
-          data-locked={model.locked ? "" : undefined}
-          key={model.id}
-          value={model.id}
-        >
-          {modelOptionLabel(model, locale)}
+      {loose.map((option) => (
+        <option key={option.id} value={option.id}>
+          {option.label}
         </option>
+      ))}
+      {groups.map((group) => (
+        <optgroup data-provider={group.providerId} key={group.providerId} label={group.label}>
+          {group.models.map((model) => (
+            <option key={model.id} value={model.id}>
+              {model.name}
+            </option>
+          ))}
+        </optgroup>
       ))}
     </>
   );
-}
-
-let buyCreditsHandler: (() => void) | undefined;
-
-/** App registers the existing Buy credits flow (Settings › Account › credit packs). */
-export function setBuyCreditsHandler(handler: (() => void) | undefined): void {
-  buyCreditsHandler = handler;
-}
-
-export function openBuyCredits(): void {
-  buyCreditsHandler?.();
-}
-
-/**
- * A picker's change handler: a locked model is NOT selected; it opens Buy credits
- * (`onLocked`, default the app handler). Anything else goes to `select`.
- */
-export function pickModel(
-  models: readonly PickableModel[],
-  id: string,
-  select: (id: string) => void,
-  onLocked: () => void = openBuyCredits,
-): void {
-  if (models.find((model) => model.id === id)?.locked) {
-    onLocked();
-    return;
-  }
-  select(id);
 }
 
 /** The inline "Modus unavailable" notice applies only to a session on a Modus model. */
