@@ -5547,7 +5547,10 @@ export class PiSdkRuntime implements AgentRuntime {
     options: { keepTodos?: boolean } = {},
   ): Promise<void> {
     this.cancelPendingIntentGate(sessionId);
-    await this.#externalPluginSupervisor.releaseSession(sessionId);
+    // This is one-way IPC with no supervisor acknowledgement. Keep it from
+    // yielding before the in-flight resume is captured below: getOrResume
+    // publishes its rebuild promise immediately after calling this method.
+    void this.#externalPluginSupervisor.releaseSession(sessionId);
     if (!options.keepTodos) clearTodoSessionCache(sessionId);
     clearAssistantToolCallCount(sessionId);
     const activeRun = getActiveAgentRun(sessionId);
