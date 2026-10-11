@@ -31,6 +31,18 @@ function emptyPage(snapshotCursor = 0): AgentEventPage {
   };
 }
 
+async function resolvePendingPages(
+  pendingPages: Array<ReturnType<typeof deferred<AgentEventPage>>>,
+): Promise<void> {
+  while (pendingPages.length > 0) {
+    const batch = pendingPages.splice(0);
+    await act(async () => {
+      for (const pending of batch) pending.resolve(emptyPage());
+      await Promise.all(batch.map((pending) => pending.promise));
+    });
+  }
+}
+
 describe("useRunSources", () => {
   it("limits concurrent event-page requests across visible run collections", async () => {
     let active = 0;
@@ -49,26 +61,31 @@ describe("useRunSources", () => {
 
     const first = renderHook(() => useRunSourcesForRuns("main-session", ["a", "b", "c", "d"]));
     const second = renderHook(() => useRunSourcesForRuns("main-session", ["e", "f", "g", "h"]));
+    try {
+      await waitFor(() => expect(listEventPage).toHaveBeenCalledTimes(4));
+      expect(maximumActive).toBe(4);
+      expect(pendingPages).toHaveLength(4);
 
-    await waitFor(() => expect(listEventPage).toHaveBeenCalledTimes(4));
-    expect(maximumActive).toBe(4);
-    expect(pendingPages).toHaveLength(4);
+      await act(async () => {
+        for (const pending of pendingPages.splice(0)) pending.resolve(emptyPage());
+      });
+      await waitFor(() => expect(listEventPage).toHaveBeenCalledTimes(8));
 
-    await act(async () => {
-      for (const pending of pendingPages.splice(0)) pending.resolve(emptyPage());
-    });
-    await waitFor(() => expect(listEventPage).toHaveBeenCalledTimes(8));
-
-    await act(async () => {
-      for (const pending of pendingPages.splice(0)) pending.resolve(emptyPage());
-    });
-    await waitFor(() => {
-      expect(first.result.current.loadingRunIds.size).toBe(0);
-      expect(second.result.current.loadingRunIds.size).toBe(0);
-    });
-    expect(maximumActive).toBe(4);
-    expect(first.result.current.failedRunIds.size).toBe(0);
-    expect(second.result.current.failedRunIds.size).toBe(0);
+      await act(async () => {
+        for (const pending of pendingPages.splice(0)) pending.resolve(emptyPage());
+      });
+      await waitFor(() => {
+        expect(first.result.current.loadingRunIds.size).toBe(0);
+        expect(second.result.current.loadingRunIds.size).toBe(0);
+      });
+      expect(maximumActive).toBe(4);
+      expect(first.result.current.failedRunIds.size).toBe(0);
+      expect(second.result.current.failedRunIds.size).toBe(0);
+    } finally {
+      first.unmount();
+      second.unmount();
+      await resolvePendingPages(pendingPages);
+    }
   });
 
   it("stops paging an in-flight source lookup after its last view unmounts", async () => {
@@ -77,20 +94,139 @@ describe("useRunSources", () => {
     Object.assign(window, { modus: { agent: { listEventPage } } });
 
     const hook = renderHook(() => useRunSources("session-cancel", "run-cancel", true));
-    await waitFor(() => expect(listEventPage).toHaveBeenCalledTimes(1));
-    hook.unmount();
+    try {
+      await waitFor(() => expect(listEventPage).toHaveBeenCalledTimes(1));
+      hook.unmount();
 
-    await act(async () => {
-      firstPage.resolve({
-        ...emptyPage(2),
-        nextCursor: 2,
-        hasMore: true,
+      await act(async () => {
+        firstPage.resolve({
+          ...emptyPage(2),
+          nextCursor: 2,
+          hasMore: true,
+        });
+        await firstPage.promise;
       });
-      await firstPage.promise;
-    });
-    await Promise.resolve();
+      await Promise.resolve();
 
-    expect(listEventPage).toHaveBeenCalledTimes(1);
+      expect(listEventPage).toHaveBeenCalledTimes(1);
+    } finally {
+      hook.unmount();
+      await resolvePendingPages([firstPage]);
+    }
+  });
+
+  it("cancels a queued source lookup when its last view unmounts", async () => {
+    const pendingPages: Array<ReturnType<typeof deferred<AgentEventPage>>> = [];
+    const listEventPage = vi.fn(() => {
+      const pending = deferred<AgentEventPage>();
+      pendingPages.push(pending);
+      return pending.promise;
+    });
+    Object.assign(window, { modus: { agent: { listEventPage } } });
+
+    const hooks = Array.from({ length: 5 }, (_, index) =>
+      renderHook(() => useRunSources("queued-session", `queued-run-${index}`, true)),
+    );
+    let queuedViewUnmounted = false;
+    try {
+      await waitFor(() => expect(listEventPage).toHaveBeenCalledTimes(4));
+      await waitFor(() => expect(hooks[4]?.result.current.status).toBe("loading"));
+      hooks[4]?.unmount();
+      queuedViewUnmounted = true;
+
+      await resolvePendingPages(pendingPages);
+      await waitFor(() => {
+        for (const hook of hooks.slice(0, 4)) {
+          expect(hook.result.current.status).toBe("loaded");
+        }
+      });
+      expect(listEventPage).toHaveBeenCalledTimes(4);
+    } finally {
+      hooks.forEach((hook, index) => {
+        if (index !== 4 || !queuedViewUnmounted) hook.unmount();
+      });
+      await resolvePendingPages(pendingPages);
+    }
+  });
+
+  it("keeps a deduplicated lookup active until its last view unmounts", async () => {
+    const firstPage = deferred<AgentEventPage>();
+    const secondPage = deferred<AgentEventPage>();
+    const listEventPage = vi
+      .fn()
+      .mockReturnValueOnce(firstPage.promise)
+      .mockReturnValueOnce(secondPage.promise);
+    Object.assign(window, { modus: { agent: { listEventPage } } });
+
+    const first = renderHook(() => useRunSources("shared-session", "shared-run", true));
+    const second = renderHook(() => useRunSources("shared-session", "shared-run", true));
+    let firstViewUnmounted = false;
+    try {
+      await waitFor(() => expect(listEventPage).toHaveBeenCalledTimes(1));
+      first.unmount();
+      firstViewUnmounted = true;
+
+      await act(async () => {
+        firstPage.resolve({ ...emptyPage(2), nextCursor: 2, hasMore: true });
+        await firstPage.promise;
+      });
+      await waitFor(() => expect(listEventPage).toHaveBeenCalledTimes(2));
+
+      await act(async () => {
+        secondPage.resolve(emptyPage(2));
+        await secondPage.promise;
+      });
+      await waitFor(() => expect(second.result.current.status).toBe("loaded"));
+      expect(listEventPage).toHaveBeenCalledTimes(2);
+      expect(second.result.current.sources).toEqual([]);
+    } finally {
+      if (!firstViewUnmounted) first.unmount();
+      second.unmount();
+      await act(async () => {
+        firstPage.resolve(emptyPage());
+        secondPage.resolve(emptyPage());
+        await Promise.all([firstPage.promise, secondPage.promise]);
+      });
+    }
+  });
+
+  it("reports queued lookups as unavailable when the global queue is full", async () => {
+    const pendingPages: Array<ReturnType<typeof deferred<AgentEventPage>>> = [];
+    const listEventPage = vi.fn(() => {
+      const pending = deferred<AgentEventPage>();
+      pendingPages.push(pending);
+      return pending.promise;
+    });
+    Object.assign(window, { modus: { agent: { listEventPage } } });
+
+    const hooks = Array.from({ length: 66 }, (_, batch) =>
+      renderHook(() =>
+        useRunSourcesForRuns(
+          "overloaded-session",
+          Array.from({ length: 4 }, (_, index) => `run-${batch * 4 + index}`),
+        ),
+      ),
+    );
+    const overflowing = hooks.at(-1);
+    try {
+      await waitFor(() => expect(overflowing?.result.current.failedRunIds.size).toBe(4));
+
+      expect(overflowing?.result.current.loadingRunIds.size).toBe(0);
+      expect(listEventPage).toHaveBeenCalledTimes(4);
+      for (const hook of hooks.slice(0, 65)) {
+        expect(hook.result.current.failedRunIds.size).toBe(0);
+        expect(hook.result.current.loadingRunIds.size).toBe(4);
+      }
+
+      expect(overflowing?.result.current.failedRunIds).toEqual(
+        new Set(["run-260", "run-261", "run-262", "run-263"]),
+      );
+    } finally {
+      for (const hook of hooks) hook.unmount();
+      await resolvePendingPages(pendingPages);
+    }
+
+    expect(listEventPage).toHaveBeenCalledTimes(4);
   });
 
   it("loads only tool activity from the requested run through paged IPC", async () => {

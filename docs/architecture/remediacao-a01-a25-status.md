@@ -2671,3 +2671,36 @@ preempted from the renderer.
   repeated result is not classified as pre-existing or solely environmental.
   Windows/macOS packaging for `09dbdd3` was still running at this status check;
   packaging for `6dab9f0` completed successfully on both platforms.
+
+### A22 source-lookup cancellation and queue-bound test coverage
+
+The source-loader tests now distinguish a genuinely queued lookup from an
+immediate rejection, exercise the full four-active/256-queued admission bound,
+and verify that a deduplicated lookup continues for the remaining subscriber
+after another view unmounts. Deferred IPC pages are drained in `finally` blocks,
+including pages started while the scheduler drains, so a failed assertion does
+not leave scheduler slots or pending promises for later tests.
+
+- RED: the prior tests did not prove that the fifth lookup had actually entered
+  the queue, that all 256 queue slots were occupied before overflow, or that a
+  shared lookup remained active until its last subscriber left. GREEN: the three
+  focused new cases passed **3/3**; the full source/timeline/Agent Group focused
+  suite passed **32/32** across four files. Biome and `git diff --check` passed.
+  `npm run typecheck --workspace=apps/desktop` passed locally after the
+  test-only change.
+- Independent static review of the final test diff found no blocker. It
+  confirmed the queue-capacity assertions and deferred cleanup; no tests were
+  run by the reviewer. This coverage does not add an IPC abort signal or change
+  A22's resource bounds.
+- The official failed-job rerun for workflow `38103304287` completed. The
+  global test job again failed only `FastVectorDistance`, measured at
+  **0.10725999999999658 ms** against the unchanged `< 0.1 ms` assertion;
+  **4,670 tests passed, 8 were skipped, and 1 failed across 415 files**.
+  The previous run attempt measured **0.10811200000000554 ms**. We do not
+  classify these measurements as pre-existing or solely environmental. The
+  macOS containment rerun passed; Linux and Windows containment, pgTAP,
+  synthetic protocol fixtures, compile-only sandbox, PTY cancellation, and
+  Verifier-First jobs also passed. Windows packaging run `38103304300` and
+  macOS packaging run `38103304292` both completed successfully. The A22 test
+  follow-up itself has not yet been published, so this CI does not validate that
+  test-only change.
