@@ -6,7 +6,7 @@ import {
   createAgentEventAccumulator,
   foldAgentEvents,
   MAX_AGENT_EVENT_PAGE_SIZE,
-  MAX_RUN_TOOL_EVIDENCE_PAGE_BYTES,
+  MAX_RUN_EVENT_PAYLOAD_PAGE_BYTES,
   type AgentEventItem as SharedAgentEventItem,
 } from "../../shared/agent-events";
 import type {
@@ -1777,15 +1777,15 @@ export function listAgentRunMessagePage(
     throw new RangeError("Agent event snapshot cursor must be a non-negative safe integer.");
   }
 
-  const rows = listAgentRunAssistantMessageRows(
+  const messagePage = listAgentRunAssistantMessageRows(
     sessionId,
     runId,
     afterCursor,
     snapshotCursor,
-    limit + 1,
+    limit,
   );
-  const hasMore = rows.length > limit;
-  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+  const hasMore = messagePage.hasMore;
+  const pageRows = messagePage.rows;
   const events = pageRows.map(parseAgentEventRow);
   const nextCursor = pageRows.at(-1)?.event_cursor;
   return {
@@ -2033,7 +2033,7 @@ function listAgentRunToolEventRows(
     };
     if (
       !Number.isSafeInteger(pageSize.payload_bytes) ||
-      pageSize.payload_bytes > MAX_RUN_TOOL_EVIDENCE_PAGE_BYTES
+      pageSize.payload_bytes > MAX_RUN_EVENT_PAYLOAD_PAGE_BYTES
     ) {
       throw new RangeError("Run tool evidence page exceeds the safe transfer limit.");
     }
@@ -2083,18 +2083,76 @@ function listAgentRunAssistantMessageRows(
   runId: string,
   afterCursor: number,
   snapshotCursor: number,
-  limit: number,
-): AgentEventRow[] {
-  const range = getAgentRunEventRange(sessionId, runId, snapshotCursor);
-  return getDatabase()
-    .prepare(
-      `select id, payload_json, created_at, rowid as event_cursor
-       from agent_events
-       where session_id = ? and rowid >= ? and rowid <= ? and rowid > ?
-         and type in ('message.started', 'message.delta', 'message.completed')
-       order by rowid asc limit ?`,
-    )
-    .all(sessionId, range.startCursor, range.endCursor, afterCursor, limit) as AgentEventRow[];
+  pageLimit: number,
+): { rows: AgentEventRow[]; hasMore: boolean } {
+  const db = getDatabase();
+  db.exec("savepoint run_assistant_message_page_read");
+  try {
+    const range = getAgentRunEventRange(sessionId, runId, snapshotCursor);
+    const candidates = db
+      .prepare(
+        `select rowid as event_cursor,
+                length(cast(payload_json as blob)) as payload_bytes
+         from agent_events
+         where session_id = ? and rowid >= ? and rowid <= ? and rowid > ?
+           and type in ('message.started', 'message.delta', 'message.completed')
+         order by rowid asc limit ?`,
+      )
+      .all(sessionId, range.startCursor, range.endCursor, afterCursor, pageLimit + 1) as Array<{
+      event_cursor: number;
+      payload_bytes: number;
+    }>;
+
+    const selectedCursors: number[] = [];
+    let totalPayloadBytes = 0;
+    let hasMore = false;
+    for (const [candidateIndex, candidate] of candidates.entries()) {
+      if (
+        !Number.isSafeInteger(candidate.event_cursor) ||
+        !Number.isSafeInteger(candidate.payload_bytes) ||
+        candidate.payload_bytes < 0
+      ) {
+        throw new RangeError("Run assistant message page has invalid stored payload sizes.");
+      }
+      if (selectedCursors.length >= pageLimit) {
+        hasMore = true;
+        break;
+      }
+      if (candidate.payload_bytes > MAX_RUN_EVENT_PAYLOAD_PAGE_BYTES - totalPayloadBytes) {
+        if (selectedCursors.length === 0) {
+          // A persisted event is indivisible at this API boundary. Return it
+          // alone so callers keep the complete assistant text; callers can
+          // still page through the remaining events without combining payloads.
+          selectedCursors.push(candidate.event_cursor);
+          totalPayloadBytes = candidate.payload_bytes;
+          hasMore = candidateIndex + 1 < candidates.length;
+          break;
+        }
+        hasMore = true;
+        break;
+      }
+      selectedCursors.push(candidate.event_cursor);
+      totalPayloadBytes += candidate.payload_bytes;
+    }
+
+    const rows =
+      selectedCursors.length === 0
+        ? []
+        : (db
+            .prepare(
+              `select id, payload_json, created_at, rowid as event_cursor
+               from agent_events
+               where session_id = ? and rowid in (${selectedCursors.map(() => "?").join(", ")})
+               order by rowid asc`,
+            )
+            .all(sessionId, ...selectedCursors) as AgentEventRow[]);
+    db.exec("release savepoint run_assistant_message_page_read");
+    return { rows, hasMore };
+  } catch (error) {
+    db.exec("rollback to savepoint run_assistant_message_page_read");
+    db.exec("release savepoint run_assistant_message_page_read");
+    throw error;
+  }
 }
 
 function getAgentRunEventRange(

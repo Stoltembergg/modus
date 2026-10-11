@@ -13,8 +13,10 @@ export type AgentEventItem = {
 };
 
 export const MAX_AGENT_EVENT_PAGE_SIZE = 256;
-/** Maximum serialized tool evidence payload transferred for one run page. */
-export const MAX_RUN_TOOL_EVIDENCE_PAGE_BYTES = 8 * 1024 * 1024;
+/** Payload_json byte ceiling for bounded run event pages; excludes the response envelope. */
+export const MAX_RUN_EVENT_PAYLOAD_PAGE_BYTES = 8 * 1024 * 1024;
+/** Backward-compatible name for the run-scoped tool evidence page ceiling. */
+export const MAX_RUN_TOOL_EVIDENCE_PAGE_BYTES = MAX_RUN_EVENT_PAYLOAD_PAGE_BYTES;
 
 export type AgentEventPage = {
   events: Array<AgentEventItem & { createdAt: string }>;

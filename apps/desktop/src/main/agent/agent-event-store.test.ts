@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { constants, DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { MAX_RUN_TOOL_EVIDENCE_PAGE_BYTES } from "../../shared/agent-events";
+import { MAX_RUN_EVENT_PAYLOAD_PAGE_BYTES } from "../../shared/agent-events";
 import type { HarnessTaskClassification, HarnessTaskState } from "../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
 
@@ -20,7 +20,7 @@ vi.mock("electron", () => ({
 const { getDatabase } = await import("../db/database");
 const { migrateDatabase } = await import("../db/database");
 const { createAgentRun } = await import("./agent-run-store");
-const { lastAssistantOutput } = await import("./runtime-subagent-helper");
+const { lastAssistantOutput, runAssistantOutput } = await import("./runtime-subagent-helper");
 const {
   getLatestCheckpointRestoreRowId,
   getLatestHarnessTaskState,
@@ -2715,6 +2715,107 @@ fs.renameSync("original-manifest-link", "package.json");
     expect(deltas.join("")).toBe(chunks.join(""));
   });
 
+  it("keeps run assistant pages under the transfer byte cap without dropping message text", () => {
+    const sessionId = `run-message-byte-page-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const run = createAgentRun({ sessionId, prompt: "large but pageable output" });
+    recordAgentEvent({ type: "run.started", sessionId, runId: run.id, delivery: "normal" });
+    recordAgentEvent({
+      type: "message.started",
+      sessionId,
+      messageId: "large-assistant",
+      role: "assistant",
+    });
+    const chunks = ["a".repeat(4 * 1024 * 1024), "b".repeat(4 * 1024 * 1024)];
+    for (const delta of chunks) {
+      recordAgentEvent({ type: "message.delta", sessionId, messageId: "large-assistant", delta });
+    }
+    recordAgentEvent({
+      type: "message.completed",
+      sessionId,
+      messageId: "large-assistant",
+    });
+
+    const pages: Array<ReturnType<typeof listAgentRunMessagePage>> = [];
+    let afterCursor = 0;
+    let snapshotCursor: number | undefined;
+    while (true) {
+      const page = listAgentRunMessagePage(sessionId, run.id, {
+        afterCursor,
+        ...(snapshotCursor === undefined ? {} : { snapshotCursor }),
+      });
+      pages.push(page);
+      snapshotCursor = page.snapshotCursor;
+      if (!page.hasMore || page.nextCursor === undefined) break;
+      afterCursor = page.nextCursor;
+    }
+
+    const messageEvents = pages.flatMap((page) => page.events.map(({ event }) => event));
+    const recovered = messageEvents
+      .filter((event) => event.type === "message.delta")
+      .map((event) => event.delta);
+    expect(pages).toHaveLength(2);
+    expect(recovered).toEqual(chunks);
+    expect(recovered.join("")).toBe(chunks.join(""));
+    expect(runAssistantOutput(sessionId, run.id)).toBe(chunks.join(""));
+  });
+
+  it("keeps one oversized run assistant event intact and recoverable", () => {
+    const sessionId = `oversized-run-message-${crypto.randomUUID()}`;
+    const runId = `oversized-message-run-${crypto.randomUUID()}`;
+    const delta = `durable-assistant-text:${"x".repeat(MAX_RUN_EVENT_PAYLOAD_PAGE_BYTES + 1)}`;
+    insertSession(sessionId);
+    recordAgentEvent({ type: "run.started", sessionId, runId, delivery: "normal" });
+    recordAgentEvent({
+      type: "message.started",
+      sessionId,
+      messageId: "oversized-assistant",
+      role: "assistant",
+    });
+    recordAgentEvent({
+      type: "message.delta",
+      sessionId,
+      messageId: "oversized-assistant",
+      delta,
+    });
+    recordAgentEvent({
+      type: "message.completed",
+      sessionId,
+      messageId: "oversized-assistant",
+    });
+
+    const firstPage = listAgentRunMessagePage(sessionId, runId);
+    const firstPageCursor = firstPage.nextCursor;
+    if (firstPageCursor === undefined) throw new Error("Expected a message page cursor.");
+    expect(firstPage.hasMore).toBe(true);
+    expect(firstPage.events).toHaveLength(1);
+
+    const secondPage = listAgentRunMessagePage(sessionId, runId, {
+      afterCursor: firstPageCursor,
+      snapshotCursor: firstPage.snapshotCursor,
+    });
+    expect(secondPage.hasMore).toBe(true);
+    expect(secondPage.events).toHaveLength(1);
+    expect(secondPage.events[0]?.event).toMatchObject({ type: "message.delta", delta });
+
+    const secondPageCursor = secondPage.nextCursor;
+    if (secondPageCursor === undefined) throw new Error("Expected the oversized event cursor.");
+    const thirdPage = listAgentRunMessagePage(sessionId, runId, {
+      afterCursor: secondPageCursor,
+      snapshotCursor: secondPage.snapshotCursor,
+    });
+    expect(thirdPage.hasMore).toBe(false);
+    expect(thirdPage.events.map(({ event }) => event.type)).toEqual(["message.completed"]);
+    expect(runAssistantOutput(sessionId, runId)).toBe(delta);
+
+    const persisted = getDatabase()
+      .prepare(
+        "select json_extract(payload_json, '$.delta') as delta from agent_events where session_id = ? and type = 'message.delta'",
+      )
+      .get(sessionId) as { delta: string } | undefined;
+    expect(persisted?.delta).toBe(delta);
+  });
+
   it("fails closed when a scoped run page has no matching run boundary", () => {
     const sessionId = `missing-run-boundary-${crypto.randomUUID()}`;
     insertSession(sessionId);
@@ -2727,7 +2828,7 @@ fs.renameSync("original-manifest-link", "package.json");
   it("rejects an oversized run event page without changing persisted output", () => {
     const sessionId = `oversized-run-event-page-${crypto.randomUUID()}`;
     const runId = `oversized-run-${crypto.randomUUID()}`;
-    const output = `safe-synthetic-output:${"x".repeat(MAX_RUN_TOOL_EVIDENCE_PAGE_BYTES + 1)}`;
+    const output = `safe-synthetic-output:${"x".repeat(MAX_RUN_EVENT_PAYLOAD_PAGE_BYTES + 1)}`;
     insertSession(sessionId);
     recordAgentEvent({ type: "run.started", sessionId, runId, delivery: "normal" });
     recordAgentEvent({ type: "tool.output", sessionId, toolCallId: "large-output", output });

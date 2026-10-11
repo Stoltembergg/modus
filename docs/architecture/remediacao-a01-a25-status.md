@@ -94,6 +94,22 @@ and preemptible process-tree termination remain unimplemented. External plugin
 execution stays blocked, while built-in Harness execution remains on the
 existing trusted host-catalog path.
 
+#### Current A01–A04 source-only recheck
+
+The current desktop dependency graph still does not include
+`modus-plugin-execution-protocol`; the dispatcher and resource policy remain
+library contracts. `PluginIsolationHost` denies external JavaScript/WASM
+execution but is not the executor for trusted built-ins. Trusted catalogued
+providers and lifecycle callbacks still execute in the host process, so the
+existing Harness path must remain available during migration. Linux remains a
+read-only preflight, Windows diagnostics do not establish the approved RSS and
+handle limits, and no macOS adapter exists. No process probes or enforcement
+tests were run. The platform source work can proceed independently, but the
+external-worker admission gate remains closed everywhere until each adapter
+implements and proves the complete policy. This is an implementation and
+evidence gap, not a claim that unavailable hostile tests alone block an
+otherwise complete executor.
+
 The next A03 increment extends host-only provenance with exact plugin version,
 artifact origin, catalog-resolved trust level, session id, and workspace id in
 addition to digest, run, and generation. All remain absent from guest frames;
@@ -1922,7 +1938,7 @@ cancellation follow-up above.
 | A19 | Prior A21.4 implementation preserved | Spill authorization, persistence, quotas, and recovery. |
 | A20 | Partially mitigated; same-connection mutation detection and reflective state encapsulation | Audit events and checkpoints persist in SQLite; immutable snapshots, transactional retention, append-time verification on audit revision changes, and checkpoint comparisons detect ordinary record changes through the same or another connection. The logger's database handle and chain state, plus the fail-closed facade's logger reference, now use ECMAScript `#private`; this prevents ordinary property reflection only. No independent signing key or database access boundary exists, and public logger APIs remain available to code holding a reference. |
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |
-| A22 | Partially mitigated; productive event reads and renderer source lookups are paged, bounded, and fail closed | Cursor-page reads drive IPC, timeline/history, source lookup and Pi output; the old `agent:list-events` bridge endpoint is removed. Collector-local budgets cover active call identities, argument traversal/references, unfinished external-tool output, and retained source metadata; ambiguous active tool-call IDs across runs invalidate attribution. Overflow is sticky: complete lookup fails, the main-chat hook marks the run unavailable, the group hook exposes unavailable status, and synchronous timeline rendering preserves the answer while marking sources unavailable. Renderer lookups admit at most four active loads and 256 queued loads; releasing the last view stops pagination after any already in-flight page returns. Run-scoped tool-evidence event pages now preflight serialized `payload_json` under a SQLite savepoint and reject pages above 8 MiB before returning payloads; the renderer uses the same limit. This does not bound assistant-message pages, non-run event pages, per-event SQLite/JSON parsing allocations, aggregate page requests, renderer heap/RSS, or the existing 24-source display cap, so A22 remains partial. RED/GREEN, review, and local checks are recorded below. CI timing failures are recorded without a pre-existing or solely environmental classification. |
+| A22 | Partially mitigated; productive event reads and renderer source lookups are paged, bounded, and fail closed | Cursor-page reads drive IPC, timeline/history, source lookup and Pi output; the old `agent:list-events` bridge endpoint is removed. Collector-local budgets cover active call identities, argument traversal/references, unfinished external-tool output, and retained source metadata; ambiguous active tool-call IDs across runs invalidate attribution. Overflow is sticky: complete lookup fails, the main-chat hook marks the run unavailable, the group hook exposes unavailable status, and synchronous timeline rendering preserves the answer while marking sources unavailable. Renderer lookups admit at most four active loads and 256 queued loads; releasing the last view stops pagination after any already in-flight page returns. Run-scoped tool-evidence and assistant-message pages preflight `payload_json` bytes under a SQLite savepoint. Pages are split at event boundaries to stay within 8 MiB when possible; an indivisible event larger than 8 MiB is returned alone to preserve complete content. The cap excludes IPC/page envelopes. This does not bound generic/non-run event pages, stream expansion, individual event allocations, aggregate requests, renderer heap/RSS, or the existing 24-source display cap, so A22 remains partial. RED/GREEN, review, and local checks are recorded below. CI timing failures are recorded without a pre-existing or solely environmental classification. |
 | A23 | Mitigated; integrated checks pass | Synthetic capability outputs and the generic core `status: ok` fallback now fail explicitly with `CapabilityUnavailableError`; stale declared grants are reconciled by exact host identity/version; separate Pi runtime services, A16 selection, and A17 evidence flows are preserved. Independent review found no blocker. Workflow `38081920060` passed the relevant feature jobs, Supabase pgTAP (20 files/1,041 tests), containment, compile-only sandbox and Windows/macOS packaging. The same run had one unrelated-to-A23 global Vitest timing failure, without a baseline classification. |
 | A24 | Partially mitigated | Compiled-module cache has LRU entry/source-byte caps, hashes namespaces up to 256 UTF-16 code units, and bypasses cache retention plus error-name retention for longer namespaces. Cache counters do not measure native compiled memory or transient compile memory. A05 supplies measured failure metrics. WASI remains denied and stdio capture is unavailable. |
 | A25 | Mitigated; prior fix preserved and revalidated | `allow-workspace` requires workspace+tool identity and lookup keys include both plus action/target; the Pi runtime supplies persisted host workspace identity across worktree cwd changes. Unknown tools are blocked before permission prompting and are not read-only safe. Safe focused validation: 52 permission-store/permission-extension/tool-registry tests and one productive Pi runtime workspace-scope test passed. A two-workspace synthetic store test passes; external tool/plugin execution remains disabled. |
@@ -2783,9 +2799,8 @@ unchanged in SQLite, and renderer source scanning uses the same shared limit.
   pagination are not frozen by a page-local snapshot. The page limit counts
   serialized `payload_json` bytes only; it does not include IPC envelope or
   JavaScript object overhead. SQLite still evaluates stored values to measure
-  their byte lengths. It bounds only run-scoped tool-evidence pages, not
-  assistant-message pages, non-run event pages, aggregate page requests,
-  renderer heap, or process RSS. A22 remains partial.
+  their byte lengths. This first cap covered run-scoped tool-evidence pages;
+  assistant-message pagination and remaining gaps are recorded below.
 - The last official CI run on published commit `e6ff0e28e49871226ace1f061564448d9cad19db`
   (`38103920154`) completed with its global Vitest job failing only the
   unchanged `FastVectorDistance` assertion at **0.10797100000002047 ms** against
@@ -2817,3 +2832,35 @@ unchanged in SQLite, and renderer source scanning uses the same shared limit.
   PTY cancellation, Verifier-First, Biome, and typecheck jobs also passed. At
   this update, Windows x64 packaging `38105345842` and macOS x64/arm64
   packaging `38105345926` also completed successfully.
+
+### A22 assistant-message page payload budgeting
+
+`listAgentRunMessagePage` now preflights stored `payload_json` byte lengths
+inside one SQLite savepoint, then materializes only an ordered prefix that fits
+the 8 MiB run-page payload budget. If a later event would exceed the budget,
+the cursor stops before it and the next page continues from there. A single
+event larger than 8 MiB is returned alone to preserve the complete assistant
+message; it is an explicit exception to the aggregate page ceiling. The API
+continues to exclude IPC/page envelopes from the byte count. `runAssistantOutput`
+uses this path and reconstructs the entire answer across pages.
+
+- RED/GREEN: two safe synthetic 4 MiB deltas initially came back in one page;
+  after the change they require two pages and both deltas, plus the final
+  assistant text assembled by `runAssistantOutput`, are unchanged. The direct
+  caller regression also verifies that a single oversized delta is returned
+  intact and can be reconstructed rather than turning a completed prompt into
+  a rejected result.
+- Focused Vitest passed **3 targeted tests** in `agent-event-store.test.ts`;
+  **78 other tests were skipped** by name, including security/path cases not
+  needed for this change. The tests call the real `runAssistantOutput` helper
+  against the SQLite event store. Desktop typecheck passed and targeted Biome
+  checked the three modified source/test files without fixes. The first
+  independent review found and drove the oversized-event compatibility change;
+  its follow-up approved cursor order, run scoping, `hasMore`, savepoint scope,
+  and `runAssistantOutput` behavior.
+- This change does not cap generic/non-run event pages or stream-expansion
+  reads. One indivisible large event can still exceed 8 MiB; envelope/object
+  overhead, aggregate page requests, renderer heap/RSS and process RSS are not
+  bounded. These are explicit A22 residuals, not a claim that all history
+  reads are bounded.
+- Remote CI for this increment is pending publication.
