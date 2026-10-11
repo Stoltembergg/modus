@@ -3371,3 +3371,30 @@ unimplemented:
 Marco 2 therefore completes persistent lifecycle and structural session/budget
 ownership, not Linux enforcement. External plugin admission remains blocked;
 Windows and macOS were untouched.
+
+### A01–A04 Marco 3.1 — blocked before cgroup implementation
+
+**Status: BLOCKED. No cgroup enforcement is implemented or claimed.** The Rust
+supervisor source explicitly has no Linux process launcher. Its production
+`SupervisorService::handle_command` validates provenance and then returns a
+deny response; `execute_assessed_worker` is not called by that path. The only
+`WorkerTransport` implementations found are synthetic fixtures. The IPC request
+contains plugin metadata and a capability payload, but no host-owned worker
+executable identity or artifact handoff contract that could safely start a
+specific process.
+
+This execution environment reports the process in the cgroup-v2 root and has
+no writable delegated cgroup subtree (`/sys/fs/cgroup` is not writable to the
+task). Therefore it cannot validate applying `memory.max`, `cpu.max`,
+`pids.max`, or associating/reaping an exact worker PID. Tests that mock these
+operations cannot supply the missing productive process owner. Adding a
+generic child command or a placeholder worker here would invent the executable
+and artifact ABI and would not enforce limits on a real plugin worker, so no
+such path was added.
+
+External admission remains fail-closed and disabled. A future authorized
+implementation first needs a host-owned Linux worker executable and explicit
+artifact handoff/process identity contract consumed by the supervisor; cgroup
+v2 preparation can then attach that exact child before artifact transfer.
+Namespaces, seccomp/Landlock, filesystem/network denial, descriptor limits,
+and process-tree enforcement remain unimplemented and unproven.
