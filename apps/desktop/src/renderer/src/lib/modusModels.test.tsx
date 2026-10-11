@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   buildModelPickerGroups,
   isHiddenPickerModel,
+  isModusModel,
   isModusModelId,
   ModelOptions,
   type PickableModel,
@@ -85,7 +86,7 @@ describe("buildModelPickerGroups", () => {
     ]);
   });
 
-  it("only modus/ ids can be hidden: a BYOK model flagged locked is still listed", () => {
+  it("only Modus models can be hidden: a BYOK model flagged locked is still listed", () => {
     const byok = {
       id: "openai/gpt-x",
       name: "GPT X",
@@ -98,6 +99,73 @@ describe("buildModelPickerGroups", () => {
     expect(isHiddenPickerModel({ id: "modus/a/b", name: "B" })).toBe(false);
     expect(selectableModels([byok]).map((m) => m.id)).toEqual(["openai/gpt-x"]);
     expect(shape([byok]).groups).toEqual([["openai", "OpenAI", ["openai/gpt-x"]]]);
+  });
+
+  it("Modus membership is by origin: a Modus model whose id collides with a bundled/BYOK id is in the Modus group", () => {
+    // The Modus router catalog id and pi's bundled deepseek model id are both deepseek/deepseek-flash.
+    const modusDeepseek = {
+      id: "deepseek/deepseek-flash",
+      name: "DeepSeek V4.1 Flash",
+      provider: "modus",
+    };
+    const byokDeepseek = {
+      id: "deepseek/deepseek-flash",
+      name: "DeepSeek V4.1 Flash",
+      provider: "deepseek",
+      providerName: "DeepSeek",
+    };
+    const models = [
+      { id: "modus/zai/glm-5-3-flash", name: "GLM-5.3-Flash", provider: "modus" },
+      modusDeepseek,
+      { id: "modus/anthropic/claude-opus-5-5", name: "Claude Opus 5.5", provider: "modus" },
+      byokDeepseek,
+    ];
+    const { groups } = buildModelPickerGroups(models);
+    expect(groups.map((group) => [group.providerId, group.models])).toEqual([
+      ["modus", [models[0], modusDeepseek, models[2]]],
+      ["deepseek", [byokDeepseek]],
+    ]);
+    expect(isModusModel(modusDeepseek)).toBe(true);
+    expect(isModusModel(byokDeepseek)).toBe(false);
+  });
+
+  it("hides a locked Modus-catalog model even when its id has no modus/ prefix", () => {
+    const locked = {
+      id: "deepseek/deepseek-pro",
+      name: "DeepSeek Pro",
+      provider: "modus",
+      locked: true,
+    };
+    expect(isHiddenPickerModel(locked)).toBe(true);
+    expect(selectableModels([locked])).toEqual([]);
+    expect(shape([locked]).groups).toEqual([]);
+  });
+
+  it("a BYOK model with the same id as a Modus model is never hidden and keeps its own group", () => {
+    const byok = {
+      id: "modus/deepseek/deepseek-flash",
+      name: "DeepSeek V4.1 Flash",
+      provider: "deepseek",
+      providerName: "DeepSeek",
+      locked: true,
+    };
+    expect(isModusModel(byok)).toBe(false);
+    expect(isHiddenPickerModel(byok)).toBe(false);
+    expect(shape([byok]).groups).toEqual([
+      ["deepseek", "DeepSeek", ["modus/deepseek/deepseek-flash"]],
+    ]);
+    const sameIdByok = { ...byok, id: "deepseek/deepseek-flash" };
+    expect(shape([sameIdByok, { ...sameIdByok, provider: "modus", locked: true }]).groups).toEqual([
+      ["deepseek", "DeepSeek", ["deepseek/deepseek-flash"]],
+    ]);
+  });
+
+  it("falls back to the modus/ prefix only when a model has no provider", () => {
+    expect(isModusModel({ id: "modus/a/b", name: "B" })).toBe(true);
+    expect(isModusModel({ id: "a/b", name: "B" })).toBe(false);
+    expect(shape([{ id: "modus/a/b", name: "B" }]).groups).toEqual([
+      ["modus", "Modus", ["modus/a/b"]],
+    ]);
   });
 
   it("drops empty groups (all Modus models locked)", () => {

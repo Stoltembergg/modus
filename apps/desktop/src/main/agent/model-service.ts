@@ -2122,7 +2122,11 @@ export function updateModelConfig(input: UpdateModelConfigInput): ModelInfo {
     modelId: parsed.id,
     displayName: existing?.display_name ?? model?.name ?? parsed.id,
     source: existing?.source ?? "builtin",
-    enabled: input.enabled ?? Boolean(existing?.enabled),
+    // No row yet: keep the model's current state (modelToInfo: Modus models are on by default,
+    // others need a row). A thinking change must not turn a Modus model off.
+    enabled:
+      input.enabled ??
+      (existing ? Boolean(existing.enabled) : model.provider === MODUS_PROVIDER_ID),
     reasoning: Boolean(existing?.reasoning ?? model?.reasoning),
     thinkingLevel: selected.level,
     thinkingVariant: selected.value,

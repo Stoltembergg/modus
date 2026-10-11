@@ -46,9 +46,18 @@ export type ModelPickerGroups<M extends PickableModel = PickableModel> = {
   groups: ModelPickerGroup<M>[];
 };
 
+/**
+ * Whether the model came from the Modus router catalog. Decided by origin (ModelInfo.provider,
+ * the registry provider), not by the id: a Modus model's router id can equal a bundled/BYOK id
+ * (`deepseek/deepseek-flash`). The `modus/` prefix is only a fallback when provider is missing.
+ */
+export function isModusModel(model: PickableModel): boolean {
+  return model.provider ? model.provider === MODUS_PROVIDER_ID : isModusModelId(model.id);
+}
+
 /** Hidden from the pickers: a locked Modus model. A BYOK model is never hidden. */
 export function isHiddenPickerModel(model: PickableModel): boolean {
-  return Boolean(model.locked) && isModusModelId(model.id);
+  return Boolean(model.locked) && isModusModel(model);
 }
 
 /** The models a picker offers (and that a draft may pick), in the given order. */
@@ -57,8 +66,8 @@ export function selectableModels<M extends PickableModel>(models: readonly M[]):
 }
 
 function providerIdOf(model: PickableModel): string {
-  if (isModusModelId(model.id)) return MODUS_PROVIDER_ID;
   if (model.provider) return model.provider;
+  if (isModusModelId(model.id)) return MODUS_PROVIDER_ID;
   const slash = model.id.indexOf("/");
   return slash > 0 ? model.id.slice(0, slash) : model.id;
 }
