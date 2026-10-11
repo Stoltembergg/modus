@@ -23,6 +23,21 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
   });
 
   describe("9.1 — Capability Registration and Version Decoupling", () => {
+    it("requires host authority before registering capability definitions", () => {
+      const capability: Capability = {
+        id: "spoofed.capability",
+        apiVersion: "1.0",
+        replaceable: true,
+        dependencies: [],
+        metadata: {},
+      };
+
+      expect(() => registry.registerCapability(capability)).toThrow(
+        "Capability registration is reserved for the host.",
+      );
+      expect(registry.getCapability(capability.id)).toBeUndefined();
+    });
+
     it("does not expose registry authorization state through JavaScript reflection", () => {
       const ownKeys = Reflect.ownKeys(registry);
       const prototype = Object.getPrototypeOf(registry) as object;
