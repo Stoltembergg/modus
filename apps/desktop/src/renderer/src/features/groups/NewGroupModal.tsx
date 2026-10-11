@@ -1,5 +1,6 @@
 import { Dialog } from "@base-ui/react/dialog";
 import { IconCrown, IconPlus, IconX } from "@tabler/icons-react";
+import { AnimatePresence } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AGENT_TEMPLATES,
@@ -676,18 +677,22 @@ export function NewGroupModal({
             </div>
           </form>
 
-          {dialogTarget ? (
-            <AgentDialog
-              defaultModelId={defaultModelId}
-              draft={dialogTarget}
-              models={allModels}
-              onGenerate={services.generateProfile}
-              onOpenChange={(next) => {
-                if (!next) setAgentDialog(null);
-              }}
-              open
-            />
-          ) : null}
+          {/* Keeps the agent dialog mounted for its exit spring after onOpenChange(false). */}
+          <AnimatePresence>
+            {dialogTarget ? (
+              <AgentDialog
+                defaultModelId={defaultModelId}
+                draft={dialogTarget}
+                key="agent-dialog"
+                models={allModels}
+                onGenerate={services.generateProfile}
+                onOpenChange={(next) => {
+                  if (!next) setAgentDialog(null);
+                }}
+                open
+              />
+            ) : null}
+          </AnimatePresence>
         </Dialog.Popup>
       </Dialog.Portal>
     </Dialog.Root>

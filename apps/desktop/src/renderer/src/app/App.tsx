@@ -1324,28 +1324,32 @@ export function App() {
                           onAddAgent={(groupId) => setAgentDialog({ groupId })}
                         />
                       </ContextSidebar>
-                      {agentDialogGroup && agentDialog ? (
-                        <AgentDialog
-                          agent={agentDialog.agent}
-                          defaultModelId={model || undefined}
-                          group={agentDialogGroup}
-                          models={groupModels}
-                          onCreate={async (input) => {
-                            await window.modus.agents.create(input);
-                            await refreshGroups();
-                          }}
-                          onGenerate={(input) => window.modus.agents.generateProfile(input)}
-                          onOpenChange={(open) => {
-                            if (!open) setAgentDialog(null);
-                          }}
-                          onUpdate={async (input) => {
-                            await window.modus.agents.update(input);
-                            // The 1:1 chat is titled after the agent.
-                            await refreshSessions();
-                          }}
-                          open
-                        />
-                      ) : null}
+                      {/* Keeps the dialog mounted for its exit spring after onOpenChange(false). */}
+                      <AnimatePresence>
+                        {agentDialogGroup && agentDialog ? (
+                          <AgentDialog
+                            key={agentDialog.agent?.id ?? `new-${agentDialogGroup.id}`}
+                            agent={agentDialog.agent}
+                            defaultModelId={model || undefined}
+                            group={agentDialogGroup}
+                            models={groupModels}
+                            onCreate={async (input) => {
+                              await window.modus.agents.create(input);
+                              await refreshGroups();
+                            }}
+                            onGenerate={(input) => window.modus.agents.generateProfile(input)}
+                            onOpenChange={(open) => {
+                              if (!open) setAgentDialog(null);
+                            }}
+                            onUpdate={async (input) => {
+                              await window.modus.agents.update(input);
+                              // The 1:1 chat is titled after the agent.
+                              await refreshSessions();
+                            }}
+                            open
+                          />
+                        ) : null}
+                      </AnimatePresence>
 
                       <MainSurface
                         data-shell-layer="main-surface"

@@ -210,13 +210,15 @@ export type ModelInfo = {
   thinkingOptions?: ThinkingOption[];
   thinkingBudget?: ThinkingBudget;
   /**
-   * Modus (B4b): the model is listed by the router but not in the user's plan. A UI hint
-   * (picker shows it disabled with an upgrade invite); the router's 403 is the real barrier.
+   * Modus (B4b): the model is listed by the router but not in the user's plan. Locked Modus
+   * models are hidden from every model picker (`selectableModels` / `buildModelPickerGroups`);
+   * a saved one is kept as an "(unavailable)" option. The router's 403 is the real barrier.
    */
   locked?: "upgrade";
   /**
    * L3b: locked Modus models only: the smallest credit pack that unlocks it (router
-   * `/v1/models` unlock_pack). Absent = unknown / no pack: the UI shows the generic text.
+   * `/v1/models` unlock_pack). Not shown by the pickers (locked models are hidden there);
+   * kept on the contract for the router data. Absent = unknown / no pack.
    */
   unlockPack?: { id: string; credits: number };
 };

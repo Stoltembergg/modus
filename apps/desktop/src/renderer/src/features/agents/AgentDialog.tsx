@@ -1,5 +1,6 @@
 import { Dialog } from "@base-ui/react/dialog";
 import { IconRefresh } from "@tabler/icons-react";
+import { m, type Transition, useReducedMotion } from "motion/react";
 import { useId, useMemo, useRef, useState } from "react";
 import { agentAvatarForId, getAgentTemplate } from "../../../../shared/agent-templates";
 import {
@@ -23,20 +24,30 @@ import {
   normalizeGroupMemberCapabilities,
 } from "../../../../shared/group-capabilities";
 import { cn } from "../../lib/cn";
-import { ModelOptions, selectableModels } from "../../lib/modusModels";
+import { selectableModels } from "../../lib/modusModels";
 import type { GroupDialogModel } from "../groups/CreateGroupDialog";
 import { describeGroupError } from "../groups/groupErrors";
 import { useGroupText } from "../groups/groupRoomI18n";
 import { AgentAvatar } from "./AgentAvatar";
 import { AGENT_AVATAR_FILL } from "./agentAvatarModel";
 import { agentDialogError, needsProfileGeneration } from "./agentDialogModel";
+import { ModelPicker } from "./ModelPicker";
 
 export const AGENT_GENERATED_HINT = "Generated. Review the role and instructions, then save.";
 
 const FIELD = cn(
-  "h-8 w-full rounded-lg border border-hairline bg-canvas px-2.5 text-sm text-fg outline-none",
-  "transition-colors placeholder:text-fg-faint focus:border-hairline-strong",
+  "h-9 w-full rounded-lg border border-hairline bg-canvas/70 px-3 text-sm text-fg outline-none",
+  "transition-colors duration-150 placeholder:text-fg-faint hover:border-hairline-strong",
+  "focus:border-hairline-strong focus-visible:ring-2 focus-visible:ring-focus-ring/40",
 );
+/** Field and section labels: small, quiet, a little air below. */
+const LABEL = "font-medium text-2xs text-fg-subtle";
+/** Subtle press feedback (transform only; none with reduced motion). */
+const PRESS =
+  "transition-[background-color,color,opacity,transform] duration-150 ease-out-quint active:scale-[0.97] motion-reduce:transition-none motion-reduce:active:scale-100";
+/** Open/close spring of the dialog (transform + opacity only). */
+const DIALOG_SPRING: Transition = { type: "spring", stiffness: 420, damping: 34, mass: 0.8 };
+const DIALOG_EXIT: Transition = { duration: 0.14, ease: [0.4, 0, 1, 1] };
 
 /**
  * The create-group modal (A4): the agent is not created here but added to the
@@ -185,6 +196,7 @@ export function AgentDialog(props: AgentDialogProps) {
   const [notice, setNotice] = useState<{ text: string; warning: boolean } | null>(null);
   const [touched, setTouched] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
+  const reduceMotion = useReducedMotion();
   const roleId = useId();
 
   const takenNames = useMemo(
@@ -326,7 +338,7 @@ export function AgentDialog(props: AgentDialogProps) {
         void submit();
       }}
     >
-      <div className="flex items-center gap-3 px-4 pt-3.5 pb-1">
+      <div className="flex items-center gap-3.5 px-5 pt-5 pb-2">
         <AgentAvatar
           color={color}
           face={face}
@@ -338,24 +350,26 @@ export function AgentDialog(props: AgentDialogProps) {
         <div className="min-w-0">
           {surface === "dialog" ? (
             <>
-              <Dialog.Title className="font-medium text-fg text-sm">{title}</Dialog.Title>
-              <Dialog.Description className="mt-0.5 truncate text-2xs text-fg-faint">
+              <Dialog.Title className="font-semibold text-[15px] text-fg tracking-tight">
+                {title}
+              </Dialog.Title>
+              <Dialog.Description className="mt-0.5 truncate text-xs text-fg-faint">
                 {subtitle}
               </Dialog.Description>
             </>
           ) : (
             <>
-              <p className="font-medium text-fg text-sm">{title}</p>
-              <p className="mt-0.5 truncate text-2xs text-fg-faint">{subtitle}</p>
+              <p className="font-semibold text-[15px] text-fg tracking-tight">{title}</p>
+              <p className="mt-0.5 truncate text-xs text-fg-faint">{subtitle}</p>
             </>
           )}
         </div>
       </div>
 
-      <div className="scroll-thin flex max-h-[60vh] flex-col gap-3 overflow-y-auto px-4 pt-2">
-        <div className="grid grid-cols-2 gap-2">
-          <label className="flex flex-col gap-1">
-            <span className="text-2xs text-fg-subtle">Name</span>
+      <div className="scroll-thin flex max-h-[60vh] flex-col gap-4 overflow-y-auto px-5 pt-3 pb-1">
+        <div className="grid grid-cols-2 gap-3">
+          <label className="flex flex-col gap-1.5">
+            <span className={LABEL}>Name</span>
             <input
               className={FIELD}
               maxLength={80}
@@ -365,31 +379,22 @@ export function AgentDialog(props: AgentDialogProps) {
               value={name}
             />
           </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-2xs text-fg-subtle">Model</span>
-            <select
-              className={cn(FIELD, "px-2")}
-              onChange={(event) => setModelId(event.target.value)}
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <ModelPicker
+              defaultLabel={custom ? undefined : "App default"}
+              label="Model"
+              models={allModels}
+              onValueChange={setModelId}
+              placeholder={models.length === 0 ? "No model configured" : "Choose a model"}
+              savedModelId={agent ? agent.modelId : initial?.modelId}
               value={modelId}
-            >
-              {custom ? (
-                <option disabled value="">
-                  {models.length === 0 ? "No model configured" : "Choose a model"}
-                </option>
-              ) : (
-                <option value="">App default</option>
-              )}
-              <ModelOptions
-                models={allModels}
-                savedModelId={agent ? agent.modelId : initial?.modelId}
-              />
-            </select>
-          </label>
+            />
+          </div>
         </div>
 
         {custom ? (
-          <label className="flex flex-col gap-1">
-            <span className="text-2xs text-fg-subtle">What should it help with? (optional)</span>
+          <label className="flex flex-col gap-1.5">
+            <span className={LABEL}>What should it help with? (optional)</span>
             <input
               className={FIELD}
               maxLength={500}
@@ -400,14 +405,17 @@ export function AgentDialog(props: AgentDialogProps) {
           </label>
         ) : null}
 
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col gap-1.5">
           <div className="flex items-center justify-between">
-            <label className="text-2xs text-fg-subtle" htmlFor={roleId}>
+            <label className={LABEL} htmlFor={roleId}>
               Role
             </label>
             {custom ? (
               <button
-                className="flex h-5 items-center gap-1 rounded px-1 text-2xs text-fg-subtle hover:bg-hover hover:text-fg disabled:opacity-40"
+                className={cn(
+                  "-my-0.5 flex h-6 items-center gap-1 rounded-md px-1.5 text-2xs text-fg-subtle hover:bg-hover hover:text-fg disabled:opacity-40",
+                  PRESS,
+                )}
                 disabled={!canGenerate}
                 onClick={() => void generate()}
                 title="Ask the model for a role and instructions"
@@ -428,10 +436,10 @@ export function AgentDialog(props: AgentDialogProps) {
           />
         </div>
 
-        <label className="flex flex-col gap-1">
-          <span className="text-2xs text-fg-subtle">Instructions</span>
+        <label className="flex flex-col gap-1.5">
+          <span className={LABEL}>Instructions</span>
           <textarea
-            className={cn(FIELD, "h-28 resize-none py-1.5 leading-snug")}
+            className={cn(FIELD, "h-28 resize-none py-2 leading-relaxed")}
             maxLength={20_000}
             onChange={(event) => setInstructions(event.target.value)}
             placeholder={custom ? "Leave empty to generate" : "How this agent works"}
@@ -439,7 +447,7 @@ export function AgentDialog(props: AgentDialogProps) {
           />
         </label>
 
-        <p className="text-2xs text-fg-subtle">
+        <p className="mt-1 text-2xs text-fg-faint">
           Choose the work this agent supports. These choices do not grant tool access.
         </p>
         {(!capabilities.capabilityIds.length || !capabilities.supportedTaskKinds.length) && (
@@ -449,7 +457,10 @@ export function AgentDialog(props: AgentDialogProps) {
           <div className="flex flex-col items-start gap-1">
             <button
               type="button"
-              className="rounded-lg border border-hairline px-2 py-1 text-2xs text-fg-subtle hover:text-fg"
+              className={cn(
+                "rounded-lg border border-hairline px-2.5 py-1 text-2xs text-fg-subtle hover:border-hairline-strong hover:text-fg",
+                PRESS,
+              )}
               disabled={busy !== null}
               onClick={() => setCapabilities(normalizeGroupMemberCapabilities(capabilityTemplate))}
             >
@@ -465,11 +476,12 @@ export function AgentDialog(props: AgentDialogProps) {
           ] as const
         ).map(([field, title, label, options]) => (
           <fieldset className="flex flex-col gap-1" key={field} disabled={busy !== null}>
-            <legend className="mb-1 text-2xs text-fg-subtle">{title}</legend>
-            <div className="flex flex-wrap gap-2">
+            <legend className={cn(LABEL, "mb-1.5")}>{title}</legend>
+            <div className="flex flex-wrap gap-x-3 gap-y-1.5">
               {options.map((option) => (
-                <label className="flex items-center gap-1 text-2xs" key={option}>
+                <label className="flex items-center gap-1.5 text-2xs text-fg-muted" key={option}>
                   <input
+                    className="size-3.5 accent-accent"
                     type="checkbox"
                     aria-label={`${label} ${option}`}
                     checked={(capabilities[field] as string[]).includes(option)}
@@ -492,14 +504,15 @@ export function AgentDialog(props: AgentDialogProps) {
         ))}
 
         <fieldset className="flex flex-col gap-1">
-          <legend className="mb-1 text-2xs text-fg-subtle">Face</legend>
+          <legend className={cn(LABEL, "mb-1.5")}>Face</legend>
           <div className="flex flex-wrap gap-1">
             {AGENT_AVATAR_FACES.map((option) => (
               <button
                 aria-label={`Face ${option}`}
                 aria-pressed={face === option}
                 className={cn(
-                  "flex size-8 items-center justify-center rounded-md border transition-colors",
+                  "flex size-8 items-center justify-center rounded-lg border",
+                  PRESS,
                   face === option
                     ? "border-accent bg-accent/10"
                     : "border-transparent hover:bg-hover",
@@ -515,14 +528,15 @@ export function AgentDialog(props: AgentDialogProps) {
         </fieldset>
 
         <fieldset className="flex flex-col gap-1">
-          <legend className="mb-1 text-2xs text-fg-subtle">Shape</legend>
+          <legend className={cn(LABEL, "mb-1.5")}>Shape</legend>
           <div className="flex flex-wrap gap-1">
             {AGENT_AVATAR_SHAPES.map((option) => (
               <button
                 aria-label={`Shape ${option}`}
                 aria-pressed={shape === option}
                 className={cn(
-                  "flex size-8 items-center justify-center rounded-md border transition-colors",
+                  "flex size-8 items-center justify-center rounded-lg border",
+                  PRESS,
                   occupiedShapes.has(option) && shape !== option
                     ? "cursor-not-allowed border-transparent opacity-35"
                     : shape === option
@@ -542,14 +556,14 @@ export function AgentDialog(props: AgentDialogProps) {
         </fieldset>
 
         <fieldset className="flex flex-col gap-1">
-          <legend className="mb-1 text-2xs text-fg-subtle">Color</legend>
+          <legend className={cn(LABEL, "mb-1.5")}>Color</legend>
           <div className="flex flex-wrap gap-1.5">
             {AGENT_AVATAR_COLORS.map((option) => (
               <button
                 aria-label={`Color ${option}`}
                 aria-pressed={color === option}
                 className={cn(
-                  "size-5 rounded-md ring-offset-1 ring-offset-canvas transition-shadow",
+                  "size-5 rounded-md ring-offset-2 ring-offset-elevated transition-[box-shadow,transform] duration-150 ease-out-quint active:scale-90 motion-reduce:transition-none motion-reduce:active:scale-100",
                   color === option
                     ? "ring-2 ring-accent"
                     : "hover:ring-1 hover:ring-hairline-strong",
@@ -567,7 +581,7 @@ export function AgentDialog(props: AgentDialogProps) {
       {notice ? (
         <p
           className={cn(
-            "mx-4 mt-3 rounded-md px-2.5 py-1.5 text-xs",
+            "mx-5 mt-3 rounded-lg px-2.5 py-1.5 text-xs",
             notice.warning
               ? "border border-amber-400/30 bg-amber-400/10 text-amber-400"
               : "text-fg-faint",
@@ -582,16 +596,19 @@ export function AgentDialog(props: AgentDialogProps) {
 
       {shownError ? (
         <div
-          className="mx-4 mt-3 max-h-24 overflow-y-auto whitespace-pre-wrap rounded-md border border-danger/30 bg-danger/8 px-2.5 py-2 text-xs text-danger"
+          className="mx-5 mt-3 max-h-24 overflow-y-auto whitespace-pre-wrap rounded-lg border border-danger/30 bg-danger/8 px-2.5 py-2 text-xs text-danger"
           role="alert"
         >
           {shownError}
         </div>
       ) : null}
 
-      <div className="mt-4 flex items-center justify-end gap-2 border-hairline-soft border-t px-4 py-2.5">
+      <div className="mt-4 flex items-center justify-end gap-2 border-hairline-soft border-t px-5 py-3">
         <button
-          className="h-7 rounded-md px-3 text-xs text-fg-muted transition-colors hover:bg-hover hover:text-fg"
+          className={cn(
+            "h-8 rounded-lg px-3.5 text-xs text-fg-muted hover:bg-hover hover:text-fg",
+            PRESS,
+          )}
           onClick={() => onOpenChange(false)}
           type="button"
         >
@@ -599,7 +616,8 @@ export function AgentDialog(props: AgentDialogProps) {
         </button>
         <button
           className={cn(
-            "h-7 rounded-md px-3 text-xs transition-colors",
+            "h-8 rounded-lg px-3.5 font-medium text-xs",
+            PRESS,
             busy === null
               ? "bg-accent text-white hover:opacity-90"
               : "cursor-not-allowed bg-chip-strong text-fg-faint",
@@ -619,20 +637,35 @@ export function AgentDialog(props: AgentDialogProps) {
     <Dialog.Root onOpenChange={onOpenChange} open={open}>
       <Dialog.Portal>
         <Dialog.Backdrop
-          className={cn(
-            "fixed inset-0 z-50 bg-black/50 transition-opacity duration-150 ease-out-quint motion-reduce:transition-none",
-            "data-ending-style:opacity-0 data-starting-style:opacity-0",
-          )}
+          className="dialog-scrim fixed inset-0 z-50"
+          data-testid="agent-dialog-backdrop"
+          render={
+            <m.div
+              animate={{ opacity: 1 }}
+              exit={reduceMotion ? { opacity: 1 } : { opacity: 0, transition: DIALOG_EXIT }}
+              initial={reduceMotion ? false : { opacity: 0 }}
+              transition={{ duration: 0.18, ease: "easeOut" }}
+            />
+          }
         />
         <Dialog.Popup
           className={cn(
-            "-translate-x-1/2 -translate-y-1/2 fixed top-1/2 left-1/2 z-50 w-[min(480px,calc(100vw-2rem))]",
-            "origin-center overflow-hidden popup-chrome outline-none",
-            "transition-[transform,opacity,scale] duration-150 ease-out-quint motion-reduce:transition-none",
-            "data-ending-style:scale-[0.96] data-ending-style:opacity-0",
-            "data-starting-style:scale-[0.96] data-starting-style:opacity-0",
+            "-translate-x-1/2 -translate-y-1/2 fixed top-1/2 left-1/2 z-50 w-[min(500px,calc(100vw-2rem))]",
+            "origin-center overflow-hidden popup-chrome surface-dialog outline-none",
           )}
           initialFocus={nameRef}
+          render={
+            <m.div
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={
+                reduceMotion
+                  ? { opacity: 1 }
+                  : { opacity: 0, scale: 0.97, y: 4, transition: DIALOG_EXIT }
+              }
+              initial={reduceMotion ? false : { opacity: 0, scale: 0.96, y: 8 }}
+              transition={DIALOG_SPRING}
+            />
+          }
         >
           {form}
         </Dialog.Popup>

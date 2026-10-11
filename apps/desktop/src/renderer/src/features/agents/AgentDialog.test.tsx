@@ -100,6 +100,19 @@ function renderDialog({
 const field = (dialog: HTMLElement, name: string | RegExp) =>
   within(dialog).getByRole("textbox", { name }) as HTMLInputElement;
 
+/** The model picker trigger (a Base UI combobox); `data-value` carries the model id. */
+const modelTrigger = (dialog: HTMLElement) =>
+  within(dialog).getByRole("combobox", { name: "Model" }) as HTMLButtonElement;
+
+async function openModels(user: ReturnType<typeof userEvent.setup>, dialog: HTMLElement) {
+  await user.click(modelTrigger(dialog));
+  return screen.findByRole("listbox");
+}
+
+const groupLabel = (group: HTMLElement) =>
+  group.ownerDocument.getElementById(group.getAttribute("aria-labelledby") ?? "")?.textContent ??
+  null;
+
 afterEach(() => cleanup());
 
 describe("agentDialogModel", () => {
@@ -134,7 +147,8 @@ describe("agentDialogModel", () => {
 });
 
 describe("AgentDialog", () => {
-  it("groups models by provider and hides a locked Modus model (never a BYOK one)", () => {
+  it("groups models by provider and hides a locked Modus model (never a BYOK one)", async () => {
+    const user = userEvent.setup();
     const { dialog } = renderDialog({
       agent: ANA,
       models: [
@@ -156,19 +170,27 @@ describe("AgentDialog", () => {
         },
       ],
     });
-    const select = within(dialog).getByRole("combobox", { name: "Model" }) as HTMLSelectElement;
-    expect(
-      [...select.children].map((el) => (el as HTMLOptGroupElement).label || el.textContent),
-    ).toEqual(["Choose a model", "Modus", "Acme", "OpenRouter", "Relay"]);
-    expect([...select.querySelectorAll("optgroup")].map((group) => group.textContent)).toEqual([
-      "GLM-5.3-Flash",
-      "BYOK flagged",
-      "GLM-5.3-Flash",
-      "Model 1",
+    expect(modelTrigger(dialog).dataset.value).toBe("m-1");
+    const listbox = await openModels(user, dialog);
+    const groups = within(listbox).getAllByRole("group");
+    expect(groups.map((group) => group.dataset.provider)).toEqual([
+      "modus",
+      "byok",
+      "openrouter",
+      "relay",
     ]);
-    expect(select.querySelector('option[value="modus/anthropic/claude-fable-5-1"]')).toBeNull();
-    expect(select.textContent).not.toMatch(/\p{Extended_Pictographic}/u);
-    expect(select.value).toBe("m-1");
+    expect(groups.map(groupLabel)).toEqual(["Modus", "Acme", "OpenRouter", "Relay"]);
+    expect(
+      groups.map((group) =>
+        within(group)
+          .getAllByRole("option")
+          .map((o) => o.textContent),
+      ),
+    ).toEqual([["GLM-5.3-Flash"], ["BYOK flagged"], ["GLM-5.3-Flash"], ["Model 1"]]);
+    expect(within(listbox).queryByRole("option", { name: "Fable" })).toBeNull();
+    expect(listbox.textContent).not.toMatch(/\p{Extended_Pictographic}/u);
+    // Custom agents get no "App default" entry.
+    expect(within(listbox).queryByRole("option", { name: "App default" })).toBeNull();
   });
 
   it("keeps a saved model that is now locked as '(unavailable)' and saving does not change it", async () => {
@@ -180,10 +202,8 @@ describe("AgentDialog", () => {
         { id: "modus/anthropic/claude-fable-5-1", name: "Fable", provider: "modus", locked: true },
       ],
     });
-    const select = within(dialog).getByRole("combobox", { name: "Model" }) as HTMLSelectElement;
-    expect(select.value).toBe("modus/anthropic/claude-fable-5-1");
-    expect(select.selectedOptions[0]?.textContent).toBe("Fable (unavailable)");
-    expect(select.selectedOptions[0]?.parentElement).toBe(select);
+    expect(modelTrigger(dialog).dataset.value).toBe("modus/anthropic/claude-fable-5-1");
+    expect(modelTrigger(dialog).textContent).toBe("Fable (unavailable)");
     await user.clear(field(dialog, "Instructions"));
     await user.type(field(dialog, "Instructions"), "Review twice.");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
@@ -197,8 +217,8 @@ describe("AgentDialog", () => {
       defaultModelId: "modus/x/locked",
       models: [...MODELS, { id: "modus/x/locked", name: "Locked", locked: true }],
     });
-    const select = within(dialog).getByRole("combobox", { name: "Model" }) as HTMLSelectElement;
-    expect(select.value).toBe("");
+    expect(modelTrigger(dialog).dataset.value).toBe("");
+    expect(modelTrigger(dialog).textContent).toBe("Choose a model");
   });
 
   it("shows every field with a 48 px animated preview that follows face and color", async () => {
@@ -207,9 +227,7 @@ describe("AgentDialog", () => {
     for (const name of ["Name", "Role", "Instructions", /What should it help with/]) {
       expect(field(dialog, name)).toBeTruthy();
     }
-    expect(
-      (within(dialog).getByRole("combobox", { name: "Model" }) as HTMLSelectElement).value,
-    ).toBe("m-2");
+    expect(modelTrigger(dialog).dataset.value).toBe("m-2");
     const preview = within(dialog)
       .getAllByTestId("agent-avatar")
       .find((avatar) => avatar.dataset.size === "48");
@@ -399,23 +417,25 @@ describe("AgentDialog", () => {
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
   });
 
-  it("a template agent may use the app default model and has no Regenerate", () => {
+  it("a template agent may use the app default model and has no Regenerate", async () => {
+    const user = userEvent.setup();
     const { dialog } = renderDialog({
       agent: (({ modelId: _modelId, ...rest }) => ({ ...rest, templateId: "reviewer" }))(ANA),
     });
-    const model = within(dialog).getByRole("combobox", { name: "Model" }) as HTMLSelectElement;
-    expect(model.value).toBe("");
-    expect(model.options[0]?.textContent).toBe("App default");
+    expect(modelTrigger(dialog).dataset.value).toBe("");
+    expect(modelTrigger(dialog).textContent).toBe("App default");
     expect(within(dialog).queryByRole("button", { name: "Regenerate" })).toBeNull();
     expect(within(dialog).queryByRole("textbox", { name: /What should it help with/ })).toBeNull();
+    const first = within(await openModels(user, dialog)).getAllByRole("option")[0];
+    expect(first?.textContent).toBe("App default");
+    expect(first?.getAttribute("aria-selected")).toBe("true");
   });
 
   it("requires a user choice when the explicit default is unavailable", async () => {
     const user = userEvent.setup();
     const create = vi.fn(async () => undefined);
     const { dialog } = renderDialog({ models: MODELS.slice(0, 1), create });
-    const model = within(dialog).getByRole("combobox", { name: "Model" }) as HTMLSelectElement;
-    expect(model.value).toBe("");
+    expect(modelTrigger(dialog).dataset.value).toBe("");
     await user.type(field(dialog, "Name"), "Cy");
     await user.type(field(dialog, "Role"), "Scribe");
     await user.click(within(dialog).getByRole("button", { name: "Create" }));
@@ -426,6 +446,109 @@ describe("AgentDialog", () => {
       ),
     );
     expect(create).not.toHaveBeenCalled();
+  });
+});
+
+describe("AgentDialog model picker", () => {
+  const MIXED: readonly PickableModel[] = [
+    { id: "m-1", name: "Model 1", provider: "relay", providerName: "Relay" },
+    { id: "m-2", name: "Model 2", provider: "relay", providerName: "Relay" },
+    { id: "or/glm", name: "GLM-5.3-Flash", provider: "openrouter", providerName: "OpenRouter" },
+    { id: "modus/zai/glm", name: "GLM Modus", provider: "modus" },
+  ];
+
+  it("opens with the keyboard, filters by typing and selects with Enter; Save sends it", async () => {
+    const user = userEvent.setup();
+    const { dialog, onUpdate } = renderDialog({ agent: ANA, models: MIXED });
+    const trigger = modelTrigger(dialog);
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    // The dialog moves focus to Name first; then focus the trigger.
+    await waitFor(() => expect(document.activeElement).toBe(field(dialog, "Name")));
+    trigger.focus();
+    await user.keyboard("{ArrowDown}");
+    const listbox = await screen.findByRole("listbox");
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    const search = screen.getByRole("combobox", { name: "Search models" });
+    await waitFor(() => expect(document.activeElement).toBe(search));
+    await user.keyboard("model 2");
+    expect(
+      within(listbox)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual(["Model 2"]);
+    await user.keyboard("{ArrowDown}{Enter}");
+    await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+    expect(trigger.dataset.value).toBe("m-2");
+    expect(trigger.textContent).toBe("Model 2");
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0]?.[0]).toMatchObject({ modelId: "m-2" });
+  });
+
+  it("arrow keys move through every group and the selected option carries the check", async () => {
+    const user = userEvent.setup();
+    const { dialog } = renderDialog({ agent: ANA, models: MIXED });
+    const listbox = await openModels(user, dialog);
+    const options = within(listbox).getAllByRole("option");
+    expect(options.map((o) => o.textContent)).toEqual([
+      "GLM Modus",
+      "GLM-5.3-Flash",
+      "Model 1",
+      "Model 2",
+    ]);
+    const selected = options.filter((o) => o.getAttribute("aria-selected") === "true");
+    expect(selected.map((o) => o.textContent)).toEqual(["Model 1"]);
+    expect(selected[0]?.querySelector("svg")).not.toBeNull();
+    expect(options[0]?.querySelector("svg")).toBeNull();
+    await user.keyboard("{ArrowUp}{ArrowUp}{Enter}");
+    await waitFor(() => expect(modelTrigger(dialog).dataset.value).toBe("modus/zai/glm"));
+  });
+
+  it("search matches provider names and shows an empty state", async () => {
+    const user = userEvent.setup();
+    const { dialog } = renderDialog({ agent: ANA, models: MIXED });
+    const listbox = await openModels(user, dialog);
+    const search = screen.getByRole("combobox", { name: "Search models" });
+    await user.type(search, "openrouter");
+    expect(
+      within(listbox)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ).toEqual(["GLM-5.3-Flash"]);
+    await user.clear(search);
+    await user.type(search, "zzz");
+    expect(within(listbox).queryAllByRole("option")).toHaveLength(0);
+    expect(screen.getByText("No models match")).toBeTruthy();
+  });
+
+  it("Esc closes the picker, keeps the value and returns focus to the trigger", async () => {
+    const user = userEvent.setup();
+    const { dialog, onOpenChange } = renderDialog({ agent: ANA, models: MIXED });
+    await openModels(user, dialog);
+    await user.keyboard("{ArrowDown}{ArrowDown}");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+    expect(modelTrigger(dialog).dataset.value).toBe("m-1");
+    await waitFor(() => expect(document.activeElement).toBe(modelTrigger(dialog)));
+    // Esc only closed the picker, not the dialog.
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    expect(screen.getByRole("dialog")).toBe(dialog);
+  });
+
+  it("a saved model that is no longer listed is offered at the top as '(unavailable)'", async () => {
+    const user = userEvent.setup();
+    const { dialog } = renderDialog({ agent: { ...ANA, modelId: "gone/model" }, models: MIXED });
+    expect(modelTrigger(dialog).dataset.value).toBe("gone/model");
+    expect(modelTrigger(dialog).textContent).toBe("gone/model (unavailable)");
+    const listbox = await openModels(user, dialog);
+    const [loose] = within(listbox).getAllByRole("group");
+    expect(loose?.dataset.provider).toBeUndefined();
+    const [saved] = within(loose as HTMLElement).getAllByRole("option");
+    expect(saved?.textContent).toBe("gone/model (unavailable)");
+    expect(saved?.getAttribute("aria-selected")).toBe("true");
+    await user.click(within(listbox).getByRole("option", { name: "Model 2" }));
+    await waitFor(() => expect(modelTrigger(dialog).dataset.value).toBe("m-2"));
   });
 });
 
