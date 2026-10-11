@@ -1106,6 +1106,23 @@ describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
       }
     });
 
+    it.each([-1, Number.NaN])(
+      "rejects invalid timeout value %s before compiling a module",
+      async (timeoutMs) => {
+        const host = new WasmCapabilityHost();
+        const compile = vi.spyOn(WebAssembly, "compile");
+        try {
+          await expect(
+            host.createInstance(buildAddModule(), { timeoutMs }),
+          ).rejects.toThrow(/timeoutMs must be a finite non-negative number/i);
+          expect(compile).not.toHaveBeenCalled();
+          expect(host.getReservedMemoryPages()).toBe(0);
+        } finally {
+          compile.mockRestore();
+        }
+      },
+    );
+
     it("preserves actual memory metrics when a call fails after instantiation", async () => {
       const result = await wasmHost.executeWasm(buildMemoryModule(1, 2), "missing_function");
 
