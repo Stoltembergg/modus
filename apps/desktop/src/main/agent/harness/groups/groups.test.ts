@@ -234,57 +234,65 @@ describe("Phase 6: Groups Mailbox & Optimistic Revision", () => {
     });
 
     it("purges expired messages according to 7-day ack and 30-day unack policies", () => {
-      const mailbox = createTestMailbox();
       const dayMs = 24 * 3600 * 1000;
       const baseTime = Date.parse("2026-10-06T12:00:00Z");
+      // Reads run lazy cleanup against Date.now(); pin the clock to baseTime so
+      // the retention windows are evaluated at the same instant as purgeExpired.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(baseTime);
+      try {
+        const mailbox = createTestMailbox();
 
-      // 1. Acked message from 8 days ago
-      const id1 = mailbox.send({
-        groupId: "g",
-        from: "A",
-        to: "B",
-        content: "acked old",
-        revision: 1,
-        sentAt: new Date(baseTime - 9 * dayMs).toISOString(),
-      });
-      mailbox.ack(id1, "B", new Date(baseTime - 8 * dayMs).toISOString(), "g");
+        // 1. Acked message from 8 days ago
+        const id1 = mailbox.send({
+          groupId: "g",
+          from: "A",
+          to: "B",
+          content: "acked old",
+          revision: 1,
+          sentAt: new Date(baseTime - 9 * dayMs).toISOString(),
+        });
+        mailbox.ack(id1, "B", new Date(baseTime - 8 * dayMs).toISOString(), "g");
 
-      // 2. Acked message from 2 days ago (should keep)
-      const id2 = mailbox.send({
-        groupId: "g",
-        from: "A",
-        to: "B",
-        content: "acked recent",
-        revision: 1,
-        sentAt: new Date(baseTime - 3 * dayMs).toISOString(),
-      });
-      mailbox.ack(id2, "B", new Date(baseTime - 2 * dayMs).toISOString(), "g");
+        // 2. Acked message from 2 days ago (should keep)
+        const id2 = mailbox.send({
+          groupId: "g",
+          from: "A",
+          to: "B",
+          content: "acked recent",
+          revision: 1,
+          sentAt: new Date(baseTime - 3 * dayMs).toISOString(),
+        });
+        mailbox.ack(id2, "B", new Date(baseTime - 2 * dayMs).toISOString(), "g");
 
-      // 3. Unacked message from 35 days ago (should purge)
-      mailbox.send({
-        groupId: "g",
-        from: "A",
-        to: "B",
-        content: "unacked ancient",
-        revision: 1,
-        sentAt: new Date(baseTime - 35 * dayMs).toISOString(),
-      });
+        // 3. Unacked message from 35 days ago (should purge)
+        mailbox.send({
+          groupId: "g",
+          from: "A",
+          to: "B",
+          content: "unacked ancient",
+          revision: 1,
+          sentAt: new Date(baseTime - 35 * dayMs).toISOString(),
+        });
 
-      // 4. Unacked message from 10 days ago (should keep, < 30 days)
-      mailbox.send({
-        groupId: "g",
-        from: "A",
-        to: "B",
-        content: "unacked recent",
-        revision: 1,
-        sentAt: new Date(baseTime - 10 * dayMs).toISOString(),
-      });
+        // 4. Unacked message from 10 days ago (should keep, < 30 days)
+        mailbox.send({
+          groupId: "g",
+          from: "A",
+          to: "B",
+          content: "unacked recent",
+          revision: 1,
+          sentAt: new Date(baseTime - 10 * dayMs).toISOString(),
+        });
 
-      const purged = mailbox.purgeExpired(new Date(baseTime).toISOString());
-      expect(purged).toBe(2);
+        const purged = mailbox.purgeExpired(new Date(baseTime).toISOString());
+        expect(purged).toBe(2);
 
-      const remaining = mailbox.getMessages("B", "g");
-      expect(remaining.map((m) => m.content)).toEqual(["unacked recent", "acked recent"]);
+        const remaining = mailbox.getMessages("B", "g");
+        expect(remaining.map((m) => m.content)).toEqual(["unacked recent", "acked recent"]);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("does not return expired persisted messages before the scheduled cleanup", () => {
