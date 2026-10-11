@@ -194,7 +194,7 @@ fn runtime_invocation_is_dispatched_through_worker_session_and_returns_result() 
         |invocation| {
             brokered.push((
                 invocation.sequence(),
-                invocation.capability().to_owned(),
+                invocation.capability().map(str::to_owned),
                 invocation.payload().cloned(),
                 invocation.provenance().cloned(),
             ));
@@ -212,7 +212,7 @@ fn runtime_invocation_is_dispatched_through_worker_session_and_returns_result() 
         brokered,
         vec![(
             1,
-            "memory.read".to_owned(),
+            Some("memory.read".to_owned()),
             Some(json!({ "key": "fixture" })),
             Some(provenance()),
         )]
