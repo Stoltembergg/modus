@@ -3493,3 +3493,35 @@ needs either must be reviewed against the policy before admission. `memory.max`
 still accounts cgroup-charged memory rather than strict RSS. Neither setting
 proves the remaining required isolation controls. External plugin admission
 remains disabled and denied.
+
+### A01–A04 Marco 3.3 — Linux pre-exec security boundary
+
+The launcher keeps `clone3(CLONE_INTO_CGROUP)` and performs the following
+operations in the child before `execve`: redirect only the prepared stdin,
+stdout, and stderr; close every descriptor from 3 upward with
+`close_range(3, UINT_MAX, 0)`; set and read back `PR_SET_NO_NEW_PRIVS`; set and
+read back the exact non-root host UID/GID already held by the desktop process;
+clear ambient capabilities; clear effective, permitted, and inheritable
+capabilities with `capset`; and read those three sets back as empty. Any
+failure exits the child before `execve`; the existing handshake failure path
+reaps it and cleans the cgroup or reports cleanup failure. There is no
+descriptor-enumeration or late-cgroup-placement fallback.
+
+This makes `close_range` a required Linux syscall (Linux 5.9+), in addition to
+the existing `clone3(CLONE_INTO_CGROUP)` requirement (Linux 5.7+). An
+unsupported or filtered syscall denies bootstrap. The launcher does not change
+supplementary groups or the inherited capability bounding set: a normal desktop
+user cannot reliably clear the latter without `CAP_SETPCAP`. `no_new_privs`
+and empty effective/permitted/inheritable/ambient sets prevent the worker from
+gaining capabilities through `exec`, but this is not account isolation. The
+worker still runs as the desktop user's UID/GID and retains that user's group
+access. A dedicated service identity or user namespace, followed by the
+remaining namespace and syscall controls, is still required before external
+code could be admitted.
+
+Validation in this workspace is limited to synthetic operation mocks, a source
+ordering regression test, and static inspection. No real worker, cgroup,
+plugin, kernel enforcement probe, or adversarial scenario was run. These tests
+do not prove kernel behavior or isolation. The supervisor remains deny-only;
+no external artifact is loaded or transferred, and no isolation-complete claim
+is made.

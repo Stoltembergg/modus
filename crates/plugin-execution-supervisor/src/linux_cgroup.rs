@@ -16,6 +16,13 @@ const REQUIRED_CONTROLLERS: [&str; 3] = ["cpu", "memory", "pids"];
 const CPU_PERIOD_MICROS: u64 = 100_000;
 const BASIS_POINTS_PER_CORE: u64 = 10_000;
 const WORKER_BOOTSTRAP_CHALLENGE_ENV: &str = "MODUS_WORKER_BOOTSTRAP_CHALLENGE";
+const PRE_EXEC_FAILURE_EXIT_CODE: i32 = 126;
+const EXEC_FAILURE_EXIT_CODE: i32 = 127;
+const PR_SET_NO_NEW_PRIVS: libc::c_int = 38;
+const PR_GET_NO_NEW_PRIVS: libc::c_int = 39;
+const PR_CAP_AMBIENT: libc::c_int = 47;
+const PR_CAP_AMBIENT_CLEAR_ALL: libc::c_ulong = 4;
+const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct WorkerCgroupIdentity {
@@ -474,18 +481,283 @@ fn build_clone_args(cgroup_fd: RawFd) -> libc::clone_args {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HostWorkerIdentity {
+    uid: libc::uid_t,
+    gid: libc::gid_t,
+}
+
+impl HostWorkerIdentity {
+    fn from_ids(
+        uids: [libc::uid_t; 3],
+        gids: [libc::gid_t; 3],
+    ) -> Result<Self, io::Error> {
+        if uids[0] == 0
+            || gids[0] == 0
+            || uids.iter().any(|uid| *uid != uids[0])
+            || gids.iter().any(|gid| *gid != gids[0])
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Linux worker requires one non-root host UID and GID",
+            ));
+        }
+        Ok(Self {
+            uid: uids[0],
+            gid: gids[0],
+        })
+    }
+}
+
+fn current_host_worker_identity() -> Result<HostWorkerIdentity, io::Error> {
+    let mut uids: [libc::uid_t; 3] = [0; 3];
+    let mut gids: [libc::gid_t; 3] = [0; 3];
+    // SAFETY: all output pointers refer to initialized writable stack storage.
+    if unsafe {
+        libc::syscall(
+            libc::SYS_getresuid,
+            &mut uids[0],
+            &mut uids[1],
+            &mut uids[2],
+        )
+    } < 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: all output pointers refer to initialized writable stack storage.
+    if unsafe {
+        libc::syscall(
+            libc::SYS_getresgid,
+            &mut gids[0],
+            &mut gids[1],
+            &mut gids[2],
+        )
+    } < 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    HostWorkerIdentity::from_ids(uids, gids)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PreExecSecurityFailure {
+    DescriptorRestriction,
+    NoNewPrivileges,
+    IdentityRestriction,
+    CapabilityDrop,
+}
+
+trait PreExecSecurityOperations {
+    fn close_all_non_stdio_descriptors(&mut self) -> bool;
+    fn set_no_new_privileges(&mut self) -> bool;
+    fn no_new_privileges_is_set(&mut self) -> bool;
+    fn set_gid(&mut self, gid: libc::gid_t) -> bool;
+    fn gid_is_exact(&mut self, gid: libc::gid_t) -> bool;
+    fn set_uid(&mut self, uid: libc::uid_t) -> bool;
+    fn uid_is_exact(&mut self, uid: libc::uid_t) -> bool;
+    fn clear_ambient_capabilities(&mut self) -> bool;
+    fn drop_all_capabilities(&mut self) -> bool;
+    fn capabilities_are_empty(&mut self) -> bool;
+}
+
+fn apply_pre_exec_security(
+    operations: &mut impl PreExecSecurityOperations,
+    identity: HostWorkerIdentity,
+) -> Result<(), PreExecSecurityFailure> {
+    if identity.uid == 0 || identity.gid == 0 {
+        return Err(PreExecSecurityFailure::IdentityRestriction);
+    }
+    if !operations.close_all_non_stdio_descriptors() {
+        return Err(PreExecSecurityFailure::DescriptorRestriction);
+    }
+    if !operations.set_no_new_privileges() || !operations.no_new_privileges_is_set() {
+        return Err(PreExecSecurityFailure::NoNewPrivileges);
+    }
+    if !operations.set_gid(identity.gid) || !operations.gid_is_exact(identity.gid) {
+        return Err(PreExecSecurityFailure::IdentityRestriction);
+    }
+    if !operations.set_uid(identity.uid) || !operations.uid_is_exact(identity.uid) {
+        return Err(PreExecSecurityFailure::IdentityRestriction);
+    }
+    if !operations.clear_ambient_capabilities()
+        || !operations.drop_all_capabilities()
+        || !operations.capabilities_are_empty()
+    {
+        return Err(PreExecSecurityFailure::CapabilityDrop);
+    }
+    if !operations.no_new_privileges_is_set() {
+        return Err(PreExecSecurityFailure::NoNewPrivileges);
+    }
+    Ok(())
+}
+
+struct SystemPreExecSecurityOperations;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CapabilityHeader {
+    version: u32,
+    pid: i32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct CapabilityData {
+    effective: u32,
+    permitted: u32,
+    inheritable: u32,
+}
+
+impl PreExecSecurityOperations for SystemPreExecSecurityOperations {
+    fn close_all_non_stdio_descriptors(&mut self) -> bool {
+        // Linux close_range was added in 5.9. Failure is terminal; there is no
+        // descriptor enumeration fallback that could race with host threads.
+        // SAFETY: this closes the child's private descriptor table from fd 3 onward.
+        unsafe { libc::syscall(libc::SYS_close_range, 3u32, u32::MAX, 0u32) == 0 }
+    }
+
+    fn set_no_new_privileges(&mut self) -> bool {
+        // SAFETY: prctl receives scalar arguments and operates on this child thread.
+        unsafe {
+            libc::syscall(
+                libc::SYS_prctl,
+                PR_SET_NO_NEW_PRIVS,
+                1 as libc::c_ulong,
+                0 as libc::c_ulong,
+                0 as libc::c_ulong,
+                0 as libc::c_ulong,
+            ) == 0
+        }
+    }
+
+    fn no_new_privileges_is_set(&mut self) -> bool {
+        // SAFETY: PR_GET_NO_NEW_PRIVS has no pointer arguments.
+        unsafe {
+            libc::syscall(
+                libc::SYS_prctl,
+                PR_GET_NO_NEW_PRIVS,
+                0 as libc::c_ulong,
+                0 as libc::c_ulong,
+                0 as libc::c_ulong,
+                0 as libc::c_ulong,
+            ) == 1
+        }
+    }
+
+    fn set_gid(&mut self, gid: libc::gid_t) -> bool {
+        // SAFETY: setresgid uses scalar IDs; raw syscall avoids post-fork libc coordination.
+        unsafe {
+            libc::syscall(
+                libc::SYS_setresgid,
+                gid as libc::c_ulong,
+                gid as libc::c_ulong,
+                gid as libc::c_ulong,
+            ) == 0
+        }
+    }
+
+    fn gid_is_exact(&mut self, expected: libc::gid_t) -> bool {
+        let mut gids: [libc::gid_t; 3] = [0; 3];
+        // SAFETY: all output pointers refer to initialized writable stack storage.
+        unsafe {
+            libc::syscall(
+                libc::SYS_getresgid,
+                &mut gids[0],
+                &mut gids[1],
+                &mut gids[2],
+            ) == 0
+                && gids == [expected; 3]
+        }
+    }
+
+    fn set_uid(&mut self, uid: libc::uid_t) -> bool {
+        // SAFETY: setresuid uses scalar IDs; raw syscall avoids post-fork libc coordination.
+        unsafe {
+            libc::syscall(
+                libc::SYS_setresuid,
+                uid as libc::c_ulong,
+                uid as libc::c_ulong,
+                uid as libc::c_ulong,
+            ) == 0
+        }
+    }
+
+    fn uid_is_exact(&mut self, expected: libc::uid_t) -> bool {
+        let mut uids: [libc::uid_t; 3] = [0; 3];
+        // SAFETY: all output pointers refer to initialized writable stack storage.
+        unsafe {
+            libc::syscall(
+                libc::SYS_getresuid,
+                &mut uids[0],
+                &mut uids[1],
+                &mut uids[2],
+            ) == 0
+                && uids == [expected; 3]
+        }
+    }
+
+    fn clear_ambient_capabilities(&mut self) -> bool {
+        // SAFETY: PR_CAP_AMBIENT_CLEAR_ALL is a scalar prctl operation on this child.
+        unsafe {
+            libc::syscall(
+                libc::SYS_prctl,
+                PR_CAP_AMBIENT,
+                PR_CAP_AMBIENT_CLEAR_ALL,
+                0 as libc::c_ulong,
+                0 as libc::c_ulong,
+                0 as libc::c_ulong,
+            ) == 0
+        }
+    }
+
+    fn drop_all_capabilities(&mut self) -> bool {
+        let header = CapabilityHeader {
+            version: LINUX_CAPABILITY_VERSION_3,
+            pid: 0,
+        };
+        let empty = [CapabilityData::default(); 2];
+        // SAFETY: both structures match the Linux capability v3 syscall ABI.
+        unsafe { libc::syscall(libc::SYS_capset, &header, empty.as_ptr()) == 0 }
+    }
+
+    fn capabilities_are_empty(&mut self) -> bool {
+        let header = CapabilityHeader {
+            version: LINUX_CAPABILITY_VERSION_3,
+            pid: 0,
+        };
+        let mut capabilities = [CapabilityData::default(); 2];
+        // SAFETY: header and output array match the Linux capability v3 syscall ABI.
+        unsafe {
+            libc::syscall(libc::SYS_capget, &header, capabilities.as_mut_ptr()) == 0
+                && capabilities.iter().all(|capability| {
+                    capability.effective == 0
+                        && capability.permitted == 0
+                        && capability.inheritable == 0
+                })
+        }
+    }
+}
+
 pub(super) fn launch_worker_in_cgroup(
     group: &WorkerCgroupLease,
     executable: &Path,
     challenge: &str,
 ) -> io::Result<LinuxWorkerProcess> {
-    launch_worker_in_cgroup_with(group, executable, challenge, &mut SystemClone3Invoker)
+    let identity = current_host_worker_identity()?;
+    launch_worker_in_cgroup_with(
+        group,
+        executable,
+        challenge,
+        identity,
+        &mut SystemClone3Invoker,
+    )
 }
 
 fn launch_worker_in_cgroup_with(
     group: &WorkerCgroupLease,
     executable: &Path,
     challenge: &str,
+    identity: HostWorkerIdentity,
     invoker: &mut impl Clone3Invoker,
 ) -> io::Result<LinuxWorkerProcess> {
     let executable = std::ffi::CString::new(executable.as_os_str().as_bytes())
@@ -520,16 +792,15 @@ fn launch_worker_in_cgroup_with(
     let clone_args = build_clone_args(cgroup_fd);
     let pid = invoker.clone3(&clone_args)?;
     if pid == 0 {
-        // This branch runs in the child after clone3. Avoid Rust allocation,
-        // locks, or destructors: only use async-signal-safe libc operations.
+        // This branch runs in the child after clone3. Avoid allocation, locks,
+        // and destructors; the pre-exec path uses only descriptor operations
+        // and direct syscalls before execve.
         unsafe {
             exec_worker_child(
                 stdin_read,
-                stdin_write,
-                stdout_read,
                 stdout_write,
                 stderr_fd,
-                cgroup_fd,
+                identity,
                 executable.as_ptr(),
                 argv.as_ptr(),
                 envp.as_ptr(),
@@ -577,38 +848,34 @@ fn open_null_stderr() -> io::Result<OwnedFd> {
 
 unsafe fn exec_worker_child(
     stdin_read: RawFd,
-    stdin_write: RawFd,
-    stdout_read: RawFd,
     stdout_write: RawFd,
     stderr_fd: RawFd,
-    cgroup_fd: RawFd,
+    identity: HostWorkerIdentity,
     executable: *const libc::c_char,
     argv: *const *const libc::c_char,
     envp: *const *const libc::c_char,
 ) -> ! {
     // SAFETY: these descriptors are open and their source values are above 2.
     if unsafe { libc::dup2(stdin_read, libc::STDIN_FILENO) } < 0 {
-        unsafe { libc::_exit(126) };
+        unsafe { libc::_exit(PRE_EXEC_FAILURE_EXIT_CODE) };
     }
     // SAFETY: these descriptors are open and their source values are above 2.
     if unsafe { libc::dup2(stdout_write, libc::STDOUT_FILENO) } < 0 {
-        unsafe { libc::_exit(126) };
+        unsafe { libc::_exit(PRE_EXEC_FAILURE_EXIT_CODE) };
     }
     // SAFETY: these descriptors are open and their source values are above 2.
     if unsafe { libc::dup2(stderr_fd, libc::STDERR_FILENO) } < 0 {
-        unsafe { libc::_exit(126) };
+        unsafe { libc::_exit(PRE_EXEC_FAILURE_EXIT_CODE) };
     }
-    // SAFETY: these are launch-owned descriptors and none is 0, 1, or 2.
-    unsafe { libc::close(stdin_read) };
-    unsafe { libc::close(stdin_write) };
-    unsafe { libc::close(stdout_read) };
-    unsafe { libc::close(stdout_write) };
-    unsafe { libc::close(stderr_fd) };
-    unsafe { libc::close(cgroup_fd) };
+    let mut security = SystemPreExecSecurityOperations;
+    if apply_pre_exec_security(&mut security, identity).is_err() {
+        // SAFETY: child setup failed; no Rust destructors may run after clone3.
+        unsafe { libc::_exit(PRE_EXEC_FAILURE_EXIT_CODE) };
+    }
     // SAFETY: argv/envp and C strings were fully built before clone3.
     unsafe { libc::execve(executable, argv, envp) };
     // SAFETY: execve only returns on failure; _exit avoids running inherited Rust state.
-    unsafe { libc::_exit(127) }
+    unsafe { libc::_exit(EXEC_FAILURE_EXIT_CODE) }
 }
 
 pub(super) fn terminate_worker_and_cleanup<T: WorkerTerminator>(
@@ -863,9 +1130,10 @@ fn unescape_mount_path(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CgroupV2Error, CgroupV2Fs, Clone3Invoker, LinuxCgroupV2, WorkerCgroupIdentity,
-        build_clone_args, launch_worker_in_cgroup_with, map_current_cgroup_to_mount,
-        terminate_worker_and_cleanup,
+        CgroupV2Error, CgroupV2Fs, Clone3Invoker, HostWorkerIdentity, LinuxCgroupV2,
+        PreExecSecurityFailure, PreExecSecurityOperations, WorkerCgroupIdentity,
+        apply_pre_exec_security, build_clone_args, launch_worker_in_cgroup_with,
+        map_current_cgroup_to_mount, terminate_worker_and_cleanup,
     };
     use crate::REQUIRED_POLICY;
     use std::collections::{HashMap, HashSet};
@@ -893,6 +1161,212 @@ mod tests {
         assert_eq!(args.tls, 0);
         assert_eq!(args.set_tid, 0);
         assert_eq!(args.set_tid_size, 0);
+    }
+
+    #[test]
+    fn child_applies_pre_exec_security_policy_before_execve() {
+        let source = include_str!("linux_cgroup.rs");
+        let child_start = source
+            .find("unsafe fn exec_worker_child")
+            .expect("child launch function must exist");
+        let child = &source[child_start..];
+        let policy_position = child
+            .find("apply_pre_exec_security")
+            .expect("child must apply the pre-exec security policy");
+        let exec_position = child
+            .find("libc::execve")
+            .expect("child must execute only after policy setup");
+
+        assert!(policy_position < exec_position);
+    }
+
+    #[test]
+    fn child_requires_close_range_for_all_descriptors_above_stdio() {
+        let source = include_str!("linux_cgroup.rs");
+        let implementation = source
+            .find("impl PreExecSecurityOperations for SystemPreExecSecurityOperations")
+            .expect("system descriptor policy must exist");
+        let start = source[implementation..]
+            .find("fn close_all_non_stdio_descriptors")
+            .map(|offset| implementation + offset)
+            .expect("descriptor policy must exist");
+        let end = source[start..]
+            .find("fn set_no_new_privileges")
+            .map(|offset| start + offset)
+            .expect("descriptor policy must be bounded");
+        let close_policy = &source[start..end];
+
+        assert!(close_policy.contains("SYS_close_range"));
+        assert!(close_policy.contains("3u32"));
+        assert!(close_policy.contains("u32::MAX"));
+        assert!(!close_policy.contains("fcntl"));
+    }
+
+    #[derive(Default)]
+    struct FakePreExecSecurityOperations {
+        calls: Vec<&'static str>,
+        fail_at: Option<(&'static str, usize)>,
+    }
+
+    impl FakePreExecSecurityOperations {
+        fn call(&mut self, name: &'static str) -> bool {
+            self.calls.push(name);
+            let occurrence = self.calls.iter().filter(|call| **call == name).count();
+            self.fail_at != Some((name, occurrence))
+        }
+    }
+
+    impl PreExecSecurityOperations for FakePreExecSecurityOperations {
+        fn close_all_non_stdio_descriptors(&mut self) -> bool {
+            self.call("close_fds")
+        }
+
+        fn set_no_new_privileges(&mut self) -> bool {
+            self.call("set_no_new_privileges")
+        }
+
+        fn no_new_privileges_is_set(&mut self) -> bool {
+            self.call("read_no_new_privileges")
+        }
+
+        fn set_gid(&mut self, _gid: libc::gid_t) -> bool {
+            self.call("set_gid")
+        }
+
+        fn gid_is_exact(&mut self, _gid: libc::gid_t) -> bool {
+            self.call("read_gid")
+        }
+
+        fn set_uid(&mut self, _uid: libc::uid_t) -> bool {
+            self.call("set_uid")
+        }
+
+        fn uid_is_exact(&mut self, _uid: libc::uid_t) -> bool {
+            self.call("read_uid")
+        }
+
+        fn clear_ambient_capabilities(&mut self) -> bool {
+            self.call("clear_ambient_capabilities")
+        }
+
+        fn drop_all_capabilities(&mut self) -> bool {
+            self.call("drop_capabilities")
+        }
+
+        fn capabilities_are_empty(&mut self) -> bool {
+            self.call("read_capabilities")
+        }
+    }
+
+    fn host_identity() -> HostWorkerIdentity {
+        HostWorkerIdentity {
+            uid: 1_000,
+            gid: 1_000,
+        }
+    }
+
+    #[test]
+    fn pre_exec_security_applies_host_identity_and_confirms_no_privileges() {
+        let mut operations = FakePreExecSecurityOperations::default();
+
+        assert_eq!(
+            apply_pre_exec_security(&mut operations, host_identity()),
+            Ok(())
+        );
+        assert_eq!(
+            operations.calls,
+            [
+                "close_fds",
+                "set_no_new_privileges",
+                "read_no_new_privileges",
+                "set_gid",
+                "read_gid",
+                "set_uid",
+                "read_uid",
+                "clear_ambient_capabilities",
+                "drop_capabilities",
+                "read_capabilities",
+                "read_no_new_privileges",
+            ]
+        );
+    }
+
+    #[test]
+    fn pre_exec_security_fails_closed_for_each_required_control() {
+        for (operation, occurrence, expected_failure) in [
+            (
+                "close_fds",
+                1,
+                PreExecSecurityFailure::DescriptorRestriction,
+            ),
+            (
+                "set_no_new_privileges",
+                1,
+                PreExecSecurityFailure::NoNewPrivileges,
+            ),
+            (
+                "read_no_new_privileges",
+                1,
+                PreExecSecurityFailure::NoNewPrivileges,
+            ),
+            (
+                "read_no_new_privileges",
+                2,
+                PreExecSecurityFailure::NoNewPrivileges,
+            ),
+            ("set_gid", 1, PreExecSecurityFailure::IdentityRestriction),
+            ("read_gid", 1, PreExecSecurityFailure::IdentityRestriction),
+            ("set_uid", 1, PreExecSecurityFailure::IdentityRestriction),
+            ("read_uid", 1, PreExecSecurityFailure::IdentityRestriction),
+            (
+                "clear_ambient_capabilities",
+                1,
+                PreExecSecurityFailure::CapabilityDrop,
+            ),
+            (
+                "drop_capabilities",
+                1,
+                PreExecSecurityFailure::CapabilityDrop,
+            ),
+            (
+                "read_capabilities",
+                1,
+                PreExecSecurityFailure::CapabilityDrop,
+            ),
+        ] {
+            let mut operations = FakePreExecSecurityOperations {
+                calls: Vec::new(),
+                fail_at: Some((operation, occurrence)),
+            };
+            assert_eq!(
+                apply_pre_exec_security(&mut operations, host_identity()),
+                Err(expected_failure),
+                "must fail closed when {operation} occurrence {occurrence} fails"
+            );
+            assert_eq!(operations.calls.last(), Some(&operation));
+        }
+    }
+
+    #[test]
+    fn pre_exec_identity_rejects_root_or_mixed_host_ids() {
+        assert!(HostWorkerIdentity::from_ids([0, 0, 0], [1_000; 3]).is_err());
+        assert!(HostWorkerIdentity::from_ids([1_000; 3], [0, 0, 0]).is_err());
+        assert!(HostWorkerIdentity::from_ids([1_000, 1_001, 1_000], [1_000; 3]).is_err());
+        assert!(HostWorkerIdentity::from_ids([1_000; 3], [1_000, 1_001, 1_000]).is_err());
+    }
+
+    #[test]
+    fn pre_exec_security_rejects_root_before_applying_controls() {
+        let mut operations = FakePreExecSecurityOperations::default();
+
+        assert_eq!(
+            apply_pre_exec_security(
+                &mut operations,
+                HostWorkerIdentity { uid: 0, gid: 1_000 },
+            ),
+            Err(PreExecSecurityFailure::IdentityRestriction)
+        );
+        assert!(operations.calls.is_empty());
     }
 
     struct FakeClone3 {
@@ -1148,6 +1622,7 @@ mod tests {
             &group,
             Path::new("/bundled/modus-plugin-worker"),
             "synthetic-challenge",
+            host_identity(),
             &mut invoker,
         );
 
@@ -1183,6 +1658,7 @@ mod tests {
             &group,
             Path::new("/bundled/modus-plugin-worker"),
             "synthetic-challenge",
+            host_identity(),
             &mut invoker,
         )
         .unwrap();
