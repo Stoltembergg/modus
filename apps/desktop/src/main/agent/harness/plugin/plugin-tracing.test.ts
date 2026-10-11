@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerTestCapability } from "../../../../../test-support/capability-registry-test-helpers";
 import { PiSdkRuntime } from "../../pi-sdk-runtime";
 import { HOST_CAPABILITY_REGISTRATION_AUTHORITY } from "../capability/capability-registration-authority";
 import { CapabilityRegistry } from "../capability/capability-registry";
@@ -15,7 +16,6 @@ import { PluginInstrumentation } from "./plugin-instrumentation";
 import { PluginStateStore } from "./plugin-state-store";
 import type { PluginTrace } from "./plugin-tracing-types";
 import type { PluginManifest } from "./plugin-types";
-import { registerTestCapability } from "../../../../../test-support/capability-registry-test-helpers";
 
 describe("Fase 12 — Plugin Tracing & Observability", () => {
   beforeEach(() => {

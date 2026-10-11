@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerTestCapability } from "../../../../../test-support/capability-registry-test-helpers";
 import { PiSdkRuntime } from "../../pi-sdk-runtime";
 import { HOST_CAPABILITY_REGISTRATION_AUTHORITY } from "../capability/capability-registration-authority";
 import { CapabilityRegistry, resetCapabilityRegistry } from "../capability/capability-registry";
@@ -25,7 +26,6 @@ import { groupsPluginManifest } from "./plugins/groups-plugin";
 import { memoryPluginManifest, memoryStore } from "./plugins/memory-plugin";
 import { modelRouterPluginManifest } from "./plugins/model-router-plugin";
 import { verifierPluginManifest } from "./plugins/verifier-plugin";
-import { registerTestCapability } from "../../../../../test-support/capability-registry-test-helpers";
 
 const runtimeElectronState = vi.hoisted(() => ({ userData: "" }));
 vi.mock("electron", () => ({ app: { getPath: () => runtimeElectronState.userData } }));

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerTestCapability } from "../../../../../test-support/capability-registry-test-helpers";
 import { PiSdkRuntime } from "../../pi-sdk-runtime";
 import { CapabilityRegistry } from "../capability/capability-registry";
 import {
@@ -19,7 +20,6 @@ import { PluginStateStore } from "./plugin-state-store";
 import { TestPluginCatalog } from "./plugin-test-catalog";
 import { PluginDependencyError, PluginLifecycleError, type PluginManifest } from "./plugin-types";
 import { UpdatePlanner } from "./update-planner";
-import { registerTestCapability } from "../../../../../test-support/capability-registry-test-helpers";
 
 const runtimeElectronState = vi.hoisted(() => ({ userData: "" }));
 vi.mock("electron", () => ({ app: { getPath: () => runtimeElectronState.userData } }));

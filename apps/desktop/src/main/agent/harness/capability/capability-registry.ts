@@ -110,9 +110,7 @@ export class CapabilityRegistry {
 
   public registerCapability(capability: Capability, authority?: symbol): void {
     if (authority !== HOST_CAPABILITY_REGISTRATION_AUTHORITY) {
-      throw new CapabilityConflictError(
-        "Capability registration is reserved for the host.",
-      );
+      throw new CapabilityConflictError("Capability registration is reserved for the host.");
     }
     const existing = this.#capabilities.get(capability.id);
     if (existing) {

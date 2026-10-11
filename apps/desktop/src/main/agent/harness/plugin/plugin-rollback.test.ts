@@ -6,6 +6,7 @@
 
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerTestCapability } from "../../../../../test-support/capability-registry-test-helpers";
 import { HOST_CAPABILITY_REGISTRATION_AUTHORITY } from "../capability/capability-registration-authority";
 import { CapabilityRegistry } from "../capability/capability-registry";
 import {
@@ -26,7 +27,6 @@ import { TestPluginCatalog } from "./plugin-test-catalog";
 import type { PluginManifest } from "./plugin-types";
 import { PluginSafeModeManager } from "./safe-mode";
 import type { PluginVersionManager } from "./version-manager";
-import { registerTestCapability } from "../../../../../test-support/capability-registry-test-helpers";
 
 describe("Fase 15 — Rollback e Safe Mode", () => {
   let store: PluginStateStore;

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerTestCapability } from "../../../../../test-support/capability-registry-test-helpers";
 import { PiSdkRuntime } from "../../pi-sdk-runtime";
 import { resetFeatureFlagOverrides, setFeatureFlagOverrides } from "../feature-flags";
 import { CapabilityDiscovery } from "./capability-discovery";
@@ -12,7 +13,6 @@ import {
   NoProviderError,
 } from "./capability-types";
 import { CORE_CAPABILITIES, registerCoreCapabilities } from "./core-capabilities";
-import { registerTestCapability } from "../../../../../test-support/capability-registry-test-helpers";
 
 describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
   let registry: CapabilityRegistry;
