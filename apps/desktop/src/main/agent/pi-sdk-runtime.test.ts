@@ -804,6 +804,17 @@ describe("PiSdkRuntime", () => {
     expect(Object.keys(runtime).filter((key) => internalApis.includes(key))).toEqual([]);
   });
 
+  it("keeps the external-plugin Pi tool unregistered without an enabled host catalog", async () => {
+    const { EXTERNAL_PLUGIN_INVOKE_TOOL } = await import("./tools/external-plugin-tools");
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_PLUGIN_ISOLATION: false });
+
+    new PiSdkRuntime();
+
+    expect(
+      toolRegistry.getCustomToolDefinitions("chat").map((definition) => definition.name),
+    ).not.toContain(EXTERNAL_PLUGIN_INVOKE_TOOL);
+  });
+
   it("connects plugin tracing to the private capability registry only when enabled", async () => {
     const capabilityModule = await import("./harness/capability/capability-registry");
     const setInstrumentation = vi.spyOn(
@@ -828,6 +839,104 @@ describe("PiSdkRuntime", () => {
     await enabledRuntime.waitForPlugins();
     expect(setInstrumentation).toHaveBeenCalledOnce();
     await enabledRuntime.closePluginLifecycleStore();
+  });
+
+  it("routes a Pi SDK external-plugin tool through the permission broker and supervisor", async () => {
+    const { requestTool, sessionAt } = await useOfflinePiToolSessions();
+    const { EXTERNAL_PLUGIN_INVOKE_TOOL, unregisterExternalPluginTool } = await import(
+      "./tools/external-plugin-tools"
+    );
+    const sessionId = `external-plugin-session-${crypto.randomUUID()}`;
+    const workspaceId = `external-plugin-workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing-plugin-session.jsonl"));
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_CAPABILITY_REGISTRY: true,
+      MODUS_PLUGINS: true,
+      MODUS_PLUGIN_LIFECYCLE: true,
+      MODUS_PLUGIN_ISOLATION: true,
+    });
+
+    const target = {
+      pluginId: "fixture/plugin",
+      pluginVersion: "1.0.0",
+      artifactSha256: "a".repeat(64),
+      artifactOrigin: "fixture-host-catalog",
+      trustLevel: "verified" as const,
+      generation: 1,
+      capabilities: ["plugin.transform"],
+      hostGrantedCapabilities: ["memory.read"],
+    };
+    const { LinuxPluginWorkerSupervisor } = await import(
+      "./harness/plugin/linux-plugin-worker-supervisor"
+    );
+    const supervisor = vi
+      .spyOn(LinuxPluginWorkerSupervisor.prototype, "execute")
+      .mockImplementation(async () => ({ result: { output: "synthetic plugin result" } }));
+    const runtime = new PiSdkRuntime({
+      externalPluginCatalog: {
+        resolve: (pluginId) => (pluginId === target.pluginId ? target : undefined),
+      },
+    });
+    await runtime.waitForPlugins();
+
+    const window = createWindowStub();
+    const events: AgentEvent[] = [];
+    runtime.onEvent((event) => events.push(event));
+    requestTool(EXTERNAL_PLUGIN_INVOKE_TOOL, {
+      pluginId: target.pluginId,
+      capability: "plugin.transform",
+      payload: { text: "synthetic input" },
+    });
+
+    let pendingTurn: ReturnType<typeof runtime.prompt> | undefined;
+    try {
+      pendingTurn = runtime.prompt(window, {
+        context: [],
+        message: "Use the fixture plugin.",
+        sessionId,
+      });
+      await vi.waitFor(() => {
+        expect(events.some((event) => event.type === "permission.requested")).toBe(true);
+      });
+      const approval = events.find((event) => event.type === "permission.requested");
+      if (approval?.type !== "permission.requested") {
+        throw new Error("Expected an explicit external-plugin permission request.");
+      }
+      expect(approval.request.action).toBe("mcp.call");
+      expect(approval.request.target).toBe("fixture/plugin:plugin.transform");
+      expect(supervisor).not.toHaveBeenCalled();
+
+      permissionBroker.resolvePermissionRequest(approval.request.id, "allow-once");
+      await pendingTurn;
+
+      expect(supervisor).toHaveBeenCalledOnce();
+      expect(supervisor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pluginId: target.pluginId,
+          sessionId,
+          workspaceId,
+          capability: "plugin.transform",
+          payload: { text: "synthetic input" },
+        }),
+        expect.any(AbortSignal),
+      );
+      expect(supervisor.mock.calls[0]?.[0]).not.toHaveProperty("capabilities");
+      expect(
+        sessionAt().state.messages.some(
+          (message) =>
+            message.role === "toolResult" &&
+            message.content.some(
+              (block) => block.type === "text" && block.text.includes("synthetic plugin result"),
+            ),
+        ),
+      ).toBe(true);
+    } finally {
+      await pendingTurn?.catch(() => undefined);
+      await runtime.releaseRuntime(sessionId);
+      await runtime.closePluginLifecycleStore();
+      unregisterExternalPluginTool();
+    }
   });
 
   it("registers group mailbox tools into the Pi tool registry when enabled", async () => {

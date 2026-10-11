@@ -70,7 +70,11 @@ import {
   recordProjectMemoryCompaction,
 } from "../memory/project-memory-service";
 import { maybeNotifyAgentEvent } from "../notifications/agent-notifications";
-import { denyPendingPermissionRequestsForSession } from "../permissions/permission-broker";
+import {
+  denyPendingPermissionRequestsForSession,
+  requestPermission,
+  resolvePermissionRequest,
+} from "../permissions/permission-broker";
 import {
   applyPlanAcceptanceEvidenceById,
   fingerprintPlanSource,
@@ -164,6 +168,13 @@ import {
   PluginStateStore,
   SecurityAuditLogger,
 } from "./harness/plugin";
+import { LinuxPluginWorkerSupervisor } from "./harness/plugin/linux-plugin-worker-supervisor";
+import {
+  type HostPluginExecutionCatalog,
+  PluginExecutionDispatcher,
+  type PluginExecutionSupervisor,
+  type PluginExecutionSupervisorRequest,
+} from "./harness/plugin/plugin-execution-dispatcher";
 import {
   estimateProjectImpactWithStore,
   upsertProjectModelChangedPaths,
@@ -245,6 +256,12 @@ import { describeAgentShellForPrompt, resolveAgentShell } from "./shell-resolver
 import { resolveAvailableSubagent, resolveSubagentsPrompt } from "./subagents-config";
 import { registerAppTools } from "./tools/app-tools";
 import { registerBrowserTools } from "./tools/browser-tools";
+import {
+  EXTERNAL_PLUGIN_INVOKE_TOOL,
+  type ExternalPluginInvokeInput,
+  registerExternalPluginTool,
+  unregisterExternalPluginTool,
+} from "./tools/external-plugin-tools";
 import { registerFastCodebaseTools } from "./tools/fast-codebase-tools";
 import {
   GROUP_MAILBOX_ACK_TOOL,
@@ -899,12 +916,19 @@ function composeSubagentPrompt(input: {
 /** Filled by `executePrompt` so `prompt()` can report how its turn ended. */
 type PromptProbe = { runId?: string; joined?: boolean };
 
+export type PiSdkRuntimeOptions = {
+  /** Host-owned catalog. Model input can select an entry but cannot define its identity. */
+  externalPluginCatalog?: HostPluginExecutionCatalog;
+};
+
 export class PiSdkRuntime implements AgentRuntime {
   #harnessKernel = new HarnessKernel();
   #capabilityRegistry: CapabilityRegistry = new CapabilityRegistry();
   #pluginLoader: PluginLoader = new PluginLoader(this.#capabilityRegistry);
   #pluginStateStore?: PluginStateStore | undefined;
   #pluginLifecycleService?: PluginLifecycleService | undefined;
+  #externalPluginCatalog?: HostPluginExecutionCatalog | undefined;
+  #externalPluginSupervisor: PluginExecutionSupervisor;
   #bootstrapPromise?: Promise<void> | undefined;
   #pluginSyncPromise?: Promise<string[]> | undefined;
   private sessions = new Map<string, SdkRuntimeSession>();
@@ -949,7 +973,11 @@ export class PiSdkRuntime implements AgentRuntime {
     }
   >();
 
-  constructor() {
+  constructor(options: PiSdkRuntimeOptions = {}) {
+    this.#externalPluginCatalog = options.externalPluginCatalog;
+    const linuxSupervisor = new LinuxPluginWorkerSupervisor();
+    this.#externalPluginSupervisor = (request, signal) => linuxSupervisor.execute(request, signal);
+
     this.#harnessKernel.registerHook(defaultToolCallRepeatGuardHook);
     this.#harnessKernel.registerHook(defaultToolResultRepeatGuardHook);
     this.#harnessKernel.registerHook(promptBuildHook);
@@ -976,6 +1004,18 @@ export class PiSdkRuntime implements AgentRuntime {
     registerWaitTools(this);
     registerGroupTools();
     registerGroupMailboxTools();
+
+    if (
+      process.platform === "linux" &&
+      this.#externalPluginCatalog &&
+      isFeatureFlagEnabled("MODUS_PLUGIN_ISOLATION")
+    ) {
+      registerExternalPluginTool({
+        invoke: (input) => this.#invokeExternalPluginCapability(input),
+      });
+    } else {
+      unregisterExternalPluginTool();
+    }
 
     if (isFeatureFlagEnabled("MODUS_CAPABILITY_REGISTRY")) {
       registerCoreCapabilities(this.#capabilityRegistry);
@@ -1025,6 +1065,119 @@ export class PiSdkRuntime implements AgentRuntime {
         );
       }
     }
+  }
+
+  async #invokeExternalPluginCapability(input: ExternalPluginInvokeInput): Promise<unknown> {
+    if (process.platform !== "linux") {
+      throw new Error(`External plugin execution is blocked on ${process.platform}.`);
+    }
+    if (!isFeatureFlagEnabled("MODUS_PLUGIN_ISOLATION")) {
+      throw new Error("External plugin execution is disabled by MODUS_PLUGIN_ISOLATION.");
+    }
+    const catalog = this.#externalPluginCatalog;
+    if (!catalog) {
+      throw new Error("No host-owned external plugin catalog is configured.");
+    }
+
+    // This identity comes only from the runtime's AsyncLocalStorage context.
+    // The model supplies plugin/capability/payload, never session, workspace, run,
+    // trust, artifact, generation, or grants.
+    const context = input.context;
+    const runId = context.runId;
+    const runtimeSession = this.sessions.get(context.sessionId);
+    const activeRun = getActiveAgentRun(context.sessionId);
+    if (
+      !runtimeSession ||
+      runtimeSession.info.workspaceId !== context.workspaceId ||
+      !runId ||
+      activeRun?.id !== runId ||
+      activeRun.status !== "running" ||
+      this.cancellingRuns.has(runId) ||
+      !context.emit
+    ) {
+      throw new Error("External plugin invocation has no current host-owned session and run.");
+    }
+
+    const target = catalog.resolve(input.pluginId);
+    if (!target || target.pluginId !== input.pluginId) {
+      throw new Error("Plugin is not present in the host-owned external plugin catalog.");
+    }
+
+    const authorize = async (_request: PluginExecutionSupervisorRequest) => {
+      if (input.signal?.aborted) {
+        throw input.signal.reason instanceof Error
+          ? input.signal.reason
+          : new Error("External plugin invocation was cancelled before approval.");
+      }
+
+      let permissionRequestId: string | undefined;
+      const permission = requestPermission({
+        sessionId: context.sessionId,
+        runId,
+        workspaceId: context.workspaceId,
+        toolName: EXTERNAL_PLUGIN_INVOKE_TOOL,
+        action: "mcp.call",
+        target: `${target.pluginId}:${input.capability}`,
+        reason:
+          "Allow this external plugin capability to be sent to the isolated Linux supervisor?",
+        emit: (event) => {
+          if (event.type === "permission.requested") {
+            permissionRequestId = event.request.id;
+          }
+          runtimeSession.emit(event);
+        },
+      });
+
+      let onAbort: (() => void) | undefined;
+      try {
+        const decision = input.signal
+          ? await Promise.race([
+              permission,
+              new Promise<never>((_resolve, reject) => {
+                onAbort = () => {
+                  if (permissionRequestId) {
+                    resolvePermissionRequest(permissionRequestId, "deny");
+                  }
+                  reject(
+                    input.signal?.reason instanceof Error
+                      ? input.signal.reason
+                      : new Error(
+                          "External plugin invocation was cancelled while awaiting approval.",
+                        ),
+                  );
+                };
+                input.signal?.addEventListener("abort", onAbort, { once: true });
+                if (input.signal?.aborted) onAbort();
+              }),
+            ])
+          : await permission;
+        return (
+          decision.decision !== "deny" &&
+          this.sessions.get(context.sessionId) === runtimeSession &&
+          getActiveAgentRun(context.sessionId)?.id === runId &&
+          !this.cancellingRuns.has(runId) &&
+          !input.signal?.aborted
+        );
+      } finally {
+        if (onAbort) input.signal?.removeEventListener("abort", onAbort);
+      }
+    };
+
+    const dispatcher = new PluginExecutionDispatcher({
+      authorize,
+      execute: this.#externalPluginSupervisor,
+    });
+    return await dispatcher.dispatch({
+      target,
+      context: {
+        sessionId: context.sessionId,
+        workspaceId: context.workspaceId,
+        runId,
+      },
+      capability: input.capability,
+      payload: input.payload,
+      ...(input.signal ? { signal: input.signal } : {}),
+    });
   }
 
   #getPluginStateStore(): PluginStateStore {

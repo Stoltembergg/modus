@@ -97,6 +97,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "modus-plugin-execution-supervisor"
+version = "0.1.0"
+dependencies = [
+ "modus-plugin-execution-protocol",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "modus-pty-host"
 version = "0.1.0"
 dependencies = [

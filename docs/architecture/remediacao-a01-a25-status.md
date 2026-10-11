@@ -3250,3 +3250,54 @@ streams retain the existing complete-stream expansion behavior.
   that this does not cap the complete `AgentEventPage`: synthesized prompt
   backfill and optional summary/activity events remain outside this budget.
   Remote CI for `5fbda34` is pending. No probe or adversarial scenario ran.
+
+### A01–A04 Linux vertical integration checkpoint
+
+On top of the protocol-only baseline, `PiSdkRuntime` now has a structural
+external-call path through a Pi SDK tool, host permission broker,
+`PluginExecutionDispatcher`, and a Linux-only supervisor IPC client. The tool
+is registered only when isolation is explicitly enabled and a host-owned
+catalog is supplied. The default production singleton supplies no external
+catalog, and `MODUS_PLUGIN_ISOLATION` remains false by default, so external
+execution stays unavailable without changing trusted in-process Harness or
+built-in plugin behavior. The tool derives session, workspace, and run identity
+from the runtime's active tool context; the model provides only plugin id,
+capability, and bounded JSON payload.
+
+The packaged Linux supervisor validates its bounded request envelope and
+currently denies every admission because no Linux process adapter enforces the
+required controls. It does not create a worker or load plugin bytes. The shared
+protocol v3 now includes host-to-worker invocation and bounded result frames;
+the supervisor library routes an assessed synthetic transport through
+`WorkerSession` and maps success, failure, and cancellation. Those fixture
+controls are test-only and are not an OS isolation assessment. The Linux
+supervisor binary is built and packaged only by Linux build/package paths; the
+Windows and macOS packages are unchanged and continue to deny external
+execution.
+
+- RED/GREEN evidence: the dispatcher tests first failed when dispatch was
+  unimplemented (**3 failed**) and passed after the host identity, broker, and
+  supervisor ordering was added (**3 passed**). The productive Pi SDK fixture
+  exercised the tool call, explicit `mcp.call` approval, synthetic supervisor
+  result, and returned tool result (**2 focused tests passed**, including the
+  default-off/no-catalog gate). The Linux IPC client tests use a mocked child
+  process only; request correlation, no-shell launch options, deny response,
+  and cancellation passed (**2 tests**). The dispatcher suite passed **3/3**.
+- Desktop TypeScript typecheck passed. Biome exited successfully with no
+  errors; it reported **9 warnings** at unchanged lines in the existing
+  `pi-sdk-runtime.ts` and `pi-sdk-runtime.test.ts`. `git diff --check` passed.
+  Rust compilation and protocol/supervisor tests were not run locally because
+  `cargo`/`rustc` are unavailable in the current environment. No real process
+  worker, external plugin, confinement probe, or enforcement scenario was
+  executed.
+- Remaining blockers: Linux has no installed cgroup/seccomp/Landlock policy,
+  no strict RSS/CPU/process/handle enforcement, and no verified process-tree
+  termination/reap adapter. The deny-only supervisor therefore does not reach
+  `WorkerSession` in production; that connection is proven only with a
+  synthetic assessed transport. The current desktop client starts one
+  short-lived deny-only supervisor per request; a future admitted worker must
+  not reuse this lifecycle until the hostcall limiter registry and worker
+  lifecycle are made persistent and shared across sessions/runs. Windows and
+  macOS remain blocked and were not modified. This checkpoint establishes
+  structural wiring and fail-closed admission, not isolation or safe external
+  plugin execution.

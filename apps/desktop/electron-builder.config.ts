@@ -60,6 +60,14 @@ const config: Configuration = {
       from: `../../target/release/${ptyHostBinary}`,
       to: `bin/${ptyHostBinary}`,
     },
+    ...(process.platform === "linux"
+      ? [
+          {
+            from: "../../target/release/modus-plugin-execution-supervisor",
+            to: "bin/modus-plugin-execution-supervisor",
+          },
+        ]
+      : []),
     ...(existsSync(fastCodebaseResource)
       ? [
           {

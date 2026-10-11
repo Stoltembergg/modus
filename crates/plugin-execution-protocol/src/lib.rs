@@ -27,9 +27,10 @@ use serde_json::Value;
 pub mod resource_policy;
 pub mod worker_admission;
 
-/// Version 2 adds an explicit cancellation response so a worker can distinguish
-/// cancellation from failure. Version 1 is rejected during handshake.
-pub const PROTOCOL_VERSION: u16 = 2;
+/// Version 3 adds host-dispatched plugin execution and an explicit worker
+/// result frame. Version 2 added distinct cancellation responses; version 1
+/// and 2 are rejected during handshake.
+pub const PROTOCOL_VERSION: u16 = 3;
 /// Maximum on-wire frame size, including the four-byte length prefix.
 pub const MAX_IPC_FRAME_BYTES: usize = 256 * 1024;
 pub const MAX_RESULT_BYTES: usize = 64 * 1024;
@@ -59,6 +60,20 @@ pub enum WorkerFrame {
         capability: String,
         payload: Value,
     },
+    ExecutionComplete {
+        protocol_version: u16,
+        sequence: u64,
+        outcome: WorkerExecutionOutcome,
+    },
+}
+
+/// Final result for one host-dispatched plugin capability invocation.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WorkerExecutionOutcome {
+    Success { result: Value },
+    Failure { error: String },
+    Cancelled,
 }
 
 /// Private worker-to-host input type. External callers cannot deserialize a
@@ -76,6 +91,11 @@ enum InboundWorkerFrame {
         capability: String,
         payload: Value,
     },
+    ExecutionComplete {
+        protocol_version: u16,
+        sequence: u64,
+        outcome: WorkerExecutionOutcome,
+    },
 }
 
 /// Message schema for host responses. It is not accepted as worker input.
@@ -84,6 +104,12 @@ enum InboundWorkerFrame {
 pub enum HostFrame {
     Ready {
         protocol_version: u16,
+    },
+    Execute {
+        protocol_version: u16,
+        sequence: u64,
+        capability: String,
+        payload: Value,
     },
     InvocationSucceeded {
         protocol_version: u16,
@@ -115,6 +141,8 @@ pub enum ProtocolError {
     UnsupportedVersion,
     IoFailure(io::ErrorKind),
     WorkerTerminationFailed(io::ErrorKind),
+    ExecutionAlreadyActive,
+    ExecutionResultTooLarge,
     WriteDeadlineExceeded,
     AllocationFailed,
     ReadDeadlineExceeded,
@@ -292,6 +320,10 @@ impl PartialEq for AuthorizedInvocation {
 pub enum DispatchEvent {
     Ready,
     Invocation(AuthorizedInvocation),
+    ExecutionComplete {
+        sequence: u64,
+        outcome: InvocationOutcome,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -327,6 +359,8 @@ struct Dispatcher {
     granted_capabilities: BTreeSet<String>,
     state: SessionState,
     next_sequence: u64,
+    next_execution_sequence: u64,
+    active_execution: Option<u64>,
     pending: BTreeMap<u64, Arc<AtomicBool>>,
 }
 
@@ -346,6 +380,8 @@ impl Dispatcher {
             granted_capabilities,
             state: SessionState::AwaitingHello,
             next_sequence: 1,
+            next_execution_sequence: 1,
+            active_execution: None,
             pending: BTreeMap::new(),
         }
     }
@@ -489,7 +525,73 @@ impl Dispatcher {
                     generation_active,
                 }))
             }
+            InboundWorkerFrame::ExecutionComplete {
+                protocol_version,
+                sequence,
+                outcome,
+            } => {
+                if self.state != SessionState::Ready {
+                    return Err(ProtocolError::InvalidState);
+                }
+                if protocol_version != PROTOCOL_VERSION {
+                    return Err(ProtocolError::UnsupportedVersion);
+                }
+                if self.active_execution != Some(sequence) || !self.pending.is_empty() {
+                    return Err(ProtocolError::OutOfOrder);
+                }
+                let outcome = match outcome {
+                    WorkerExecutionOutcome::Success { result } => {
+                        serialize_bounded(
+                            &result,
+                            MAX_RESULT_BYTES,
+                            ProtocolError::ExecutionResultTooLarge,
+                        )?;
+                        InvocationOutcome::Success(result)
+                    }
+                    WorkerExecutionOutcome::Failure { error } => {
+                        serialize_bounded(
+                            &error,
+                            MAX_RESULT_BYTES,
+                            ProtocolError::ExecutionResultTooLarge,
+                        )?;
+                        InvocationOutcome::Failure(error)
+                    }
+                    WorkerExecutionOutcome::Cancelled => InvocationOutcome::Cancelled,
+                };
+                self.active_execution = None;
+                Ok(DispatchEvent::ExecutionComplete { sequence, outcome })
+            }
         }
+    }
+
+    fn begin_execution(
+        &mut self,
+        capability: String,
+        payload: Value,
+    ) -> Result<Vec<u8>, ProtocolError> {
+        if self.state != SessionState::Ready {
+            return Err(ProtocolError::InvalidState);
+        }
+        if self.active_execution.is_some() {
+            return Err(ProtocolError::ExecutionAlreadyActive);
+        }
+        if !valid_capability(&capability) {
+            return Err(ProtocolError::InvalidCapability);
+        }
+        serialize_bounded(&payload, MAX_RESULT_BYTES, ProtocolError::ResultTooLarge)?;
+        let sequence = self.next_execution_sequence;
+        let next_sequence = sequence
+            .checked_add(1)
+            .ok_or(ProtocolError::SequenceOverflow)?;
+        let frame = encode_host_frame(&HostFrame::Execute {
+            protocol_version: PROTOCOL_VERSION,
+            sequence,
+            capability,
+            payload,
+        })?;
+        self.next_execution_sequence = next_sequence;
+        self.active_execution = Some(sequence);
+        Ok(frame)
     }
 
     /// Encode the host result for one exact, outstanding invocation.
@@ -549,6 +651,10 @@ impl Dispatcher {
 
     fn is_closed(&self) -> bool {
         self.state == SessionState::Closed
+    }
+
+    fn is_ready(&self) -> bool {
+        self.state == SessionState::Ready
     }
 
     /// Frozen approved policy associated with this dispatcher's validated
@@ -689,6 +795,61 @@ impl<T: WorkerTransport> WorkerSession<T> {
         Ok(())
     }
 
+    /// Dispatch one host-owned capability invocation to this worker, broker
+    /// every worker-to-host request through the supplied callback, and return
+    /// only a bounded worker result. The session is always terminated and
+    /// reaped after the single execution, including failure and cancellation.
+    pub fn execute_until(
+        &mut self,
+        capability: impl Into<String>,
+        payload: Value,
+        deadline: Instant,
+        mut broker: impl FnMut(AuthorizedInvocation) -> InvocationOutcome,
+    ) -> Result<InvocationOutcome, ProtocolError> {
+        if !self.dispatcher.is_ready() {
+            match self.receive_until(deadline) {
+                Ok(Some(DispatchEvent::Ready)) => {}
+                Ok(_) => return Err(self.finish_error(ProtocolError::InvalidState)),
+                Err(error) => return Err(error),
+            }
+        }
+
+        let frame = match self.dispatcher.begin_execution(capability.into(), payload) {
+            Ok(frame) => frame,
+            Err(error) => return Err(self.finish_error(error)),
+        };
+        let write_deadline = bounded_deadline(
+            deadline,
+            self.dispatcher.approved_policy().startup_timeout_ms,
+        );
+        let write_result = match self.transport.as_mut() {
+            Some(transport) => write_worker_frame(transport, &frame, write_deadline),
+            None => return Err(self.finish_error(ProtocolError::InvalidState)),
+        };
+        if let Err(error) = write_result {
+            return Err(self.finish_error(error));
+        }
+
+        loop {
+            match self.receive_until(deadline) {
+                Ok(Some(DispatchEvent::Invocation(invocation))) => {
+                    let sequence = invocation.sequence();
+                    let outcome = broker(invocation);
+                    self.complete_until(sequence, outcome, deadline)?;
+                }
+                Ok(Some(DispatchEvent::ExecutionComplete { outcome, .. })) => {
+                    self.shutdown_until(deadline)?;
+                    return Ok(outcome);
+                }
+                Ok(Some(DispatchEvent::Ready)) => {
+                    return Err(self.finish_error(ProtocolError::InvalidState));
+                }
+                Ok(None) => return Err(ProtocolError::InvalidState),
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
     /// Revoke every pending invocation, request non-blocking process-tree
     /// termination, and wait only until the supplied reap deadline.
     pub fn shutdown_until(&mut self, deadline: Instant) -> Result<(), ProtocolError> {
@@ -810,6 +971,23 @@ pub fn encode_worker_frame(message: &WorkerFrame) -> Result<Vec<u8>, ProtocolErr
             }
             serialize_bounded(payload, MAX_RESULT_BYTES, ProtocolError::ResultTooLarge)?;
         }
+        WorkerFrame::ExecutionComplete { outcome, .. } => match outcome {
+            WorkerExecutionOutcome::Success { result } => {
+                serialize_bounded(
+                    result,
+                    MAX_RESULT_BYTES,
+                    ProtocolError::ExecutionResultTooLarge,
+                )?;
+            }
+            WorkerExecutionOutcome::Failure { error } => {
+                serialize_bounded(
+                    error,
+                    MAX_RESULT_BYTES,
+                    ProtocolError::ExecutionResultTooLarge,
+                )?;
+            }
+            WorkerExecutionOutcome::Cancelled => {}
+        },
         _ => {}
     }
     encode_message(message)
@@ -823,6 +1001,9 @@ pub fn decode_host_frame(frame: &[u8]) -> Result<HostFrame, ProtocolError> {
     let message: HostFrame = decode_message(frame)?;
     let protocol_version = match &message {
         HostFrame::Ready {
+            protocol_version, ..
+        }
+        | HostFrame::Execute {
             protocol_version, ..
         }
         | HostFrame::InvocationSucceeded {
@@ -840,6 +1021,14 @@ pub fn decode_host_frame(frame: &[u8]) -> Result<HostFrame, ProtocolError> {
     }
 
     match &message {
+        HostFrame::Execute {
+            capability, payload, ..
+        } => {
+            if !valid_capability(capability) {
+                return Err(ProtocolError::InvalidCapability);
+            }
+            serialize_bounded(payload, MAX_RESULT_BYTES, ProtocolError::ResultTooLarge)?;
+        }
         HostFrame::InvocationSucceeded { result, .. } => {
             serialize_bounded(result, MAX_RESULT_BYTES, ProtocolError::ResultTooLarge)?;
         }
@@ -1547,6 +1736,7 @@ mod tests {
         match event {
             DispatchEvent::Invocation(invocation) => invocation,
             DispatchEvent::Ready => panic!("expected invocation"),
+            DispatchEvent::ExecutionComplete { .. } => panic!("unexpected execution result"),
         }
     }
 
@@ -1861,32 +2051,33 @@ mod tests {
     }
 
     #[test]
-    fn rejects_v1_worker_before_negotiating_the_v2_cancellation_frame() {
-        let mut dispatcher = new_dispatcher();
-        let v1_hello = encode_worker_frame(&WorkerFrame::Hello {
-            protocol_version: 1,
-            challenge: CHALLENGE.to_string(),
-        })
-        .unwrap();
+    fn rejects_v1_and_v2_workers_before_negotiating_the_v3_execution_frames() {
+        for protocol_version in [1, 2] {
+            let mut dispatcher = new_dispatcher();
+            let old_hello = encode_worker_frame(&WorkerFrame::Hello {
+                protocol_version,
+                challenge: CHALLENGE.to_string(),
+            })
+            .unwrap();
 
-        assert_eq!(
-            dispatcher.receive(&v1_hello),
-            Err(ProtocolError::UnsupportedVersion),
-        );
-        assert!(dispatcher.is_closed());
+            assert_eq!(
+                dispatcher.receive(&old_hello),
+                Err(ProtocolError::UnsupportedVersion),
+            );
+            assert!(dispatcher.is_closed());
+        }
     }
 
     #[test]
-    fn rejects_v1_host_responses_after_the_v2_protocol_upgrade() {
-        let v1_response = encode_message(&HostFrame::Ready {
-            protocol_version: 1,
-        })
-        .unwrap();
+    fn rejects_v1_and_v2_host_responses_after_the_v3_protocol_upgrade() {
+        for protocol_version in [1, 2] {
+            let old_response = encode_message(&HostFrame::Ready { protocol_version }).unwrap();
 
-        assert_eq!(
-            decode_host_frame(&v1_response),
-            Err(ProtocolError::UnsupportedVersion),
-        );
+            assert_eq!(
+                decode_host_frame(&old_response),
+                Err(ProtocolError::UnsupportedVersion),
+            );
+        }
     }
 
     #[test]
