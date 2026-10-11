@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use modus_plugin_execution_protocol::resource_policy::APPROVED_RESOURCE_POLICY;
 use modus_plugin_execution_protocol::worker_admission::{
     AdmissionAssessmentToken, AssessedWorker, EnforcementControl, HostAuthorization,
-    PlatformAssessment, WorkerTransport,
+    PlatformAssessment, PluginHostcallRateLimiter, WorkerTransport,
 };
 use modus_plugin_execution_protocol::{
     DispatchEvent, HostFrame, HostProvenance, HostTrustLevel, InvocationOutcome, PROTOCOL_VERSION,
@@ -131,9 +131,15 @@ fn session(
     };
     let worker = unsafe { AssessedWorker::from_adapter(assessment, transport) };
     let token = AdmissionAssessmentToken::validate(worker, provenance.clone()).unwrap();
+    let hostcall_rate_limiter = PluginHostcallRateLimiter::for_plugin(&provenance);
     let authorization = unsafe {
-        HostAuthorization::from_permission_broker(provenance.clone(), ["memory.read".to_owned()])
-    };
+        HostAuthorization::from_permission_broker(
+            provenance.clone(),
+            ["memory.read".to_owned()],
+            hostcall_rate_limiter,
+        )
+    }
+    .unwrap();
     let session = WorkerSession::new(token, authorization, CHALLENGE).unwrap();
     (
         session,
