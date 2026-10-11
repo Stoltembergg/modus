@@ -2088,8 +2088,8 @@ cancellation follow-up above.
 | Finding | Current status | Implementation state / next evidence |
 |---|---|---|
 | A01 | Partially mitigated | Pi chat/review fail closed and no longer auto-load project/user extensions. The shared protocol validates bounded frames and strict schemas; v2 adds distinct cancellation and rejects v1. `WorkerSession` now owns the exact assessed transport, non-cloneable admission token, and mandatory dispatcher; synthetic integration tests cover the handshake, invocation/result round-trip, timeout, cleanup, and authorization paths. No production executor or platform adapter exists, and this API is not proof of OS confinement. Production wiring and hostile execution proof remain blocked. |
-| A02 | Partially mitigated | The shared policy records approved CPU, memory, time, output, IPC, process, hostcall and concurrency ceilings. The shared session clips I/O deadlines and fixes one total shutdown/reap cutoff; termination and reap errors remain observable. The dispatcher now reserves the approved rolling one-second hostcall budget before granting each invocation, using a host-owned limiter passed through authorization. Synthetic tests cover the 256-call ceiling, cross-session reuse, one-second expiry, identity mismatch and concurrent reservations. This is protocol logic only: there is no production broker/limiter registry or platform adapter, so the host must reuse one limiter per plugin; the per-invocation ceiling remains undefined because the protocol lacks an invocation boundary. No platform adapter applies OS resource limits or confirms process-tree termination. External execution remains blocked; enforcement probes were not run. |
-| A03 | Partially mitigated | Chat/review auto-discovery remains blocked. Host catalog lookups, built-in catalog entries, loader results, and capability provider queries expose immutable metadata descriptors without lifecycle/implementation callbacks. `PluginLoader`, `PluginLifecycleService`, and `CapabilityRegistry` keep trust/authorization maps, checkpoints, provenance state, source/executor references, and internal helpers in ECMAScript `#private` fields/methods; unused loader/service registry accessors were removed after callsite search. Exact source references remain within trusted in-process wiring. The shared admission token binds the assessed transport to host provenance, and one-use authorization must match plugin/artifact/session/workspace/run/generation. No production adapter or broker caller exists; the unsafe adapter boundary does not independently prove provenance or isolation. |
+| A02 | Partially mitigated | The shared policy records approved CPU, memory, time, output, IPC, process, hostcall and concurrency ceilings. `WorkerSession` clips I/O deadlines and uses one shutdown/reap cutoff; termination and reap errors remain observable. The dispatcher reserves the approved rolling one-second hostcall budget before granting an invocation. `PluginHostcallRateLimiterRegistry` shares the budget by host-resolved plugin ID across sessions when the runtime reuses one registry; tests cover cross-session reuse, expiry, isolation, concurrent reservations, and over-budget worker closure/reap. This remains protocol logic: there is no production broker/runtime caller or platform adapter. The 64-hostcalls-per-invocation value is not enforced because the protocol has no invocation boundary. No platform adapter enforces the approved OS resource limits or proves full process-tree termination. External execution remains blocked; enforcement probes were not run. |
+| A03 | Partially mitigated | Chat/review auto-discovery remains blocked. Host catalog lookups, built-in catalog entries, loader results, and capability provider queries expose immutable metadata descriptors without lifecycle/implementation callbacks. `PluginLoader`, `PluginLifecycleService`, and `CapabilityRegistry` keep trust/authorization maps, checkpoints, provenance state, source/executor references, and internal helpers in ECMAScript `#private` fields/methods; unused loader/service registry accessors were removed after callsite search. `CapabilityRegistry.registerCapability` now requires the host-only registration symbol. Exact source references remain within trusted in-process wiring. The shared admission token binds the assessed transport to host provenance, and one-use authorization must match plugin/artifact/session/workspace/run/generation. No production adapter or broker caller exists; the unsafe adapter boundary does not independently prove provenance or isolation. |
 | A04 | Partially mitigated | External Pi extension ingress is disabled for chat and review; the review callsite guard covers loader flags and session creation. Registry provider execution remains dispatched through `CapabilityRegistry.execute`; rollback uses opaque registry-owned checkpoints. Public catalog/registry lookup APIs no longer return implementation references. The shared `WorkerSession` validates exact grants and routes frames through its private dispatcher in safe synthetic tests. Built-ins remain trusted in-process and there is no OS-backed external dispatcher or lifecycle integration. |
 | A05 | Partially mitigated; unpreemptible WASM timeouts now fail closed | Both `WasmCapabilityHost.executeWasm` and its public `createInstance` factory reject positive `timeoutMs` before compilation/instantiation because synchronous in-process WASM cannot be preempted by a JavaScript timer. Trusted in-process calls without a timeout retain their behavior. Memory/callable/fuel-import protections remain; external plugin wiring and blocked enforcement proof remain unavailable. |
 | A06 | Partially mitigated; no-grant WASI denial revalidated | All imported WASI modules are denied before instantiation; exact synthetic tests ran with instantiation asserted unused. Grant-backed env/preopens and host isolation remain unavailable. |
@@ -3103,3 +3103,95 @@ dispatch violation closes the dispatcher so the session cleanup path runs.
   Windows containment plus Verifier-First checks. macOS containment and
   Windows/macOS packaging were still pending. No worker process, external
   plugin code, probe, or enforcement scenario was run.
+
+### A02 runtime-owned limiter registry follow-up
+
+The broker authorization constructor now takes a reference to
+`PluginHostcallRateLimiterRegistry` and derives the limiter from the trusted
+`HostProvenance.plugin_id`; callers can no longer inject an arbitrary limiter
+for the authorization. A registry reused for the runtime lifetime shares one
+mutex-protected rolling budget across sessions, runs, and agent groups. It
+keeps an inactive plugin's recent window until it expires, then removes the
+entry on a later lookup when no session still owns it. Cleanup is opportunistic
+while the registry is idle; a trusted host must still use one registry for all
+worker sessions. No production caller exists yet, so productive wiring is not
+proven. The per-invocation 64-call limit remains outside this layer.
+
+- Safe protocol tests now prove that same-plugin scopes retrieve one shared
+  limiter, different plugin IDs receive separate state, expired inactive state
+  is retired, concurrent reservations cannot overbook the 256-call window,
+  and an over-budget `WorkerSession` closes and requests termination/reap.
+- Independent static review found no lock-order or concurrent quota-reset
+  issue. It confirmed the registry is only effective when one runtime-owned
+  instance is reused. It also identified residual memory retention: expiry
+  cleanup runs on lookup and there is no registry cardinality cap for many
+  trusted plugin IDs.
+- Rust stable 1.99 local container validation passed `cargo fmt --check` and
+  `cargo test`: **44 unit tests, 1 synthetic transport integration test, and
+  5 compile-fail doctests**. Remote CI `38115549386` on `0f48ecc` passed the
+  protocol formatting and synthetic-frame job with the same counts. The global
+  workflow passed Biome/typecheck and Vitest (**415 files, 4,684 passed,
+  8 skipped**); pgTAP/integration, A17/A21.2, PTY cancellation, compile-only
+  sandbox, and safe filtered containment on Ubuntu, Windows, and macOS passed.
+  No worker process, plugin code, probe, or enforcement case ran.
+- Commits `6460a5d`, `6f3bc2c`, `fac6865`, and `0f48ecc` contain the registry,
+  exact Rust-format adjustments, and test-only import fix. Intermediate CI
+  caught formatting and import errors before the current green run; those are
+  not represented as behavior RED evidence. No production hostcall-registry
+  wiring or OS resource enforcement is claimed.
+
+### A03 host-only capability-definition registration
+
+`CapabilityRegistry.registerCapability` now requires the exact host-owned
+registration symbol, and the shipped core-capability and plugin-loader paths
+provide it. The test-only compatibility helper lives outside the desktop
+production source include. This guards accidental or unauthorized registration
+within trusted in-process module wiring; it does not isolate code already
+executing inside the host process.
+
+- RED: CI `38114143265` failed the new assertion because calling
+  `registerCapability` without host authority did not throw. GREEN: CI
+  `38114554666` on `78ae043` passed Biome/typecheck, Vitest (**415 files,
+  4,684 passed, 8 skipped**), pgTAP, protocol fixtures, A17/A21.2, and the
+  safe-filtered Linux, Windows, and macOS containment jobs. Independent review
+  approved the change as in-process API hardening and explicitly did not count
+  it as an OS boundary. The follow-up Biome failure on `51ece0e` was limited to
+  six diagnostics and corrected by `78ae043`; no rule was disabled and no
+  broad formatting was applied.
+
+### Supabase monthly-renewal anchor validation
+
+The incremental migration `20261010175941_free_monthly_renewal_anchor.sql`
+keeps the documented anniversary day instead of repeatedly deriving the next
+renewal from a month-end-clipped date. Fixed-date pgTAP cases cover leap-year
+and non-leap-year Jan 31 renewals, the Dec 31 boundary, canonicalization of
+drifted deadlines, and unchanged canonical deadlines. Workflow `38115549386`
+passed the complete Supabase pgTAP/integration job; its log ran
+`17_free_monthly_renewal.test.sql` successfully, including assertions 4–9 for
+the fixed date behavior and rollout. The billing implementation, idempotence,
+and ledger history were not weakened to change the expectation.
+
+### Cross-platform A01–A04 execution boundary snapshot
+
+The protocol crate contains shared bounded IPC schemas, host-owned provenance,
+one-use admission, a mandatory dispatcher, approved resource requirements,
+and deadline-aware termination/reap contracts. It still has no production
+executor or broker caller. The platform code in `plugin-sandbox-probe` is
+diagnostic/read-only and is not that executor:
+
+- Linux inspects cgroup v2 and namespace/security feature presence without
+  creating namespaces, cgroups, or launching a worker. CPU, RSS, process,
+  handle, seccomp/Landlock, and complete tree-reap enforcement are not installed
+  or verified.
+- Windows can run a trusted child-tree diagnostic, but RSS and general handle
+  quotas are unsupported; CPU, deadline, process-admission, and full worker
+  supervisor implementations are incomplete.
+- macOS has no platform adapter and the diagnostic currently reports the OS as
+  unsupported.
+
+External plugin execution therefore remains blocked on all three platforms.
+Trusted in-process Harness and plugin lifecycle behavior remains in place.
+The next safe implementation step is a host-owned supervisor that binds one
+registry and provenance to a single lifecycle/capability dispatcher, followed
+by platform-specific launchers whose incomplete controls fail closed. A
+platform is not enabled merely because it has a child-process or sandbox probe.
