@@ -222,11 +222,7 @@ mod tests {
         provenance_for_scope(session_id, "workspace-fixture", run_id)
     }
 
-    fn provenance_for_scope(
-        session_id: &str,
-        workspace_id: &str,
-        run_id: &str,
-    ) -> HostProvenance {
+    fn provenance_for_scope(session_id: &str, workspace_id: &str, run_id: &str) -> HostProvenance {
         HostProvenance::from_host_catalog(
             "fixture/plugin",
             "1.0.0",
@@ -250,17 +246,15 @@ mod tests {
         policy: ResourcePolicy,
         controls: impl IntoIterator<Item = EnforcementControl>,
     ) -> SyntheticAdapter {
-        SyntheticAdapter(PlatformAssessment::from_adapter(provenance, policy, controls))
+        SyntheticAdapter(PlatformAssessment::from_adapter(
+            provenance, policy, controls,
+        ))
     }
 
     #[test]
     fn issues_a_one_use_assessment_token_only_for_complete_synthetic_controls() {
         let provenance = provenance();
-        let adapter = adapter(
-            provenance.clone(),
-            APPROVED_RESOURCE_POLICY,
-            all_controls(),
-        );
+        let adapter = adapter(provenance.clone(), APPROVED_RESOURCE_POLICY, all_controls());
 
         let token =
             AdmissionAssessmentToken::validate_from_adapter(adapter, provenance.clone()).unwrap();
@@ -328,13 +322,11 @@ mod tests {
         assert_eq!(policies_over_ceiling.len(), 49);
 
         for effective_policy in policies_over_ceiling {
-            let adapter = adapter(
-                provenance.clone(),
-                effective_policy,
-                all_controls(),
+            let adapter = adapter(provenance.clone(), effective_policy, all_controls());
+            assert_eq!(
+                AdmissionAssessmentToken::validate_from_adapter(adapter, provenance.clone()),
+                Err(AdmissionError::PolicyDiffersFromApproved)
             );
-            assert_eq!(AdmissionAssessmentToken::validate_from_adapter(adapter, provenance.clone()),
-                Err(AdmissionError::PolicyDiffersFromApproved));
         }
     }
 

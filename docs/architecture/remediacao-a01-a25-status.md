@@ -209,12 +209,20 @@ and does not change the trusted Harness/plugin path.
   frame bytes/readers and host-provided grants; this library API alone does
   not prove those are from the assessed process or bound to the correct host
   authorization.
+- A second independent static review approved this narrowed assessment-token
+  change, while explicitly rejecting any claim that it proves production
+  confinement. It confirmed the exact-policy check, non-cloneable/consumed
+  token, compile-fail coverage, test-derived required-control list, and the
+  documented process/stream/grant gaps. No hostile, process-launch, or
+  enforcement test was run.
 - No Windows/Linux/macOS adapter implementation, artifact-transfer callsite,
   process supervisor, or productive desktop dependency exists. This source
   contract neither proves OS policy enforcement nor closes A01–A04. The
   external-worker path remains unavailable; the trusted Harness/plugin path is
-  unchanged. The independent follow-up and remote Rust job for the revised API
-  are pending.
+  unchanged. The first remote run `38109817444` on `da9e2b3` stopped at the
+  Rust formatting check; the protocol tests were skipped. The formatting-only
+  differences were corrected, and the full remote validation for the revised
+  API is pending.
 
 ## Mission CI prerequisite — Free monthly renewal calendar
 

@@ -12,9 +12,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
+use crate::worker_admission::AdmissionAssessmentToken;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use crate::worker_admission::AdmissionAssessmentToken;
 
 pub mod resource_policy;
 pub mod worker_admission;
@@ -1421,12 +1421,8 @@ mod tests {
     #[test]
     fn caps_pending_calls_and_response_bytes() {
         let grants = ["memory.read".to_string()];
-        let mut dispatcher = Dispatcher::new(
-            synthetic_test_token(provenance()),
-            CHALLENGE,
-            grants,
-        )
-        .unwrap();
+        let mut dispatcher =
+            Dispatcher::new(synthetic_test_token(provenance()), CHALLENGE, grants).unwrap();
         dispatcher.receive(&hello()).unwrap();
         for sequence in 1..=MAX_PENDING_REQUESTS as u64 {
             dispatcher
