@@ -6,6 +6,8 @@ This is the rolling implementation record for the authorized remediation on
 the original evidence and finding definitions. A status of “mitigated” does
 not mean that a security boundary has been certified; validation that requires
 blocked hostile-plugin or enforcement scenarios remains explicitly pending.
+Earlier finding sections retain their point-in-time evidence; later checkpoint
+sections below supersede implementation-status statements where they differ.
 
 ## Baseline
 
@@ -3290,7 +3292,9 @@ execution.
   `cargo`/`rustc` are unavailable in the current environment. No real process
   worker, external plugin, confinement probe, or enforcement scenario was
   executed.
-- Remaining blockers: Linux has no installed cgroup/seccomp/Landlock policy,
+- At this structural checkpoint, the desktop client started one short-lived
+  deny-only supervisor per request; the lifecycle change below supersedes that
+  behavior. Remaining blockers: Linux has no installed cgroup/seccomp/Landlock policy,
   no strict RSS/CPU/process/handle enforcement, and no verified process-tree
   termination/reap adapter. The deny-only supervisor therefore does not reach
   `WorkerSession` in production; that connection is proven only with a
@@ -3301,3 +3305,69 @@ execution.
   macOS remain blocked and were not modified. This checkpoint establishes
   structural wiring and fail-closed admission, not isolation or safe external
   plugin execution.
+
+### A01–A04 Marco 2 — persistent deny-only supervisor lifecycle
+
+`PiSdkRuntime` now owns one `LinuxPluginWorkerSupervisor` client for its
+lifetime. After the host permission broker approves a request, the existing
+`PluginExecutionDispatcher` sends a bounded, correlated line message to one
+reused Rust supervisor process. Runtime `dispose`/`releaseRuntime` sends a
+session release; the desktop `before-quit` drain calls the runtime shutdown
+entrypoint, which closes supervisor stdin and waits briefly before escalating
+termination. Unexpected exit, startup failure, malformed or uncorrelated IPC,
+timeout, write failure, and cancellation reject pending requests and clear
+session registrations. A later separately authorized request may start a new
+supervisor; the failed request is never replayed. There is no in-process
+fallback. `MODUS_PLUGIN_ISOLATION` remains false by default and the production
+runtime has no external catalog.
+
+The Rust service retains validated plugin/session provenance until an explicit
+host release or process exit and owns one `PluginHostcallRateLimiterRegistry`
+for its complete lifetime. The Linux adapter entrypoint
+`SupervisorService::execute_assessed_worker` passes that same registry into
+the existing `WorkerSession` / permission-broker protocol. No production Linux
+adapter invokes this entrypoint yet: every invocation still ends in an explicit
+denial before a worker or plugin bytes are created or exposed. The existing
+protocol tests prove that the registry shares the rolling plugin budget across
+different sessions and concurrent dispatchers; no real hostcall was generated
+in this marco.
+
+RED/GREEN evidence: the new TypeScript concurrency test failed before the
+change because two requests spawned two processes (**1 failed**). The mocked
+Pi IPC suite now passes persistent reuse, concurrent correlation, cancellation
+of all requests on shared-process invalidation, startup failure, unexpected
+exit and subsequent safe restart, timeout, provenance mismatch, session
+release, and idempotent shutdown. The productive Pi SDK fixture still traverses
+broker then dispatcher and now also proves release and runtime shutdown calls.
+Rust stream/service tests cover multiple requests, bounded lines, provenance
+retention/release and deny-only replies. Local Rust tools are unavailable in
+this environment; remote CI results are recorded after the published head is
+validated. No real supervisor, worker, plugin, probe, or enforcement scenario
+was run locally.
+
+The future Linux enforcement insertion points are explicit and remain
+unimplemented:
+
+- Artifact-size admission and policy selection must happen in the future Linux
+  launcher before parsing or exposing artifact bytes, under the host catalog's
+  identity rather than an IPC/model-provided path.
+- cgroups v2 CPU, memory, aggregate RSS, and process-count controls must be
+  installed and verified before child `exec`; `memory.max` alone does not prove
+  the approved RSS semantics.
+- User, mount, PID, and network namespaces plus filesystem/network/credential
+  denial must be established before plugin bytes or host resources become
+  reachable. seccomp and Landlock policy must be installed in the child before
+  loading the artifact.
+- Descriptor limits and inherited-fd closure belong in child setup before
+  `exec`. Process-tree control belongs in the future `WorkerTransport`
+  implementation of `request_termination` / `reap_until`, with a bounded
+  deadline and confirmed reap before a replacement can start.
+- Only after every `REQUIRED_LINUX_CONTROLS` item is measured for the exact
+  process may the adapter produce `PlatformAssessment` and construct
+  `AssessedWorker`; that admission branch belongs inside the Rust supervisor's
+  invocation handling, after host provenance/broker checks and before worker
+  start. Today that branch intentionally returns the deny response.
+
+Marco 2 therefore completes persistent lifecycle and structural session/budget
+ownership, not Linux enforcement. External plugin admission remains blocked;
+Windows and macOS were untouched.
