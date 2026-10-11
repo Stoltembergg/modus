@@ -2088,7 +2088,7 @@ cancellation follow-up above.
 | Finding | Current status | Implementation state / next evidence |
 |---|---|---|
 | A01 | Partially mitigated | Pi chat/review fail closed and no longer auto-load project/user extensions. The shared protocol validates bounded frames and strict schemas; v2 adds distinct cancellation and rejects v1. `WorkerSession` now owns the exact assessed transport, non-cloneable admission token, and mandatory dispatcher; synthetic integration tests cover the handshake, invocation/result round-trip, timeout, cleanup, and authorization paths. No production executor or platform adapter exists, and this API is not proof of OS confinement. Production wiring and hostile execution proof remain blocked. |
-| A02 | Partially mitigated | The shared policy records approved CPU, memory, time, output, IPC, process, hostcall and concurrency ceilings. The shared session clips I/O deadlines and fixes one total shutdown/reap cutoff; termination and reap errors remain observable. These are API contracts only: no platform adapter applies the limits or confirms process-tree termination. External execution remains blocked; enforcement probes were not run. |
+| A02 | Partially mitigated | The shared policy records approved CPU, memory, time, output, IPC, process, hostcall and concurrency ceilings. The shared session clips I/O deadlines and fixes one total shutdown/reap cutoff; termination and reap errors remain observable. The dispatcher now reserves the approved rolling one-second hostcall budget before granting each invocation, using a host-owned limiter passed through authorization. Synthetic tests cover the 256-call ceiling, cross-session reuse, one-second expiry, identity mismatch and concurrent reservations. This is protocol logic only: there is no production broker/limiter registry or platform adapter, so the host must reuse one limiter per plugin; the per-invocation ceiling remains undefined because the protocol lacks an invocation boundary. No platform adapter applies OS resource limits or confirms process-tree termination. External execution remains blocked; enforcement probes were not run. |
 | A03 | Partially mitigated | Chat/review auto-discovery remains blocked. Host catalog lookups, built-in catalog entries, loader results, and capability provider queries expose immutable metadata descriptors without lifecycle/implementation callbacks. `PluginLoader`, `PluginLifecycleService`, and `CapabilityRegistry` keep trust/authorization maps, checkpoints, provenance state, source/executor references, and internal helpers in ECMAScript `#private` fields/methods; unused loader/service registry accessors were removed after callsite search. Exact source references remain within trusted in-process wiring. The shared admission token binds the assessed transport to host provenance, and one-use authorization must match plugin/artifact/session/workspace/run/generation. No production adapter or broker caller exists; the unsafe adapter boundary does not independently prove provenance or isolation. |
 | A04 | Partially mitigated | External Pi extension ingress is disabled for chat and review; the review callsite guard covers loader flags and session creation. Registry provider execution remains dispatched through `CapabilityRegistry.execute`; rollback uses opaque registry-owned checkpoints. Public catalog/registry lookup APIs no longer return implementation references. The shared `WorkerSession` validates exact grants and routes frames through its private dispatcher in safe synthetic tests. Built-ins remain trusted in-process and there is no OS-backed external dispatcher or lifecycle integration. |
 | A05 | Partially mitigated; unpreemptible WASM timeouts now fail closed | Both `WasmCapabilityHost.executeWasm` and its public `createInstance` factory reject positive `timeoutMs` before compilation/instantiation because synchronous in-process WASM cannot be preempted by a JavaScript timer. Trusted in-process calls without a timeout retain their behavior. Memory/callable/fuel-import protections remain; external plugin wiring and blocked enforcement proof remain unavailable. |
@@ -2108,7 +2108,7 @@ cancellation follow-up above.
 | A19 | Prior A21.4 implementation preserved | Spill authorization, persistence, quotas, and recovery. |
 | A20 | Partially mitigated; same-connection mutation detection and reflective state encapsulation | Audit events and checkpoints persist in SQLite; immutable snapshots, transactional retention, append-time verification on audit revision changes, and checkpoint comparisons detect ordinary record changes through the same or another connection. The logger's database handle and chain state, plus the fail-closed facade's logger reference, now use ECMAScript `#private`; this prevents ordinary property reflection only. No independent signing key or database access boundary exists, and public logger APIs remain available to code holding a reference. |
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |
-| A22 | Partially mitigated; productive event reads and renderer source lookups are paged, bounded, and fail closed | Cursor-page reads drive IPC, timeline/history, source lookup and Pi output; the old `agent:list-events` bridge endpoint is removed. Collector-local budgets cover active call identities, argument traversal/references, unfinished external-tool output, and retained source metadata; ambiguous active tool-call IDs across runs invalidate attribution. Overflow is sticky: complete lookup fails, the main-chat hook marks the run unavailable, the group hook exposes unavailable status, and synchronous timeline rendering preserves the answer while marking sources unavailable. Renderer lookups admit at most four active loads and 256 queued loads; releasing the last view stops pagination after any already in-flight page returns. Run-scoped tool-evidence and assistant-message pages preflight `payload_json` bytes under a SQLite savepoint. Pages are split at event boundaries to stay within 8 MiB when possible; an indivisible event larger than 8 MiB is returned alone to preserve complete content. The cap excludes IPC/page envelopes. This does not bound generic/non-run event pages, stream expansion, individual event allocations, aggregate requests, renderer heap/RSS, or the existing 24-source display cap, so A22 remains partial. RED/GREEN, review, local checks, and current remote CI are recorded below. The prior global run's benchmark timing failure and the current successful run are both recorded without assigning a definitive root cause. |
+| A22 | Partially mitigated; productive event reads and renderer source lookups are paged, bounded, and fail closed | Cursor-page reads drive IPC, timeline/history, source lookup and Pi output; the old `agent:list-events` bridge endpoint is removed. Collector-local budgets cover active call identities, argument traversal/references, unfinished external-tool output, and retained source metadata; ambiguous active tool-call IDs across runs invalidate attribution. Overflow is sticky: complete lookup fails, the main-chat hook marks the run unavailable, the group hook exposes unavailable status, and synchronous timeline rendering preserves the answer while marking sources unavailable. Renderer lookups admit at most four active loads and 256 queued loads; releasing the last view stops pagination after any already in-flight page returns. Run-scoped tool-evidence and assistant-message pages preflight `payload_json` bytes under a SQLite savepoint. Generic pages now select persisted rows under the same 8 MiB payload budget in forward and backward traversal; one indivisible oversized event is returned alone to preserve content. This budget applies to selected persisted rows, not the final expanded IPC response: cross-page stream expansion, synthesized prompt backfill, optional summary/activity events, the IPC envelope, individual event allocations, aggregate requests, renderer heap/RSS, and the existing 24-source display cap remain unbounded. A22 remains partial. RED/GREEN, review, local checks, and current remote CI are recorded below. The prior global run's benchmark timing failure and the current successful run are both recorded without assigning a definitive root cause. |
 | A23 | Mitigated; integrated checks pass | Synthetic capability outputs and the generic core `status: ok` fallback now fail explicitly with `CapabilityUnavailableError`; stale declared grants are reconciled by exact host identity/version; separate Pi runtime services, A16 selection, and A17 evidence flows are preserved. Independent review found no blocker. Workflow `38081920060` passed the relevant feature jobs, Supabase pgTAP (20 files/1,041 tests), containment, compile-only sandbox and Windows/macOS packaging. The same run had one unrelated-to-A23 global Vitest timing failure, without a baseline classification. |
 | A24 | Partially mitigated; artifact admission capped, isolated execution unproven | Cache has LRU entry/source-byte caps; namespaces are hashed up to 256 UTF-16 code units and longer ones bypass retention. WASM inputs over the existing 32 MiB limit are rejected using intrinsic view metadata, then hashed and compiled from one fixed snapshot. Cache counters do not measure native compiled memory or compiler overhead. A05 supplies measured failure metrics. WASI remains denied and stdio capture is unavailable; the in-process host is not an OS-isolated executor. |
 | A25 | Mitigated; prior fix preserved and revalidated | `allow-workspace` requires workspace+tool identity and lookup keys include both plus action/target; the Pi runtime supplies persisted host workspace identity across worktree cwd changes. Unknown tools are blocked before permission prompting and are not read-only safe. Safe focused validation: 52 permission-store/permission-extension/tool-registry tests and one productive Pi runtime workspace-scope test passed. A two-workspace synthetic store test passes; external tool/plugin execution remains disabled. |
@@ -3047,3 +3047,59 @@ uses this path and reconstructs the entire answer across pages.
   threshold, and filters were unchanged. This difference is evidence of
   differing outcomes across two commits, not enough to attribute a root cause
   to the environment, the benchmark, or this change.
+
+### A22 generic event-page payload selection
+
+Generic forward and backward event-page reads now select row metadata first,
+then materialize only the ordered persisted rows that fit the shared 8 MiB
+payload budget. The metadata selection and payload materialization share a
+SQLite savepoint. If one event alone exceeds the budget, the page returns that
+event intact so cursor progress and event integrity are preserved. The budget
+does not include post-selection stream expansion, synthesized prompt
+backfill, optional summary/activity events, IPC envelopes, or JS object and
+renderer memory overhead; those remain explicit A22 gaps.
+
+- RED: CI `38112321306` failed the new productive-page regression: two fixed
+  4 MiB `tool.output` rows were returned together, while the expected first
+  page contained only the first row. GREEN: CI `38113373679` on `fcffb29` passed
+  the forward/backward page regression and the global suite (**415 files,
+  4,683 passed, 8 skipped**); Biome/typecheck and Supabase pgTAP passed too,
+  including the Jan 31 leap-year/non-leap-year renewal cases. Safe Ubuntu and
+  Windows containment and the focused A17/Verifier-First checks also passed.
+  macOS containment and package jobs were still queued/running at this entry.
+- Independent review approved row selection, cursor ordering and the
+  savepoint snapshot, and identified the expanded-response omissions above.
+  This change bounds persisted selected rows only and does not establish a
+  strict cap on final IPC response size.
+
+### A02 hostcall rolling-window budget gate
+
+The protocol dispatcher now reserves a host-owned rolling one-second budget
+before granting a worker invocation. The limiter is bound to host provenance's
+plugin ID, serializes concurrent reservations, expires timestamps at the
+one-second boundary, and fails closed on identity mismatch, quota exhaustion,
+or mutex poisoning. A shared `Arc` can enforce one budget across worker
+sessions; the unsafe broker authorization constructor now requires it, and a
+dispatch violation closes the dispatcher so the session cleanup path runs.
+
+- Synthetic safe-fixture coverage checks cross-session budget reuse,
+  concurrent attempts, exact one-second expiry, and limiter identity mismatch.
+  Independent static review approved the rolling-window algorithm and
+  dispatch cleanup flow. It confirmed that enforcement across sessions still
+  depends on the future host broker retaining and reusing one `Arc` per plugin;
+  there is no production registry or caller yet. The 64-hostcalls-per-
+  invocation limit remains unimplemented because no invocation boundary is
+  defined in this protocol layer.
+- Commits `70721db`, `d991a8d`, `d52200e`, and `fcffb29` contain the implementation,
+  remote-rustfmt corrections, and the safe integration-fixture update. The
+  first remote protocol job caught formatting-only differences before tests
+  ran. The next compile exposed internal method visibility and missing test
+  imports; both were fixed in `fcffb29`. These are build failures, not claimed
+  behavioral RED evidence. Remote CI `38113373679` on `fcffb29` passed Rust
+  formatting and the safe protocol suite: **40 unit tests, 1 synthetic
+  transport integration test, and 5 compile-fail doctests**. The same run
+  passed Biome/typecheck, the global Vitest suite (**415 files, 4,683 passed,
+  8 skipped**), pgTAP (including the renewal-date cases), and safe Ubuntu and
+  Windows containment plus Verifier-First checks. macOS containment and
+  Windows/macOS packaging were still pending. No worker process, external
+  plugin code, probe, or enforcement scenario was run.
