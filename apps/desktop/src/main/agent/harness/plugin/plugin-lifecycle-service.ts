@@ -49,8 +49,8 @@ const lifecycleQueuesByStore = new WeakMap<PluginStateStore, Map<string, Promise
 
 export class PluginLifecycleService {
   private store: PluginStateStore;
-  private loader: PluginLoader;
-  private registry: CapabilityRegistry;
+  #loader: PluginLoader;
+  #registry: CapabilityRegistry;
   private dependencyGraph: DependencyGraph = new DependencyGraph();
   private versionManager?: PluginVersionManager | undefined;
   private safeModeManager?: PluginSafeModeManager | undefined;
@@ -60,8 +60,8 @@ export class PluginLifecycleService {
 
   constructor(store: PluginStateStore, loader: PluginLoader, registry: CapabilityRegistry) {
     this.store = store;
-    this.loader = loader;
-    this.registry = registry;
+    this.#loader = loader;
+    this.#registry = registry;
     let lifecycleQueues = lifecycleQueuesByStore.get(store);
     if (!lifecycleQueues) {
       lifecycleQueues = new Map();
@@ -99,14 +99,6 @@ export class PluginLifecycleService {
     return this.store;
   }
 
-  public getLoader(): PluginLoader {
-    return this.loader;
-  }
-
-  public getRegistry(): CapabilityRegistry {
-    return this.registry;
-  }
-
   public getDependencyGraph(): DependencyGraph {
     return this.dependencyGraph;
   }
@@ -131,7 +123,7 @@ export class PluginLifecycleService {
     if (!level || this.allowedTrustLevels(level).includes(trustLevel)) return;
 
     if (quarantineWhenDenied) {
-      this.registry.quarantineProvider(pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+      this.#registry.quarantineProvider(pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
     }
     throw new PluginLifecycleError(
       `Cannot ${operation} plugin '${pluginId}' while Safe Mode '${level}' excludes trust level '${trustLevel}'`,
@@ -170,7 +162,7 @@ export class PluginLifecycleService {
         let trustLevel: TrustLevel | undefined;
         if (manifest) {
           try {
-            trustLevel = this.loader.authorizeManifest(manifest).trustLevel;
+            trustLevel = this.#loader.authorizeManifest(manifest).trustLevel;
           } catch {
             trustLevel = undefined;
           }
@@ -180,8 +172,8 @@ export class PluginLifecycleService {
           continue;
         }
 
-        this.registry.quarantineProvider(plugin.id, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
-        this.loader.disableForHostSafety(plugin.id);
+        this.#registry.quarantineProvider(plugin.id, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+        this.#loader.disableForHostSafety(plugin.id);
         this.store.transaction(() => {
           this.store.updatePluginState(plugin.id, "disabled");
           this.store.recordEvent(plugin.id, "safe_mode_disabled", {
@@ -193,20 +185,20 @@ export class PluginLifecycleService {
       }
 
       const trackedIds = new Set(records.map((plugin) => plugin.id));
-      for (const plugin of this.loader.listPlugins()) {
+      for (const plugin of this.#loader.listPlugins()) {
         if (plugin.status !== "enabled" || trackedIds.has(plugin.manifest.id)) continue;
         let trustLevel: TrustLevel | undefined;
         try {
-          trustLevel = this.loader.authorizeManifest(plugin.manifest).trustLevel;
+          trustLevel = this.#loader.authorizeManifest(plugin.manifest).trustLevel;
         } catch {
           trustLevel = undefined;
         }
         if (trustLevel && allowedTrusts.includes(trustLevel)) continue;
-        this.registry.quarantineProvider(
+        this.#registry.quarantineProvider(
           plugin.manifest.id,
           HOST_CAPABILITY_REGISTRATION_AUTHORITY,
         );
-        this.loader.disableForHostSafety(plugin.manifest.id);
+        this.#loader.disableForHostSafety(plugin.manifest.id);
         disabledPlugins.add(plugin.manifest.id);
       }
 
@@ -262,10 +254,10 @@ export class PluginLifecycleService {
 
     if (record.state === "enabled") {
       const manifest = this.resolveManifest(pluginId, record.version);
-      const loaded = this.loader.getPlugin(pluginId);
+      const loaded = this.#loader.getPlugin(pluginId);
       if (manifest && loaded?.manifest === manifest && loaded.status === "enabled") {
-        if (this.registry.isProviderQuarantined(pluginId)) {
-          const hostEntry = this.loader.authorizeManifest(manifest);
+        if (this.#registry.isProviderQuarantined(pluginId)) {
+          const hostEntry = this.#loader.authorizeManifest(manifest);
           this.assertTrustAllowedBySafeMode(pluginId, hostEntry.trustLevel, "restore", true);
           this.releaseQuarantineAfterDurableEnable(pluginId, record.version);
           return true;
@@ -297,7 +289,7 @@ export class PluginLifecycleService {
       this.recoveryManager = new PluginRecoveryManager(
         this,
         this.getVersionManager(),
-        this.registry,
+        this.#registry,
         this.dependencyGraph,
       );
     }
@@ -315,7 +307,7 @@ export class PluginLifecycleService {
    * Registers a manifest in the live catalog so its implementations are available across lifecycle transitions.
    */
   public registerManifest(manifest: PluginManifest): void {
-    this.loader.authorizeManifest(manifest);
+    this.#loader.authorizeManifest(manifest);
     this.dependencyGraph.addPlugin(manifest);
   }
 
@@ -344,7 +336,7 @@ export class PluginLifecycleService {
         );
         if (
           !replacement ||
-          !this.loader.isApiVersionSatisfied(replacement.apiVersion, requirement.version)
+          !this.#loader.isApiVersionSatisfied(replacement.apiVersion, requirement.version)
         ) {
           throw new PluginDependencyError(
             `Cannot change '${manifest.id}': dependent '${dependentId}' requires ${requirement.capability}@${requirement.version}`,
@@ -360,8 +352,8 @@ export class PluginLifecycleService {
   public resolveManifest(id: string, version?: string): PluginManifest | undefined {
     const requestedVersion = version ?? this.store.getPlugin(id)?.version;
     return requestedVersion
-      ? this.loader.resolveHostManifest(id, requestedVersion)
-      : this.loader.resolveHostManifestById(id);
+      ? this.#loader.resolveHostManifest(id, requestedVersion)
+      : this.#loader.resolveHostManifestById(id);
   }
 
   /**
@@ -379,8 +371,8 @@ export class PluginLifecycleService {
     config?: Record<string, unknown>,
     initialState: PersistentPluginState = "installed",
   ): Promise<PluginRecord> {
-    const hostEntry = this.loader.authorizeManifest(manifest);
-    this.loader.validateManifest(manifest);
+    const hostEntry = this.#loader.authorizeManifest(manifest);
+    this.#loader.validateManifest(manifest);
     this.dependencyGraph.assertCanAddPlugin(manifest);
     this.assertDependentCapabilitiesCompatible(manifest);
 
@@ -464,17 +456,17 @@ export class PluginLifecycleService {
     if (
       safeMode.level &&
       !this.allowedTrustLevels(safeMode.level).includes(
-        this.loader.authorizeManifest(manifest).trustLevel,
+        this.#loader.authorizeManifest(manifest).trustLevel,
       )
     ) {
-      this.registry.quarantineProvider(pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+      this.#registry.quarantineProvider(pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
       throw new PluginLifecycleError(
         `Cannot enable plugin '${pluginId}' while Safe Mode '${safeMode.level}' is active`,
       );
     }
 
-    this.loader.checkDependencies(manifest);
-    const loadedPlugin = this.loader.getPlugin(pluginId);
+    this.#loader.checkDependencies(manifest);
+    const loadedPlugin = this.#loader.getPlugin(pluginId);
     if (
       pluginRecord.state === "enabled" &&
       loadedPlugin?.manifest === manifest &&
@@ -484,19 +476,19 @@ export class PluginLifecycleService {
       return;
     }
 
-    this.registry.quarantineProvider(pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+    this.#registry.quarantineProvider(pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
 
     // Ensure it is loaded in PluginLoader, at the recorded version: a stale
     // loaded manifest (e.g. after upgrading while disabled) is reloaded.
     if (!loadedPlugin || loadedPlugin.manifest !== manifest) {
       if (loadedPlugin) {
-        await this.loader.unload(pluginId);
+        await this.#loader.unload(pluginId);
       }
-      await this.loader.load(manifest);
+      await this.#loader.load(manifest);
     }
 
     try {
-      await this.loader.enableFromHostLifecycle(manifest);
+      await this.#loader.enableFromHostLifecycle(manifest);
       const now = new Date().toISOString();
       this.store.transaction(() => {
         this.store.updatePluginState(pluginId, "enabled");
@@ -505,7 +497,7 @@ export class PluginLifecycleService {
       });
       this.releaseQuarantineAfterDurableEnable(pluginId, pluginRecord.version);
     } catch (error) {
-      this.registry.quarantineProvider(pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+      this.#registry.quarantineProvider(pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
       throw error;
     }
   }
@@ -523,11 +515,11 @@ export class PluginLifecycleService {
       throw new PluginLifecycleError(`Cannot disable plugin '${pluginId}': not installed`);
     }
 
-    const loaded = this.loader.getPlugin(pluginId);
-    this.registry.quarantineProvider(pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+    const loaded = this.#loader.getPlugin(pluginId);
+    this.#registry.quarantineProvider(pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
 
     try {
-      if (loaded) await this.loader.disable(pluginId);
+      if (loaded) await this.#loader.disable(pluginId);
 
       try {
         this.store.transaction(() => {
@@ -545,7 +537,7 @@ export class PluginLifecycleService {
         const manifest = this.resolveManifest(pluginId, pluginRecord.version);
         if (loaded && manifest === loaded.manifest) {
           try {
-            await this.loader.enableFromHostLifecycle(manifest);
+            await this.#loader.enableFromHostLifecycle(manifest);
             this.releaseQuarantineAfterDurableEnable(pluginId, pluginRecord.version);
           } catch (restoreError) {
             try {
@@ -568,8 +560,8 @@ export class PluginLifecycleService {
         throw commitError;
       }
     } catch (error) {
-      const current = this.loader.getPlugin(pluginId);
-      if (current?.status === "enabled" && this.registry.isProviderQuarantined(pluginId)) {
+      const current = this.#loader.getPlugin(pluginId);
+      if (current?.status === "enabled" && this.#registry.isProviderQuarantined(pluginId)) {
         try {
           this.store.transaction(() => {
             this.store.updatePluginState(pluginId, "error");
@@ -594,8 +586,8 @@ export class PluginLifecycleService {
   }
 
   private async upgradeUnlocked(newManifest: PluginManifest): Promise<void> {
-    const hostEntry = this.loader.authorizeManifest(newManifest);
-    this.loader.validateManifest(newManifest);
+    const hostEntry = this.#loader.authorizeManifest(newManifest);
+    this.#loader.validateManifest(newManifest);
     const existing = this.store.getPlugin(newManifest.id);
     if (!existing) {
       throw new PluginLifecycleError(
@@ -615,11 +607,11 @@ export class PluginLifecycleService {
     // Hot-reload FIRST: a failure here leaves durable state untouched, so the
     // next syncOnStartup restores the old version instead of diverging from it.
     if (wasEnabled) {
-      this.registry.quarantineProvider(newManifest.id, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
-      await this.loader.unload(newManifest.id);
+      this.#registry.quarantineProvider(newManifest.id, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+      await this.#loader.unload(newManifest.id);
       try {
-        await this.loader.load(newManifest);
-        await this.loader.enableFromHostLifecycle(newManifest);
+        await this.#loader.load(newManifest);
+        await this.#loader.enableFromHostLifecycle(newManifest);
       } catch (err) {
         await this.restoreLoaderVersion(newManifest.id, oldVersion);
         throw err;
@@ -668,23 +660,23 @@ export class PluginLifecycleService {
    * anything left behind from SQLite on the next boot.
    */
   private async restoreLoaderVersion(pluginId: string, version: string): Promise<void> {
-    this.registry.quarantineProvider(pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+    this.#registry.quarantineProvider(pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
     const previous = this.resolveManifest(pluginId, version);
     if (!previous)
       throw new PluginLifecycleError(
         `Cannot restore ${pluginId}@${version}: catalog manifest unavailable`,
       );
-    const loaded = this.loader.getPlugin(pluginId);
-    if (loaded) await this.loader.unload(pluginId);
-    await this.loader.load(previous);
-    await this.loader.enableFromHostLifecycle(previous);
+    const loaded = this.#loader.getPlugin(pluginId);
+    if (loaded) await this.#loader.unload(pluginId);
+    await this.#loader.load(previous);
+    await this.#loader.enableFromHostLifecycle(previous);
     this.releaseQuarantineAfterDurableEnable(pluginId, version);
   }
 
   private releaseQuarantineAfterDurableEnable(pluginId: string, version: string): void {
     const record = this.store.getPlugin(pluginId);
-    const manifest = this.loader.resolveHostManifest(pluginId, version);
-    const loaded = this.loader.getPlugin(pluginId);
+    const manifest = this.#loader.resolveHostManifest(pluginId, version);
+    const loaded = this.#loader.getPlugin(pluginId);
     if (
       !record ||
       record.version !== version ||
@@ -697,10 +689,10 @@ export class PluginLifecycleService {
         `Cannot recover quarantine for ${pluginId}@${version}: durable state or exact loaded manifest mismatch`,
       );
     }
-    this.registry.clearProviderQuarantine(pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+    this.#registry.clearProviderQuarantine(pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
     for (const provision of manifest.provides) {
       try {
-        this.registry.activateProvider(provision.capability, pluginId);
+        this.#registry.activateProvider(provision.capability, pluginId);
       } catch {
         /* non-replaceable provider */
       }
@@ -728,8 +720,8 @@ export class PluginLifecycleService {
         `Cannot downgrade plugin '${pluginId}' to '${targetVersion}': version is not available in the host catalog`,
       );
     }
-    const hostEntry = this.loader.authorizeManifest(targetManifest);
-    this.loader.validateManifest(targetManifest);
+    const hostEntry = this.#loader.authorizeManifest(targetManifest);
+    this.#loader.validateManifest(targetManifest);
     this.assertTrustAllowedBySafeMode(pluginId, hostEntry.trustLevel, "downgrade");
     this.dependencyGraph.assertCanAddPlugin(targetManifest);
     this.assertDependentCapabilitiesCompatible(targetManifest);
@@ -739,11 +731,11 @@ export class PluginLifecycleService {
 
     // Hot-reload FIRST so a failure leaves durable state untouched.
     if (wasEnabled) {
-      this.registry.quarantineProvider(pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
-      await this.loader.unload(pluginId);
+      this.#registry.quarantineProvider(pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+      await this.#loader.unload(pluginId);
       try {
-        await this.loader.load(targetManifest);
-        await this.loader.enableFromHostLifecycle(targetManifest);
+        await this.#loader.load(targetManifest);
+        await this.#loader.enableFromHostLifecycle(targetManifest);
       } catch (err) {
         await this.restoreLoaderVersion(pluginId, oldVersion);
         throw err;
@@ -818,8 +810,8 @@ export class PluginLifecycleService {
         // participant from dispatch before deleting one node, and persist any
         // enabled participant as an error until its graph is repaired.
         for (const cycleId of cyclePluginIds) {
-          this.registry.quarantineProvider(cycleId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
-          this.loader.disableForHostSafety(cycleId);
+          this.#registry.quarantineProvider(cycleId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+          this.#loader.disableForHostSafety(cycleId);
           const cycleRecord = this.store.getPlugin(cycleId);
           if (cycleRecord?.state === "enabled") {
             this.store.transaction(() => {
@@ -843,7 +835,7 @@ export class PluginLifecycleService {
           .reverse();
         for (const dependentId of dependentsToSuspend) {
           const dependentRecord = this.store.getPlugin(dependentId);
-          const loadedDependent = this.loader.getPlugin(dependentId);
+          const loadedDependent = this.#loader.getPlugin(dependentId);
           if (dependentRecord?.state !== "enabled" && loadedDependent?.status !== "enabled") {
             continue;
           }
@@ -856,15 +848,15 @@ export class PluginLifecycleService {
               forcedUninstall: true,
             });
           } else {
-            this.registry.quarantineProvider(dependentId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
-            this.loader.disableForHostSafety(dependentId);
+            this.#registry.quarantineProvider(dependentId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+            this.#loader.disableForHostSafety(dependentId);
             suspendedDependents.push({ pluginId: dependentId, persisted: false });
           }
         }
       }
 
-      if (this.loader.getPlugin(pluginId)) {
-        await this.loader.unload(pluginId);
+      if (this.#loader.getPlugin(pluginId)) {
+        await this.#loader.unload(pluginId);
       }
 
       // NOTE: no 'uninstalled' audit event is recorded: deletePlugin removes
@@ -884,12 +876,12 @@ export class PluginLifecycleService {
       if (this.store.getPlugin(pluginId)) {
         if (existing.state === "enabled") {
           try {
-            const loaded = this.loader.getPlugin(pluginId);
-            if (loaded?.status !== "enabled" || this.registry.isProviderQuarantined(pluginId)) {
+            const loaded = this.#loader.getPlugin(pluginId);
+            if (loaded?.status !== "enabled" || this.#registry.isProviderQuarantined(pluginId)) {
               await this.restoreLoaderVersion(pluginId, existing.version);
             }
           } catch (restoreError) {
-            this.registry.quarantineProvider(pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+            this.#registry.quarantineProvider(pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
             try {
               this.store.transaction(() => {
                 this.store.updatePluginState(pluginId, "error");
@@ -912,17 +904,17 @@ export class PluginLifecycleService {
               continue;
             }
 
-            const loaded = this.loader.getPlugin(dependent.pluginId);
+            const loaded = this.#loader.getPlugin(dependent.pluginId);
             if (!loaded) continue;
-            this.loader.checkDependencies(loaded.manifest);
-            await this.loader.enableFromHostLifecycle(loaded.manifest);
-            this.registry.clearProviderQuarantine(
+            this.#loader.checkDependencies(loaded.manifest);
+            await this.#loader.enableFromHostLifecycle(loaded.manifest);
+            this.#registry.clearProviderQuarantine(
               dependent.pluginId,
               HOST_CAPABILITY_REGISTRATION_AUTHORITY,
             );
             for (const provision of loaded.manifest.provides) {
               try {
-                this.registry.activateProvider(provision.capability, dependent.pluginId);
+                this.#registry.activateProvider(provision.capability, dependent.pluginId);
               } catch {
                 /* non-replaceable provider */
               }
@@ -949,7 +941,7 @@ export class PluginLifecycleService {
     const permissions = this.store.getPermissions(pluginId);
     const versions = this.store.getVersions(pluginId).map((v) => v.version);
     const recentEvents = this.store.getEvents(pluginId, 10);
-    const loadedPlugin = this.loader.getPlugin(pluginId);
+    const loadedPlugin = this.#loader.getPlugin(pluginId);
 
     return {
       id: record.id,
@@ -987,8 +979,8 @@ export class PluginLifecycleService {
     const tombstones = this.store.listPluginUninstallTombstones();
     const tombstonedPluginIds = new Set(tombstones.map((item) => item.pluginId));
     for (const tombstone of tombstones) {
-      this.registry.quarantineProvider(tombstone.pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
-      this.loader.disableForHostSafety(tombstone.pluginId);
+      this.#registry.quarantineProvider(tombstone.pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+      this.#loader.disableForHostSafety(tombstone.pluginId);
     }
 
     // Seed first-install defaults from exact host catalog entries. Startup
@@ -1001,16 +993,19 @@ export class PluginLifecycleService {
       const manifest = this.resolveManifest(entry.manifest.id, entry.manifest.version);
       if (!manifest) continue;
       try {
-        if (manifest !== this.loader.authorizeManifest(entry.manifest).manifest) continue;
+        if (manifest !== this.#loader.authorizeManifest(entry.manifest).manifest) continue;
       } catch {
         continue;
       }
       try {
-        this.loader.authorizeManifest(manifest);
+        this.#loader.authorizeManifest(manifest);
         await this.installUnlocked(manifest, undefined, "enabled");
       } catch (error) {
-        this.registry.quarantineProvider(entry.manifest.id, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
-        this.loader.disableForHostSafety(entry.manifest.id);
+        this.#registry.quarantineProvider(
+          entry.manifest.id,
+          HOST_CAPABILITY_REGISTRATION_AUTHORITY,
+        );
+        this.#loader.disableForHostSafety(entry.manifest.id);
         console.error(
           `[modus] Startup sync: failed to persist built-in '${entry.manifest.id}':`,
           error,
@@ -1027,7 +1022,7 @@ export class PluginLifecycleService {
       const manifest = this.resolveManifest(record.id, record.version);
       if (!manifest) continue;
       try {
-        if (manifest !== this.loader.authorizeManifest(builtInEntry.manifest).manifest) continue;
+        if (manifest !== this.#loader.authorizeManifest(builtInEntry.manifest).manifest) continue;
       } catch {
         continue;
       }
@@ -1053,21 +1048,21 @@ export class PluginLifecycleService {
       const manifest = this.resolveManifest(record.id, record.version);
       if (manifest) startupManifestsById.set(record.id, manifest);
     }
-    for (const loaded of this.loader.listPlugins()) {
+    for (const loaded of this.#loader.listPlugins()) {
       if (startupManifestsById.has(loaded.manifest.id)) continue;
       try {
-        const hostEntry = this.loader.authorizeManifest(loaded.manifest);
+        const hostEntry = this.#loader.authorizeManifest(loaded.manifest);
         if (hostEntry.manifest === loaded.manifest) {
           startupManifestsById.set(loaded.manifest.id, loaded.manifest);
         }
       } catch {
         // Loaded state is never proof of host authorization. Keep an
         // unexpected preloaded provider out of dispatch and dependency data.
-        this.registry.quarantineProvider(
+        this.#registry.quarantineProvider(
           loaded.manifest.id,
           HOST_CAPABILITY_REGISTRATION_AUTHORITY,
         );
-        this.loader.disableForHostSafety(loaded.manifest.id);
+        this.#loader.disableForHostSafety(loaded.manifest.id);
       }
     }
     this.dependencyGraph.rebuild([...startupManifestsById.values()]);
@@ -1078,17 +1073,17 @@ export class PluginLifecycleService {
     // Bootstrap may have activated built-ins before state was read, so startup
     // must apply the persisted host decision without executing plugin hooks.
     for (const record of records) {
-      if (record.state !== "enabled" && this.loader.getPlugin(record.id)) {
-        this.registry.quarantineProvider(record.id, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
-        this.loader.disableForHostSafety(record.id);
+      if (record.state !== "enabled" && this.#loader.getPlugin(record.id)) {
+        this.#registry.quarantineProvider(record.id, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+        this.#loader.disableForHostSafety(record.id);
       }
     }
 
     // Quarantine every cycle participant before a dependent is considered.
     // This also handles a cyclic host-loaded plugin that has no durable row.
     for (const pluginId of cyclicPluginIds) {
-      this.registry.quarantineProvider(pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
-      this.loader.disableForHostSafety(pluginId);
+      this.#registry.quarantineProvider(pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+      this.#loader.disableForHostSafety(pluginId);
       const record = this.store.getPlugin(pluginId);
       if (record?.state === "enabled") {
         this.store.transaction(() => {
@@ -1128,17 +1123,17 @@ export class PluginLifecycleService {
     ].filter((record): record is PluginRecord => record !== undefined);
 
     for (const record of orderedEnabledRecords) {
-      this.registry.quarantineProvider(record.id, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+      this.#registry.quarantineProvider(record.id, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
       if (cyclicPluginIds.has(record.id)) continue;
       const manifest = this.resolveManifest(record.id, record.version);
       if (!manifest) {
         console.warn(
           `[modus] Startup sync: cannot find manifest for enabled plugin '${record.id}'`,
         );
-        this.registry.quarantineProvider(record.id, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
-        const loadedPlugin = this.loader.getPlugin(record.id);
+        this.#registry.quarantineProvider(record.id, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+        const loadedPlugin = this.#loader.getPlugin(record.id);
         if (loadedPlugin && loadedPlugin.manifest.version !== record.version) {
-          await this.loader.unload(record.id).catch(() => undefined);
+          await this.#loader.unload(record.id).catch(() => undefined);
         }
         this.store.transaction(() => {
           this.store.updatePluginState(record.id, "error");
@@ -1153,11 +1148,11 @@ export class PluginLifecycleService {
       if (
         safeMode.level &&
         !this.allowedTrustLevels(safeMode.level).includes(
-          this.loader.authorizeManifest(manifest).trustLevel,
+          this.#loader.authorizeManifest(manifest).trustLevel,
         )
       ) {
-        this.registry.quarantineProvider(record.id, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
-        this.loader.disableForHostSafety(record.id);
+        this.#registry.quarantineProvider(record.id, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+        this.#loader.disableForHostSafety(record.id);
         this.store.transaction(() => {
           this.store.updatePluginState(record.id, "disabled");
           this.store.recordEvent(record.id, "safe_mode_disabled", {
@@ -1176,9 +1171,9 @@ export class PluginLifecycleService {
         // A loaded plugin with the same ID is not proof that it is the
         // catalog-authorized version persisted in state. Reconcile identity
         // as well as version before enabling it.
-        const loadedPlugin = this.loader.getPlugin(record.id);
+        const loadedPlugin = this.#loader.getPlugin(record.id);
         if (loadedPlugin?.manifest === manifest && loadedPlugin.status === "enabled") {
-          this.loader.checkDependencies(manifest);
+          this.#loader.checkDependencies(manifest);
           this.releaseQuarantineAfterDurableEnable(record.id, record.version);
           restored.push(record.id);
           continue;
@@ -1189,21 +1184,21 @@ export class PluginLifecycleService {
             loadedPlugin.manifest.id !== record.id ||
             loadedPlugin.manifest.version !== record.version)
         ) {
-          this.registry.quarantineProvider(record.id, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
-          await this.loader.unload(record.id);
+          this.#registry.quarantineProvider(record.id, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+          await this.#loader.unload(record.id);
         }
-        if (!this.loader.getPlugin(record.id)) {
-          await this.loader.load(manifest);
+        if (!this.#loader.getPlugin(record.id)) {
+          await this.#loader.load(manifest);
         } else {
-          this.loader.checkDependencies(manifest);
+          this.#loader.checkDependencies(manifest);
         }
-        await this.loader.enableFromHostLifecycle(manifest);
+        await this.#loader.enableFromHostLifecycle(manifest);
         this.releaseQuarantineAfterDurableEnable(record.id, record.version);
         restored.push(record.id);
       } catch (err) {
         console.error(`[modus] Startup sync: failed to enable plugin '${record.id}':`, err);
-        this.registry.quarantineProvider(record.id, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
-        this.loader.disableForHostSafety(record.id);
+        this.#registry.quarantineProvider(record.id, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+        this.#loader.disableForHostSafety(record.id);
         this.store.transaction(() => {
           this.store.updatePluginState(record.id, "error");
           this.store.recordEvent(record.id, "sync_error", {

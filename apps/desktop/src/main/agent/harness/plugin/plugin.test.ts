@@ -55,6 +55,17 @@ describe("Fase 10 — Modus Internal Plugins", () => {
   });
 
   describe("10.1 — Plugin Manifest & Descriptor Validation", () => {
+    it("keeps loader state and executable source resolution out of reflection", () => {
+      const prototype = Object.getPrototypeOf(loader) as Record<string, unknown>;
+
+      expect(Reflect.ownKeys(loader)).toEqual([]);
+      expect(Reflect.get(loader, "plugins")).toBeUndefined();
+      expect(Reflect.get(loader, "sourceManifestByPublic")).toBeUndefined();
+      expect(Reflect.get(loader, "registry")).toBeUndefined();
+      expect(Reflect.get(prototype, "authorizedEntry")).toBeUndefined();
+      expect(Reflect.get(prototype, "getRegistry")).toBeUndefined();
+    });
+
     it("rejects executable manifests from catalogs without host-registered provenance", async () => {
       const onLoad = vi.fn();
       const manifest: PluginManifest = {

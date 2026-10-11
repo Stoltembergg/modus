@@ -261,17 +261,11 @@ describe("Fase 11 — Plugin Lifecycle & State Storage", () => {
       expect(registry.isProviderQuarantined(sampleManifestV1.id)).toBe(true);
     });
 
-    it("unloads a same-ID instance whose manifest identity is absent from the host catalog", async () => {
+    it("unloads a plugin when durable state names a version absent from the host catalog", async () => {
       const now = new Date().toISOString();
-      const uncatalogued = { ...sampleManifestV1, version: "77.0.0" };
-      (loader as unknown as { plugins: Map<string, unknown> }).plugins.set(uncatalogued.id, {
-        manifest: uncatalogued,
-        status: "loaded",
-        loadedAt: new Date(),
-        implementations: {},
-      });
+      await loader.load(sampleManifestV1);
       store.savePlugin({
-        id: uncatalogued.id,
+        id: sampleManifestV1.id,
         version: "9.9.9",
         state: "enabled",
         trust_level: "official",
@@ -282,9 +276,16 @@ describe("Fase 11 — Plugin Lifecycle & State Storage", () => {
 
       const restored = await service.syncOnStartup();
 
-      expect(restored).not.toContain(uncatalogued.id);
-      expect(loader.getPlugin(uncatalogued.id)).toBeUndefined();
-      expect(store.getPlugin(uncatalogued.id)?.state).toBe("error");
+      expect(restored).not.toContain(sampleManifestV1.id);
+      expect(loader.getPlugin(sampleManifestV1.id)).toBeUndefined();
+      expect(store.getPlugin(sampleManifestV1.id)?.state).toBe("error");
+    });
+
+    it("does not expose its loader or mutable registry through reflection", () => {
+      expect(Reflect.get(service, "loader")).toBeUndefined();
+      expect(Reflect.get(service, "registry")).toBeUndefined();
+      expect(Reflect.get(service, "getLoader")).toBeUndefined();
+      expect(Reflect.get(service, "getRegistry")).toBeUndefined();
     });
     it("installs a plugin into SQLite and live catalog", async () => {
       const record = await service.install(sampleManifestV1, { maxEntries: 50 });

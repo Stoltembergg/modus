@@ -1840,13 +1840,13 @@ cancellation follow-up above.
 |---|---|---|
 | A01 | Partially mitigated | Facade fails closed and Pi chat/review no longer auto-load project/user extensions. The shared protocol validates bounded frames and strict schemas; v2 adds distinct cancellation and rejects v1 on both worker handshake and host-response decode. No OS process executor or production caller exists; isolation and productive wiring remain unproven. Hostile execution proof remains blocked. |
 | A02 | Partially mitigated | The shared resource-policy contract records the approved CPU, memory, time, output, IPC, process, hostcall and concurrency ceilings. No platform adapter enforces them, and no process-tree preemption/reap path is integrated. Do not run blocked probes. |
-| A03 | Partially mitigated | Chat/review auto-discovery remains blocked. Host catalog lookups, built-in catalog entries, loader results, and capability provider queries expose immutable metadata descriptors without lifecycle/implementation callbacks. `PluginLoader` now also rejects a catalog's self-declared trust unless the exact catalog/source pair is registered by host-owned wiring. Exact source references remain private to trusted in-process loader wiring; this is API encapsulation, not process isolation. The v2 IPC contract carries host-only digest, origin, trust, session/workspace/run and generation provenance, but has no production caller and does not establish trust on its own. |
+| A03 | Partially mitigated | Chat/review auto-discovery remains blocked. Host catalog lookups, built-in catalog entries, loader results, and capability provider queries expose immutable metadata descriptors without lifecycle/implementation callbacks. `PluginLoader` rejects catalog self-declared trust unless the exact catalog/source pair is host-registered. Loader state, catalog/registry references, source-manifest maps, and sensitive lifecycle/authorization helpers now use ECMAScript `#private`; unused loader/service registry accessors were removed after full-repository callsite search found no consumers. Exact source references remain within trusted in-process wiring; this is reflective encapsulation, not process isolation. The v2 IPC contract carries host-only digest, origin, trust, session/workspace/run and generation provenance, but has no production caller and does not establish trust on its own. |
 | A04 | Partially mitigated | External Pi extension ingress is disabled for chat and review; the review callsite guard covers loader flags and session creation. Registry provider execution remains dispatched through `CapabilityRegistry.execute`; rollback uses opaque registry-owned checkpoints. Public catalog/registry lookup APIs no longer return implementation references. The shared IPC dispatcher validates exact grants and cancellation in synthetic fixtures, but built-ins remain trusted in-process and no OS-backed dispatcher/lifecycle boundary is integrated. |
 | A05 | Partially mitigated; WASM watchdog cleanup fixed | `WasmCapabilityHost` validates a single bounded memory, reserves per-instance/aggregate maximum capacity, reports actual live memory, charges returned callable and JSON helper calls, defers reservation release until active exports unwind, invalidates returned callables on disposal, recognizes cross-realm resources, rejects object-valued globals/callback returns/exports and blocks function-reference escape through host imports/tables/tags/globals, keeps fuel imports host-owned, and now clears the host timeout timer on every settled invocation. External plugin wiring and blocked enforcement proof remain unavailable. |
 | A06 | Partially mitigated; no-grant WASI denial revalidated | All imported WASI modules are denied before instantiation; exact synthetic tests ran with instantiation asserted unused. Grant-backed env/preopens and host isolation remain unavailable. |
 | A07 | Partially mitigated; FilesystemBroker now fails closed before metadata lookup | All path grants return denial before filesystem metadata or content I/O; `readFile`/`writeFile` audit and throw until a handle-bound executor exists. This is no longer a path-containment proof. No production consumer; scoped safe I/O and OS-handle binding remain open. |
 | A08 | Partially mitigated; NetworkBroker now fails closed | Exact public-domain/IP grants no longer return allow without DNS-pinned connection enforcement. Audit reasons still distinguish protected ranges from ordinary public destinations denied for absent I/O. The broker has no production caller. DNS pinning, redirect enforcement, actual connection control, and production wiring remain open. |
-| A09 | Partially mitigated; ShellBroker now fails closed | `ShellBroker.canExecute` always denies and audits until a platform-isolated executor is integrated, so exact grants cannot authorize known or unknown command strings. Static search found no production caller; trusted Harness and separate `GitBroker` remain independent. A production dispatcher, scoped argv authority, and OS execution boundary are still absent. |
+| A09 | Partially mitigated; ShellBroker now fails closed | `ShellBroker.canExecute` always denies and audits until a platform-isolated executor is integrated, so exact grants cannot authorize known or unknown command strings. Static search found no production caller. `GitBroker` requires an exact operation grant in its contract, but it also has no production caller and therefore does not gate actual Git network operations. Trusted Harness and other built-in Git paths remain independent. A production dispatcher, scoped argv authority, Git network authorization, and OS execution boundary are still absent. |
 | A10 | Mitigated for host-catalog plugins; legacy activation blocked | Startup uses exact host-catalog versions, opens the durable store before deferred activation, reconciles disabled/tombstoned state, and restores dependency order. `MODUS_PLUGINS` now requires `MODUS_PLUGIN_LIFECYCLE`; no direct bootstrap path remains. External artifact identity and crash-consistent package deployment remain unavailable. |
 | A11 | Mitigated | Disable transaction rollback restores runtime or leaves provider quarantined; broader crash atomicity remains unproven. |
 | A12 | Mitigated | Per-store lifecycle queue serializes shared DB/graph operations; stress/fault injection beyond targeted tests remains open. |
@@ -1859,7 +1859,7 @@ cancellation follow-up above.
 | A19 | Prior A21.4 implementation preserved | Spill authorization, persistence, quotas, and recovery. |
 | A20 | Partially mitigated; same-connection mutation detection added | Audit events and checkpoints persist in SQLite; immutable snapshots, transactional retention, append-time verification on audit revision changes, and checkpoint comparisons detect ordinary record changes through the same or another connection. No independent signing key or database access boundary exists. |
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |
-| A22 | Partially mitigated; productive readers page and source extraction is incremental | Cursor-page reads now drive IPC, timeline/history, source lookup and Pi output; the unbounded `agent:list-events` bridge endpoint is removed. Store/helper/context tests passed 89/89, offline Pi runtime 232/232; source/timeline/history/EventHub regressions passed 39/39; the A22 IPC follow-up passed 87/87 and independent review found no blocker. The internal `listAgentEvents` helper still aggregates if explicitly called but has no productive callsite. CI on `e1f175e` passed Biome/typecheck, containment on all three platforms, Verifier-First, sandbox compile-only and PTY cancellation. Global Vitest recorded 4,606 passed, 8 skipped, one `FastVectorDistance` timing failure at 0.113051 ms against <0.1 ms; pgTAP test 22 received 2026-10-30 and expected 2026-10-31. Subsequent pgTAP CI after migration `6844254` passed (20 files/1,041 tests; see the renewal follow-up above). Windows/macOS packaging later passed. No baseline or instability classification is claimed. Active source-tool arguments/output, individual raw event payloads, synthetic prompt backfill and volatile partial previews remain byte/retention limitations. |
+| A22 | Partially mitigated; productive readers page and source extraction is incremental | Cursor-page reads now drive IPC, timeline/history, source lookup and Pi output; the unbounded `agent:list-events` bridge endpoint is removed. Store/helper/context tests passed 89/89, offline Pi runtime 232/232; source/timeline/history/EventHub regressions passed 39/39; the A22 IPC follow-up passed 87/87 and independent review found no blocker. The internal `listAgentEvents` helper still aggregates if explicitly called but has no productive callsite. CI on `e1f175e` passed Biome/typecheck, containment on all three platforms, Verifier-First, sandbox compile-only and PTY cancellation. Global Vitest recorded 4,606 passed, 8 skipped, one `FastVectorDistance` timing failure at 0.113051 ms against <0.1 ms; pgTAP test 22 received 2026-10-30 and expected 2026-10-31. Subsequent pgTAP CI after migration `6844254` passed (20 files/1,041 tests; see the renewal follow-up above). Windows/macOS packaging later passed. Fresh read-only query-plan checks show the current `idx_agent_events_session_id` serves forward and backward `rowid` keyset ranges; a proposed composite index was discarded because `event_cursor` is the `INTEGER PRIMARY KEY` rowid alias and the existing plan already applies the cursor bounds. No query-plan regression was demonstrated. No baseline or instability classification is claimed. Active source-tool arguments/output, individual raw event payloads, synthetic prompt backfill and volatile partial previews remain byte/retention limitations. |
 | A23 | Mitigated; integrated checks pass | Synthetic capability outputs and the generic core `status: ok` fallback now fail explicitly with `CapabilityUnavailableError`; stale declared grants are reconciled by exact host identity/version; separate Pi runtime services, A16 selection, and A17 evidence flows are preserved. Independent review found no blocker. Workflow `38081920060` passed the relevant feature jobs, Supabase pgTAP (20 files/1,041 tests), containment, compile-only sandbox and Windows/macOS packaging. The same run had one unrelated-to-A23 global Vitest timing failure, without a baseline classification. |
 | A24 | Partially mitigated | Compiled-module cache has LRU entry/source-byte caps and hashes caller namespaces; cache counters do not measure native compiled memory. A05 supplies measured failure metrics. WASI remains denied and stdio capture is unavailable. |
 | A25 | Mitigated; prior fix preserved and revalidated | `allow-workspace` requires workspace+tool identity and lookup keys include both plus action/target; the Pi runtime supplies persisted host workspace identity across worktree cwd changes. Unknown tools are blocked before permission prompting and are not read-only safe. Safe focused validation: 52 permission-store/permission-extension/tool-registry tests and one productive Pi runtime workspace-scope test passed. A two-workspace synthetic store test passes; external tool/plugin execution remains disabled. |
@@ -2307,4 +2307,80 @@ does not establish the cause or justify classifying the failure as pre-existing
 or solely environmental. The threshold, benchmark, filters, and production
 benchmark implementation were not changed. Windows x64 packaging
 (`38094951266`) and macOS x64/arm64 packaging (`38094951288`) passed. The
-upcoming CodeGraph change has not yet run remote CI.
+CodeGraph change was subsequently published in `c37495b`; its remote CI is
+recorded below.
+
+### A22 keyset index recheck
+
+An attempted composite-index addition was reverted after the query plan showed
+that the existing `idx_agent_events_session_id` already supports both forward
+and backward keyset range scans: `event_cursor` is the table's
+`INTEGER PRIMARY KEY` alias for `rowid`, and SQLite secondary indexes retain
+rowid as the tie-breaker. Synthetic `EXPLAIN QUERY PLAN` output used the
+existing index with the `rowid` range predicates in both directions. An
+independent review confirmed the schema and plan reasoning. This is evidence
+of index usability, not a benchmark across database sizes or SQLite versions;
+the index is not covering for payload columns, and the conclusion depends on
+the current rowid-table schema. No database or event-store code change was
+retained.
+
+### A09 broker callsite recheck
+
+Static callsite search on `c37495b` found no non-test caller of
+`GitBroker.canPerform`. The method correctly denies by default and allows only
+the exact requested operation when its matching grant is true, but this is a
+unit-tested contract rather than productive enforcement. `ShellBroker` also
+has no production caller and remains deny-all. No Git operation was run or
+changed. Do not treat either broker as an OS or network boundary; actual
+built-in Git behavior continues through its separate user-facing tool path.
+
+### Remote CI and official rerun on `c37495b`
+
+Workflow `38096490604` ran on PR HEAD `c37495ba81c289cce53a8b5f14df636f55440643`.
+Biome and TypeScript typecheck passed. Global Vitest reported **4,648 passed,
+8 skipped, and 1 failed across 414 files**; the sole failure was the unchanged
+`FastVectorDistance` latency assertion at `0.115616 ms` against `<0.1 ms`.
+The official GitHub rerun of only `typecheck · test · biome` (job
+`114344266471`) reproduced the same failure at `0.115616 ms`, with the same
+test counts. The benchmark, threshold, test filters, and production code were
+not changed. This does not establish a baseline or environment-only cause.
+
+The same workflow passed PTY cancellation, safe-filtered containment on
+Ubuntu/Windows/macOS, safe plugin execution protocol fixtures, compile-only
+sandbox targets, Verifier-First runtime regressions, and Supabase pgTAP/integration
+(20 files, **1,041 tests passed**). Windows packaging (`38096490570`) and macOS
+packaging (`38096490615`, x64 and arm64) completed successfully. The PR remains
+Draft; no enforcement probe was run.
+
+### A03 loader and lifecycle reflection hardening
+
+`PluginLoader` previously used TypeScript-only `private` fields for its
+capability registry, host catalog, loaded-plugin map, and source-manifest
+mapping. JavaScript reflection could read or mutate those own properties, and
+the prototype exposed the authorization helper as a normal method. The
+`PluginLifecycleService` likewise reflected its loader and mutable registry
+through own properties and public getters. These references are part of the
+trusted in-process implementation, and the runtime does not expose them to
+external plugin code; the change narrows the reflective API and removes
+unused escape hatches, but does not establish an external execution boundary.
+
+- RED/GREEN: the new reflection tests failed on the old properties/getters and
+  passed after conversion to ECMAScript `#private` fields/methods. The lifecycle
+  reconciliation test no longer injects state by mutating the loader's private
+  map; it now loads a host-catalog manifest and tests stale durable version
+  reconciliation through the supported flow.
+- Focused plugin loader/lifecycle/dependency/rollback Vitest passed **146/146**;
+  focused catalog tests passed **6/6**. Desktop typecheck passed. Biome exited
+  successfully on all four changed TypeScript files; it reported existing
+  warnings (non-null assertions and explicit `any`) without errors. No
+  unrelated warnings were changed.
+- Full-repository callsite search found no `.getRegistry()` or `.getLoader()`
+  consumers. Independent patch review found no blocker. It notes that the
+  exported classes could have out-of-repository consumers and that unrelated
+  service fields such as the store and dependency graph remain intentionally
+  outside this encapsulation change. No external plugins, probes, or
+  enforcement scenarios ran.
+- Residual: reflective encapsulation only protects against ordinary property
+  inspection/mutation. Trusted code already executing in the host process is
+  outside this boundary. External plugin execution remains blocked pending the
+  process executor, platform adapters, dispatcher wiring, and preemption proof.
