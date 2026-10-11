@@ -105,6 +105,63 @@ describe("Supabase auth backend", () => {
       }
     });
 
+    it("fetchBilling reads credit_lots as remaining + status only (RLS filters) and sums credited lots", async () => {
+      const lotsResponses: Array<() => Response> = [
+        () =>
+          Response.json([
+            { remaining: 4000, status: "credited" },
+            { remaining: 5000, status: "credited" },
+            { remaining: 700, status: "refunded" },
+            { remaining: 300, status: "charged_back" },
+            { remaining: 0, status: "credited" },
+          ]),
+        () => Response.json({ message: "permission denied" }, { status: 403 }),
+      ];
+      for (const lots of lotsResponses) {
+        const { backend } = withFetch(() => Response.json([]));
+        const urls: URL[] = [];
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (input: RequestInfo | URL) => {
+            const url = new URL(String(input instanceof Request ? input.url : input));
+            urls.push(url);
+            if (url.pathname.endsWith("/credit_lots")) return lots();
+            if (url.pathname.endsWith("/credit_wallets")) {
+              return Response.json({
+                balance: 9640,
+                reserved: 0,
+                plan_allowance: 1000,
+                period_end: null,
+              });
+            }
+            return Response.json([]);
+          }),
+        );
+        try {
+          const snapshot = await backend.fetchBilling("11111111-1111-4111-8111-111111111111");
+          const lotReads = urls.filter((url) => url.pathname.endsWith("/credit_lots"));
+          expect(lotReads).toHaveLength(1);
+          // The authenticated column grant has no user_id: no user_id filter, two columns only.
+          expect([...(lotReads[0]?.searchParams.keys() ?? [])]).toEqual(["select"]);
+          expect(lotReads[0]?.searchParams.get("select")).toBe("remaining,status");
+          if (lots === lotsResponses[0]) {
+            expect(snapshot.wallet).toMatchObject({
+              balance: 9640,
+              purchased: 9000,
+              allowance: 640,
+            });
+          } else {
+            // Lots unreadable: the balance still shows, without a breakdown.
+            expect(snapshot.wallet?.balance).toBe(9640);
+            expect(snapshot.wallet).not.toHaveProperty("purchased");
+            expect(snapshot.wallet).not.toHaveProperty("allowance");
+          }
+        } finally {
+          backend.dispose();
+        }
+      }
+    });
+
     it("POSTs an empty object to mp-cancel and maps the known codes", async () => {
       for (const code of ["no_subscription", "canceled", "cancel_requested"]) {
         const { backend, calls } = withFetch(() => Response.json({ code }));

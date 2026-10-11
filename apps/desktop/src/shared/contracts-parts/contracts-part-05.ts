@@ -322,6 +322,11 @@ export type ModelSettingsState = {
   modus?: ModusModelsStatus;
   /** L3b: the model a Modus session's turn runs on (main getModusTurnModelId). */
   modusDefaultModel?: string;
+  /**
+   * The plan the Modus router grants now (GET /v1/models `plan`): the subscription plan or, with
+   * unspent purchased credits, the pack's access plan. Only while Modus is ready.
+   */
+  modusPlan?: string;
 };
 
 export type ProviderUsageMetric = {

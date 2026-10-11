@@ -125,6 +125,23 @@ describe("createModusProvider", () => {
     expect(fetchModels).toHaveBeenCalledTimes(3);
   });
 
+  it("plan(): the /v1/models plan while ready (credit-pack access included), undefined otherwise", async () => {
+    const fetchModels = vi
+      .fn<() => Promise<ModusModelsResult>>()
+      .mockResolvedValueOnce({ ...READY, plan: "starter" })
+      .mockResolvedValueOnce({ ok: false, reason: "unavailable" })
+      .mockResolvedValueOnce({ ...READY, plan: "pro" });
+    const { source, provider, onChanged } = setup("signed-in", fetchModels);
+    await vi.waitFor(() => expect(provider.plan()).toBe("starter"));
+    expect(onChanged).toHaveBeenCalled();
+    await provider.reload();
+    expect(provider.plan()).toBeUndefined();
+    await provider.reload();
+    expect(provider.plan()).toBe("pro");
+    source.emit("signed-out");
+    expect(provider.plan()).toBeUndefined();
+  });
+
   it("an expired session from /v1/models turns the provider off", async () => {
     const { provider } = setup(
       "signed-in",

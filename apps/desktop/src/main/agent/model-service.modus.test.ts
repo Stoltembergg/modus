@@ -315,6 +315,15 @@ describe("Modus provider in the model service", () => {
     expect(ms.getDefaultModelId(settings.models)).not.toBe("modus/zai/glm-4.6");
   });
 
+  it("getModelSettings reports the router plan as modusPlan only while Modus is ready", async () => {
+    const auth = authSource("signed-in");
+    const modus = installModus(auth, () => ({ ...READY, plan: "starter" }));
+    await vi.waitFor(() => expect(modus.status()).toBe("ready"));
+    expect(ms.getModelSettings().modusPlan).toBe("starter");
+    ms.setModusProvider(undefined);
+    expect(ms.getModelSettings()).not.toHaveProperty("modusPlan");
+  });
+
   it("an unavailable router registers Modus with no models; the next catalog load retries once", async () => {
     let result: ModusModelsResult = { ok: false, reason: "unavailable" };
     const fetchModels = vi.fn(async () => result);

@@ -58,6 +58,8 @@ export type ModusProvider = {
   lockedIds(): ReadonlySet<string>;
   /** L3b: the plan default (`/v1/models` default_model) as an app id; undefined = none. */
   defaultModelId(): string | undefined;
+  /** The plan /v1/models reported (subscription or credit-pack access); undefined unless ready. */
+  plan(): string | undefined;
   /** L3b: the smallest credit pack that unlocks a locked app model id (null/undefined = none). */
   unlockPack(appModelId: string): { id: string; credits: number } | null | undefined;
   /** Sync with the cached state; cheap and idempotent (applyModelCatalog runs it often). */
@@ -75,6 +77,7 @@ export function createModusProvider(deps: ModusProviderDeps): ModusProvider {
   let models: ModusRouterModel[] = [];
   let locked = new Set<string>();
   let planDefault: string | undefined;
+  let plan: string | undefined;
   let userId: string | null = null;
   let loading: Promise<void> | undefined;
   let generation = 0;
@@ -84,8 +87,10 @@ export function createModusProvider(deps: ModusProviderDeps): ModusProvider {
     nextStatus: ModusModelsStatus,
     nextModels: ModusRouterModel[],
     nextDefault?: string | null,
+    nextPlan?: string,
   ): void {
     status = nextStatus;
+    plan = nextStatus === "ready" ? nextPlan : undefined;
     models = nextModels;
     planDefault = nextDefault ? `${MODUS_PROVIDER_ID}/${nextDefault}` : undefined;
     locked = new Set(
@@ -105,7 +110,7 @@ export function createModusProvider(deps: ModusProviderDeps): ModusProvider {
         .fetchModels()
         .catch((): ModusModelsResult => ({ ok: false, reason: "unavailable" }));
       if (run !== generation) return;
-      if (result.ok) set("ready", result.models, result.defaultModel);
+      if (result.ok) set("ready", result.models, result.defaultModel, result.plan);
       else if (result.reason === "signed-out") set("off", []);
       else set("unavailable", []);
     })();
@@ -138,6 +143,7 @@ export function createModusProvider(deps: ModusProviderDeps): ModusProvider {
     models: () => models,
     lockedIds: () => locked,
     defaultModelId: () => planDefault,
+    plan: () => plan,
     unlockPack: (appModelId) =>
       models.find((model) => `${MODUS_PROVIDER_ID}/${model.id}` === appModelId)?.unlockPack,
 

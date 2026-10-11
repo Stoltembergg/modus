@@ -65,9 +65,12 @@ export function modusStatusText(status: ModusModelsStatus): { label: string; det
 
 export function AccountSettingsPanel({
   modusStatus,
+  modusPlan,
 }: {
   /** Absent = off (signed out / no Modus provider). */
   modusStatus?: ModusModelsStatus | undefined;
+  /** The plan the Modus router grants now (/v1/models `plan`); absent until Modus is ready. */
+  modusPlan?: string | undefined;
 } = {}) {
   const [state, setState] = useState<AuthState | undefined>();
   const [mode, setMode] = useState<Mode>("sign-in");
@@ -190,7 +193,7 @@ export function AccountSettingsPanel({
               ) : null}
             </SettingsList>
           </SettingsSection>
-          <AccountBillingSection />
+          <AccountBillingSection accessPlan={modusPlan} />
         </>
       ) : (
         <>

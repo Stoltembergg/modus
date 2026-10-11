@@ -175,7 +175,10 @@ export function ModelPicker({
                   key={group.key}
                 >
                   {group.label !== null && group.providerId ? (
-                    <Combobox.GroupLabel className="sticky top-0 z-[1] -mx-1 flex items-center gap-2 bg-elevated px-3 pt-2 pb-1 text-2xs text-fg-subtle select-none">
+                    <Combobox.GroupLabel
+                      className="sticky-glass-strip sticky top-0 z-[1] -mx-1 flex items-center gap-2 px-3 pt-2 pb-1 text-2xs text-fg-subtle select-none"
+                      data-strip="elevated"
+                    >
                       <span aria-hidden className="contents">
                         <ProviderLogo
                           framed={false}

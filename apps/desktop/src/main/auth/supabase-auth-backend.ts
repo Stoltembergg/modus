@@ -203,7 +203,7 @@ export function createSupabaseAuthBackend(config: AuthConfig): AuthBackend & Bil
     async fetchBilling(userId) {
       const columns =
         "plan, provider, status, current_period_end, cancel_at_period_end, cancel_requested_at, updated_at";
-      const [plans, catalog, subscription, grace, wallet] = await Promise.all([
+      const [plans, catalog, subscription, grace, wallet, lots] = await Promise.all([
         client
           .from("plans")
           .select("plan, name, price_usd_cents, stripe_price_id, monthly_credits, sort_order")
@@ -238,6 +238,9 @@ export function createSupabaseAuthBackend(config: AuthConfig): AuthBackend & Bil
           .select("balance, reserved, plan_allowance, period_end")
           .eq("user_id", userId)
           .maybeSingle(),
+        // Purchased credits left. The authenticated column grant has no user_id: select only
+        // these columns and let RLS (credit_lots_select_own) return the caller's own lots.
+        client.from("credit_lots").select("remaining, status"),
       ]);
       for (const result of [plans, subscription, grace, wallet]) {
         if (result.error) throw new AuthBackendError("other", "billing read failed");
@@ -248,6 +251,8 @@ export function createSupabaseAuthBackend(config: AuthConfig): AuthBackend & Bil
         catalog: catalog.error ? null : ((catalog.data ?? []) as unknown[]),
         subscription: subscription.data ?? grace.data,
         wallet: wallet.data,
+        // A lots failure must not hide the balance: the UI then skips the breakdown.
+        lots: lots.error ? null : ((lots.data ?? []) as unknown[]),
       });
     },
 
