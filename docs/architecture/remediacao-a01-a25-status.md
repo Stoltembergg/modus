@@ -1905,7 +1905,7 @@ cancellation follow-up above.
 | A02 | Partially mitigated | The shared resource-policy contract records the approved CPU, memory, time, output, IPC, process, hostcall and concurrency ceilings. No platform adapter enforces them, and no process-tree preemption/reap path is integrated. Do not run blocked probes. |
 | A03 | Partially mitigated | Chat/review auto-discovery remains blocked. Host catalog lookups, built-in catalog entries, loader results, and capability provider queries expose immutable metadata descriptors without lifecycle/implementation callbacks. `PluginLoader`, `PluginLifecycleService`, and `CapabilityRegistry` now keep trust/authorization maps, checkpoints, provenance state, source/executor references, and internal helpers in ECMAScript `#private` fields/methods; unused loader/service registry accessors were removed after full-repository callsite search found no consumers. Exact source references remain within trusted in-process wiring; this is reflective encapsulation, not process isolation. The v2 IPC contract carries host-only digest, origin, trust, session/workspace/run and generation provenance, but has no production caller and does not establish trust on its own. |
 | A04 | Partially mitigated | External Pi extension ingress is disabled for chat and review; the review callsite guard covers loader flags and session creation. Registry provider execution remains dispatched through `CapabilityRegistry.execute`; rollback uses opaque registry-owned checkpoints. Public catalog/registry lookup APIs no longer return implementation references. The shared IPC dispatcher validates exact grants and cancellation in synthetic fixtures, but built-ins remain trusted in-process and no OS-backed dispatcher/lifecycle boundary is integrated. |
-| A05 | Partially mitigated; WASM watchdog cleanup fixed | `WasmCapabilityHost` validates a single bounded memory, reserves per-instance/aggregate maximum capacity, reports actual live memory, charges returned callable and JSON helper calls, defers reservation release until active exports unwind, invalidates returned callables on disposal, recognizes cross-realm resources, rejects object-valued globals/callback returns/exports and blocks function-reference escape through host imports/tables/tags/globals, keeps fuel imports host-owned, and now clears the host timeout timer on every settled invocation. External plugin wiring and blocked enforcement proof remain unavailable. |
+| A05 | Partially mitigated; unpreemptible WASM timeouts now fail closed | Both `WasmCapabilityHost.executeWasm` and its public `createInstance` factory reject positive `timeoutMs` before compilation/instantiation because synchronous in-process WASM cannot be preempted by a JavaScript timer. Trusted in-process calls without a timeout retain their behavior. Memory/callable/fuel-import protections remain; external plugin wiring and blocked enforcement proof remain unavailable. |
 | A06 | Partially mitigated; no-grant WASI denial revalidated | All imported WASI modules are denied before instantiation; exact synthetic tests ran with instantiation asserted unused. Grant-backed env/preopens and host isolation remain unavailable. |
 | A07 | Partially mitigated; FilesystemBroker now fails closed before metadata lookup | All path grants return denial before filesystem metadata or content I/O; `readFile`/`writeFile` audit and throw until a handle-bound executor exists. This is no longer a path-containment proof. No production consumer; scoped safe I/O and OS-handle binding remain open. |
 | A08 | Partially mitigated; NetworkBroker now fails closed | Exact public-domain/IP grants no longer return allow without DNS-pinned connection enforcement. Audit reasons still distinguish protected ranges from ordinary public destinations denied for absent I/O. The broker has no production caller. DNS pinning, redirect enforcement, actual connection control, and production wiring remain open. |
@@ -2299,6 +2299,47 @@ deadline, error, fuel/memory behavior, and instance-disposal path.
   new runtime assertions. Static call-site search found no productive callers
   of `executeWasm`/`executeAsPluginRpc`, and external plugin execution remains
   blocked.
+
+### A05 in-process WASM timeout contract
+
+The timer cleanup above did not make the timeout enforceable. `WasmPluginInstance`
+invokes exports synchronously with `Reflect.apply`; while that call is running,
+the Node event loop cannot run the `setTimeout` callback in the old
+`Promise.race`. The race could report success after the requested deadline and
+could not stop a non-terminating export. Module start work also runs during
+instantiation, so checking only around the export would leave an unbounded path
+before the race.
+
+Both `executeWasm` and the public `createInstance` factory now reject positive
+`timeoutMs` before compilation/instantiation, with an error directing callers
+to a preemptible OS-isolated worker. The ineffective watchdog and timeout error
+import were removed. A call with no positive timeout remains available for
+trusted internal WASM; this does not authorize external plugin execution, and
+there are no production callers of `executeWasm` or `executeAsPluginRpc` in the
+repository. The public APIs may have external callers, which now receive
+explicit failure instead of an ignored or false timeout guarantee.
+
+- RED: the safe synthetic add-module regression returned `success: true` for a
+  positive timeout before this change, despite invoking WASM synchronously.
+- GREEN: the same request now returns `success: false` before `createInstance`,
+  reserves no memory, and creates no timer. A paired no-timeout regression
+  confirms the trusted add module still returns `5`.
+- Review follow-up RED: the new direct-factory test observed that
+  `createInstance({ timeoutMs: 1 })` resolved and compiled the safe add module.
+  GREEN: the shared guard now rejects it before `WebAssembly.compile` and
+  leaves no memory reservation.
+- Targeted Vitest: **3 passed, 50 skipped** in `wasm-sandbox.test.ts`. The
+  command selected only these finite synthetic-module cases; it did not execute
+  loop/fuel probes, enforcement scenarios, or benchmarks.
+- Final verification: targeted Vitest **3 passed, 50 skipped**; desktop
+  TypeScript typecheck passed; targeted Biome exited 0 with no errors or
+  formatting changes. The one `noUnusedVariables` warning for the existing
+  `TIn` type parameter is unchanged in the pre-change file. Independent
+  follow-up review approved both guard points; it found no blocker and noted
+  that there are no productive positive-timeout callers. Remote CI for this
+  follow-up is pending. A05 remains partial because non-cooperative in-process
+  work is not preemptible, external plugin execution must stay blocked, and
+  platform process containment/reap guarantees have not been proven.
 
 #### Remote CI on `a1a4e35` before the `pkexec`/`run0` follow-up
 
@@ -2745,3 +2786,16 @@ unchanged in SQLite, and renderer source scanning uses the same shared limit.
   PTY cancellation, and Verifier-First passed. Windows packaging run
   `38103920147` and macOS packaging run `38103920146` both succeeded. This CI
   predates the current uncommitted A22 page cap.
+- The next remote CI on `0b326037fbb7e5816a9a3fef2b3ff6c697d15b5d`
+  (`38104705079`) confirmed the incremental Supabase renewal migration and
+  pgTAP divergence fix: the pgTAP integration job passed, including SQL and
+  Deno function checks. Its global Vitest job had **4,675 passed, 8 skipped,
+  1 failed across 415 files**; the sole failure was the unchanged
+  `FastVectorDistance` benchmark at **0.10311200000001008 ms** against
+  `< 0.1 ms`. The safe-filtered macOS containment job also ran that benchmark
+  and failed at **0.50875 ms** (310 passed, 7 skipped). Ubuntu/Windows
+  containment, synthetic IPC, compile-only sandbox, Verifier-First, PTY
+  cancellation, typecheck/Biome, and the remaining jobs passed. macOS package
+  `38104705086` and Windows package `38104705094` both succeeded. The benchmark
+  and threshold remain unchanged; these failures are not classified as
+  pre-existing or solely environmental.

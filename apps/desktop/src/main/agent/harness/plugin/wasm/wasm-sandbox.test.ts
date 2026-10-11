@@ -986,17 +986,61 @@ describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
       expect(host.getReservedMemoryPages()).toBe(0);
     });
 
-    it("clears the watchdog timer when execution completes before its deadline", async () => {
+    it("executes trusted in-process WASM when no preemption timeout is requested", async () => {
       vi.useFakeTimers();
       try {
-        const result = await wasmHost.executeWasm(buildAddModule(), "add", [2, 3], {
-          timeoutMs: 60_000,
-        });
+        const result = await wasmHost.executeWasm(buildAddModule(), "add", [2, 3]);
 
         expect(result.success).toBe(true);
+        expect(result.result).toBe(5);
         expect(vi.getTimerCount()).toBe(0);
       } finally {
         vi.useRealTimers();
+      }
+    });
+
+    it("rejects timeout requests that synchronous in-process WASM cannot enforce", async () => {
+      vi.useFakeTimers();
+      const host = new WasmCapabilityHost();
+      const createInstance = vi.spyOn(host, "createInstance");
+      try {
+        const result = await host.executeWasm(buildAddModule(), "add", [2, 3], {
+          timeoutMs: 1,
+        });
+
+        expect(result.success).toBe(false);
+        expect(result.error).toMatch(/timeouts cannot be enforced.*in-process webassembly/i);
+        expect(createInstance).not.toHaveBeenCalled();
+        expect(host.getReservedMemoryPages()).toBe(0);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("rejects factory timeout requests before compiling a module", async () => {
+      const host = new WasmCapabilityHost();
+      const compile = vi.spyOn(WebAssembly, "compile");
+      try {
+        const outcome = await host.createInstance(buildAddModule(), { timeoutMs: 1 }).then(
+          ({ instance }) => {
+            instance.dispose();
+            return { status: "resolved" as const };
+          },
+          (error: unknown) => ({ status: "rejected" as const, error }),
+        );
+
+        expect(outcome.status).toBe("rejected");
+        if (outcome.status === "rejected") {
+          expect(outcome.error).toBeInstanceOf(Error);
+          expect((outcome.error as Error).message).toMatch(
+            /timeouts cannot be enforced.*in-process webassembly/i,
+          );
+        }
+        expect(compile).not.toHaveBeenCalled();
+        expect(host.getReservedMemoryPages()).toBe(0);
+      } finally {
+        compile.mockRestore();
       }
     });
 

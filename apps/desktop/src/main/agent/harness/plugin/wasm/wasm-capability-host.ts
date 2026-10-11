@@ -15,7 +15,6 @@ import {
   WasmCompilationError,
   type WasmExecutionMetrics,
   type WasmExecutionResult,
-  WasmExecutionTimeoutError,
   type WasmInstanceOptions,
   WasmMemoryPolicyError,
   type WasmModuleInspection,
@@ -24,6 +23,15 @@ import {
 type WasmInstantiationFailureMetrics = Omit<WasmExecutionMetrics, "latencyMs">;
 const instantiationFailureMetrics = new WeakMap<object, WasmInstantiationFailureMetrics>();
 const MAX_CACHE_NAMESPACE_LENGTH = 256;
+const IN_PROCESS_WASM_TIMEOUT_ERROR =
+  "WASM timeouts cannot be enforced for in-process WebAssembly; use a preemptible OS-isolated worker.";
+
+function assertNoInProcessWasmTimeout(options: WasmInstanceOptions): void {
+  const timeoutMs = options.timeoutMs;
+  if (timeoutMs !== undefined && timeoutMs > 0) {
+    throw new Error(IN_PROCESS_WASM_TIMEOUT_ERROR);
+  }
+}
 
 function hasWebAssemblyInternalSlot(value: unknown, prototype: object, property: string): boolean {
   const getter = Object.getOwnPropertyDescriptor(prototype, property)?.get;
@@ -186,12 +194,14 @@ export class WasmCapabilityHost {
 
   /**
    * Creates a WASM instance with fuel metering. WASI imports stay disabled until the host
-   * has a grant-backed policy for imports, environment, and preopens.
+   * has a grant-backed policy for imports, environment, and preopens. This in-process
+   * factory cannot enforce a timeout, so positive `timeoutMs` values are rejected.
    */
   public async createInstance(
     wasmBytes: Uint8Array,
     options: WasmInstanceOptions = {},
   ): Promise<{ instance: WasmPluginInstance; wasiSandbox?: WasiSandbox }> {
+    assertNoInProcessWasmTimeout(options);
     const stableWasmBytes = new Uint8Array(wasmBytes);
     const module = await this.compileModule(stableWasmBytes, options.pluginId);
     let memoryDeclarations: WasmMemoryDeclaration[] = [];
@@ -440,8 +450,8 @@ export class WasmCapabilityHost {
   }
 
   /**
-   * Executes a WASM capability with sub-0.2ms latency monitoring,
-   * fuel bounds, and complete fault isolation.
+   * Executes a trusted in-process WASM capability with fuel and memory accounting.
+   * Positive `timeoutMs` values are rejected because this API cannot preempt execution.
    */
   public async executeWasm<TIn = unknown, TOut = unknown>(
     wasmBytes: Uint8Array,
@@ -454,36 +464,11 @@ export class WasmCapabilityHost {
     let pluginInstance: WasmPluginInstance | undefined;
 
     try {
+      assertNoInProcessWasmTimeout(options);
+
       const { instance, wasiSandbox: ws } = await this.createInstance(wasmBytes, options);
       pluginInstance = instance;
       wasiSandbox = ws;
-
-      // Timeout watchdog
-      if (options.timeoutMs && options.timeoutMs > 0) {
-        const timeoutMs = options.timeoutMs;
-        let watchdog: ReturnType<typeof setTimeout> | undefined;
-        const result = await Promise.race([
-          Promise.resolve().then(() => instance.invoke(functionName, ...args)),
-          new Promise<never>(
-            (_, reject) =>
-              (watchdog = setTimeout(
-                () => reject(new WasmExecutionTimeoutError(timeoutMs, options.pluginId)),
-                timeoutMs,
-              )),
-          ),
-        ]).finally(() => {
-          if (watchdog !== undefined) clearTimeout(watchdog);
-        });
-
-        const metrics = instance.getMetrics(start);
-        return {
-          success: true,
-          result: result as TOut,
-          metrics,
-          stdout: wasiSandbox?.getStdout(),
-          stderr: wasiSandbox?.getStderr(),
-        };
-      }
 
       const rawResult = instance.invoke(functionName, ...args);
       const metrics = instance.getMetrics(start);
