@@ -2384,3 +2384,18 @@ unused escape hatches, but does not establish an external execution boundary.
   inspection/mutation. Trusted code already executing in the host process is
   outside this boundary. External plugin execution remains blocked pending the
   process executor, platform adapters, dispatcher wiring, and preemption proof.
+
+### Remote CI and packaging for A03 commit `512c7b2`
+
+CI workflow `38098027525` completed successfully on
+`512c7b281183cb2bf41a86bb1029e72319b99e12`. Biome and desktop typecheck
+passed; Vitest passed **4,651 tests**, skipped **8**, across **414 files**.
+The safe protocol fixture job, compile-only sandbox build, Verifier-First
+regressions, PTY cancellation regressions, safe-filtered plugin-containment
+checks on Ubuntu/Windows/macOS, and Supabase pgTAP/integration (**20 files,
+1,041 tests**) all passed. No probe or enforcement scenario ran.
+
+Windows x64 packaging (`38098027506`) and macOS x64/arm64 packaging
+(`38098027511`) also completed successfully. These results verify the A03
+change builds and passes its integrated regression suite; they do not prove an
+OS process boundary. PR #191 remains Draft.
