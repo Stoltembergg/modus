@@ -246,9 +246,7 @@ impl PluginHostcallRateLimiter {
         }) {
             recent_calls.pop_front();
         }
-        if recent_calls.len()
-            >= APPROVED_RESOURCE_POLICY.max_hostcalls_per_plugin_second as usize
-        {
+        if recent_calls.len() >= APPROVED_RESOURCE_POLICY.max_hostcalls_per_plugin_second as usize {
             return Err(crate::ProtocolError::PluginHostcallRateLimitExceeded);
         }
         recent_calls.push_back(now);

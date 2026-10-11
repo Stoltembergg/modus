@@ -2065,16 +2065,11 @@ mod tests {
         let rate_limiter = PluginHostcallRateLimiter::for_plugin(&first_provenance);
         let now = Instant::now() + Duration::from_secs(3_600);
         for _ in 0..APPROVED_RESOURCE_POLICY.max_hostcalls_per_plugin_second {
-            rate_limiter
-                .reserve_at(&first_provenance, now)
-                .unwrap();
+            rate_limiter.reserve_at(&first_provenance, now).unwrap();
         }
 
-        let second_provenance = provenance_for_scope(
-            "session-fixture-2",
-            "workspace-fixture-2",
-            "run-fixture-2",
-        );
+        let second_provenance =
+            provenance_for_scope("session-fixture-2", "workspace-fixture-2", "run-fixture-2");
         let mut dispatcher =
             dispatcher_for_with_rate_limiter(second_provenance, Arc::clone(&rate_limiter));
         dispatcher.receive(&hello()).unwrap();
@@ -2115,10 +2110,7 @@ mod tests {
         });
 
         assert_eq!(
-            outcomes
-                .iter()
-                .filter(|outcome| outcome.is_ok())
-                .count(),
+            outcomes.iter().filter(|outcome| outcome.is_ok()).count(),
             APPROVED_RESOURCE_POLICY.max_hostcalls_per_plugin_second as usize,
         );
         assert_eq!(
@@ -2128,8 +2120,7 @@ mod tests {
                     **outcome == Err(ProtocolError::PluginHostcallRateLimitExceeded)
                 })
                 .count(),
-            outcomes.len()
-                - APPROVED_RESOURCE_POLICY.max_hostcalls_per_plugin_second as usize,
+            outcomes.len() - APPROVED_RESOURCE_POLICY.max_hostcalls_per_plugin_second as usize,
         );
     }
 
