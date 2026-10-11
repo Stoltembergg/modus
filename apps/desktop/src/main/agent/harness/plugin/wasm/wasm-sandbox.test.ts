@@ -1113,9 +1113,21 @@ describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
       const host = new WasmCapabilityHost();
       const compile = vi.spyOn(WebAssembly, "compile");
       try {
-        await expect(host.createInstance(buildAddModule(), { timeoutMs })).rejects.toThrow(
-          /timeoutMs must be a finite non-negative number/i,
+        const outcome = await host.createInstance(buildAddModule(), { timeoutMs }).then(
+          ({ instance }) => {
+            instance.dispose();
+            return { status: "resolved" as const };
+          },
+          (error: unknown) => ({ status: "rejected" as const, error }),
         );
+
+        expect(outcome.status).toBe("rejected");
+        if (outcome.status === "rejected") {
+          expect(outcome.error).toBeInstanceOf(RangeError);
+          expect((outcome.error as Error).message).toMatch(
+            /timeoutMs must be a finite non-negative number/i,
+          );
+        }
         expect(compile).not.toHaveBeenCalled();
         expect(host.getReservedMemoryPages()).toBe(0);
       } finally {
