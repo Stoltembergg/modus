@@ -172,7 +172,6 @@ import { LinuxPluginWorkerSupervisor } from "./harness/plugin/linux-plugin-worke
 import {
   type HostPluginExecutionCatalog,
   PluginExecutionDispatcher,
-  type PluginExecutionSupervisor,
   type PluginExecutionSupervisorRequest,
 } from "./harness/plugin/plugin-execution-dispatcher";
 import {
@@ -928,7 +927,7 @@ export class PiSdkRuntime implements AgentRuntime {
   #pluginStateStore?: PluginStateStore | undefined;
   #pluginLifecycleService?: PluginLifecycleService | undefined;
   #externalPluginCatalog?: HostPluginExecutionCatalog | undefined;
-  #externalPluginSupervisor: PluginExecutionSupervisor;
+  #externalPluginSupervisor: LinuxPluginWorkerSupervisor;
   #bootstrapPromise?: Promise<void> | undefined;
   #pluginSyncPromise?: Promise<string[]> | undefined;
   private sessions = new Map<string, SdkRuntimeSession>();
@@ -975,8 +974,7 @@ export class PiSdkRuntime implements AgentRuntime {
 
   constructor(options: PiSdkRuntimeOptions = {}) {
     this.#externalPluginCatalog = options.externalPluginCatalog;
-    const linuxSupervisor = new LinuxPluginWorkerSupervisor();
-    this.#externalPluginSupervisor = (request, signal) => linuxSupervisor.execute(request, signal);
+    this.#externalPluginSupervisor = new LinuxPluginWorkerSupervisor();
 
     this.#harnessKernel.registerHook(defaultToolCallRepeatGuardHook);
     this.#harnessKernel.registerHook(defaultToolResultRepeatGuardHook);
@@ -1165,7 +1163,7 @@ export class PiSdkRuntime implements AgentRuntime {
 
     const dispatcher = new PluginExecutionDispatcher({
       authorize,
-      execute: this.#externalPluginSupervisor,
+      execute: (request, signal) => this.#externalPluginSupervisor.execute(request, signal),
     });
     return await dispatcher.dispatch({
       target,
@@ -1337,6 +1335,11 @@ export class PiSdkRuntime implements AgentRuntime {
     this.#pluginStateStore?.close();
     this.#pluginStateStore = undefined;
     this.#pluginLifecycleService = undefined;
+  }
+
+  /** Stop runtime-owned child services when the desktop application shuts down. */
+  async shutdown(): Promise<void> {
+    await this.#externalPluginSupervisor.close();
   }
 
   getActiveToolNames(sessionId: string, profile: ToolProfileName): readonly string[] {
@@ -5544,6 +5547,7 @@ export class PiSdkRuntime implements AgentRuntime {
     options: { keepTodos?: boolean } = {},
   ): Promise<void> {
     this.cancelPendingIntentGate(sessionId);
+    await this.#externalPluginSupervisor.releaseSession(sessionId);
     if (!options.keepTodos) clearTodoSessionCache(sessionId);
     clearAssistantToolCallCount(sessionId);
     const activeRun = getActiveAgentRun(sessionId);

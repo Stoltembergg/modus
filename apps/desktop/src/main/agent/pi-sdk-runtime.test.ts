@@ -873,6 +873,11 @@ describe("PiSdkRuntime", () => {
     const supervisor = vi
       .spyOn(LinuxPluginWorkerSupervisor.prototype, "execute")
       .mockImplementation(async () => ({ result: { output: "synthetic plugin result" } }));
+    const releaseSupervisorSession = vi.spyOn(
+      LinuxPluginWorkerSupervisor.prototype,
+      "releaseSession",
+    );
+    const closeSupervisor = vi.spyOn(LinuxPluginWorkerSupervisor.prototype, "close");
     const runtime = new PiSdkRuntime({
       externalPluginCatalog: {
         resolve: (pluginId) => (pluginId === target.pluginId ? target : undefined),
@@ -931,6 +936,11 @@ describe("PiSdkRuntime", () => {
             ),
         ),
       ).toBe(true);
+
+      await runtime.releaseRuntime(sessionId);
+      expect(releaseSupervisorSession).toHaveBeenCalledWith(sessionId);
+      await runtime.shutdown();
+      expect(closeSupervisor).toHaveBeenCalledOnce();
     } finally {
       await pendingTurn?.catch(() => undefined);
       await runtime.releaseRuntime(sessionId);

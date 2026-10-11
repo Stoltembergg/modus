@@ -18,3 +18,7 @@ const runtime = new PiSdkRuntime();
 export function getAgentRuntime(): AgentRuntime {
   return runtime;
 }
+
+export async function shutdownAgentRuntime(): Promise<void> {
+  await runtime.shutdown();
+}

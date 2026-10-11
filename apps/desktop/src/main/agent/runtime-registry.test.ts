@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const runtimeRegistryMocks = vi.hoisted(() => ({
   warningsBeforeConstruction: [] as number[],
+  shutdownCalls: 0,
 }));
 
 vi.mock("./harness/adaptive-oracle-bridge", () => ({
@@ -16,6 +17,10 @@ vi.mock("./pi-sdk-runtime", async () => {
           (console.warn as unknown as { mock?: { calls: unknown[] } }).mock?.calls.length ?? 0,
         );
       }
+
+      async shutdown() {
+        runtimeRegistryMocks.shutdownCalls += 1;
+      }
     },
   };
 });
@@ -25,6 +30,7 @@ describe("runtime registry feature flag startup validation", () => {
     vi.restoreAllMocks();
     vi.resetModules();
     runtimeRegistryMocks.warningsBeforeConstruction = [];
+    runtimeRegistryMocks.shutdownCalls = 0;
   });
 
   it("validates valid flags before constructing the singleton", async () => {
@@ -38,6 +44,15 @@ describe("runtime registry feature flag startup validation", () => {
     expect(runtimeRegistryMocks.warningsBeforeConstruction).toEqual([0]);
     expect(warn).not.toHaveBeenCalled();
     expect(getAgentRuntime()).toBe(getAgentRuntime());
+  });
+
+  it("shuts down the runtime-owned supervisor through the app lifecycle entrypoint", async () => {
+    vi.resetModules();
+    const { shutdownAgentRuntime } = await import("./runtime-registry");
+
+    await shutdownAgentRuntime();
+
+    expect(runtimeRegistryMocks.shutdownCalls).toBe(1);
   });
 
   it("diagnoses invalid dependencies and disables them before constructing the singleton", async () => {
