@@ -358,7 +358,8 @@ impl Dispatcher {
             validate_dispatch_config(challenge, granted_capabilities)?;
         let (provenance, approved_policy, transport) = admission.into_parts();
         drop(transport);
-        let hostcall_rate_limiter = PluginHostcallRateLimiter::for_plugin(&provenance);
+        let registry = PluginHostcallRateLimiterRegistry::default();
+        let hostcall_rate_limiter = registry.for_plugin(&provenance)?;
         Ok(Self::from_validated_parts(
             provenance,
             approved_policy,
@@ -1037,7 +1038,8 @@ mod tests {
 
     use super::*;
     use crate::worker_admission::{
-        HostAuthorization, synthetic_test_token, synthetic_test_token_with_transport,
+        HostAuthorization, PluginHostcallRateLimiterRegistry, synthetic_test_token,
+        synthetic_test_token_with_transport,
     };
 
     const CHALLENGE: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -1203,20 +1205,20 @@ mod tests {
 
     fn fixture_worker_session(transport: FixtureTransport) -> WorkerSession<FixtureTransport> {
         let provenance = provenance();
-        let hostcall_rate_limiter = PluginHostcallRateLimiter::for_plugin(&provenance);
-        fixture_worker_session_with_rate_limiter(transport, provenance, hostcall_rate_limiter)
+        let registry = PluginHostcallRateLimiterRegistry::default();
+        fixture_worker_session_with_registry(transport, provenance, &registry)
     }
 
-    fn fixture_worker_session_with_rate_limiter(
+    fn fixture_worker_session_with_registry(
         transport: FixtureTransport,
         provenance: HostProvenance,
-        hostcall_rate_limiter: Arc<PluginHostcallRateLimiter>,
+        registry: &PluginHostcallRateLimiterRegistry,
     ) -> WorkerSession<FixtureTransport> {
         let authorization = unsafe {
             HostAuthorization::from_permission_broker(
                 provenance.clone(),
                 ["memory.read".to_string()],
-                hostcall_rate_limiter,
+                registry,
             )
         }
         .unwrap();
@@ -1362,8 +1364,7 @@ mod tests {
         let worker_provenance = provenance();
         let authorization_provenance =
             provenance_for_scope("session-fixture", "workspace-fixture", "other-run-fixture");
-        let hostcall_rate_limiter =
-            PluginHostcallRateLimiter::for_plugin(&authorization_provenance);
+        let registry = PluginHostcallRateLimiterRegistry::default();
         let termination_requested = Arc::new(AtomicBool::new(false));
         let reaped = Arc::new(AtomicBool::new(false));
         let transport = FixtureTransport {
@@ -1376,7 +1377,7 @@ mod tests {
             HostAuthorization::from_permission_broker(
                 authorization_provenance,
                 ["memory.read".to_string()],
-                hostcall_rate_limiter,
+                &registry,
             )
         }
         .unwrap();
@@ -1390,7 +1391,7 @@ mod tests {
     }
 
     #[test]
-    fn host_authorization_rejects_a_rate_limiter_for_another_plugin() {
+    fn limiter_registry_isolates_budgets_between_plugins() {
         let authorized_provenance = provenance();
         let other_plugin = HostProvenance::from_host_catalog(
             "@modus/other-fixture",
@@ -1404,19 +1405,11 @@ mod tests {
             1,
         )
         .unwrap();
-        let rate_limiter = PluginHostcallRateLimiter::for_plugin(&other_plugin);
+        let registry = PluginHostcallRateLimiterRegistry::default();
+        let authorized_limiter = registry.for_plugin(&authorized_provenance).unwrap();
+        let other_limiter = registry.for_plugin(&other_plugin).unwrap();
 
-        assert_eq!(
-            unsafe {
-                HostAuthorization::from_permission_broker(
-                    authorized_provenance,
-                    ["memory.read".to_string()],
-                    rate_limiter,
-                )
-            }
-            .err(),
-            Some(ProtocolError::HostcallLimiterIdentityMismatch),
-        );
+        assert!(!Arc::ptr_eq(&authorized_limiter, &other_limiter));
     }
 
     #[test]
@@ -1432,13 +1425,12 @@ mod tests {
             "workspace-fixture-1",
             "different-run-fixture",
         );
-        let hostcall_rate_limiter =
-            PluginHostcallRateLimiter::for_plugin(&authorization_provenance);
+        let registry = PluginHostcallRateLimiterRegistry::default();
         let authorization = unsafe {
             HostAuthorization::from_permission_broker(
                 authorization_provenance,
                 ["memory.read".to_string()],
-                hostcall_rate_limiter,
+                &registry,
             )
         }
         .unwrap();
@@ -1459,13 +1451,12 @@ mod tests {
         };
         let admission = synthetic_test_token_with_transport(provenance(), transport);
         let authorization_provenance = provenance();
-        let hostcall_rate_limiter =
-            PluginHostcallRateLimiter::for_plugin(&authorization_provenance);
+        let registry = PluginHostcallRateLimiterRegistry::default();
         let authorization = unsafe {
             HostAuthorization::from_permission_broker(
                 authorization_provenance,
                 ["memory.read".to_string()],
-                hostcall_rate_limiter,
+                &registry,
             )
         }
         .unwrap();
@@ -1513,7 +1504,8 @@ mod tests {
     #[test]
     fn worker_session_rejects_over_budget_invocation_and_reaps_worker() {
         let provenance = provenance();
-        let hostcall_rate_limiter = PluginHostcallRateLimiter::for_plugin(&provenance);
+        let registry = PluginHostcallRateLimiterRegistry::default();
+        let hostcall_rate_limiter = registry.for_plugin(&provenance).unwrap();
         // Preload a future timestamp so the test remains deterministic even if
         // the runner pauses: production still reserves using Instant::now().
         let fixed_time = Instant::now() + Duration::from_secs(3_600);
@@ -1534,7 +1526,7 @@ mod tests {
             ..FixtureTransport::default()
         };
         let mut session =
-            fixture_worker_session_with_rate_limiter(transport, provenance, hostcall_rate_limiter);
+            fixture_worker_session_with_registry(transport, provenance, &registry);
         let deadline = Instant::now() + Duration::from_secs(1);
 
         assert_eq!(
@@ -2112,7 +2104,8 @@ mod tests {
     #[test]
     fn shares_the_approved_plugin_hostcall_rate_budget_across_dispatchers() {
         let first_provenance = provenance();
-        let rate_limiter = PluginHostcallRateLimiter::for_plugin(&first_provenance);
+        let registry = PluginHostcallRateLimiterRegistry::default();
+        let rate_limiter = registry.for_plugin(&first_provenance).unwrap();
         let now = Instant::now() + Duration::from_secs(3_600);
         for _ in 0..APPROVED_RESOURCE_POLICY.max_hostcalls_per_plugin_second {
             rate_limiter.reserve_at(&first_provenance, now).unwrap();
@@ -2120,8 +2113,10 @@ mod tests {
 
         let second_provenance =
             provenance_for_scope("session-fixture-2", "workspace-fixture-2", "run-fixture-2");
+        let second_session_limiter = registry.for_plugin(&second_provenance).unwrap();
+        assert!(Arc::ptr_eq(&rate_limiter, &second_session_limiter));
         let mut dispatcher =
-            dispatcher_for_with_rate_limiter(second_provenance, Arc::clone(&rate_limiter));
+            dispatcher_for_with_rate_limiter(second_provenance, second_session_limiter);
         dispatcher.receive(&hello()).unwrap();
         assert_eq!(
             dispatcher.receive(&invoke(1, "memory.read", json!({}))),
@@ -2139,14 +2134,15 @@ mod tests {
     #[test]
     fn concurrent_sessions_cannot_overbook_the_plugin_hostcall_budget() {
         let provenance = provenance();
-        let rate_limiter = PluginHostcallRateLimiter::for_plugin(&provenance);
+        let registry = PluginHostcallRateLimiterRegistry::default();
         let now = Instant::now();
         let outcomes = std::thread::scope(|scope| {
             let workers: Vec<_> = (0..8)
                 .map(|_| {
-                    let limiter = Arc::clone(&rate_limiter);
                     let provenance = provenance.clone();
+                    let registry = &registry;
                     scope.spawn(move || {
+                        let limiter = registry.for_plugin(&provenance).unwrap();
                         (0..64)
                             .map(|_| limiter.reserve_at(&provenance, now))
                             .collect::<Vec<_>>()

@@ -59,7 +59,7 @@
 //! }
 //! ```
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -206,20 +206,18 @@ pub enum AdmissionError {
 }
 
 /// Host-owned rolling one-second hostcall budget shared by every session for
-/// one plugin identity. The supervisor must reuse the same value when it
-/// authorizes concurrent or restarted workers for that plugin.
+/// one plugin identity. The runtime's limiter registry retains this state
+/// across concurrent, restarted, and currently inactive worker sessions.
 #[derive(Debug)]
-pub struct PluginHostcallRateLimiter {
+pub(crate) struct PluginHostcallRateLimiter {
     plugin_id: String,
     recent_calls: Mutex<VecDeque<Instant>>,
 }
 
 impl PluginHostcallRateLimiter {
-    /// Create a limiter for the plugin identity resolved by the host catalog.
-    /// Keep and reuse this `Arc` across sessions for that plugin.
-    pub fn for_plugin(provenance: &HostProvenance) -> Arc<Self> {
+    fn for_plugin_id(plugin_id: &str) -> Arc<Self> {
         Arc::new(Self {
-            plugin_id: provenance.plugin_id().to_string(),
+            plugin_id: plugin_id.to_string(),
             recent_calls: Mutex::new(VecDeque::new()),
         })
     }
@@ -260,6 +258,49 @@ impl PluginHostcallRateLimiter {
         now: Instant,
     ) -> Result<(), crate::ProtocolError> {
         self.reserve_with_clock(provenance, || now)
+    }
+}
+
+/// Host-owned limiter registry. Keep one registry for the runtime lifetime so
+/// every worker session and agent group for a plugin shares the same budget.
+/// It retains recent budgets while a plugin has no active worker, then prunes
+/// an entry only after its rolling window expires and no session holds it.
+#[derive(Default)]
+pub struct PluginHostcallRateLimiterRegistry {
+    limiters: Mutex<HashMap<String, Arc<PluginHostcallRateLimiter>>>,
+}
+
+impl PluginHostcallRateLimiterRegistry {
+    pub(crate) fn for_plugin(
+        &self,
+        provenance: &HostProvenance,
+    ) -> Result<Arc<PluginHostcallRateLimiter>, crate::ProtocolError> {
+        let mut limiters = self
+            .limiters
+            .lock()
+            .map_err(|_| crate::ProtocolError::HostcallLimiterUnavailable)?;
+        let now = Instant::now();
+        limiters.retain(|_, limiter| {
+            if Arc::strong_count(limiter) > 1 {
+                return true;
+            }
+            let Ok(mut recent_calls) = limiter.recent_calls.lock() else {
+                return true;
+            };
+            while recent_calls.front().is_some_and(|recorded| {
+                now.saturating_duration_since(*recorded) >= Duration::from_secs(1)
+            }) {
+                recent_calls.pop_front();
+            }
+            !recent_calls.is_empty()
+        });
+        Ok(Arc::clone(
+            limiters
+                .entry(provenance.plugin_id().to_string())
+                .or_insert_with(|| {
+                    PluginHostcallRateLimiter::for_plugin_id(provenance.plugin_id())
+                }),
+        ))
     }
 }
 
@@ -355,17 +396,15 @@ impl HostAuthorization {
     /// The caller must supply the current grant set returned by the host's
     /// permission broker for this exact provenance. It must not widen grants
     /// based on worker input or configuration that the broker has not
-    /// approved. It must also pass the host-owned rate limiter shared by all
-    /// sessions for this plugin identity; constructing a fresh limiter for
-    /// each authorization would not enforce the per-plugin rate ceiling.
+    /// approved. The supplied limiter registry must be the one runtime-owned
+    /// registry reused across worker sessions and agent groups; a distinct
+    /// registry per session would reset the rolling budget.
     pub unsafe fn from_permission_broker(
         provenance: HostProvenance,
         granted_capabilities: impl IntoIterator<Item = String>,
-        hostcall_rate_limiter: Arc<PluginHostcallRateLimiter>,
+        hostcall_rate_limiters: &PluginHostcallRateLimiterRegistry,
     ) -> Result<Self, crate::ProtocolError> {
-        if hostcall_rate_limiter.plugin_id != provenance.plugin_id() {
-            return Err(crate::ProtocolError::HostcallLimiterIdentityMismatch);
-        }
+        let hostcall_rate_limiter = hostcall_rate_limiters.for_plugin(&provenance)?;
         Ok(Self {
             provenance,
             granted_capabilities: granted_capabilities.into_iter().collect(),
@@ -475,6 +514,67 @@ mod tests {
             1,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn limiter_registry_reuses_one_budget_for_plugin_across_sessions() {
+        let registry = PluginHostcallRateLimiterRegistry::default();
+        let first = provenance_for_scope("session-a", "workspace-a", "run-a");
+        let second = provenance_for_scope("session-b", "workspace-b", "run-b");
+
+        let first_limiter = registry.for_plugin(&first).unwrap();
+        first_limiter
+            .reserve_at(&first, Instant::now() + Duration::from_secs(3_600))
+            .unwrap();
+        let first_weak = Arc::downgrade(&first_limiter);
+        drop(first_limiter);
+        let second_limiter = registry.for_plugin(&second).unwrap();
+
+        assert!(Arc::ptr_eq(
+            &first_weak.upgrade().unwrap(),
+            &second_limiter
+        ));
+    }
+
+    #[test]
+    fn limiter_registry_retires_expired_budgets_after_sessions_release_them() {
+        let registry = PluginHostcallRateLimiterRegistry::default();
+        let provenance = provenance();
+        let expired_limiter = registry.for_plugin(&provenance).unwrap();
+        expired_limiter
+            .reserve_at(&provenance, Instant::now() - Duration::from_secs(2))
+            .unwrap();
+        let expired_weak = Arc::downgrade(&expired_limiter);
+        drop(expired_limiter);
+
+        let current_limiter = registry.for_plugin(&provenance).unwrap();
+
+        assert!(expired_weak.upgrade().is_none());
+        assert_eq!(current_limiter.reserve(&provenance), Ok(()));
+    }
+
+    #[test]
+    fn limiter_rejects_reservations_for_a_different_plugin_identity() {
+        let registry = PluginHostcallRateLimiterRegistry::default();
+        let provenance = provenance();
+        let other_plugin = HostProvenance::from_host_catalog(
+            "fixture/other-plugin",
+            "1.0.0",
+            "c".repeat(64),
+            "synthetic-catalog",
+            crate::HostTrustLevel::Verified,
+            "session-fixture",
+            "workspace-fixture",
+            "run-fixture",
+            1,
+        )
+        .unwrap();
+        let limiter = registry.for_plugin(&provenance).unwrap();
+
+        assert_eq!(
+            limiter.reserve_at(&other_plugin, Instant::now()),
+            Err(crate::ProtocolError::HostcallLimiterIdentityMismatch),
+        );
     }
 
     fn all_controls() -> impl Iterator<Item = EnforcementControl> {

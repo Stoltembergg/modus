@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use modus_plugin_execution_protocol::resource_policy::APPROVED_RESOURCE_POLICY;
 use modus_plugin_execution_protocol::worker_admission::{
     AdmissionAssessmentToken, AssessedWorker, EnforcementControl, HostAuthorization,
-    PlatformAssessment, PluginHostcallRateLimiter, WorkerTransport,
+    PlatformAssessment, PluginHostcallRateLimiterRegistry, WorkerTransport,
 };
 use modus_plugin_execution_protocol::{
     DispatchEvent, HostFrame, HostProvenance, HostTrustLevel, InvocationOutcome, PROTOCOL_VERSION,
@@ -100,7 +100,7 @@ fn session(
     Arc<Mutex<Vec<u128>>>,
 ) {
     let provenance = provenance();
-    let hostcall_rate_limiter = PluginHostcallRateLimiter::for_plugin(&provenance);
+    let hostcall_rate_limiters = PluginHostcallRateLimiterRegistry::default();
     let outgoing = Arc::new(Mutex::new(Vec::new()));
     let terminated = Arc::new(AtomicBool::new(false));
     let reaped = Arc::new(AtomicBool::new(false));
@@ -136,7 +136,7 @@ fn session(
         HostAuthorization::from_permission_broker(
             provenance.clone(),
             ["memory.read".to_owned()],
-            hostcall_rate_limiter,
+            &hostcall_rate_limiters,
         )
     }
     .unwrap();
