@@ -518,4 +518,68 @@ describe("Modus provider in the model service", () => {
       ms.updateModelConfig({ model: "deepseek/deepseek-flash", thinkingVariant: "off" }).enabled,
     ).toBe(false);
   });
+
+  /** A fresh Modus install: no Modus provider or model config rows yet. */
+  function clearModusConfigRows() {
+    const db = getDatabase();
+    db.prepare("delete from model_configs where provider_id = 'modus'").run();
+    db.prepare("delete from model_provider_configs where provider_id = 'modus'").run();
+  }
+
+  it("Settings › Providers › Modus agrees with listModels for a model with no config row, and its toggle turns it off", async () => {
+    clearModusConfigRows();
+    const modus = installModus(authSource("signed-in"), () => READY);
+    await vi.waitFor(() => expect(modus.status()).toBe("ready"));
+    const listed = () =>
+      ms
+        .listModels()
+        .filter((model) => model.provider === "modus")
+        .map((model) => [model.id, model.enabled]);
+    const settings = () => {
+      const detail = ms.getProviderDetail("modus");
+      return {
+        enabledModelCount: detail?.enabledModelCount,
+        models: detail?.models.map((model) => [`modus/${model.id}`, model.enabled]),
+      };
+    };
+    expect(listed()).toEqual([
+      ["modus/deepseek/deepseek-flash", true],
+      ["modus/zai/glm-4.6", true],
+    ]);
+    expect(settings()).toEqual({ enabledModelCount: 2, models: listed() });
+
+    // SettingsPanel.toggleModel: updateConfig({ model: `${detail.id}/${model.id}`, enabled: !model.enabled })
+    const flash = ms
+      .getProviderDetail("modus")
+      ?.models.find((m) => m.id === "deepseek/deepseek-flash");
+    expect(flash?.enabled).toBe(true);
+    ms.updateModelConfig({ model: `modus/${flash?.id}`, enabled: !flash?.enabled });
+    expect(ms.listModels().map((model) => model.id)).not.toContain("modus/deepseek/deepseek-flash");
+    expect(settings()).toEqual({
+      enabledModelCount: 1,
+      models: [
+        ["modus/deepseek/deepseek-flash", false],
+        ["modus/zai/glm-4.6", true],
+      ],
+    });
+  });
+
+  it("setProviderModelsEnabled('modus', …) works on a fresh install (no Modus provider row) both ways", async () => {
+    clearModusConfigRows();
+    const modus = installModus(authSource("signed-in"), () => READY);
+    await vi.waitFor(() => expect(modus.status()).toBe("ready"));
+    const off = ms.setProviderModelsEnabled("modus", false);
+    expect(off.enabledModelCount).toBe(0);
+    expect(off.models.map((model) => model.enabled)).toEqual([false, false]);
+    expect(ms.listModels().filter((model) => model.provider === "modus")).toEqual([]);
+    const on = ms.setProviderModelsEnabled("modus", true);
+    expect(on.enabledModelCount).toBe(2);
+    expect(on.models.map((model) => model.enabled)).toEqual([true, true]);
+    expect(
+      ms
+        .listModels()
+        .filter((model) => model.provider === "modus")
+        .map((model) => model.id),
+    ).toEqual(["modus/deepseek/deepseek-flash", "modus/zai/glm-4.6"]);
+  });
 });
