@@ -488,10 +488,7 @@ struct HostWorkerIdentity {
 }
 
 impl HostWorkerIdentity {
-    fn from_ids(
-        uids: [libc::uid_t; 3],
-        gids: [libc::gid_t; 3],
-    ) -> Result<Self, io::Error> {
+    fn from_ids(uids: [libc::uid_t; 3], gids: [libc::gid_t; 3]) -> Result<Self, io::Error> {
         if uids[0] == 0
             || gids[0] == 0
             || uids.iter().any(|uid| *uid != uids[0])
@@ -1360,10 +1357,7 @@ mod tests {
         let mut operations = FakePreExecSecurityOperations::default();
 
         assert_eq!(
-            apply_pre_exec_security(
-                &mut operations,
-                HostWorkerIdentity { uid: 0, gid: 1_000 },
-            ),
+            apply_pre_exec_security(&mut operations, HostWorkerIdentity { uid: 0, gid: 1_000 },),
             Err(PreExecSecurityFailure::IdentityRestriction)
         );
         assert!(operations.calls.is_empty());
