@@ -15,10 +15,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
+use crate::worker_admission::PluginHostcallRateLimiterRegistry;
 use crate::worker_admission::WorkerTransport;
 use crate::worker_admission::{
     AdmissionAssessmentToken, HostAuthorization, PluginHostcallRateLimiter,
-    PluginHostcallRateLimiterRegistry,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
