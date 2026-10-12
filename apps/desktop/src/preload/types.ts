@@ -32,7 +32,6 @@ import type {
   ContextKind,
   ContextSuggestion,
   CreateAgentGroupInput,
-  CreateGroupAgentInput,
   CustomProviderConfig,
   DiffFilePatch,
   DiffReview,
@@ -83,6 +82,7 @@ import type {
   ModelInfo,
   ModelProviderDetail,
   ModelSettingsState,
+  NewGroupAgentInput,
   PermissionAction,
   PermissionDecision,
   PersonalizationState,
@@ -321,7 +321,7 @@ export type ModusApi = {
      * `group-max-members`, and without a template `agent-model-required` /
      * `agent-model-unavailable`.
      */
-    create(input: CreateGroupAgentInput): Promise<AgentInfo>;
+    create(input: NewGroupAgentInput & { groupId?: string }): Promise<AgentInfo>;
     /** Change the given fields (null clears model / default Project); returns the refreshed list. */
     update(input: UpdateAgentInput & { id: string }): Promise<AgentInfo[]>;
     /** Archive / restore (group membership is kept); returns the refreshed list. */

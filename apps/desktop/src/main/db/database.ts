@@ -606,8 +606,24 @@ export function migrateDatabase(db: DatabaseSync): void {
   // the agent (with its group) only unlinks the row: the caller then runs the
   // full session teardown (runtime, subagents, checkpoints) after the commit.
   addColumn(db, "agent_sessions", "agent_id", "text references agents(id) on delete set null");
-  db.exec(`create unique index if not exists idx_agent_sessions_agent_chat
-    on agent_sessions(agent_id) where agent_id is not null`);
+  // Projects default (PR 3): an agent (profile) can have many chats. The old
+  // one-chat-per-agent unique index is replaced by a plain lookup index; the
+  // "agent's chat" is its most recent writable one (read_only = 0).
+  addColumn(db, "agent_sessions", "read_only", "integer not null default 0");
+  addColumn(db, "agent_sessions", "migrated_from_group_id", "text");
+  db.exec(`drop index if exists idx_agent_sessions_agent_chat;
+    create index if not exists idx_agent_sessions_agent
+      on agent_sessions(agent_id, updated_at desc) where agent_id is not null;
+    create table if not exists migrated_group_transcripts (
+      session_id text primary key references agent_sessions(id) on delete cascade,
+      group_id text not null,
+      body_md text not null,
+      messages_json text not null,
+      checksum text not null,
+      created_at text not null
+    );
+    create unique index if not exists idx_migrated_group_transcripts_group
+      on migrated_group_transcripts(group_id);`);
   // Group room Prompt Kit file upload: image + context payloads on user messages.
   addColumn(db, "group_messages", "attachments_json", "text");
   addColumn(db, "group_messages", "context_items_json", "text");
@@ -1353,6 +1369,32 @@ function migrateLegacyGroupDecisions(db: DatabaseSync): void {
   }
 }
 
+/**
+ * The schema version this build understands (`PRAGMA user_version`). The
+ * groups → projects migration (PR 4) will set 1; a build that knows only 0
+ * must refuse such a file instead of re-running its legacy group steps on it.
+ */
+export const KNOWN_DATABASE_VERSION = 0;
+
+export class DatabaseTooNewError extends Error {
+  constructor(
+    readonly version: number,
+    readonly dbPath: string,
+  ) {
+    super(
+      `This data was upgraded by a newer Modus (schema ${version}). Reinstall the newer version or restore a backup of ${dbPath}.`,
+    );
+    this.name = "DatabaseTooNewError";
+  }
+}
+
+/** Downgrade guard: reads `user_version` and writes nothing. Runs before migrateDatabase. */
+export function assertDatabaseVersionSupported(db: DatabaseSync, dbPath = ""): void {
+  const row = db.prepare("PRAGMA user_version").get() as { user_version: number } | undefined;
+  const version = Number(row?.user_version ?? 0);
+  if (version > KNOWN_DATABASE_VERSION) throw new DatabaseTooNewError(version, dbPath);
+}
+
 export function getDatabase(): DatabaseSync {
   if (database) {
     return database;
@@ -1361,10 +1403,17 @@ export function getDatabase(): DatabaseSync {
   const dbPath = join(app.getPath("userData"), "modus.sqlite");
   mkdirSync(dirname(dbPath), { recursive: true });
 
-  database = new DatabaseSync(dbPath);
-  database.exec("PRAGMA journal_mode = WAL");
-  database.exec("PRAGMA foreign_keys = ON");
-  migrateDatabase(database);
+  const db = new DatabaseSync(dbPath);
+  try {
+    assertDatabaseVersionSupported(db, dbPath);
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA foreign_keys = ON");
+  database = db;
+  migrateDatabase(db);
 
   return database;
 }

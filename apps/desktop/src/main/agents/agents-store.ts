@@ -18,6 +18,7 @@ import {
   type AgentInfo,
   type AgentSessionInfo,
   allocateUniqueGroupAvatarShapes,
+  CHATS_WORKSPACE_ID,
   type CreateAgentInput,
   type CreateGroupAgentInput,
   type NewGroupAgentInput,
@@ -44,12 +45,14 @@ import {
   getAgentGroupWithMembers,
   insertGroupWithProject,
   joinGroupRows,
-  openAgentChatRow,
   removeAgentFromGroupRows,
+  requireGroupProject,
+  requireGroupRow,
   setGroupLeadRow,
   throwCountError,
   withGroupTransaction,
 } from "../groups/group-store";
+import { ensureChatsWorkspace } from "../workspace/workspace-store";
 
 /*
  * Agents (agents model): each belongs to ONE group (A2, `group_id`), with a
@@ -130,15 +133,34 @@ function requireAgentRow(agentId: string): AgentRow {
   return row;
 }
 
+/** Another agent holding `name` in the same scope (group, or the active groupless profiles). */
+function nameOwner(name: string, groupId: string | null): { id: string } | undefined {
+  // Groupless profiles: unique among the ACTIVE ones (archived names are free, as the
+  // PR 4 partial index `where group_id is null and archived_at is null` will be).
+  const sql =
+    groupId === null
+      ? "select id from agents where name = ? and group_id is null and archived_at is null"
+      : "select id from agents where name = ? and group_id = ?";
+  const db = getDatabase().prepare(sql);
+  return (groupId === null ? db.get(name) : db.get(name, groupId)) as { id: string } | undefined;
+}
+
+/** Max agent name length (the IPC schema's `agentFields.name`). */
+export const AGENT_NAME_MAX_LENGTH = 80;
+
+/** "Name n" within AGENT_NAME_MAX_LENGTH: the base is shortened, never the suffix. */
+export function suffixedAgentName(base: string, n: number): string {
+  const suffix = ` ${n}`;
+  return `${base.slice(0, AGENT_NAME_MAX_LENGTH - suffix.length).trimEnd()}${suffix}`;
+}
+
 /** Trimmed, non-empty name that no OTHER agent of the same group has (case-insensitive). */
 function requireFreeName(name: string, groupId: string | null, selfId?: string): string {
   const trimmed = typeof name === "string" ? name.trim() : "";
   if (!trimmed) {
     throw new GroupStoreError("invalid-value", "Agent name must not be empty.");
   }
-  const owner = getDatabase()
-    .prepare("select id from agents where name = ? and group_id is ?")
-    .get(trimmed, groupId) as { id: string } | undefined;
+  const owner = nameOwner(trimmed, groupId);
   if (owner && owner.id !== selfId) {
     throw new GroupStoreError("agent-name-taken", `Another agent is already named "${trimmed}".`);
   }
@@ -324,6 +346,15 @@ function newAgentFields(input: NewGroupAgentInput, groupId: string | undefined):
 }
 
 /**
+ * `agents:create` without a group: a standalone profile (no membership, no
+ * room session). Its name must be free among the active groupless profiles;
+ * `defaultWorkspaceId` is where its chats open (else No project).
+ */
+export function createProfile(input: NewGroupAgentInput): AgentInfo {
+  return createAgent(newAgentFields(input, undefined));
+}
+
+/**
  * Picking a template: creates an editable copy (name, role, instructions and
  * avatar copied, `template_id` set, app-default model). A taken name gets the
  * next free suffix in the group ("Planner 2"); `overrides.name` is used as given.
@@ -500,7 +531,9 @@ export function updateAgent(agentId: string, input: UpdateAgentInput): AgentInfo
   // The agent's 1:1 chat (A3) is titled after it.
   if (input.name !== undefined) {
     getDatabase()
-      .prepare("update agent_sessions set title = ? where agent_id = ? and kind = 'chat'")
+      .prepare(
+        "update agent_sessions set title = ? where agent_id = ? and kind = 'chat' and read_only = 0",
+      )
       .run(requireAgentRow(agentId).name, agentId);
   }
   // Edit agent Model must rebind every session that runs as this agent: the
@@ -534,10 +567,36 @@ function rebindAgentSessionModels(agentId: string, modelId: string | null): void
  * groups but is never woken (the room posts "<name> is archived").
  */
 export function setAgentArchived(agentId: string, archived: boolean): AgentInfo {
-  requireAgentRow(agentId);
-  getDatabase()
-    .prepare("update agents set archived_at = ? where id = ?")
-    .run(archived ? new Date().toISOString() : null, agentId);
+  const row = requireAgentRow(agentId);
+  const db = getDatabase();
+  if (archived || row.archived_at === null) {
+    db.prepare("update agents set archived_at = ? where id = ?").run(
+      archived ? (row.archived_at ?? new Date().toISOString()) : null,
+      agentId,
+    );
+    return toAgent(requireAgentRow(agentId));
+  }
+  // Restoring a groupless profile whose name an active profile took meanwhile:
+  // auto-rename it with the migration's dedupe rule ("A 2", "A 3"…). The caller
+  // compares names to say "Restored as 'A 2'".
+  let name = row.name;
+  if (row.group_id === null && nameOwner(name, null) !== undefined) {
+    let n = 2;
+    while (nameOwner(suffixedAgentName(row.name, n), null) !== undefined) n += 1;
+    name = suffixedAgentName(row.name, n);
+  }
+  withGroupTransaction(() => {
+    db.prepare("update agents set archived_at = null, name = ?, updated_at = ? where id = ?").run(
+      name,
+      name === row.name ? row.updated_at : new Date().toISOString(),
+      agentId,
+    );
+    if (name !== row.name) {
+      db.prepare(
+        "update agent_sessions set title = ? where agent_id = ? and kind = 'chat' and read_only = 0",
+      ).run(name, agentId);
+    }
+  });
   return toAgent(requireAgentRow(agentId));
 }
 
@@ -567,9 +626,56 @@ export function deleteAgent(agentId: string): string[] {
 }
 
 /**
- * The agent's 1:1 chat (A3), made on first open: a normal chat in its group's
- * Project, linked to the agent. `group-project-required` when the group has
- * no Project yet.
+ * The agent's chat: its MOST RECENT WRITABLE `chat` (read_only = 0), else a
+ * new one. A new chat opens in the agent's `default_workspace_id`; without
+ * one, a grouped agent keeps using its group's Project (until PR 4 migrates
+ * groups) and a profile opens in No project (the Chats inbox).
+ */
+export function openAgentChatRow(agentId: string): string {
+  const db = getDatabase();
+  const existing = db
+    .prepare(
+      `select id from agent_sessions
+       where agent_id = ? and kind = 'chat' and read_only = 0
+       order by updated_at desc, id desc limit 1`,
+    )
+    .get(agentId) as { id: string } | undefined;
+  if (existing) return existing.id;
+  return createAgentChatRow(agentId);
+}
+
+/** A new chat for the agent ("New chat with profile"), placed as openAgentChatRow describes. */
+export function createAgentChatRow(agentId: string): string {
+  const agent = requireAgentRow(agentId);
+  const project = agentChatProject(agent);
+  const sessionId = randomUUID();
+  const now = new Date().toISOString();
+  getDatabase()
+    .prepare(
+      `insert into agent_sessions
+         (id, workspace_id, title, cwd, status, runtime, model, kind, agent_id, created_at, updated_at)
+       values (?, ?, ?, ?, 'idle', 'pi-sdk', ?, 'chat', ?, ?, ?)`,
+    )
+    .run(sessionId, project.id, agent.name, project.root, agent.model_id, agentId, now, now);
+  return sessionId;
+}
+
+function agentChatProject(agent: AgentRow): { id: string; root: string } {
+  if (agent.default_workspace_id !== null) {
+    const row = getDatabase()
+      .prepare("select id, root_path from workspaces where id = ?")
+      .get(agent.default_workspace_id) as { id: string; root_path: string } | undefined;
+    if (row) return { id: row.id, root: row.root_path };
+  }
+  if (agent.group_id !== null) {
+    return requireGroupProject(requireGroupRow(agent.group_id).workspace_id);
+  }
+  const inbox = ensureChatsWorkspace();
+  return { id: CHATS_WORKSPACE_ID, root: inbox.rootPath };
+}
+
+/**
+ * Opens the agent's chat (see openAgentChatRow).
  */
 export function openAgentChat(agentId: string): AgentSessionInfo {
   requireAgentRow(agentId);
@@ -603,8 +709,19 @@ export function agentChatBlockedReason(sessionId: string): GroupBlockedReason | 
 
 /** Refuses a send to a read-only 1:1 chat (`group-project-required` / `group-min-members`). */
 export function requireAgentChatWritable(sessionId: string): void {
+  requireSessionWritable(sessionId);
   const reason = agentChatBlockedReason(sessionId);
   if (reason) throw new GroupStoreError(groupBlockedErrorCode(reason), GROUP_BLOCKED_TEXT[reason]);
+}
+
+/** Refuses any write to a read-only (migrated history) session: `session-read-only`. */
+export function requireSessionWritable(sessionId: string): void {
+  const row = getDatabase()
+    .prepare("select read_only from agent_sessions where id = ?")
+    .get(sessionId) as { read_only: number } | undefined;
+  if (row && Number(row.read_only) !== 0) {
+    throw new GroupStoreError("session-read-only", "This chat is read-only history.");
+  }
 }
 
 /**

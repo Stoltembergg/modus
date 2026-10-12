@@ -5648,6 +5648,20 @@ describe("PiSdkRuntime", () => {
     ]);
   });
 
+  it("refuses to compact a read-only session (session-read-only)", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    getDatabase().prepare("update agent_sessions set read_only = 1 where id = ?").run(sessionId);
+    const compact = vi.fn();
+    mocks.createAgentSession.mockImplementationOnce(async () => ({
+      session: createMockPiSession({ compact }),
+    }));
+    await expect(new PiSdkRuntime().compact(createWindowStub(), sessionId)).rejects.toMatchObject({
+      code: "session-read-only",
+    });
+    expect(compact).not.toHaveBeenCalled();
+  });
+
   it("never lets manual compaction abort a busy session", async () => {
     const sessionId = `session-${crypto.randomUUID()}`;
     insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));

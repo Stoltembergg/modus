@@ -14,6 +14,7 @@ import type {
   AgentInfo,
   GenerateAgentProfileInput,
   GeneratedAgentProfile,
+  NewGroupAgentInput,
 } from "../../../../shared/contracts";
 import { encodeGroupErrorMessage } from "../../../../shared/group-errors";
 import type { PickableModel } from "../../lib/modusModels";
@@ -1046,5 +1047,66 @@ describe("AgentDialog group drafts (New group panel)", () => {
   it("the plain panel focuses Name on open", () => {
     const { dialog } = draftDialog({ initial: { templateId: "builder", name: "Builder" } });
     expect(document.activeElement).toBe(field(dialog, "Name"));
+  });
+});
+
+describe("AgentDialog profile mode", () => {
+  function renderProfileDialog({
+    takenNames = [],
+    agent,
+    models = MODELS,
+    defaultModelId = "m-1",
+    create = vi.fn(async (_input: NewGroupAgentInput) => undefined),
+    update = vi.fn(async (_input: unknown) => undefined),
+    generate = vi.fn(async (_input: GenerateAgentProfileInput) => GENERATED),
+  }: {
+    takenNames?: readonly string[];
+    agent?: AgentInfo;
+    models?: readonly PickableModel[];
+    defaultModelId?: string;
+    create?: ReturnType<typeof vi.fn<(input: NewGroupAgentInput) => Promise<undefined>>>;
+    update?: ReturnType<typeof vi.fn<(input: unknown) => Promise<undefined>>>;
+    generate?: (input: GenerateAgentProfileInput) => Promise<GeneratedAgentProfile>;
+  } = {}) {
+    const onOpenChange = vi.fn();
+    render(
+      <AgentDialog
+        agent={agent}
+        defaultModelId={defaultModelId}
+        models={models}
+        onCreate={create}
+        onGenerate={generate}
+        onOpenChange={onOpenChange}
+        onUpdate={update}
+        open
+        profile={{ takenNames }}
+      />,
+    );
+    const dialog = screen.getByRole("dialog");
+    return { dialog, create, update, onOpenChange, generate };
+  }
+
+  it("profile mode create calls onCreate with no groupId", async () => {
+    const user = userEvent.setup();
+    const { dialog, create } = renderProfileDialog();
+    expect(within(dialog).getByText("New profile")).toBeTruthy();
+    await user.type(field(dialog, "Name"), "Solo");
+    await user.type(field(dialog, "Custom role"), "Scribe");
+    await user.click(within(dialog).getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    const payload = create.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
+    expect(payload.name).toBe("Solo");
+    expect("groupId" in payload).toBe(false);
+    expect(payload.groupId).toBeUndefined();
+  });
+
+  it("a taken name from takenNames (different case) is refused and onCreate not called", async () => {
+    const user = userEvent.setup();
+    const { dialog, create } = renderProfileDialog({ takenNames: ["Solo"] });
+    await user.type(field(dialog, "Name"), "solo");
+    await user.type(field(dialog, "Custom role"), "Scribe");
+    await user.click(within(dialog).getByRole("button", { name: "Create" }));
+    expect(create).not.toHaveBeenCalled();
+    expect(within(dialog).getByText(GROUP_ERROR_MESSAGES["agent-name-taken"])).toBeTruthy();
   });
 });

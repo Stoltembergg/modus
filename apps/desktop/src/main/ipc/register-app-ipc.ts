@@ -97,10 +97,12 @@ import {
 import {
   createAgentInGroup,
   createGroupWithNewAgents,
+  createProfile,
   getAgent,
   listAgents,
   openAgentChat,
   requireAgentChatWritable,
+  requireSessionWritable,
   setAgentArchived,
   updateAgent,
 } from "../agents/agents-store";
@@ -651,10 +653,9 @@ export function registerAppIpc({
 
   ipcMain.handle(IPC_CHANNELS.agentCompact, async (event, sessionId: string) => {
     assertTrustedSender(event);
-    await getAgentRuntime().compact(
-      getSenderWindow(event),
-      parseIpcInput(sessionIdSchema, sessionId, IPC_CHANNELS.agentCompact),
-    );
+    const parsedId = parseIpcInput(sessionIdSchema, sessionId, IPC_CHANNELS.agentCompact);
+    requireSessionWritable(parsedId);
+    await getAgentRuntime().compact(getSenderWindow(event), parsedId);
   });
 
   ipcMain.handle(IPC_CHANNELS.agentAbort, async (event, sessionId: string) => {
@@ -670,6 +671,7 @@ export function registerAppIpc({
   ipcMain.handle(IPC_CHANNELS.agentRollback, async (event, input) => {
     assertTrustedSender(event);
     const parsed = parseIpcInput(agentRollbackSchema, input, IPC_CHANNELS.agentRollback);
+    requireSessionWritable(parsed.sessionId);
     return await rollbackToUserMessage(getAgentRuntime(), parsed);
   });
 
@@ -1546,6 +1548,7 @@ export function registerAppIpc({
   registerAgentsIpcHandlers(ipcMain, assertTrustedSender, {
     listAgents,
     createAgentInGroup,
+    createProfile,
     getAgent,
     isModelAvailable,
     updateAgent,

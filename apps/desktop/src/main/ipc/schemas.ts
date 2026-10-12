@@ -964,8 +964,8 @@ const agentFields = {
 
 export const agentsCreateSchema = z
   .object({
-    /** The agent's only group (required, A2). */
-    groupId: agentIdString,
+    /** The agent's only group (A2); omitted for a standalone profile. */
+    groupId: agentIdString.optional(),
     name: agentFields.name,
     /** From a template: exempt from the model rule (the app default model applies). */
     templateId: z.string().min(1).max(128).optional(),

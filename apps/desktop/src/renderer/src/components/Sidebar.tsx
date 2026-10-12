@@ -12,6 +12,7 @@ import {
   IconPin,
   IconPinnedOff,
   IconTrash,
+  IconUserPlus,
   IconX,
 } from "@tabler/icons-react";
 import { AnimatePresence, m, useMotionValue, useReducedMotion } from "motion/react";
@@ -135,6 +136,8 @@ type SidebarProps = {
   onEditAgent?(agentId: string): void;
   /** Add a custom agent to a group (the agent dialog). */
   onAddAgent?(groupId: string): void;
+  /** "New profile" button next to/near New group. */
+  onNewProfile?(): void;
 };
 
 const NO_GROUPS: readonly AgentGroupWithMembers[] = [];
@@ -186,6 +189,7 @@ export function Sidebar({
   onOpenAgentChat,
   onEditAgent,
   onAddAgent,
+  onNewProfile,
 }: SidebarProps) {
   const t = useShellText();
   const [projectsExpanded, setProjectsExpanded] = useState(false);
@@ -195,7 +199,8 @@ export function Sidebar({
   // Hidden group room sessions (kind "group_member") are never listed as chats.
   const ungroupedSessions = useMemo(() => agentSessions.filter(isListedChat), [agentSessions]);
   const sessionsByWorkspace = groupSessionsByWorkspace(
-    ungroupedSessions.filter((session) => !session.pinnedAt && !session.agentId),
+    // Agent (profile) chats are listed in their project like any chat.
+    ungroupedSessions.filter((session) => !session.pinnedAt),
   );
   // Pinned direct messages stay together; the rest of the list stays flat.
   const pinnedSessions = useMemo(
@@ -298,6 +303,14 @@ export function Sidebar({
             >
               New message
             </NavRow>
+            {onNewProfile ? (
+              <NavRow
+                icon={<IconUserPlus size={SB_ICON} stroke={SB_STROKE} />}
+                onClick={onNewProfile}
+              >
+                {t("shell.newProfile")}
+              </NavRow>
+            ) : null}
           </div>
         ) : null}
 
@@ -389,6 +402,7 @@ export function Sidebar({
                   onAddAgent={onAddAgent}
                   onEditAgent={onEditAgent}
                   onOpenAgentChat={onOpenAgentChat}
+                  {...(onNewProfile ? { onNewProfile } : {})}
                 />
               </CollapsibleMotion>
             </>

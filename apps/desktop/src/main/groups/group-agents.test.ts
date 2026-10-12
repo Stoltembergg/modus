@@ -792,7 +792,7 @@ describe("A3 migration and persona", () => {
     }
   });
 
-  it("agent_sessions.agent_id: one 1:1 chat per agent, unlinked (not deleted) with the agent; idempotent", async () => {
+  it("agent_sessions.agent_id: several chats per agent (PR 3), unlinked (not deleted) with the agent; idempotent", async () => {
     const dir = await mkdtemp(join(tmpdir(), "modus-a3-migrate-"));
     const db = new DatabaseSync(join(dir, "modus.sqlite"));
     try {
@@ -812,15 +812,16 @@ describe("A3 migration and persona", () => {
       const first = insertSession(ws, "Ana", db);
       const second = insertSession(ws, "Ana again", db);
       db.prepare("update agent_sessions set agent_id = 'a1' where id = ?").run(first);
-      expect(() =>
-        db.prepare("update agent_sessions set agent_id = 'a1' where id = ?").run(second),
-      ).toThrow(/UNIQUE/);
+      // PR 3: an agent may have several chats (the unique index is gone).
+      db.prepare("update agent_sessions set agent_id = 'a1' where id = ?").run(second);
       // ON DELETE SET NULL: the row stays for the teardown (subagents, checkpoints).
       db.prepare("delete from agents where id = 'a1'").run();
       expect(db.prepare("select agent_id from agent_sessions where id = ?").get(first)).toEqual({
         agent_id: null,
       });
-      expect(db.prepare("select 1 from agent_sessions where id = ?").get(second)).toBeDefined();
+      expect(db.prepare("select agent_id from agent_sessions where id = ?").get(second)).toEqual({
+        agent_id: null,
+      });
     } finally {
       db.close();
       await rm(dir, { recursive: true, force: true }).catch(() => undefined);

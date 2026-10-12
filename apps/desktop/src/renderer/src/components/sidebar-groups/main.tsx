@@ -1,5 +1,6 @@
-import { IconUsersPlus } from "@tabler/icons-react";
+import { IconUserPlus, IconUsersPlus } from "@tabler/icons-react";
 import { useState } from "react";
+import { shellText } from "../../../../shared/shell-text";
 import { CreateGroupDialog } from "../../features/groups/CreateGroupDialog";
 import { isGroupWorkingStub } from "../../features/groups/groupSidebarModel";
 import { NewGroupModal } from "../../features/groups/NewGroupModal";
@@ -26,6 +27,7 @@ export function SidebarGroups({
   onUpdateMembers,
   onDeleteGroup,
   onAddAgent,
+  onNewProfile,
 }: SidebarGroupsProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [managingId, setManagingId] = useState<string | null>(null);
@@ -76,6 +78,19 @@ export function SidebarGroups({
         </span>
         <span className="min-w-0 flex-1 truncate">New group</span>
       </button>
+
+      {onNewProfile ? (
+        <button
+          className={cn(SB_ROW, "text-left text-fg-faint hover:bg-hover hover:text-fg-muted")}
+          onClick={onNewProfile}
+          type="button"
+        >
+          <span className={SB_RAIL}>
+            <IconUserPlus size={SB_ICON} stroke={SB_STROKE} />
+          </span>
+          <span className="min-w-0 flex-1 truncate">{shellText("shell.newProfile")}</span>
+        </button>
+      ) : null}
 
       {dialogOpen ? (
         <NewGroupModal

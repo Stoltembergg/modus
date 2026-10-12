@@ -181,6 +181,24 @@ describe("SidebarGroups", () => {
     expect(listAgents).toHaveBeenCalledTimes(1);
   });
 
+  it("calls onNewProfile when clicking the New profile button", async () => {
+    const user = userEvent.setup();
+    const onNewProfile = vi.fn();
+    render(
+      <SidebarGroups
+        activityBySession={{}}
+        groups={GROUPS}
+        onNewProfile={onNewProfile}
+        sessions={SESSIONS}
+        workspaces={WORKSPACES}
+        {...groupHandlers()}
+      />,
+    );
+    const button = screen.getByRole("button", { name: "New profile" });
+    await user.click(button);
+    expect(onNewProfile).toHaveBeenCalledTimes(1);
+  });
+
   it("lights the activity dot only through the injected selector", () => {
     render(
       <SidebarGroups
@@ -325,10 +343,14 @@ describe("SidebarGroups", () => {
 });
 
 describe("Sidebar with groups", () => {
-  function renderSidebar(section: "groups" | "direct-messages" = "groups") {
+  function renderSidebar(
+    section: "groups" | "direct-messages" = "groups",
+    onNewProfile?: () => void,
+  ) {
     const noop = vi.fn();
     render(
       <Sidebar
+        {...(onNewProfile ? { onNewProfile } : {})}
         activityBySession={{}}
         agentSessions={SESSIONS}
         canCreateSession
@@ -390,7 +412,7 @@ describe("Sidebar with groups", () => {
     expect(screen.queryByText("Chat inbox-chat")).toBeNull();
   });
 
-  it("keeps an agent's 1:1 chat in Projects and outside Project context", async () => {
+  it("lists an agent's chat in Projects and in its Project context (PR 3)", async () => {
     const noop = vi.fn();
     const user = userEvent.setup();
     render(
@@ -431,7 +453,16 @@ describe("Sidebar with groups", () => {
     await user.click(screen.getByRole("button", { name: "Project context" }));
     const projectContext = screen.getByTestId("sidebar-project-context");
     expect(within(projectContext).getByText("Chat project-chat")).toBeTruthy();
-    expect(within(projectContext).queryByText("Direct with Ana")).toBeNull();
+    // PR 3: an agent's chat is listed in its project like any chat.
+    expect(within(projectContext).getByText("Direct with Ana")).toBeTruthy();
+  });
+
+  it("the Projects sidebar offers New profile too", async () => {
+    const user = userEvent.setup();
+    const onNewProfile = vi.fn();
+    renderSidebar("direct-messages", onNewProfile);
+    await user.click(screen.getByRole("button", { name: "New profile" }));
+    expect(onNewProfile).toHaveBeenCalledTimes(1);
   });
 
   it("room sessions (kind group_member) never show in the sidebar, even pinned", () => {
