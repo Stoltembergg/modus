@@ -276,7 +276,7 @@ select pg_temp.set_wallet(:'a', 400, now() - interval '1 second');
 select pg_temp.signed_up(:'a', '2 months');
 select tests.as_service_role();
 select is(private.renew_free_credits_for_user(:'a') - 'period_end' - 'balance',
-  '{"code": "renewed", "amount": 600}'::jsonb, 'A: balance 400 -> renewed, +600');
+  '{"code": "renewed", "amount": 600, "shortfall_collected": 0}'::jsonb, 'A: balance 400 -> renewed, +600');
 select is(pg_temp.wallet(:'a'), '1000:1000', 'A: 400 + 600 = 1000');
 select is(pg_temp.renewals(:'a'), '1000,600', 'A: ledger row of 600');
 select ok(pg_temp.period_end(:'a') between now() + interval '27 days' and now() + interval '1 month',
@@ -289,7 +289,7 @@ select pg_temp.set_wallet(:'a', 1500, now() - interval '1 second');
 select pg_temp.signed_up(:'a', '2 months 1 day');
 select tests.as_service_role();
 select is(private.renew_free_credits_for_user(:'a') - 'period_end' - 'balance',
-  '{"code": "renewed_zero", "amount": 0}'::jsonb, 'A: balance 1500 -> renewed_zero, 0 granted');
+  '{"code": "renewed_zero", "amount": 0, "shortfall_collected": 0}'::jsonb, 'A: balance 1500 -> renewed_zero, 0 granted');
 select is(pg_temp.wallet(:'a'), '1500:1000', 'A: balance kept (never reduced)');
 select is(pg_temp.renewals(:'a'), '1000,600', 'A: no ledger row for a 0 top-up');
 select ok(pg_temp.period_end(:'a') between now() + interval '27 days' and now() + interval '1 month',

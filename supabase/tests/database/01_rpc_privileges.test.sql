@@ -99,20 +99,20 @@ select tests.clear_authentication();
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private'),
-  37, 'all thirty-seven private functions are inventoried, including the four calendar-anchor helpers');
+  38, 'all thirty-eight private functions are inventoried, including the four calendar-anchor helpers');
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private'
       and p.prosecdef
       and p.proconfig @> array['search_path=""']),
-  35, 'all thirty-five SECURITY DEFINER functions have search_path=""');
+  36, 'all thirty-six SECURITY DEFINER functions have search_path=""');
 select is(
   (select array_agg(p.proname::text order by p.proname)
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private'
       and p.prosecdef
       and p.proconfig @> array['search_path=""']),
-  array['account_blocked', 'backfill_free_plan_allowance', 'claim_stripe_customer', 'consume_credit_lots', 'debit_credits', 'free_renewal_check', 'grant_credits', 'grant_free_initial_credits',
+  array['account_blocked', 'backfill_free_plan_allowance', 'claim_stripe_customer', 'collect_shortfall', 'consume_credit_lots', 'debit_credits', 'free_renewal_check', 'grant_credits', 'grant_free_initial_credits',
         'handle_new_user', 'infer_free_renewal_anchor', 'mp_cancel_targets', 'mp_claim_notification', 'mp_create_checkout', 'mp_create_purchase',
         'mp_finish_notification', 'mp_link_checkout', 'mp_link_purchase', 'mp_mark_cancel_requested', 'mp_preapproval_mismatch', 'non_purchased_credits', 'process_mp_payment', 'process_mp_preapproval',
         'process_mp_purchase_payment', 'process_stripe_event', 'purchase_access_plan', 'release_expired_reservations', 'renew_free_credits',
