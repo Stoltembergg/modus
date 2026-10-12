@@ -62,9 +62,9 @@ describe("App shell", () => {
     render(<AppRail active="direct-messages" onNavigate={onNavigate} />);
 
     const navigation = screen.getByRole("navigation", { name: "Primary navigation" });
-    const directMessages = within(navigation).getByRole("button", { name: "Direct Messages" });
+    const directMessages = within(navigation).getByRole("button", { name: "Projects" });
     expect(directMessages.getAttribute("aria-current")).toBe("page");
-    expect(within(navigation).queryByText("Direct Messages")).toBeNull();
+    expect(within(navigation).queryByText("Projects")).toBeNull();
     expect(within(navigation).queryByText("Groups")).toBeNull();
     expect(within(navigation).getByRole("button", { name: "Groups" })).toBeTruthy();
     expect(within(navigation).queryByRole("button", { name: "Connections" })).toBeNull();
@@ -73,7 +73,7 @@ describe("App shell", () => {
     expect(mascot.tagName.toLowerCase()).toBe("svg");
     expect(mascot.classList.contains("size-7")).toBe(true);
     expect(brand.querySelector("img")).toBeNull();
-    expect(directMessages.getAttribute("title")).toBe("Direct Messages");
+    expect(directMessages.getAttribute("title")).toBe("Projects");
     const settings = within(navigation).getByRole("button", { name: "Settings" });
     expect(settings.getAttribute("title")).toBe("Settings");
     expect(within(navigation).queryByText("Settings")).toBeNull();
@@ -99,7 +99,7 @@ describe("App shell", () => {
     const initialMetrics = metrics();
     expect(initialMetrics).toEqual([
       { label: "Groups", iconSize: "20", slotClass: true },
-      { label: "Direct Messages", iconSize: "20", slotClass: true },
+      { label: "Projects", iconSize: "20", slotClass: true },
       { label: "Settings", iconSize: "20", slotClass: true },
     ]);
 

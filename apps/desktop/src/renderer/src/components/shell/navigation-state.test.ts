@@ -7,30 +7,39 @@ import {
 } from "./navigation-state";
 
 describe("primary navigation", () => {
-  it("returns from Settings to the last primary destination", () => {
-    const groups = navigatePrimary(INITIAL_PRIMARY_NAVIGATION, "settings");
-    expect(groups).toEqual({ active: "settings", settingsReturnTo: "groups" });
-
-    const directMessages = navigatePrimary(groups, "direct-messages");
-    const settings = navigatePrimary(directMessages, "settings");
-    expect(closeSettingsNavigation(settings)).toEqual({
+  it("opens on Projects", () => {
+    expect(INITIAL_PRIMARY_NAVIGATION).toEqual({
       active: "direct-messages",
       settingsReturnTo: "direct-messages",
     });
   });
 
-  it("restores an active Direct Message before opening restored Settings", () => {
-    expect(
-      restorePrimaryNavigation(INITIAL_PRIMARY_NAVIGATION, {
-        settingsOpen: false,
-        activeSessionId: "session-1",
-      }),
-    ).toEqual({ active: "direct-messages", settingsReturnTo: "groups" });
+  it("returns from Settings to the last primary destination", () => {
+    const projects = navigatePrimary(INITIAL_PRIMARY_NAVIGATION, "settings");
+    expect(projects).toEqual({ active: "settings", settingsReturnTo: "direct-messages" });
+
+    const groups = navigatePrimary(projects, "groups");
+    const settings = navigatePrimary(groups, "settings");
+    expect(closeSettingsNavigation(settings)).toEqual({
+      active: "groups",
+      settingsReturnTo: "groups",
+    });
+  });
+
+  it("restores Projects with or without an active chat", () => {
+    for (const activeSessionId of ["session-1", null, undefined]) {
+      expect(
+        restorePrimaryNavigation(INITIAL_PRIMARY_NAVIGATION, {
+          settingsOpen: false,
+          activeSessionId,
+        }),
+      ).toEqual({ active: "direct-messages", settingsReturnTo: "direct-messages" });
+    }
 
     expect(
       restorePrimaryNavigation(INITIAL_PRIMARY_NAVIGATION, {
         settingsOpen: true,
-        activeSessionId: "session-1",
+        activeSessionId: null,
       }),
     ).toEqual({ active: "settings", settingsReturnTo: "direct-messages" });
   });

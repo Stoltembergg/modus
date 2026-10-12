@@ -394,7 +394,7 @@ export function Sidebar({
 
           {section === "direct-messages" ? (
             <>
-              <SectionLabel>Direct Messages</SectionLabel>
+              <SectionLabel>Projects</SectionLabel>
               <AnimatePresence initial={false}>
                 {directMessageSessions.length === 0 ? (
                   <p className="px-2 py-1 text-2xs text-fg-faint">

@@ -7,8 +7,8 @@ export type PrimaryNavigationState = {
 };
 
 export const INITIAL_PRIMARY_NAVIGATION: PrimaryNavigationState = {
-  active: "groups",
-  settingsReturnTo: "groups",
+  active: "direct-messages",
+  settingsReturnTo: "direct-messages",
 };
 
 export function navigatePrimary(
@@ -33,6 +33,6 @@ export function restorePrimaryNavigation(
   current: PrimaryNavigationState,
   restored: { settingsOpen: boolean; activeSessionId?: string | null | undefined },
 ): PrimaryNavigationState {
-  const primary = navigatePrimary(current, restored.activeSessionId ? "direct-messages" : "groups");
+  const primary = navigatePrimary(current, "direct-messages");
   return restored.settingsOpen ? navigatePrimary(primary, "settings") : primary;
 }
