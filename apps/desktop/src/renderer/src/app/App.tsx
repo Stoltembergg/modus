@@ -20,7 +20,6 @@ import type {
   ContextItem,
   ContextUsageInfo,
   CreateAgentGroupInput,
-  FileDiff,
   ModelInfo,
   ModelSettingsState,
   PlanRef,
@@ -244,7 +243,6 @@ export function App() {
   // Plans are scoped per session (the authoritative key), so switching sessions
   // shows that session's own plan — never the last one any session emitted.
   const [activePlanBySession, setActivePlanBySession] = useState<Record<string, PlanRef>>({});
-  const [environmentStats, setEnvironmentStats] = useState({ added: 0, removed: 0 });
   const [sessionCreateError, setSessionCreateError] = useState<string | undefined>();
   const [layoutWidth, setLayoutWidth] = useState(0);
 
@@ -774,10 +772,6 @@ export function App() {
     setInspectorOpen(true);
   }, []);
 
-  const openConnections = useCallback(() => {
-    openSettings("mcp");
-  }, [openSettings]);
-
   const rememberActivePlan = useCallback(
     (plan: PlanRef) => {
       const normalized = normalizePlan(plan);
@@ -1130,9 +1124,6 @@ export function App() {
     (primaryNavigation.active === "direct-messages" ? activeWorkspace?.rootPath : undefined);
   const branch = useGitBranch(activeCwd);
   const isMac = window.modus?.app.platform === "darwin";
-  const activeRunning = activeSession
-    ? (activityBySession[activeSession.id]?.running ?? false)
-    : false;
 
   useEffect(() => {
     const next = { sessionId: activeSessionId, workspaceId: activeWorkspace?.id };
@@ -1180,19 +1171,6 @@ export function App() {
       setInspectorWidth(inspectorMaxWidth);
     }
   }, [inspectorWidth, inspectorMaxWidth]);
-
-  useEffect(() => {
-    // activeRunning gates nothing but re-runs the poll whenever the active
-    // agent starts/stops — its edits have just landed when it stops.
-    void activeRunning;
-    if (!activeCwd) {
-      setEnvironmentStats({ added: 0, removed: 0 });
-      return;
-    }
-    void window.modus.diff.read({ cwd: activeCwd }).then((fileDiff: FileDiff) => {
-      setEnvironmentStats(getDiffTotals(fileDiff.diff));
-    });
-  }, [activeCwd, activeRunning]);
 
   const workspaceRoot = activeWorkspace?.rootPath;
   useEffect(() => {
@@ -1490,11 +1468,7 @@ export function App() {
                             {visibleGroup ? null : (
                               <div className="pr-2">
                                 <HeaderActions
-                                  activeWorkspace={activeWorkspace}
-                                  branch={branch}
-                                  environmentStats={environmentStats}
                                   inspectorOpen={responsiveInspectorOpen}
-                                  onOpenSettings={() => openSettings()}
                                   onToggleInspector={() => setInspectorOpen((open) => !open)}
                                   tier={topBarTier}
                                 />
@@ -1636,7 +1610,6 @@ export function App() {
                                   }
                                   onOpenReview={openReview}
                                   onOpenActivity={openActivity}
-                                  onOpenConnections={openConnections}
                                   onComposerDraftChange={(update) =>
                                     updateSessionComposerDraft(visibleSession.id, update)
                                   }
@@ -1685,7 +1658,6 @@ export function App() {
                             >
                               <div className="relative z-10 w-full max-w-[680px] -translate-y-4">
                                 <Composer
-                                  onOpenConnections={openConnections}
                                   canSubmit={canCreateSession}
                                   contextItems={heroContextItems}
                                   cwd={activeWorkspace?.rootPath}
@@ -1956,16 +1928,5 @@ function WorkspaceMenu({
         </Menu.Positioner>
       </Menu.Portal>
     </Menu.Root>
-  );
-}
-
-function getDiffTotals(diff: string): { added: number; removed: number } {
-  return diff.split("\n").reduce(
-    (total, line) => {
-      if (line.startsWith("+") && !line.startsWith("+++")) total.added += 1;
-      if (line.startsWith("-") && !line.startsWith("---")) total.removed += 1;
-      return total;
-    },
-    { added: 0, removed: 0 },
   );
 }

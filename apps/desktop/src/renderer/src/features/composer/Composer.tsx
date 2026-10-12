@@ -5,7 +5,6 @@ import {
   IconDots,
   IconListCheck,
   IconLoader2,
-  IconPlugConnected,
   IconPlus,
   IconSparkles,
   IconX,
@@ -72,8 +71,6 @@ type ComposerProps = {
   /** Input content shares the single elevated shell owned by ComposerDock. */
   integrated?: boolean;
   trailingActions?: ReactNode;
-  /** Opens the first-class Connections view for Composio and provider access. */
-  onOpenConnections?(): void;
   /**
    * Session controls rendered by the host (session state): the chat's model chip, the
    * effort chip when the model has thinking options (PR 2, current chat only), and the
@@ -182,7 +179,6 @@ export function Composer({
   isRunning = false,
   onAbort,
   branchControl,
-  onOpenConnections,
   onContextChange,
   onCompact,
   onSubmit,
@@ -242,7 +238,7 @@ export function Composer({
   const editorRef = useRef<MentionEditorHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [toolbarRef, toolbarTier] = useWidthTier<HTMLDivElement>(COMPOSER_TOOLBAR_BREAKPOINTS);
-  // sm: secondary actions (Attach, Connections) collapse into one overflow menu.
+  // sm: secondary actions (Attach) collapse into one overflow menu.
   const toolbarOverflow = toolbarTier === "sm" && !isInlineEdit;
   const { addFiles, clearImages, images, removeImage, toAttachments, updateImage } =
     useComposerImages({
@@ -684,14 +680,6 @@ export function Composer({
                       >
                         Attach files
                       </GroupMenuItem>
-                      {onOpenConnections ? (
-                        <GroupMenuItem
-                          icon={<IconPlugConnected size={ICON.sm} stroke={ICON_STROKE.sm} />}
-                          onClick={onOpenConnections}
-                        >
-                          Connections
-                        </GroupMenuItem>
-                      ) : null}
                     </Menu.Popup>
                   </Menu.Positioner>
                 </Menu.Portal>
@@ -729,18 +717,6 @@ export function Composer({
                   onExit={() => setMode("build")}
                 />
                 {branchControl}
-                {onOpenConnections && !toolbarOverflow ? (
-                  <button
-                    aria-label="Connections"
-                    className="app-no-drag inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-xs text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
-                    onClick={onOpenConnections}
-                    title="Manage Connections and Composio access"
-                    type="button"
-                  >
-                    <IconPlugConnected size={ICON.sm} stroke={ICON_STROKE.sm} />
-                    {toolbarTier === "lg" ? <span>Connections</span> : null}
-                  </button>
-                ) : null}
               </>
             ) : null}
 
