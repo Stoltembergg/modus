@@ -873,6 +873,34 @@ describe("AgentDialog work types follow the role", () => {
     expect(onUpdate.mock.calls[0]?.[0]).toMatchObject({ role: "Advisor" });
   });
 
+  it("leaving the role and coming back sends the original text and shows no warning", async () => {
+    const user = userEvent.setup();
+    const cases: [stored: string, away: string, back: string][] = [
+      ["Planner", "advisor", "lead"],
+      ["oracle", "custom", "advisor"],
+      ["Release notes", "builder", "custom"],
+    ];
+    for (const [stored, away, back] of cases) {
+      // Hand-picked lists, so leaving the role does warn.
+      const { dialog, onUpdate } = renderDialog({
+        agent: { ...ANA, role: stored, capabilityIds: ["verify"], supportedTaskKinds: ["code"] },
+      });
+      const original = roleSelect(dialog).value;
+      expect(original, stored).toBe(back);
+      await user.selectOptions(roleSelect(dialog), away);
+      if (away !== "custom") {
+        expect(within(dialog).getByText(CUSTOM_WORK_TYPES_WARNING), stored).toBeTruthy();
+      }
+      await user.selectOptions(roleSelect(dialog), back);
+      expect(within(dialog).queryByText(CUSTOM_WORK_TYPES_WARNING), stored).toBeNull();
+      expect(workTypes(dialog), stored).toBe("Handles code tasks. Verifies.");
+      await user.click(within(dialog).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+      expect(onUpdate.mock.calls[0]?.[0], stored).toMatchObject({ role: stored });
+      cleanup();
+    }
+  });
+
   it("create and group drafts send no work lists", async () => {
     const user = userEvent.setup();
     const { dialog, create } = renderDialog();
