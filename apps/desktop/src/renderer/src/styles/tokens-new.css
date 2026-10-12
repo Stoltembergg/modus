@@ -1,0 +1,195 @@
+/*
+ * New look (redesign Phase 1, PLAN.md §1–2). Plain CSS, loaded after app.css.
+ *
+ * Every rule is scoped to :root[data-ui="new"], so the classic look
+ * (data-ui="classic", the default) computes exactly what it did before. The
+ * file redefines the token names app.css already exposes (the @theme
+ * --color-* / --radius-* that Tailwind utilities read, and the semantic
+ * --surface-* / --glass-* / --space-* layer), so no component changes.
+ *
+ * Glass: same D2 architecture (one tint + blur on .app-shell, panels
+ * transparent on top). Tiers are tint colour + one alpha set for both themes:
+ *   g0 window  --color-panel    @ --glass-alpha-chrome  64%
+ *   g1 inset   --color-canvas   (main/inset surfaces; opaque in Sidebar/Off)
+ *   g2 raised  --color-surface  (composer, cards, lists)
+ *   g3 overlay --color-elevated @ --glass-alpha-overlay 90%
+ * Text contrast on these tiers, and the solid fallback at the end of this
+ * file, are pinned by styles/tokensNew.test.ts.
+ *
+ * Eye-care Dark is classic-only: lib/theme.ts resolves it to "dark" while the
+ * new look is on, so :root[data-ui="new"][data-theme="dark-plus"] never occurs.
+ */
+:root[data-ui="new"] {
+  color-scheme: dark;
+
+  /* Surfaces: night-ink tiers sampled from the concept. */
+  --color-canvas: #0f1520;
+  --color-panel: #0b1018;
+  --color-surface: #151d2a;
+  --color-elevated: #1a2333;
+  --color-code-bg: #0f1520;
+
+  /* Text */
+  --color-fg: #e7ebf1;
+  --color-fg-muted: #a9b2c0;
+  --color-fg-subtle: #939dac;
+  --color-fg-faint: #7a8494;
+  --color-fg-placeholder: #5f6979;
+  --color-icon: #dce1e8;
+  --color-icon-muted: #a9b2c0;
+
+  /* Borders */
+  --color-hairline: rgba(255, 255, 255, 0.07);
+  --color-hairline-soft: rgba(255, 255, 255, 0.05);
+  --color-hairline-strong: rgba(255, 255, 255, 0.1);
+  --color-popup-border: rgba(255, 255, 255, 0.1);
+  --color-composer-border: rgba(255, 255, 255, 0.12);
+  --color-composer-shine: rgba(255, 255, 255, 0.4), rgba(255, 255, 255, 0.12);
+
+  /* States */
+  --color-hover: rgba(255, 255, 255, 0.05);
+  --color-active: rgba(255, 255, 255, 0.08);
+  --color-selected: rgba(47, 107, 242, 0.16);
+  --color-chip-faint: rgba(255, 255, 255, 0.04);
+  --color-chip: rgba(255, 255, 255, 0.06);
+  --color-chip-strong: rgba(255, 255, 255, 0.09);
+
+  /* One accent: blue replaces the orange send, the Build blue and the focus purple. */
+  --color-accent: #2f6bf2;
+  --color-accent-hover: #4a7ff5;
+  --color-accent-active: #2459d6;
+  --color-on-accent: #ffffff;
+  --color-build: #2f6bf2;
+  --color-build-hover: #4a7ff5;
+  --color-build-fg: #ffffff;
+  --color-focus-ring: #5b8cff;
+  --color-focus-ring-soft: #7aa5ff;
+  --color-selection: rgba(47, 107, 242, 0.36);
+  --color-link: #7aa5ff;
+  --color-link-hover: #9dbdff;
+  --accent-text: #7aa5ff;
+  --accent-soft: rgba(47, 107, 242, 0.16);
+  --accent-edge: rgba(122, 165, 255, 0.28);
+
+  /* Status */
+  --color-success: #34c38f;
+  --color-danger: #f06a6a;
+  --status-warning: #f2b84b;
+
+  /* Radii by hierarchy: chip 6, control 8, thumb 10, card/popover 14, dialog/sheet 18, window 24. */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-2xl: 24px;
+  --radius-composer: 14px;
+
+  /* Elevation: shadows only on raised (e1) and overlays (e2 popover, e3 dialog), night-ink tinted. */
+  --shadow-1: 0 1px 2px rgba(2, 6, 14, 0.35);
+  --shadow-2: 0 1px 2px rgba(2, 6, 14, 0.3), 0 10px 28px -10px rgba(2, 6, 14, 0.55);
+  --shadow-3: 0 2px 6px rgba(2, 6, 14, 0.3), 0 28px 72px -20px rgba(2, 6, 14, 0.7);
+  --edge-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --shadow-popup: var(--shadow-2);
+  --dialog-shadow: var(--shadow-3);
+  --shadow-composer-edge: var(--edge-highlight), var(--shadow-1);
+  --shadow-composer-focus: var(--shadow-1), 0 0 0 1px var(--color-focus-ring);
+  --overlay-scrim-color: rgba(3, 6, 12, 0.42);
+
+  /* Glass */
+  --glass-alpha-chrome: 64%;
+  --glass-alpha-overlay: 90%;
+  --glass-blur: 20px;
+  --glass-saturate: 1.3;
+
+  /* Spacing */
+  --space-row-height: 32px;
+  --space-content-gutter: 20px;
+  --space-sidebar-width: clamp(232px, 18vw, 272px);
+
+  --scrollbar-thumb: rgba(255, 255, 255, 0.1);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.18);
+}
+
+:root[data-ui="new"][data-theme="light"] {
+  color-scheme: light;
+
+  --color-canvas: #f6f8fb;
+  --color-panel: #eef1f6;
+  --color-surface: #ffffff;
+  --color-elevated: #ffffff;
+  --color-code-bg: #ffffff;
+
+  --color-fg: #161c27;
+  --color-fg-muted: #3f4959;
+  --color-fg-subtle: #535d6f;
+  --color-fg-faint: #626c7e;
+  --color-fg-placeholder: #9aa3b2;
+  --color-icon: #161c27;
+  --color-icon-muted: #586274;
+
+  --color-hairline: rgba(16, 24, 40, 0.07);
+  --color-hairline-soft: rgba(16, 24, 40, 0.05);
+  --color-hairline-strong: rgba(16, 24, 40, 0.1);
+  --color-popup-border: rgba(16, 24, 40, 0.08);
+  --color-composer-border: rgba(16, 24, 40, 0.12);
+  --color-composer-shine: rgba(16, 24, 40, 0.3), rgba(16, 24, 40, 0.08);
+
+  --color-hover: rgba(16, 24, 40, 0.04);
+  --color-active: rgba(16, 24, 40, 0.07);
+  --color-selected: rgba(31, 95, 224, 0.1);
+  --color-chip-faint: rgba(16, 24, 40, 0.035);
+  --color-chip: rgba(16, 24, 40, 0.055);
+  --color-chip-strong: rgba(16, 24, 40, 0.09);
+
+  --color-accent: #1f5fe0;
+  --color-accent-hover: #2f6bf2;
+  --color-accent-active: #1a4fbf;
+  --color-build: #1f5fe0;
+  --color-build-hover: #2f6bf2;
+  --color-focus-ring: #1f5fe0;
+  --color-focus-ring-soft: #2f6bf2;
+  --color-selection: rgba(31, 95, 224, 0.18);
+  --color-link: #1f5fe0;
+  --color-link-hover: #1a4fbf;
+  --accent-text: #1f5fe0;
+  --accent-soft: rgba(31, 95, 224, 0.1);
+  --accent-edge: rgba(31, 95, 224, 0.22);
+
+  --color-success: #138a5e;
+  --color-danger: #d23b3b;
+  --status-warning: #a76500;
+
+  --shadow-1: 0 1px 2px rgba(20, 32, 56, 0.06);
+  --shadow-2: 0 1px 2px rgba(20, 32, 56, 0.05), 0 10px 28px -12px rgba(20, 32, 56, 0.18);
+  --shadow-3: 0 2px 6px rgba(20, 32, 56, 0.06), 0 30px 80px -24px rgba(20, 32, 56, 0.28);
+  --edge-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  --overlay-scrim-color: rgba(20, 32, 56, 0.16);
+
+  --glass-saturate: 1.6;
+
+  --scrollbar-thumb: rgba(16, 24, 40, 0.1);
+  --scrollbar-thumb-hover: rgba(16, 24, 40, 0.16);
+}
+
+/*
+ * Solid fallback for the new look. app.css zeroes the glass tiers on plain
+ * :root; the alphas above are on :root[data-ui="new"] (higher specificity),
+ * so the same conditions must zero them again here, last in the cascade.
+ */
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
+  :root[data-ui="new"] {
+    --glass-alpha-chrome: 100%;
+    --glass-alpha-overlay: 100%;
+    --glass-filter: none;
+    --glass-scrim-filter: none;
+  }
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root[data-ui="new"] {
+    --glass-alpha-chrome: 100%;
+    --glass-alpha-overlay: 100%;
+    --glass-filter: none;
+    --glass-scrim-filter: none;
+  }
+}

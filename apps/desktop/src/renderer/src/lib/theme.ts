@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import type { LookPreference } from "../../../shared/appearance";
 
 /**
  * App color theme. Dark is the original, hand-tuned palette; Light and
@@ -26,9 +27,23 @@ function readStored(): ThemeMode {
 }
 
 let current: ThemeMode = readStored();
+let look: LookPreference = "classic";
 let systemColorScheme: MediaQueryList | null = null;
 let systemColorSchemeListenerAttached = false;
 const listeners = new Set<() => void>();
+
+export function getThemeLook(): LookPreference {
+  return look;
+}
+
+export function setThemeLook(next: LookPreference): void {
+  if (next === look) return;
+  look = next;
+  applyTheme(current);
+  for (const listener of listeners) {
+    listener();
+  }
+}
 
 function getSystemColorScheme(): MediaQueryList | null {
   if (systemColorScheme) return systemColorScheme;
@@ -40,9 +55,11 @@ function getSystemColorScheme(): MediaQueryList | null {
 export function resolveThemePreference(
   preference: ThemeMode,
   systemPrefersLight = getSystemColorScheme()?.matches ?? false,
+  activeLook: LookPreference = look,
 ): EffectiveThemeMode {
-  if (preference === "system") return systemPrefersLight ? "light" : "dark";
-  return preference;
+  const resolved = preference === "system" ? (systemPrefersLight ? "light" : "dark") : preference;
+  if (resolved === "dark-plus" && activeLook === "new") return "dark";
+  return resolved;
 }
 
 /** Reflect the effective palette onto <html data-theme>. Safe to call repeatedly. */

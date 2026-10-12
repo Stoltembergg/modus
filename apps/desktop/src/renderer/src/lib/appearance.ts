@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
-import type { AppearanceState, TransparencyPreference } from "../../../shared/appearance";
+import type {
+  AppearanceState,
+  LookPreference,
+  TransparencyPreference,
+} from "../../../shared/appearance";
+import { setThemeLook } from "./theme";
 
 function appearanceApi() {
   return typeof window === "undefined" ? undefined : window.modus?.app.appearance;
@@ -28,16 +33,38 @@ export function applyTransparencyAttribute(state: Pick<AppearanceState, "glassMo
   document.documentElement.dataset.transparency = state.glassMode;
 }
 
-/** Keep <html data-transparency> on the main-process state; index.html set the first frame. */
+/** Reflect the look onto <html data-ui> (classic | new) and let the theme drop Eye-care Dark in the new look. */
+export function applyLookAttribute(state: Pick<AppearanceState, "look">): void {
+  const look = state.look === "new" ? "new" : "classic";
+  document.documentElement.dataset.ui = look;
+  setThemeLook(look);
+}
+
+/** Keep <html data-transparency> and <html data-ui> on the main-process state; index.html set the first frame. */
 export function initAppearanceAttributes(): void {
   const api = appearanceApi();
-  if (!api) return;
-  if (api.initial) applyTransparencyAttribute(api.initial);
-  api.onChange(applyTransparencyAttribute);
+  if (!api) {
+    if (!document.documentElement.dataset.ui) {
+      document.documentElement.dataset.ui = "classic";
+    }
+    return;
+  }
+  const apply = (state: AppearanceState): void => {
+    applyTransparencyAttribute(state);
+    applyLookAttribute(state);
+  };
+  if (api.initial) apply(api.initial);
+  api.onChange(apply);
 }
 
 export function setTransparency(transparency: TransparencyPreference): void {
   void appearanceApi()
     ?.set({ transparency })
+    .catch(() => undefined);
+}
+
+export function setLook(look: LookPreference): void {
+  void appearanceApi()
+    ?.set({ look })
     .catch(() => undefined);
 }

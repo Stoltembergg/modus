@@ -2,11 +2,12 @@ import type { BrowserWindow, NativeTheme } from "electron";
 import {
   type AppearanceSetInput,
   type AppearanceState,
+  applyAppearanceInput,
   type OsAppearance,
   resolveAppearance,
-  SOLID_WINDOW_BACKGROUND,
+  solidWindowBackground,
   themeSourceFor,
-  WINDOW_SYMBOL_COLOR,
+  windowSymbolColor,
 } from "../../shared/appearance";
 import type { WindowAppearance } from "../../shared/window-appearance";
 import { IPC_CHANNELS } from "../ipc/channels";
@@ -83,7 +84,7 @@ export function createAppearanceController({
   /** Returns false when the OS declined the native material (host downgraded to solid). */
   const apply = (window: AppearanceWindow): boolean => {
     if (window.isDestroyed()) return true;
-    const { glass, effectiveTheme } = state;
+    const { glass } = state;
     if (host.glass === "native" && host.chrome === "macos") {
       window.setVibrancy(glass ? "sidebar" : null);
     }
@@ -102,11 +103,11 @@ export function createAppearanceController({
     }
     if (host.chrome === "windows-overlay") {
       window.setTitleBarOverlay({
-        symbolColor: WINDOW_SYMBOL_COLOR[effectiveTheme],
+        symbolColor: windowSymbolColor(state),
         height: TITLE_BAR_HEIGHT,
       });
     }
-    window.setBackgroundColor(glass ? TRANSPARENT : SOLID_WINDOW_BACKGROUND[effectiveTheme]);
+    window.setBackgroundColor(glass ? TRANSPARENT : solidWindowBackground(state));
     return true;
   };
 
@@ -141,10 +142,7 @@ export function createAppearanceController({
   return {
     getState: () => state,
     set(input) {
-      preferences = {
-        theme: input.theme ?? preferences.theme,
-        transparency: input.transparency ?? preferences.transparency,
-      };
+      preferences = applyAppearanceInput(preferences, input);
       store.write(preferences);
       nativeTheme.themeSource = themeSourceFor(preferences.theme);
       return refresh();
