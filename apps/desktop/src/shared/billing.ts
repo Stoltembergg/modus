@@ -86,13 +86,12 @@ export type BillingWallet = {
   planAllowance: number;
   periodEnd: string | null;
   /**
-   * Purchased credits left: the client counts only lots with status 'credited' (sum of their
-   * remaining). This intentionally differs from the server's private.non_purchased_credits, which
-   * subtracts the remaining of every lot: a refund
-   * (supabase/migrations/20261004040200_l5a_lock_order_starter_models.sql:103-142) removes
-   * least(delta, remaining, balance) and can leave a 'refunded' lot with remaining > 0 (a
-   * shortfall), which the server currently counts as purchased. That is a known server bug, fixed
-   * in a separate PR. Absent when the lots could not be read.
+   * Purchased credits left: the sum of `remaining` over the caller's lots with status
+   * 'credited'. The server uses the same rule since #199
+   * (supabase/migrations/20261012003000_l5a_refunded_lot_rule.sql): private.non_purchased_credits,
+   * consume_credit_lots and purchase_access_plan only count credited lots, and a full refund or
+   * chargeback zeroes its lot. Before #199 the server also counted a 'refunded' lot whose
+   * remainder was held by a reservation. Absent when the lots could not be read.
    */
   purchased?: number;
   /**
