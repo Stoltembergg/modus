@@ -1557,6 +1557,7 @@ export function App() {
                                   }
                                   contextUsage={contextUsageBySession[visibleSession.id]}
                                   defaultModel={model}
+                                  modelsReady={modelSettings !== null}
                                   modusStatus={modelSettings?.modus}
                                   hub={hubRef.current}
                                   initialEvents={initialEventsBySession[visibleSession.id]}

@@ -64,6 +64,7 @@ export function ModelPicker({
   disabled = false,
   tone = "neutral",
   triggerText,
+  description,
 }: {
   label: string;
   models: readonly PickableModel[];
@@ -79,6 +80,8 @@ export function ModelPicker({
   disabled?: boolean | undefined;
   tone?: "neutral" | "warning" | undefined;
   triggerText?: string | undefined;
+  /** Extra screen-reader text on the trigger (e.g. why it is disabled). */
+  description?: string | undefined;
 }) {
   const groups = useMemo<PickerGroup[]>(() => {
     const built = buildModelPickerGroups(models, savedModelId);
@@ -146,6 +149,7 @@ export function ModelPicker({
                 "active:scale-[0.99] data-popup-open:border-hairline-strong motion-reduce:transition-none motion-reduce:active:scale-100",
               )
         }
+        aria-description={description}
         data-testid="model-picker-trigger"
         data-value={value}
         disabled={disabled}

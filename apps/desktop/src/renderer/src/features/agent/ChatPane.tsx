@@ -94,6 +94,21 @@ export function turnModelForPane(defaultModel: string, sessionModel?: string | u
   return sessionModel || defaultModel;
 }
 
+/** Send is allowed only with a usable model and branch, and a folder (or the No project inbox). */
+export function canSubmitChatComposer(input: {
+  branchBlocked: boolean;
+  modelBlocked: boolean;
+  workspace: WorkspaceInfo | null;
+  sessionWorkspaceId: string;
+  modelId: string | undefined;
+}): boolean {
+  return (
+    !input.branchBlocked &&
+    !input.modelBlocked &&
+    canSubmitPromptForSession(input.workspace, input.sessionWorkspaceId, input.modelId)
+  );
+}
+
 export function canSubmitPromptForSession(
   workspace: WorkspaceInfo | null,
   sessionWorkspaceId: string,
@@ -399,6 +414,8 @@ type ChatPaneProps = {
   models: ModelInfo[];
   /** App-level default model id — fallback when the session has none. */
   defaultModel: string;
+  /** False while the model catalog is still loading (`models` is empty, not "none usable"). */
+  modelsReady?: boolean;
   /** L3b0: Modus provider state (ModelSettingsState.modus) for the inline unavailable notice. */
   modusStatus?: ModusModelsStatus | undefined;
   contextUsage?: ContextUsageInfo | undefined;
@@ -703,6 +720,7 @@ export function ChatPane({
   initialEvents,
   onInitialEventsConsumed,
   onSessionsChanged,
+  modelsReady = true,
   onModelChange,
   onModelConfigChange,
   onOpenReview,
@@ -1826,17 +1844,20 @@ export function ChatPane({
                     >
                       <Composer
                         integrated
-                        canSubmit={
-                          !branchBlocked &&
-                          !modelBlocked &&
-                          canSubmitPromptForSession(workspace, session.workspaceId, paneModel)
-                        }
+                        canSubmit={canSubmitChatComposer({
+                          branchBlocked,
+                          modelBlocked,
+                          workspace,
+                          sessionWorkspaceId: session.workspaceId,
+                          modelId: paneModel,
+                        })}
                         branchControl={
                           <>
                             <SessionModelPicker
                               defaultModelId={defaultModel}
                               isRunning={isRunning}
                               models={models}
+                              modelsReady={modelsReady}
                               onBlockedChange={setModelBlocked}
                               onChanged={onSessionsChanged}
                               onError={setPromptError}

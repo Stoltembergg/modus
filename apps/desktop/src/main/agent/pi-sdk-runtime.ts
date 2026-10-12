@@ -288,6 +288,9 @@ import { registerVisualTools, VISUAL_AUTHORING_GUIDELINES } from "./tools/visual
 import { formatWaitedDuration, registerWaitTools } from "./tools/wait-tools";
 import { registerWebTools } from "./tools/web-tools";
 
+/** Shown translated by the renderer (shell.modelRunning). */
+export const MODEL_CHANGE_RUNNING_ERROR = "Can't change the model while a run is active.";
+
 function requireUsableSelectedModel(modelId: string): NonNullable<ReturnType<typeof findModel>> {
   const model = findModel(modelId);
   if (!model || !isUsableModelId(modelId)) {
@@ -3567,6 +3570,11 @@ export class PiSdkRuntime implements AgentRuntime {
     return result;
   }
 
+  /** The composer model picker and Ctrl+/ are idle-only; main enforces it. */
+  private assertModelChangeAllowed(sessionId: string): void {
+    if (this.isSessionStreaming(sessionId)) throw new Error(MODEL_CHANGE_RUNNING_ERROR);
+  }
+
   isSessionStreaming(sessionId: string): boolean {
     return this.sessions.get(sessionId)?.session.isStreaming === true;
   }
@@ -5673,10 +5681,7 @@ export class PiSdkRuntime implements AgentRuntime {
     modelId: string,
     thinkingVariant?: string,
   ): Promise<AgentSessionInfo> {
-    // The composer picker is idle-only; main enforces it too.
-    if (this.isSessionStreaming(sessionId)) {
-      throw new Error("Can't change the model while a run is active.");
-    }
+    this.assertModelChangeAllowed(sessionId);
     const runtimeSession = await this.getOrResume(window, sessionId, modelId);
     if (!runtimeSession) {
       throw new Error(`Unable to set model: ${modelId}`);
@@ -5694,8 +5699,12 @@ export class PiSdkRuntime implements AgentRuntime {
     if (!sessionId || !window) {
       return cycleDefaultModel(direction);
     }
+    this.assertModelChangeAllowed(sessionId);
 
-    const candidates = listModels().filter((model) => !model.locked);
+    // Same rule as setModel: only models the picker would accept.
+    const candidates = listModels().filter(
+      (model) => !model.locked && model.available && model.enabled && isUsableModelId(model.id),
+    );
     if (candidates.length === 0) throw new Error("No models are available to select.");
     const cachedSession = this.sessions.get(sessionId);
     const currentId = cachedSession

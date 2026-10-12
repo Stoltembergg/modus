@@ -15,6 +15,8 @@ type SessionModelPickerProps = {
   storedModelId: string | undefined;
   defaultModelId: string;
   models: ModelInfo[];
+  /** False while the catalog loads: an empty list then means "unknown", never "unusable". */
+  modelsReady: boolean;
   isRunning: boolean;
   /** True while the saved model can't be used: the host blocks sending. */
   onBlockedChange(blocked: boolean): void;
@@ -49,12 +51,17 @@ function pickableModels(models: readonly ModelInfo[]): PickableModel[] {
  * (main validates the id and refuses while a run is active). The app default in Settings
  * is never touched. An unusable saved model asks the user to pick and blocks sending.
  * The effort chip appears only when the model has more than one thinking option.
+ * Choosing an effort calls `setModel` with the effective model, so it also PINS that model
+ * on the chat (a chat on "Default (X)" stops following the default). The level lives on the
+ * chat's runtime session; the chip shows the last pick until the pane remounts, then the
+ * model's configured level.
  */
 export function SessionModelPicker({
   sessionId,
   storedModelId,
   defaultModelId,
   models,
+  modelsReady,
   isRunning,
   onBlockedChange,
   onError,
@@ -63,7 +70,8 @@ export function SessionModelPicker({
   const t = useShellText();
   const pickable = useMemo(() => pickableModels(models), [models]);
   const effectiveId = storedModelId || defaultModelId;
-  const blocked = Boolean(storedModelId) && !isPickableModel(models, storedModelId ?? "");
+  const blocked =
+    modelsReady && Boolean(storedModelId) && !isPickableModel(models, storedModelId ?? "");
   const effective = models.find((model) => model.id === effectiveId);
   const options = useMemo(() => (effective ? modelThinkingOptions(effective) : []), [effective]);
   const [effort, setEffort] = useState<string | undefined>(undefined);
@@ -87,7 +95,13 @@ export function SessionModelPicker({
       });
       onChanged();
     } catch (error) {
-      onError(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      // Main's idle-only refusal (pi-sdk-runtime MODEL_CHANGE_RUNNING_ERROR), translated.
+      onError(
+        message.includes("Can't change the model while a run is active.")
+          ? t("shell.modelRunning")
+          : message,
+      );
     }
   }
 
@@ -105,6 +119,7 @@ export function SessionModelPicker({
     <>
       <span className="inline-flex min-w-0" title={isRunning ? t("shell.modelRunning") : undefined}>
         <ModelPicker
+          description={isRunning ? t("shell.modelRunning") : undefined}
           disabled={isRunning}
           label={t("shell.model")}
           models={pickable}
@@ -122,6 +137,7 @@ export function SessionModelPicker({
       {!blocked && effective && options.length > 1 && currentEffort ? (
         <Menu.Root>
           <Menu.Trigger
+            aria-description={isRunning ? t("shell.modelRunning") : undefined}
             aria-label={t("shell.effort")}
             className={cn(MODEL_CHIP_BASE, MODEL_CHIP_INTERACTIVE, MODEL_CHIP_TONE)}
             data-testid="session-effort-picker"

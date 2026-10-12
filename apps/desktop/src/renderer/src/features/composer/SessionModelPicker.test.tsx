@@ -49,6 +49,7 @@ function renderPicker(extra: Partial<Parameters<typeof SessionModelPicker>[0]> =
     storedModelId: "anthropic/sonnet" as string | undefined,
     defaultModelId: "openai/gpt-5",
     models: MODELS,
+    modelsReady: true,
     isRunning: false,
     onBlockedChange: vi.fn(),
     onError: vi.fn(),
@@ -121,8 +122,25 @@ describe("SessionModelPicker", () => {
     );
   });
 
+  it("does not block while the catalog is still loading", () => {
+    const props = renderPicker({ models: [], modelsReady: false });
+    expect(props.onBlockedChange).toHaveBeenLastCalledWith(false);
+    expect(trigger().textContent).not.toContain("Pick a model");
+  });
+
+  it("tells screen readers why it is disabled during a run", () => {
+    renderPicker({ isRunning: true });
+    expect(trigger().getAttribute("aria-description")).toBe(
+      "Can't change the model while a run is active.",
+    );
+  });
+
   it("reports a refused change", async () => {
-    setModel.mockRejectedValue(new Error("Can't change the model while a run is active."));
+    setModel.mockRejectedValue(
+      new Error(
+        "Error invoking remote method 'agent:set-model': Error: Can't change the model while a run is active.",
+      ),
+    );
     const user = userEvent.setup();
     const props = renderPicker();
     await user.click(trigger());
