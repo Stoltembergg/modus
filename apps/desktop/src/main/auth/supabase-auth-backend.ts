@@ -248,6 +248,13 @@ export function createSupabaseAuthBackend(config: AuthConfig): AuthBackend & Bil
       for (const result of [plans, subscription, grace, wallet]) {
         if (result.error) throw new AuthBackendError("other", "billing read failed");
       }
+      // Expected until #199 is applied live (42703: no such column) or if the column grant is
+      // ever narrowed (403). Anything else is a real failure: log it so the hidden debt is seen.
+      if (owed.error && owed.error.code !== "42703" && owed.status !== 403) {
+        console.warn(
+          `[billing] shortfall_owed read failed (status ${owed.status}, code ${owed.error.code ?? "none"}): the refund debt is hidden`,
+        );
+      }
       return mapBillingRows({
         plans: (plans.data ?? []) as unknown[],
         // A catalog failure must not hide the plan / credits: the UI shows "plans unavailable".

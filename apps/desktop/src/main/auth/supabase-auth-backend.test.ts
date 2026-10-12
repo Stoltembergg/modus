@@ -171,8 +171,11 @@ describe("Supabase auth backend", () => {
             { status: 400 },
           ),
         () => Response.json({ message: "permission denied" }, { status: 403 }),
+        () => Response.json({ message: "upstream timeout", code: "57014" }, { status: 500 }),
       ];
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       for (const shortfall of shortfallResponses) {
+        warn.mockClear();
         const { backend } = withFetch(() => Response.json([]));
         const urls: URL[] = [];
         vi.stubGlobal(
@@ -212,10 +215,18 @@ describe("Supabase auth backend", () => {
           } else {
             expect(snapshot.wallet).not.toHaveProperty("shortfallOwed");
           }
+          // Only an unexpected error is logged; a missing column (42703) or a 403 is expected.
+          if (shortfall === shortfallResponses[3]) {
+            expect(warn).toHaveBeenCalledTimes(1);
+            expect(String(warn.mock.calls[0]?.[0])).toContain("status 500, code 57014");
+          } else {
+            expect(warn).not.toHaveBeenCalled();
+          }
         } finally {
           backend.dispose();
         }
       }
+      warn.mockRestore();
     });
 
     it("POSTs an empty object to mp-cancel and maps the known codes", async () => {
