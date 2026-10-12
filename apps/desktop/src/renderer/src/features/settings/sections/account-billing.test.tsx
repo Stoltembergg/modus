@@ -710,6 +710,44 @@ describe("L5b credit packs", () => {
     );
   });
 
+  it("shows the refund debt after the balance sentence; the pill and the split are unchanged", () => {
+    const wallet = {
+      balance: 9640,
+      reserved: 360,
+      planAllowance: 1000,
+      periodEnd: null,
+      allowance: 1000,
+      purchased: 9000,
+      shortfallOwed: 4000,
+    };
+    const descEn = creditsDescription(wallet, "Free", "en-US");
+    const owedSentence =
+      "You owe 4,000 credits from a refunded purchase. They come out of your next credits.";
+    // The balance sentence is unchanged (640 + 9,000 = the 9,640 pill); the debt comes last.
+    expect(descEn).toBe(
+      "640 credits from your Free plan are used first, then 9,000 credits purchased, which never expire. " +
+        "Another 360 credits are held for requests in progress. " +
+        owedSentence,
+    );
+    expect(creditsDescription(wallet, "Free", "pt-BR")).toContain("You owe 4.000 credits");
+    const descOne = creditsDescription({ ...wallet, shortfallOwed: 1 }, "Free", "en-US");
+    expect(
+      descOne.endsWith(
+        "You owe 1 credit from a refunded purchase. It comes out of your next credits.",
+      ),
+    ).toBe(true);
+    expect(creditsDescription({ ...wallet, shortfallOwed: 0 }, "Free", "en-US")).not.toContain(
+      "You owe",
+    );
+    const { shortfallOwed: _owed, ...unknownDebt } = wallet;
+    expect(creditsDescription(unknownDebt, "Free", "en-US")).not.toContain("You owe");
+    expect(640 + 9000).toBe(wallet.balance);
+
+    const html = markup({ ...PACKS_ONLY, wallet });
+    expect(html).toContain(`>${formatCredits(9640)}<`);
+    expect(html).toContain(owedSentence);
+  });
+
   it("Current plan row for not-subscribed users describes monthly top-up neutrally", () => {
     // Free never bought -> exactly "Tops up to 1,000 credits each month." (no "change your plan")
     const freeNeverBought = markup(READY);

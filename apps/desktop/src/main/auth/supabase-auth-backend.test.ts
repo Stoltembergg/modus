@@ -162,6 +162,62 @@ describe("Supabase auth backend", () => {
       }
     });
 
+    it("fetchBilling reads shortfall_owed in its own query; an error there keeps the rest", async () => {
+      const shortfallResponses: Array<() => Response> = [
+        () => Response.json({ shortfall_owed: 4000 }),
+        () =>
+          Response.json(
+            { message: "column credit_wallets.shortfall_owed does not exist", code: "42703" },
+            { status: 400 },
+          ),
+        () => Response.json({ message: "permission denied" }, { status: 403 }),
+      ];
+      for (const shortfall of shortfallResponses) {
+        const { backend } = withFetch(() => Response.json([]));
+        const urls: URL[] = [];
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (input: RequestInfo | URL) => {
+            const url = new URL(String(input instanceof Request ? input.url : input));
+            urls.push(url);
+            if (url.pathname.endsWith("/credit_wallets")) {
+              if (url.searchParams.get("select") === "shortfall_owed") {
+                return shortfall();
+              }
+              return Response.json({
+                balance: 9640,
+                reserved: 0,
+                plan_allowance: 1000,
+                period_end: null,
+              });
+            }
+            return Response.json([]);
+          }),
+        );
+        try {
+          const snapshot = await backend.fetchBilling("11111111-1111-4111-8111-111111111111");
+          const shortfallReads = urls.filter(
+            (url) =>
+              url.pathname.endsWith("/credit_wallets") &&
+              url.searchParams.get("select") === "shortfall_owed",
+          );
+          expect(shortfallReads).toHaveLength(1);
+          expect(shortfallReads[0]?.searchParams.get("select")).toBe("shortfall_owed");
+          expect(shortfallReads[0]?.searchParams.get("user_id")).toBe(
+            "eq.11111111-1111-4111-8111-111111111111",
+          );
+          expect(snapshot.wallet?.balance).toBe(9640);
+          if (shortfall === shortfallResponses[0]) {
+            expect(snapshot.wallet?.shortfallOwed).toBe(4000);
+          } else {
+            expect(snapshot.wallet).not.toHaveProperty("shortfallOwed");
+          }
+        } finally {
+          backend.dispose();
+        }
+      }
+    });
+
     it("POSTs an empty object to mp-cancel and maps the known codes", async () => {
       for (const code of ["no_subscription", "canceled", "cancel_requested"]) {
         const { backend, calls } = withFetch(() => Response.json({ code }));

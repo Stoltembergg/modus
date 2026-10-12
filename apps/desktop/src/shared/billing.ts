@@ -99,6 +99,12 @@ export type BillingWallet = {
    * Absent when the lots could not be read.
    */
   allowance?: number;
+  /**
+   * Credits a refunded purchase still owes (credit_wallets.shortfall_owed, see #199);
+   * collected from credits returned by finished requests and from the next monthly top-up;
+   * not part of balance; absent when unknown.
+   */
+  shortfallOwed?: number;
 };
 
 export type BillingReturnStatus = "success" | "cancel" | "portal";

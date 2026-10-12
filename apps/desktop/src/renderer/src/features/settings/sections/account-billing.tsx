@@ -116,6 +116,14 @@ export function creditsDescription(
       `Another ${creditCount(held, locale)} ${held === 1 ? "is" : "are"} held for requests in progress.`,
     );
   }
+  const owed = wallet.shortfallOwed;
+  if (typeof owed === "number" && owed > 0) {
+    parts.push(
+      `You owe ${creditCount(owed, locale)} from a refunded purchase. ${
+        owed === 1 ? "It comes" : "They come"
+      } out of your next credits.`,
+    );
+  }
   return parts.join(" ");
 }
 
