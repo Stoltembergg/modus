@@ -213,9 +213,7 @@ export function NewGroupModal({
   function addCollabPipeline(): void {
     // Built outside the state updater: StrictMode runs updaters twice, and keys
     // minted there would leave the lead pointing at a member that never landed.
-    const next = assignNewGroupAvatarShapes(
-      applyCollabPipeline(AGENT_TEMPLATES, members, nextKey),
-    );
+    const next = assignNewGroupAvatarShapes(applyCollabPipeline(AGENT_TEMPLATES, members, nextKey));
     setMembers(next);
     const planner = next.find((member) => member.templateId === "planner");
     if (planner) setLeadKey((lead) => lead ?? planner.key);
