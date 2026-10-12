@@ -1,9 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   type AppearancePreferences,
+  applyAppearanceInput,
+  effectiveThemeFor,
+  NEW_LOOK_SOLID_WINDOW_BACKGROUND,
+  NEW_LOOK_WINDOW_SYMBOL_COLOR,
   type OsAppearance,
   resolveAppearance,
+  SOLID_WINDOW_BACKGROUND,
+  solidWindowBackground,
   themeSourceFor,
+  WINDOW_SYMBOL_COLOR,
+  windowSymbolColor,
 } from "./appearance";
 import { resolveWindowAppearance } from "./window-appearance";
 
@@ -15,6 +23,7 @@ const OS: OsAppearance = { dark: true, reducedTransparency: false, highContrast:
 const prefs = (p: Partial<AppearancePreferences> = {}): AppearancePreferences => ({
   theme: "dark",
   transparency: "sidebar",
+  look: "classic",
   ...p,
 });
 
@@ -85,5 +94,116 @@ describe("resolveAppearance (D2 state matrix)", () => {
     expect(themeSourceFor("light")).toBe("light");
     expect(themeSourceFor("dark")).toBe("dark");
     expect(themeSourceFor("dark-plus")).toBe("dark");
+  });
+
+  it("applies appearance input with look transitions and preserves defaults appropriately", () => {
+    // classic->new with sidebar becomes full
+    expect(
+      applyAppearanceInput(
+        { theme: "dark", transparency: "sidebar", look: "classic" },
+        { look: "new" },
+      ),
+    ).toEqual({ theme: "dark", transparency: "full", look: "new" });
+
+    // classic->new with off stays off
+    expect(
+      applyAppearanceInput(
+        { theme: "dark", transparency: "off", look: "classic" },
+        { look: "new" },
+      ),
+    ).toEqual({ theme: "dark", transparency: "off", look: "new" });
+
+    // classic->new with explicit transparency in same input keeps it
+    expect(
+      applyAppearanceInput(
+        { theme: "dark", transparency: "sidebar", look: "classic" },
+        { look: "new", transparency: "sidebar" },
+      ),
+    ).toEqual({ theme: "dark", transparency: "sidebar", look: "new" });
+
+    // new->classic keeps full
+    expect(
+      applyAppearanceInput(
+        { theme: "dark", transparency: "full", look: "new" },
+        { look: "classic" },
+      ),
+    ).toEqual({ theme: "dark", transparency: "full", look: "classic" });
+
+    // theme-only input keeps look
+    expect(
+      applyAppearanceInput(
+        { theme: "dark", transparency: "full", look: "new" },
+        { theme: "light" },
+      ),
+    ).toEqual({ theme: "light", transparency: "full", look: "new" });
+  });
+
+  it("resolves effective theme according to look", () => {
+    expect(effectiveThemeFor("dark-plus", true, "new")).toBe("dark");
+    expect(effectiveThemeFor("dark-plus", false, "new")).toBe("dark");
+    expect(effectiveThemeFor("dark-plus", true, "classic")).toBe("dark-plus");
+    expect(effectiveThemeFor("dark-plus", false, "classic")).toBe("dark-plus");
+  });
+
+  it("carries look through resolveAppearance", () => {
+    const classicState = resolveAppearance({
+      window: MAC,
+      preferences: prefs({ look: "classic" }),
+      os: OS,
+    });
+    expect(classicState.look).toBe("classic");
+
+    const newState = resolveAppearance({
+      window: MAC,
+      preferences: prefs({ look: "new" }),
+      os: OS,
+    });
+    expect(newState.look).toBe("new");
+
+    const darkPlusNew = resolveAppearance({
+      window: MAC,
+      preferences: prefs({ theme: "dark-plus", look: "new" }),
+      os: OS,
+    });
+    expect(darkPlusNew.effectiveTheme).toBe("dark");
+    expect(darkPlusNew.look).toBe("new");
+  });
+
+  it("computes solidWindowBackground and windowSymbolColor for classic and new looks", () => {
+    // classic
+    expect(solidWindowBackground({ look: "classic", effectiveTheme: "dark" })).toBe(
+      SOLID_WINDOW_BACKGROUND.dark,
+    );
+    expect(solidWindowBackground({ look: "classic", effectiveTheme: "dark-plus" })).toBe(
+      SOLID_WINDOW_BACKGROUND["dark-plus"],
+    );
+    expect(solidWindowBackground({ look: "classic", effectiveTheme: "light" })).toBe(
+      SOLID_WINDOW_BACKGROUND.light,
+    );
+
+    expect(windowSymbolColor({ look: "classic", effectiveTheme: "dark" })).toBe(
+      WINDOW_SYMBOL_COLOR.dark,
+    );
+    expect(windowSymbolColor({ look: "classic", effectiveTheme: "dark-plus" })).toBe(
+      WINDOW_SYMBOL_COLOR["dark-plus"],
+    );
+    expect(windowSymbolColor({ look: "classic", effectiveTheme: "light" })).toBe(
+      WINDOW_SYMBOL_COLOR.light,
+    );
+
+    // new
+    expect(solidWindowBackground({ look: "new", effectiveTheme: "dark" })).toBe(
+      NEW_LOOK_SOLID_WINDOW_BACKGROUND.dark,
+    );
+    expect(solidWindowBackground({ look: "new", effectiveTheme: "light" })).toBe(
+      NEW_LOOK_SOLID_WINDOW_BACKGROUND.light,
+    );
+
+    expect(windowSymbolColor({ look: "new", effectiveTheme: "dark" })).toBe(
+      NEW_LOOK_WINDOW_SYMBOL_COLOR.dark,
+    );
+    expect(windowSymbolColor({ look: "new", effectiveTheme: "light" })).toBe(
+      NEW_LOOK_WINDOW_SYMBOL_COLOR.light,
+    );
   });
 });

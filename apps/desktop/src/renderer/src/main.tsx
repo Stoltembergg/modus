@@ -9,6 +9,7 @@ import { reportRendererStartup } from "./app/startup-report";
 import { initAppearanceAttributes } from "./lib/appearance";
 import { initTheme } from "./lib/theme";
 import "./styles/app.css";
+import "./styles/tokens-new.css";
 
 const rootElement = document.getElementById("root");
 

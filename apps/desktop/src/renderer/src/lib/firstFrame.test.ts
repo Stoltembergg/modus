@@ -57,4 +57,24 @@ describe("index.html first frame (D2)", () => {
     ).toMatchObject({ nativeGlass: "true", transparency: "sidebar" });
     expect(runFirstFrame(undefined)).toMatchObject({ nativeGlass: "false", transparency: "off" });
   });
+
+  it("sets dataset.ui 'new' and maps stored 'dark-plus' to 'dark' when initial.look is 'new'; no look -> dataset.ui 'classic' and dark-plus stays dark-plus", () => {
+    const appWithLook = (look?: "new" | "classic") => ({
+      app: {
+        nativeGlass: true,
+        isNativeGlassAvailable: () => true,
+        appearance: { initial: { glassMode: "sidebar", glass: true, ...(look ? { look } : {}) } },
+      },
+    });
+
+    expect(runFirstFrame(appWithLook("new"), "dark-plus")).toMatchObject({
+      ui: "new",
+      theme: "dark",
+    });
+
+    expect(runFirstFrame(appWithLook(undefined), "dark-plus")).toMatchObject({
+      ui: "classic",
+      theme: "dark-plus",
+    });
+  });
 });

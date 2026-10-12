@@ -87,13 +87,16 @@ function setup({
 describe("appearance controller", () => {
   it("syncs nativeTheme.themeSource from the stored theme before any window exists", () => {
     expect(
-      setup({ stored: { theme: "dark-plus", transparency: "sidebar" } }).nativeTheme.themeSource,
+      setup({ stored: { theme: "dark-plus", transparency: "sidebar", look: "classic" } })
+        .nativeTheme.themeSource,
     ).toBe("dark");
     expect(
-      setup({ stored: { theme: "light", transparency: "sidebar" } }).nativeTheme.themeSource,
+      setup({ stored: { theme: "light", transparency: "sidebar", look: "classic" } }).nativeTheme
+        .themeSource,
     ).toBe("light");
     expect(
-      setup({ stored: { theme: "system", transparency: "sidebar" } }).nativeTheme.themeSource,
+      setup({ stored: { theme: "system", transparency: "sidebar", look: "classic" } }).nativeTheme
+        .themeSource,
     ).toBe("system");
   });
 
@@ -104,6 +107,7 @@ describe("appearance controller", () => {
     expect(JSON.parse(arg.slice(APPEARANCE_ARGUMENT_PREFIX.length))).toMatchObject({
       theme: "dark",
       transparency: "sidebar",
+      look: "classic",
       glassMode: "sidebar",
       glass: true,
       material: "vibrancy",
@@ -111,13 +115,15 @@ describe("appearance controller", () => {
   });
 
   it("keeps vibrancy for the light theme and paints the light canvas when Off", () => {
-    const { controller } = setup({ stored: { theme: "light", transparency: "sidebar" } });
+    const { controller } = setup({
+      stored: { theme: "light", transparency: "sidebar", look: "classic" },
+    });
     const { window, raw } = fakeWindow();
     controller.attach(window, { nativeGlassAvailable: true });
     expect(raw.setVibrancy).toHaveBeenLastCalledWith("sidebar");
     expect(raw.setBackgroundColor).toHaveBeenLastCalledWith("#00000000");
 
-    const off = setup({ stored: { theme: "light", transparency: "off" } });
+    const off = setup({ stored: { theme: "light", transparency: "off", look: "classic" } });
     const solid = fakeWindow();
     off.controller.attach(solid.window, { nativeGlassAvailable: true });
     expect(solid.raw.setVibrancy).toHaveBeenLastCalledWith(null);
@@ -134,7 +140,11 @@ describe("appearance controller", () => {
       glass: false,
       blockedBy: "user",
     });
-    expect(store.write).toHaveBeenCalledWith({ theme: "dark", transparency: "off" });
+    expect(store.write).toHaveBeenCalledWith({
+      theme: "dark",
+      transparency: "off",
+      look: "classic",
+    });
     expect(calls).toEqual(["send:false"]);
     for (const callback of scheduled) callback();
     expect(calls).toEqual(["send:false", "vibrancy:null", "bg:#131314"]);
@@ -159,9 +169,36 @@ describe("appearance controller", () => {
     expect(scheduled).toHaveLength(0);
   });
 
+  it("switches to new look from defaults, promotes transparency to full, and uses new-look colour when solid", () => {
+    const { controller, scheduled } = setup();
+    const { window, raw, calls } = fakeWindow();
+    controller.attach(window, { nativeGlassAvailable: true });
+    calls.length = 0;
+
+    const next = controller.set({ look: "new" });
+    expect(next).toMatchObject({
+      look: "new",
+      glassMode: "full",
+      transparency: "full",
+    });
+
+    // Turning off transparency to verify solid background with new look
+    calls.length = 0;
+    controller.set({ transparency: "off" });
+    for (const callback of scheduled) callback();
+    expect(raw.setBackgroundColor).toHaveBeenLastCalledWith("#0f1520");
+
+    // Also on a solid host
+    const solidHost = setup();
+    const solidWin = fakeWindow();
+    solidHost.controller.attach(solidWin.window, { nativeGlassAvailable: false });
+    solidHost.controller.set({ look: "new" });
+    expect(solidWin.raw.setBackgroundColor).toHaveBeenLastCalledWith("#0f1520");
+  });
+
   it("follows the OS through nativeTheme `updated` and window focus", () => {
     const { controller, nativeTheme } = setup({
-      stored: { theme: "system", transparency: "sidebar" },
+      stored: { theme: "system", transparency: "sidebar", look: "classic" },
     });
     const { window, raw, handlers } = fakeWindow();
     controller.attach(window, { nativeGlassAvailable: true });

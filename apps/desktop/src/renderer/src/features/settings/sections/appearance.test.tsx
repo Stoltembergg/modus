@@ -7,6 +7,7 @@ import { AppearanceSettingsPanel, transparencyDescription } from "./appearance";
 const base: AppearanceState = {
   theme: "dark",
   transparency: "sidebar",
+  look: "classic",
   effectiveTheme: "dark",
   glassMode: "sidebar",
   glass: true,

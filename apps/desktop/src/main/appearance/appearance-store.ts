@@ -4,7 +4,11 @@ import {
   type AppearancePreferences,
   DEFAULT_APPEARANCE_PREFERENCES,
 } from "../../shared/appearance";
-import { themePreferenceSchema, transparencyPreferenceSchema } from "./appearance-schemas";
+import {
+  lookPreferenceSchema,
+  themePreferenceSchema,
+  transparencyPreferenceSchema,
+} from "./appearance-schemas";
 
 export const APPEARANCE_FILE_NAME = "appearance.json";
 
@@ -29,11 +33,13 @@ export function migrateAppearancePreferences(raw: unknown): AppearancePreference
   const legacy =
     typeof record.transparency === "string" ? LEGACY_TRANSPARENCY[record.transparency] : undefined;
   const transparency = transparencyPreferenceSchema.safeParse(legacy ?? record.transparency);
+  const look = lookPreferenceSchema.safeParse(record.look);
   return {
     theme: theme.success ? theme.data : DEFAULT_APPEARANCE_PREFERENCES.theme,
     transparency: transparency.success
       ? transparency.data
       : DEFAULT_APPEARANCE_PREFERENCES.transparency,
+    look: look.success ? look.data : DEFAULT_APPEARANCE_PREFERENCES.look,
   };
 }
 

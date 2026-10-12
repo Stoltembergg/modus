@@ -1,14 +1,20 @@
 import {
   IconBlur,
   IconDeviceDesktop,
+  IconLayoutDashboard,
   IconLayoutSidebar,
   IconMoon,
   IconMoonStars,
+  IconSparkles,
   IconSquare,
   IconSun,
 } from "@tabler/icons-react";
-import type { AppearanceState, TransparencyPreference } from "../../../../../shared/appearance";
-import { setTransparency, useAppearanceState } from "../../../lib/appearance";
+import type {
+  AppearanceState,
+  LookPreference,
+  TransparencyPreference,
+} from "../../../../../shared/appearance";
+import { setLook, setTransparency, useAppearanceState } from "../../../lib/appearance";
 import { cn } from "../../../lib/cn";
 import { type ThemeMode, useTheme } from "../../../lib/theme";
 import {
@@ -22,6 +28,12 @@ import {
 export function AppearanceSettingsPanel() {
   const [theme, setTheme] = useTheme();
   const appearance = useAppearanceState();
+  const isNewLook = appearance?.look === "new";
+  const themeOptions = isNewLook
+    ? THEME_OPTIONS.filter((option) => option.value !== "dark-plus")
+    : THEME_OPTIONS;
+  const themeValue = isNewLook && theme === "dark-plus" ? "dark" : theme;
+
   return (
     <>
       <SettingsPageHeader
@@ -32,9 +44,31 @@ export function AppearanceSettingsPanel() {
         <SettingsList>
           <SettingsRow
             control={
-              <Segmented label="theme" onChange={setTheme} options={THEME_OPTIONS} value={theme} />
+              <Segmented
+                disabled={!appearance}
+                label="look"
+                onChange={setLook}
+                options={LOOK_OPTIONS}
+                value={appearance?.look ?? "classic"}
+              />
             }
-            description="Follow your system appearance or choose a light, dark, or eye-care palette."
+            description="Try the new look with a blue accent, deeper glass and softer corners. You can switch back at any time."
+            title="Look"
+          />
+          <SettingsRow
+            control={
+              <Segmented
+                label="theme"
+                onChange={setTheme}
+                options={themeOptions}
+                value={themeValue}
+              />
+            }
+            description={
+              isNewLook
+                ? "Follow your system appearance or choose light or dark."
+                : "Follow your system appearance or choose a light, dark, or eye-care palette."
+            }
             title="Color scheme"
           />
           <SettingsRow
@@ -77,6 +111,11 @@ export function transparencyDescription(appearance: AppearanceState | null): str
 }
 
 type SegmentOption<T extends string> = { value: T; label: string; icon: typeof IconSun };
+
+const LOOK_OPTIONS: ReadonlyArray<SegmentOption<LookPreference>> = [
+  { value: "classic", label: "Classic", icon: IconLayoutDashboard },
+  { value: "new", label: "New", icon: IconSparkles },
+];
 
 const THEME_OPTIONS: ReadonlyArray<SegmentOption<ThemeMode>> = [
   { value: "system", label: "System", icon: IconDeviceDesktop },
