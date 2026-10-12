@@ -509,6 +509,11 @@ describe("agent work lists follow the role", () => {
     };
   };
 
+  const rawRow = (id: string) =>
+    getDatabase()
+      .prepare("select capability_ids_json, supported_task_kinds_json from agents where id = ?")
+      .get(id) as { capability_ids_json: string; supported_task_kinds_json: string };
+
   it("agents saved before keep every task kind they could receive (empty ones may only gain)", () => {
     const empty = createAgent({ name: uid("Empty"), role: "Builder", modelId: "m-1" });
     const legacyTemplate = createAgent({
@@ -528,6 +533,7 @@ describe("agent work lists follow the role", () => {
     const seeded = [empty, legacyTemplate, fromTemplate, handPicked, freeText];
     // What routing saw before this change: the saved lists, unread.
     const before = new Map(seeded.map((agent) => [agent.id, savedRow(agent.id)]));
+    const beforeRaw = new Map(seeded.map((agent) => [agent.id, { ...rawRow(agent.id) }]));
     expect(before.get(empty.id)).toEqual({ capabilityIds: [], supportedTaskKinds: [] });
     expect(before.get(freeText.id)).toEqual({ capabilityIds: [], supportedTaskKinds: [] });
 
@@ -535,7 +541,8 @@ describe("agent work lists follow the role", () => {
     for (const agent of seeded) {
       updateAgent(agent.id, { name: `${agent.name} 2`, instructions: "Edited", modelId: "m-2" });
       updateAgent(agent.id, { role: ` ${agent.role.toUpperCase()} ` });
-      expect(savedRow(agent.id)).toEqual(before.get(agent.id));
+      // Byte-for-byte: the stored columns are not even rewritten.
+      expect({ ...rawRow(agent.id) }).toEqual(beforeRaw.get(agent.id));
     }
     migrateDatabase(getDatabase());
 
@@ -613,7 +620,7 @@ describe("agent work lists follow the role", () => {
     expect(savedRow(agent.id)).toEqual(CUSTOM_ROLE_CAPABILITIES);
   });
 
-  it("a copy keeps the source's saved lists, not its role's", () => {
+  it("a copy keeps what its source handles: saved lists, or its derived ones when empty", () => {
     const source = createAgent({
       name: uid("Source"),
       role: "Builder",
@@ -633,6 +640,28 @@ describe("agent work lists follow the role", () => {
       capabilityIds: ["implement", "review"],
       supportedTaskKinds: ["code", "review"],
     });
+    // A source with empty lists and a template copies what it is shown to handle (its
+    // template's lists), not Custom from its free-text label.
+    const legacy = createAgent({
+      name: uid("Old helper"),
+      role: "Old helper",
+      templateId: "builder",
+    });
+    expect(rawRow(legacy.id)).toMatchObject({
+      capability_ids_json: "[]",
+      supported_task_kinds_json: "[]",
+    });
+    expect(getAgent(legacy.id)).toMatchObject(capabilitiesForRole("builder"));
+    const copies = createGroupWithNewAgents({
+      name: uid("Legacy copies"),
+      workspaceId: insertWorkspace(),
+      members: [
+        { name: "Helper copy", role: "Old helper", modelId: "m-1", copiedFromAgentId: legacy.id },
+        { name: "Other", templateId: "planner" },
+      ],
+    });
+    expect(copies.members[0]).toMatchObject(capabilitiesForRole("builder"));
+    expect(savedRow(copies.members[0]?.agentId ?? "")).toEqual(capabilitiesForRole("builder"));
     expectAgentError(
       () =>
         createGroupWithNewAgents({

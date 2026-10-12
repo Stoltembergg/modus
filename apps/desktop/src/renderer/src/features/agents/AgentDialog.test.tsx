@@ -376,7 +376,7 @@ describe("AgentDialog", () => {
     expect(within(dialog).getByRole("button", { name: "Generate" })).toBeTruthy();
   });
 
-  it("edit: Regenerate replaces role + instructions (excluding itself); Save sends the changes", async () => {
+  it("edit: Regenerate replaces only the instructions (excluding itself); Save sends the changes", async () => {
     const user = userEvent.setup();
     const { dialog, generate, onUpdate } = renderDialog({ agent: ANA });
     expect(field(dialog, "Name").value).toBe("Ana");
@@ -391,7 +391,12 @@ describe("AgentDialog", () => {
       name: "Ana",
       agentId: "a-1",
     });
-    await waitFor(() => expect(field(dialog, "Custom role").value).toBe(GENERATED.role));
+    await waitFor(() => expect(field(dialog, "Instructions").value).toBe(GENERATED.instructions));
+    // The chosen role stays: no switch to Custom with the generated label.
+    expect(
+      (within(dialog).getByRole("combobox", { name: "Role" }) as HTMLSelectElement).value,
+    ).toBe("reviewer");
+    expect(within(dialog).queryByRole("textbox", { name: "Custom role" })).toBeNull();
     await user.click(within(dialog).getByRole("button", { name: "Color pink" }));
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
@@ -399,7 +404,7 @@ describe("AgentDialog", () => {
     expect(onUpdate).toHaveBeenCalledWith({
       id: "a-1",
       name: "Ana",
-      role: GENERATED.role,
+      role: "Reviewer",
       instructions: GENERATED.instructions,
       avatarFace: "wink",
       avatarColor: "pink",
@@ -822,6 +827,50 @@ describe("AgentDialog work types follow the role", () => {
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
     expect(onUpdate.mock.calls[0]?.[0]).toMatchObject({ role: "Release notes" });
+  });
+
+  it("Regenerate keeps the chosen role, so the work types never change silently", async () => {
+    const user = userEvent.setup();
+    // A non-template Builder with empty lists (derived as Builder).
+    const { dialog, onUpdate } = renderDialog({ agent: { ...ANA, role: "Builder" } });
+    await user.click(within(dialog).getByRole("button", { name: "Regenerate" }));
+    await waitFor(() => expect(field(dialog, "Instructions").value).toBe(GENERATED.instructions));
+    expect(roleSelect(dialog).value).toBe("builder");
+    expect(workTypes(dialog)).toBe("Handles code tasks. Implements and verifies.");
+    expect(within(dialog).queryByText(CUSTOM_WORK_TYPES_WARNING)).toBeNull();
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0]?.[0]).toMatchObject({
+      role: "Builder",
+      instructions: GENERATED.instructions,
+    });
+    cleanup();
+
+    // A Custom agent keeps its own label too.
+    const custom = renderDialog({ agent: { ...ANA, role: "Release notes" } });
+    await user.click(within(custom.dialog).getByRole("button", { name: "Regenerate" }));
+    await waitFor(() =>
+      expect(field(custom.dialog, "Instructions").value).toBe(GENERATED.instructions),
+    );
+    expect(field(custom.dialog, "Custom role").value).toBe("Release notes");
+  });
+
+  it("saving without touching Role sends the stored role text unchanged", async () => {
+    const user = userEvent.setup();
+    for (const stored of ["Planner", "oracle", " builder "]) {
+      const { dialog, onUpdate } = renderDialog({ agent: { ...ANA, role: stored } });
+      await user.click(within(dialog).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+      expect(onUpdate.mock.calls[0]?.[0]).toMatchObject({ role: stored.trim() });
+      cleanup();
+    }
+    // A changed selection sends the role's label.
+    const { dialog, onUpdate } = renderDialog({ agent: { ...ANA, role: "Planner" } });
+    expect(roleSelect(dialog).value).toBe("lead");
+    await user.selectOptions(roleSelect(dialog), "advisor");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0]?.[0]).toMatchObject({ role: "Advisor" });
   });
 
   it("create and group drafts send no work lists", async () => {

@@ -90,14 +90,19 @@ function savedCapabilities(
   });
 }
 
+/** What an agent handles: its saved lists, or (when empty) its derived role's. Copies take this too. */
+function handledCapabilities(row: AgentRow): GroupMemberCapabilities {
+  return effectiveCapabilities({
+    ...savedCapabilities(row),
+    role: row.role,
+    ...(row.template_id !== null ? { templateId: row.template_id } : {}),
+  });
+}
+
 function toAgent(row: AgentRow): AgentInfo {
   return {
     // Saved lists as they are; empty ones read as the agent's derived role.
-    ...effectiveCapabilities({
-      ...savedCapabilities(row),
-      role: row.role,
-      ...(row.template_id !== null ? { templateId: row.template_id } : {}),
-    }),
+    ...handledCapabilities(row),
     id: row.id,
     ...(row.group_id !== null ? { groupId: row.group_id } : {}),
     name: row.name,
@@ -281,10 +286,10 @@ function newAgentFields(input: NewGroupAgentInput, groupId: string | undefined):
   const { templateId, copiedFromAgentId, ...fields } = input;
   const base = { ...fields, ...(groupId !== undefined ? { groupId } : {}) };
   if (templateId === undefined) {
-    // A copy keeps the source's saved lists; any other new agent follows its role.
+    // A copy handles what its source handles (empty lists derived, as shown); others follow their role.
     const capabilities =
       copiedFromAgentId !== undefined
-        ? savedCapabilities(requireAgentRow(copiedFromAgentId))
+        ? handledCapabilities(requireAgentRow(copiedFromAgentId))
         : capabilitiesForRole(roleIdForLabel(fields.role));
     return { ...base, ...capabilities };
   }

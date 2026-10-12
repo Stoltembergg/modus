@@ -177,6 +177,8 @@ export function AgentDialog(props: AgentDialogProps) {
   // A Custom label that names a known role is that role (same rule as main).
   const effectiveRoleId = roleIdForLabel(role);
   const roleChanged = effectiveRoleId !== initialRoleId;
+  // Untouched selection: send the stored text back as it was (Planner stays Planner).
+  const savedRole = roleChoice === initialRoleId && roleChoice !== "custom" ? initialRole : role;
   // What the agent will handle, computed exactly like main does on save.
   const workTypes = agent
     ? roleChanged
@@ -269,8 +271,11 @@ export function AgentDialog(props: AgentDialogProps) {
         ...(description.trim() ? { description: description.trim() } : {}),
         ...(agent ? { agentId: agent.id } : {}),
       });
-      setRoleChoice("custom");
-      setCustomLabel(profile.role);
+      // The role is the user's choice: Regenerate only rewrites the instructions. A new
+      // agent with no role yet takes the generated label (Custom, or the role it names).
+      if (!agent && roleChoice === "custom" && !customLabel.trim()) {
+        setCustomLabel(profile.role);
+      }
       setInstructions(profile.instructions);
       setNotice(
         profile.generated
@@ -303,7 +308,7 @@ export function AgentDialog(props: AgentDialogProps) {
       target.onAdd({
         ...(initial?.templateId ? { templateId: initial.templateId } : {}),
         name: name.trim(),
-        role: role.trim(),
+        role: savedRole.trim(),
         instructions,
         ...(selectedModel ? { modelId: selectedModel } : {}),
         avatarFace: face,
@@ -320,7 +325,7 @@ export function AgentDialog(props: AgentDialogProps) {
         await props.onUpdate({
           id: agent.id,
           name: name.trim(),
-          role: role.trim(),
+          role: savedRole.trim(),
           instructions,
           ...(selectedModel !== (agent.modelId ?? "") ? { modelId: selectedModel || null } : {}),
           avatarFace: face,
@@ -331,7 +336,7 @@ export function AgentDialog(props: AgentDialogProps) {
         await props.onCreate({
           groupId: group.id,
           name: name.trim(),
-          role: role.trim(),
+          role: savedRole.trim(),
           instructions,
           modelId: selectedModel,
           avatarFace: face,
@@ -495,7 +500,7 @@ export function AgentDialog(props: AgentDialogProps) {
           </p>
           {replacesCustomWorkTypes ? (
             <p
-              className="rounded-md border border-amber-400/30 bg-amber-400/10 px-2 py-1 text-2xs text-amber-400"
+              className="rounded-md border border-amber-400/30 bg-amber-400/10 px-2 py-1 text-2xs text-amber-400 [:root[data-theme=light]_&]:text-amber-800"
               role="status"
             >
               {CUSTOM_WORK_TYPES_WARNING}
@@ -594,7 +599,7 @@ export function AgentDialog(props: AgentDialogProps) {
           className={cn(
             "mx-5 mt-3 rounded-lg px-2.5 py-1.5 text-xs",
             notice.warning
-              ? "border border-amber-400/30 bg-amber-400/10 text-amber-400"
+              ? "border border-amber-400/30 bg-amber-400/10 text-amber-400 [:root[data-theme=light]_&]:text-amber-800"
               : "text-fg-faint",
           )}
           data-testid="agent-dialog-notice"
