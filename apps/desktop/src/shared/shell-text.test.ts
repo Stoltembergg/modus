@@ -13,4 +13,10 @@ describe("shell text", () => {
     expect(shellText("shell.noProject", "pt-BR")).toBe("Sem projeto");
     expect(shellText("shell.projects", "zh-CN")).toBe("项目");
   });
+
+  it("fills placeholders like {name} in every locale", () => {
+    expect(shellText("shell.modelDefault", undefined, { name: "Claude" })).toBe("Default (Claude)");
+    expect(shellText("shell.modelDefault", "pt-BR", { name: "Claude" })).toBe("Padrão (Claude)");
+    expect(shellText("shell.modelDefault", "zh-CN", { name: "Claude" })).toBe("默认（Claude）");
+  });
 });

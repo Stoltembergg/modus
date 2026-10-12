@@ -5673,6 +5673,10 @@ export class PiSdkRuntime implements AgentRuntime {
     modelId: string,
     thinkingVariant?: string,
   ): Promise<AgentSessionInfo> {
+    // The composer picker is idle-only; main enforces it too.
+    if (this.isSessionStreaming(sessionId)) {
+      throw new Error("Can't change the model while a run is active.");
+    }
     const runtimeSession = await this.getOrResume(window, sessionId, modelId);
     if (!runtimeSession) {
       throw new Error(`Unable to set model: ${modelId}`);

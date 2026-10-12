@@ -1,8 +1,13 @@
 import { Combobox } from "@base-ui/react/combobox";
-import { IconCheck, IconSearch, IconSelector } from "@tabler/icons-react";
+import { IconCheck, IconChevronDown, IconSearch, IconSelector } from "@tabler/icons-react";
 import { useMemo } from "react";
 import { cn } from "../../lib/cn";
 import { buildModelPickerGroups, type PickableModel } from "../../lib/modusModels";
+import {
+  MODEL_CHIP_BASE,
+  MODEL_CHIP_INTERACTIVE,
+  MODEL_CHIP_TONE,
+} from "../composer/modelChipStyle";
 import { ProviderLogo } from "../settings/ProviderLogo";
 
 /** One option of the picker; `{ value, label }` lets the Combobox derive label and value. */
@@ -55,6 +60,10 @@ export function ModelPicker({
   savedModelId,
   defaultLabel,
   placeholder,
+  variant = "field",
+  disabled = false,
+  tone = "neutral",
+  triggerText,
 }: {
   label: string;
   models: readonly PickableModel[];
@@ -66,6 +75,10 @@ export function ModelPicker({
   defaultLabel?: string | undefined;
   /** Trigger text when nothing is selected. */
   placeholder: string;
+  variant?: "field" | "chip" | undefined;
+  disabled?: boolean | undefined;
+  tone?: "neutral" | "warning" | undefined;
+  triggerText?: string | undefined;
 }) {
   const groups = useMemo<PickerGroup[]>(() => {
     const built = buildModelPickerGroups(models, savedModelId);
@@ -105,6 +118,7 @@ export function ModelPicker({
 
   return (
     <Combobox.Root<PickerItem>
+      disabled={disabled}
       filter={matches}
       isItemEqualToValue={(item, current) => item.value === current.value}
       items={groups}
@@ -113,16 +127,28 @@ export function ModelPicker({
       }}
       value={selected}
     >
-      <Combobox.Label className="font-medium text-2xs text-fg-subtle">{label}</Combobox.Label>
+      {variant === "field" ? (
+        <Combobox.Label className="font-medium text-2xs text-fg-subtle">{label}</Combobox.Label>
+      ) : null}
       <Combobox.Trigger
-        className={cn(
-          "group/model flex h-9 w-full min-w-0 items-center gap-2 rounded-lg border border-hairline bg-canvas/70 pr-2 pl-3 text-left text-sm text-fg outline-none",
-          "transition-[border-color,background-color,transform] duration-150 ease-out-quint",
-          "hover:border-hairline-strong focus-visible:border-hairline-strong focus-visible:ring-2 focus-visible:ring-focus-ring/40",
-          "active:scale-[0.99] data-popup-open:border-hairline-strong motion-reduce:transition-none motion-reduce:active:scale-100",
-        )}
+        {...(variant === "chip" ? { "aria-label": label } : {})}
+        className={
+          variant === "chip"
+            ? cn(
+                MODEL_CHIP_BASE,
+                tone === "warning" ? "border-danger/40 text-danger" : MODEL_CHIP_TONE,
+                MODEL_CHIP_INTERACTIVE,
+              )
+            : cn(
+                "group/model flex h-9 w-full min-w-0 items-center gap-2 rounded-lg border border-hairline bg-canvas/70 pr-2 pl-3 text-left text-sm text-fg outline-none",
+                "transition-[border-color,background-color,transform] duration-150 ease-out-quint",
+                "hover:border-hairline-strong focus-visible:border-hairline-strong focus-visible:ring-2 focus-visible:ring-focus-ring/40",
+                "active:scale-[0.99] data-popup-open:border-hairline-strong motion-reduce:transition-none motion-reduce:active:scale-100",
+              )
+        }
         data-testid="model-picker-trigger"
         data-value={value}
+        disabled={disabled}
       >
         {selected?.providerId ? (
           <span aria-hidden className="contents">
@@ -137,12 +163,20 @@ export function ModelPicker({
         <span
           className={cn(
             "min-w-0 flex-1 truncate",
-            !selected || selected.unavailable ? "text-fg-faint" : undefined,
+            variant === "chip"
+              ? undefined
+              : !selected || selected.unavailable
+                ? "text-fg-faint"
+                : undefined,
           )}
         >
-          {selected?.label ?? placeholder}
+          {triggerText ?? selected?.label ?? placeholder}
         </span>
-        <IconSelector aria-hidden className="shrink-0 text-fg-faint" size={14} />
+        {variant === "chip" ? (
+          <IconChevronDown aria-hidden className="shrink-0" size={12} stroke={2} />
+        ) : (
+          <IconSelector aria-hidden className="shrink-0 text-fg-faint" size={14} />
+        )}
       </Combobox.Trigger>
       <Combobox.Portal>
         <Combobox.Positioner align="start" className="z-[60] outline-none" sideOffset={6}>
