@@ -176,5 +176,11 @@ select is(
     where table_schema = 'public' and grantee in ('anon', 'authenticated')),
   array['SELECT'], 'anon / authenticated hold table-level SELECT only');
 
+-- #199: the Account screen reads its own shortfall_owed (RLS keeps it to the caller's row).
+select ok(has_column_privilege('authenticated', 'public.credit_wallets', 'shortfall_owed', 'SELECT'),
+  'authenticated: SELECT on credit_wallets.shortfall_owed');
+select ok(not has_column_privilege('anon', 'public.credit_wallets', 'shortfall_owed', 'SELECT'),
+  'anon: no SELECT on credit_wallets.shortfall_owed');
+
 select * from finish();
 rollback;

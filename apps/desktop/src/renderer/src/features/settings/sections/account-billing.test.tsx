@@ -710,6 +710,48 @@ describe("L5b credit packs", () => {
     );
   });
 
+  it("shows the refund debt after the balance sentence; the pill and the split are unchanged", () => {
+    const wallet = {
+      balance: 9640,
+      reserved: 360,
+      planAllowance: 1000,
+      periodEnd: null,
+      allowance: 1000,
+      purchased: 9000,
+      shortfallOwed: 4000,
+    };
+    const owedSentence =
+      "You owe 4,000 credits from a refunded purchase. They're deducted as you use Modus.";
+    const owedSentenceFree =
+      "You owe 4,000 credits from a refunded purchase. They're deducted as you use Modus and from your next free monthly credits.";
+    // The balance sentence is unchanged (640 + 9,000 = the 9,640 pill); the debt comes last.
+    expect(creditsDescription(wallet, "Pro", "en-US")).toBe(
+      "640 credits from your Pro plan are used first, then 9,000 credits purchased, which never expire. " +
+        "Another 360 credits are held for requests in progress. " +
+        owedSentence,
+    );
+    expect(creditsDescription(wallet, "Free", "en-US", true)).toBe(
+      "640 credits from your Free plan are used first, then 9,000 credits purchased, which never expire. " +
+        "Another 360 credits are held for requests in progress. " +
+        owedSentenceFree,
+    );
+    expect(creditsDescription(wallet, "Free", "pt-BR")).toContain("You owe 4.000 credits");
+    expect(creditsDescription({ ...wallet, shortfallOwed: 1 }, "Pro", "en-US")).toMatch(
+      / You owe 1 credit from a refunded purchase\. It's deducted as you use Modus\.$/,
+    );
+    expect(
+      creditsDescription({ ...wallet, shortfallOwed: 0 }, "Free", "en-US", true),
+    ).not.toContain("You owe");
+    const { shortfallOwed: _owed, ...unknownDebt } = wallet;
+    expect(creditsDescription(unknownDebt, "Free", "en-US", true)).not.toContain("You owe");
+    expect(640 + 9000).toBe(wallet.balance);
+
+    // PACKS_ONLY is on the Free plan: the row carries the free-credits clause.
+    const html = markup({ ...PACKS_ONLY, wallet });
+    expect(html).toContain(`>${formatCredits(9640)}<`);
+    expect(html).toContain(owedSentenceFree.replace("They're", "They&#x27;re"));
+  });
+
   it("Current plan row for not-subscribed users describes monthly top-up neutrally", () => {
     // Free never bought -> exactly "Tops up to 1,000 credits each month." (no "change your plan")
     const freeNeverBought = markup(READY);

@@ -93,6 +93,8 @@ export function creditsDescription(
   wallet: BillingWallet,
   planName: string,
   locale?: string,
+  /** On Free the debt also comes out of the next monthly top-up (renew_free_credits_for_user). */
+  onFreePlan = false,
 ): string {
   const held = wallet.reserved;
   const parts: string[] = [];
@@ -114,6 +116,14 @@ export function creditsDescription(
   if (held > 0) {
     parts.push(
       `Another ${creditCount(held, locale)} ${held === 1 ? "is" : "are"} held for requests in progress.`,
+    );
+  }
+  const owed = wallet.shortfallOwed;
+  if (typeof owed === "number" && owed > 0) {
+    parts.push(
+      `You owe ${creditCount(owed, locale)} from a refunded purchase. ${
+        owed === 1 ? "It's" : "They're"
+      } deducted as you use Modus${onFreePlan ? " and from your next free monthly credits" : ""}.`,
     );
   }
   return parts.join(" ");
@@ -340,7 +350,7 @@ export function BillingSectionView({
           control={<ReadOnlyPill>{formatCredits(state.wallet?.balance ?? 0)}</ReadOnlyPill>}
           description={
             state.wallet
-              ? creditsDescription(state.wallet, planName)
+              ? creditsDescription(state.wallet, planName, undefined, state.currentPlan === "free")
               : "Credits appear after your email is confirmed."
           }
           title="Credits"

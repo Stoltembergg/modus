@@ -557,6 +557,24 @@ describe("wallet breakdown from credit lots", () => {
       expect(mapped.wallet).not.toHaveProperty("allowance");
     }
   });
+
+  it("shortfallOwed: numeric or numeric string, clamped at 0; absent when unknown", () => {
+    expect(
+      mapBillingRows({ ...base, shortfall: { shortfall_owed: 4000 } }).wallet?.shortfallOwed,
+    ).toBe(4000);
+    expect(
+      mapBillingRows({ ...base, shortfall: { shortfall_owed: "250" } }).wallet?.shortfallOwed,
+    ).toBe(250);
+    expect(
+      mapBillingRows({ ...base, shortfall: { shortfall_owed: -50 } }).wallet?.shortfallOwed,
+    ).toBe(0);
+    for (const shortfall of [{ shortfall_owed: null }, null, undefined]) {
+      const mapped = mapBillingRows({ ...base, shortfall });
+      expect(mapped.wallet).not.toHaveProperty("shortfallOwed");
+    }
+    const absent = mapBillingRows(base);
+    expect(absent.wallet).not.toHaveProperty("shortfallOwed");
+  });
 });
 
 describe("billing catalog mapping", () => {
