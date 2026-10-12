@@ -193,6 +193,8 @@ export function mapBillingRows(rows: {
    * read. Only `credited` lots count (refunded / charged back are excluded).
    */
   lots?: unknown[] | null;
+  /** The { shortfall_owed } row; null/absent when unreadable. */
+  shortfall?: unknown;
 }): BillingSnapshot {
   const plans = rows.plans.flatMap((raw): BillingPlan[] => {
     const row = raw as Record<string, unknown>;
@@ -217,6 +219,16 @@ export function mapBillingRows(rows: {
         return lot.status === "credited" && remaining > 0 ? sum + remaining : sum;
       }, 0)
     : undefined;
+  // shortfall_owed arrives as a number (or a numeric string for bigint); anything else = unknown.
+  const rawOwed =
+    rows.shortfall && typeof rows.shortfall === "object"
+      ? (rows.shortfall as Record<string, unknown>).shortfall_owed
+      : undefined;
+  const owedValue =
+    typeof rawOwed === "number" || (typeof rawOwed === "string" && rawOwed.trim() !== "")
+      ? Number(rawOwed)
+      : Number.NaN;
+  const shortfallOwed = Number.isFinite(owedValue) ? Math.max(0, owedValue) : undefined;
   return {
     plans,
     catalog: rows.catalog ? mapCatalogRows(rows.catalog) : null,
@@ -245,6 +257,7 @@ export function mapBillingRows(rows: {
                 purchased,
                 allowance: Math.max(0, num(wallet.balance) + num(wallet.reserved) - purchased),
               }),
+          ...(shortfallOwed === undefined ? {} : { shortfallOwed }),
         }
       : null,
   };
