@@ -676,6 +676,36 @@ describe("agent work lists follow the role", () => {
     );
   });
 
+  it("a copy whose role changed in the modal follows the new role; same role keeps the source's", () => {
+    const source = createAgent({
+      name: uid("Hand"),
+      role: "Reviewer",
+      modelId: "m-1",
+      capabilityIds: ["verify"],
+      supportedTaskKinds: ["code"],
+    });
+    const group = createGroupWithNewAgents({
+      name: uid("Recalc"),
+      workspaceId: insertWorkspace(),
+      members: [
+        { name: "Same", role: " reviewer ", modelId: "m-1", copiedFromAgentId: source.id },
+        { name: "Moved", role: "Builder", modelId: "m-1", copiedFromAgentId: source.id },
+        { name: "Unset", modelId: "m-1", copiedFromAgentId: source.id },
+      ],
+    });
+    const byName = (name: string) => group.members.find((member) => member.name === name);
+    expect(byName("Same")).toMatchObject({
+      capabilityIds: ["verify"],
+      supportedTaskKinds: ["code"],
+    });
+    expect(byName("Unset")).toMatchObject({
+      capabilityIds: ["verify"],
+      supportedTaskKinds: ["code"],
+    });
+    expect(byName("Moved")).toMatchObject(capabilitiesForRole("builder"));
+    expect(savedRow(byName("Moved")?.agentId ?? "")).toEqual(capabilitiesForRole("builder"));
+  });
+
   it("migrates missing columns to empty and preserves all profile fields idempotently", () => {
     const db = new DatabaseSync(":memory:");
     try {

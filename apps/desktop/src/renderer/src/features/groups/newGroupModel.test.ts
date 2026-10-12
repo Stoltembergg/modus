@@ -4,6 +4,9 @@ import {
   applyCollabPipeline,
   copyMember,
   dialogMember,
+  editedMember,
+  leadAfterRemoval,
+  membersFromCard,
   NEW_GROUP_DEFAULT_NAME,
   NEW_GROUP_HINTS,
   type NewGroupMember,
@@ -17,6 +20,11 @@ import {
 } from "./newGroupModel";
 
 const builder = getAgentTemplate("builder");
+const template = (id: string) => {
+  const found = getAgentTemplate(id);
+  if (!found) throw new Error(`no template ${id}`);
+  return found;
+};
 if (!builder) throw new Error("builder template missing");
 
 function members(count: number): NewGroupMember[] {
@@ -81,14 +89,107 @@ describe("newGroupModel (A4)", () => {
     ).toBe("m-2");
   });
 
-  it("counts N/10 and blocks Create with no folder, below 2 or above 10", () => {
-    expect(newGroupCounter(0)).toBe("0/10");
-    expect(newGroupCounter(11)).toBe("11/10");
+  it("counts N of M and blocks Create with no folder, below 2 or above 10", () => {
+    expect(newGroupCounter(0)).toBe("0 of 10");
+    expect(newGroupCounter(4)).toBe("4 of 10");
+    expect(newGroupCounter(11)).toBe("11 of 10");
+    expect(newGroupCounter(4, "pt")).toBe("4 de 10");
+    expect(newGroupCounter(4, "zh")).toBe("4 / 10");
     expect(newGroupBlocker({ workspaceId: "", members: members(3) })).toBe(NEW_GROUP_HINTS.folder);
     expect(newGroupBlocker({ workspaceId: "ws", members: members(1) })).toBe(NEW_GROUP_HINTS.min);
     expect(newGroupBlocker({ workspaceId: "ws", members: members(2) })).toBeNull();
     expect(newGroupBlocker({ workspaceId: "ws", members: members(10) })).toBeNull();
     expect(newGroupBlocker({ workspaceId: "ws", members: members(11) })).toBe(NEW_GROUP_HINTS.max);
+  });
+
+  describe("leadAfterRemoval", () => {
+    const planner = template("planner");
+    const reviewer = template("reviewer");
+
+    it("moves lead to Planner when lead is removed and Planner remains", () => {
+      const list = [
+        templateMember(builder as NonNullable<typeof builder>, [], "k0"),
+        templateMember(planner, [], "k1"),
+      ];
+      // k0 is lead, remove k0 -> Planner k1 becomes lead
+      expect(leadAfterRemoval(list, "k0", "k0")).toBe("k1");
+    });
+
+    it("clears lead (returns null) when lead is removed and no Planner remains", () => {
+      const list = [
+        templateMember(builder as NonNullable<typeof builder>, [], "k0"),
+        templateMember(reviewer, [], "k1"),
+      ];
+      // k0 is lead, remove k0 -> no suggestedLead template, returns null
+      expect(leadAfterRemoval(list, "k0", "k0")).toBeNull();
+    });
+
+    it("returns leadKey unchanged when a non-lead member is removed", () => {
+      const list = [
+        templateMember(builder as NonNullable<typeof builder>, [], "k0"),
+        templateMember(planner, [], "k1"),
+      ];
+      // k0 is lead, remove k1 (non-lead) -> k0 stays lead
+      expect(leadAfterRemoval(list, "k1", "k0")).toBe("k0");
+    });
+  });
+
+  it("editedMember keeps identity and updates editable fields", () => {
+    const original = templateMember(builder as NonNullable<typeof builder>, [], "k1");
+    const updated = editedMember(original, {
+      name: "SuperBuilder",
+      role: "Architect",
+      instructions: "Build architectures.",
+      modelId: "m-custom",
+      avatarFace: "focused",
+      avatarColor: "violet",
+      avatarShape: "squircle",
+    });
+    expect(updated).toEqual({
+      key: "k1",
+      source: "template",
+      templateId: "builder",
+      name: "SuperBuilder",
+      role: "Architect",
+      instructions: "Build architectures.",
+      modelId: "m-custom",
+      avatarFace: "focused",
+      avatarColor: "violet",
+      avatarShape: "squircle",
+    });
+  });
+
+  it("membersFromCard lists members matching templateId, copiedFromAgentId, or source", () => {
+    const planner = template("planner");
+    const p1 = templateMember(planner, [], "p1");
+    const b1 = templateMember(builder as NonNullable<typeof builder>, [], "b1");
+    const b2 = templateMember(builder as NonNullable<typeof builder>, [b1], "b2");
+    const c1: NewGroupMember = {
+      key: "c1",
+      source: "copy",
+      copiedFromAgentId: "agent-x",
+      name: "CopyCat",
+      role: "Tester",
+      instructions: "",
+      modelId: "m-1",
+      avatarFace: "calm",
+      avatarColor: "sky",
+    };
+    const cust1: NewGroupMember = {
+      key: "cust1",
+      source: "custom",
+      name: "CustomOne",
+      role: "Specialist",
+      instructions: "",
+      modelId: "m-2",
+      avatarFace: "happy",
+      avatarColor: "red",
+    };
+    const all = [p1, b1, b2, c1, cust1];
+
+    expect(membersFromCard(all, { templateId: "builder" })).toEqual([b1, b2]);
+    expect(membersFromCard(all, { copiedFromAgentId: "agent-x" })).toEqual([c1]);
+    expect(membersFromCard(all, { source: "custom" })).toEqual([cust1]);
   });
 
   it("blocks duplicate or empty names and a non-template member without a model", () => {

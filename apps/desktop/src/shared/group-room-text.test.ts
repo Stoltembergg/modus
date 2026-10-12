@@ -89,7 +89,8 @@ describe("group room catalog parity (en / pt / zh)", () => {
           GROUP_ROOM_TEXT_EN[key as keyof typeof GROUP_ROOM_TEXT_EN],
     );
     // "Lead" is a product term kept in every locale.
-    expect(same).toEqual(["common.lead"]);
+    // The pipeline row names the templates (agent names are not translated).
+    expect(same).toEqual(["common.lead", "newGroup.collabPipeline"]);
   });
 });
 

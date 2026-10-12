@@ -46,9 +46,6 @@ const ALLOWED: Record<string, Record<string, string>> = {
   "GroupMessageRow.tsx": {
     "→": "arrow glyph before the addressee's name",
   },
-  "NewGroupModal.tsx": {
-    "×": "multiplier glyph before a template count",
-  },
   "../agent/SearchToolCard.tsx": {
     Home: "keyboard event key name (roving focus), not rendered",
     End: "keyboard event key name (roving focus), not rendered",

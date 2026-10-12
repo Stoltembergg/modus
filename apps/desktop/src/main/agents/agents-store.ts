@@ -286,10 +286,14 @@ function newAgentFields(input: NewGroupAgentInput, groupId: string | undefined):
   const { templateId, copiedFromAgentId, ...fields } = input;
   const base = { ...fields, ...(groupId !== undefined ? { groupId } : {}) };
   if (templateId === undefined) {
-    // A copy handles what its source handles (empty lists derived, as shown); others follow their role.
+    // A copy handles what its source handles (empty lists derived, as shown) unless its
+    // role was changed in the modal: then it follows the new role, like an edit would.
+    // Any other new agent follows its role.
+    const source = copiedFromAgentId !== undefined ? requireAgentRow(copiedFromAgentId) : undefined;
     const capabilities =
-      copiedFromAgentId !== undefined
-        ? handledCapabilities(requireAgentRow(copiedFromAgentId))
+      source !== undefined &&
+      (fields.role === undefined || roleIdForLabel(fields.role) === roleIdForLabel(source.role))
+        ? handledCapabilities(source)
         : capabilitiesForRole(roleIdForLabel(fields.role));
     return { ...base, ...capabilities };
   }
