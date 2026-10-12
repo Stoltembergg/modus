@@ -21,6 +21,10 @@ export const SHELL_TEXT_EN = {
   "shell.editProfile": "Edit profile",
   "shell.profileRestoredAs": 'Restored as "{name}"',
   "shell.readOnlyHistory": "This chat is read-only history.",
+  "shell.taskChecklist": "Task checklist",
+  "shell.showTaskChecklist": "Show task checklist",
+  "shell.hideTaskChecklist": "Hide task checklist",
+  "shell.taskChecklistHidden": "The task checklist is hidden.",
 } as const;
 
 export type ShellTextKey = keyof typeof SHELL_TEXT_EN;
@@ -39,6 +43,10 @@ export const SHELL_TEXT_PT: Record<ShellTextKey, string> = {
   "shell.editProfile": "Editar perfil",
   "shell.profileRestoredAs": 'Restaurado como "{name}"',
   "shell.readOnlyHistory": "Esta conversa é um histórico somente leitura.",
+  "shell.taskChecklist": "Lista de tarefas",
+  "shell.showTaskChecklist": "Mostrar lista de tarefas",
+  "shell.hideTaskChecklist": "Ocultar lista de tarefas",
+  "shell.taskChecklistHidden": "A lista de tarefas está oculta.",
 };
 
 export const SHELL_TEXT_ZH: Record<ShellTextKey, string> = {
@@ -55,6 +63,10 @@ export const SHELL_TEXT_ZH: Record<ShellTextKey, string> = {
   "shell.editProfile": "编辑档案",
   "shell.profileRestoredAs": "已恢复为“{name}”",
   "shell.readOnlyHistory": "此对话为只读历史记录。",
+  "shell.taskChecklist": "任务清单",
+  "shell.showTaskChecklist": "显示任务清单",
+  "shell.hideTaskChecklist": "隐藏任务清单",
+  "shell.taskChecklistHidden": "任务清单已隐藏。",
 };
 
 const SHELL_TEXT: Record<GroupRoomLocale, Record<ShellTextKey, string>> = {

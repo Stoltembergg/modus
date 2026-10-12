@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEventItem,
@@ -7,6 +7,7 @@ import type {
   AgentEventPageOptions,
 } from "../../../../shared/agent-events";
 import type { PlanRef } from "../../../../shared/contracts";
+import { reloadTaskChecklistPreference, setTaskChecklistVisible } from "../../lib/taskChecklist";
 import { ActivityTimeline } from "./ActivityTimeline";
 import { AgentEventHub } from "./agentEventHub";
 
@@ -198,5 +199,29 @@ describe("ActivityTimeline", () => {
     expect(onOpenFile).toHaveBeenCalledWith("/repo/src/app.ts");
     expect(onOpenPlan).toHaveBeenCalledWith(expect.any(Object));
     expect(onOpenSubagent).toHaveBeenCalledWith("child-session");
+  });
+
+  it("hides to-do cards with the checklist toggle and says so when nothing else is left", async () => {
+    const hub = new AgentEventHub();
+    render(<ActivityTimeline cwd="/repo" hub={hub} sessionId="s" />);
+    hub.seedHistory("s", [
+      {
+        id: "todos-1",
+        createdAt: "2026-10-01T12:00:00.000Z",
+        event: {
+          type: "todos.updated",
+          sessionId: "s",
+          todos: [{ id: "t1", content: "Write tests", status: "pending" }],
+        },
+      },
+    ]);
+    await waitFor(() => expect(screen.getByTestId("activity-blocks")).toBeTruthy());
+    act(() => setTaskChecklistVisible(false));
+    expect(screen.queryByTestId("activity-blocks")).toBeNull();
+    expect(screen.getByText("The task checklist is hidden.")).toBeTruthy();
+    act(() => setTaskChecklistVisible(true));
+    expect(screen.getByTestId("activity-blocks")).toBeTruthy();
+    localStorage.clear();
+    reloadTaskChecklistPreference();
   });
 });

@@ -106,10 +106,16 @@ describe("task checklist toggle", () => {
   it("toggles, persists, and restores the checklist preference", async () => {
     const user = userEvent.setup();
     renderBar("lg");
+    expect(
+      screen.getByRole("button", { name: "Hide task checklist" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+    // The right-sidebar toggle stays next to it on wide bars.
+    expect(screen.getByRole("button", { name: "Show right sidebar" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Hide task checklist" }));
     expect(localStorage.getItem(TASK_CHECKLIST_STORAGE_KEY)).toBe("false");
     const show = screen.getByRole("button", { name: "Show task checklist" });
     expect(show.dataset.active).toBe("false");
+    expect(show.getAttribute("aria-pressed")).toBe("false");
     cleanup();
     // A fresh launch reads the persisted value.
     reloadTaskChecklistPreference();

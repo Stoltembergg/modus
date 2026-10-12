@@ -2,6 +2,7 @@ import { Menu } from "@base-ui/react/menu";
 import { IconCheck, IconDots, IconLayoutSidebarRight, IconListCheck } from "@tabler/icons-react";
 import type { ReactNode } from "react";
 import { TOOLBAR_ICON, ToolbarButton } from "../../components/ui/ToolbarButton";
+import { useShellText } from "../../lib/shellText";
 import { toggleTaskChecklist, useTaskChecklistVisible } from "../../lib/taskChecklist";
 import type { WidthTier } from "../../lib/useWidthTier";
 
@@ -22,7 +23,10 @@ export function HeaderActions({
 }) {
   const checklistVisible = useTaskChecklistVisible();
   const inspectorLabel = inspectorOpen ? "Hide right sidebar" : "Show right sidebar";
-  const checklistLabel = checklistVisible ? "Hide task checklist" : "Show task checklist";
+  const t = useShellText();
+  const checklistLabel = t(
+    checklistVisible ? "shell.hideTaskChecklist" : "shell.showTaskChecklist",
+  );
   if (tier === "sm") {
     return (
       <div className="app-no-drag flex h-8 items-center gap-1" data-width-tier={tier}>
@@ -44,7 +48,7 @@ export function HeaderActions({
                 <CheckItem
                   checked={checklistVisible}
                   icon={<IconListCheck size={TOOLBAR_ICON.size} stroke={TOOLBAR_ICON.stroke} />}
-                  label="Task checklist"
+                  label={t("shell.taskChecklist")}
                   onToggle={toggleTaskChecklist}
                 />
                 <CheckItem
@@ -64,7 +68,12 @@ export function HeaderActions({
   }
   return (
     <div className="app-no-drag flex h-8 items-center gap-1" data-width-tier={tier}>
-      <ToolbarButton active={checklistVisible} label={checklistLabel} onClick={toggleTaskChecklist}>
+      <ToolbarButton
+        active={checklistVisible}
+        label={checklistLabel}
+        onClick={toggleTaskChecklist}
+        pressed={checklistVisible}
+      >
         <IconListCheck size={TOOLBAR_ICON.size} stroke={TOOLBAR_ICON.stroke} />
       </ToolbarButton>
       <ToolbarButton active={inspectorOpen} label={inspectorLabel} onClick={onToggleInspector}>
