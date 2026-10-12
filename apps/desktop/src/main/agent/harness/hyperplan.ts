@@ -44,9 +44,12 @@ const CRITICS: Array<{ id: HyperPlanCriticId; prompt: string }> = [
 
 const SESSION_SETUP_TIMEOUT_MS = 60_000;
 const CRITIC_TIMEOUT_MS = 5 * 60_000;
-const SYNTHESIS_TIMEOUT_MS = 45_000;
+// Synthesis only merges bounded critic output (no plan rewrite); 3 min covers slow providers.
+export const SYNTHESIS_TIMEOUT_MS = 180_000;
 const REVISION_TIMEOUT_MS = 5 * 60_000;
 const CLEANUP_TIMEOUT_MS = 5_000;
+/** Critics and synthesis only classify/merge findings; keep reasoning cheap (clamped per model). */
+const REVIEW_THINKING_LEVEL = "low" as const;
 const MAX_CRITIC_INPUT_BYTES = 24 * 1024;
 const MAX_CRITIC_PLAN_BYTES = 12 * 1024;
 const MAX_SYNTHESIS_INPUT_BYTES = 24 * 1024;
@@ -79,16 +82,15 @@ const criticOutputSchema = z
   })
   .strict();
 
-const synthesisOutputSchema = z
-  .object({
-    revisedContent: z.string().trim().min(1).max(MAX_REVISED_CONTENT_BYTES),
-    agreements: z.array(z.string().trim().min(1).max(500)).max(12),
-    disagreements: z.array(z.string().trim().min(1).max(500)).max(12),
-    risks: z.array(z.string().trim().min(1).max(500)).max(12),
-    openQuestions: z.array(z.string().trim().min(1).max(500)).max(12),
-    references: z.array(z.string().trim().min(1).max(240)).max(20),
-  })
-  .strict();
+// The revision step is the only source of the revised plan; synthesis returns feedback only.
+// Unknown keys (e.g. a stray revisedContent) are stripped rather than failing the review.
+const synthesisOutputSchema = z.object({
+  agreements: z.array(z.string().trim().min(1).max(500)).max(12),
+  disagreements: z.array(z.string().trim().min(1).max(500)).max(12),
+  risks: z.array(z.string().trim().min(1).max(500)).max(12),
+  openQuestions: z.array(z.string().trim().min(1).max(500)).max(12),
+  references: z.array(z.string().trim().min(1).max(240)).max(20),
+});
 
 type CriticOutput = z.infer<typeof criticOutputSchema>;
 type SynthesisOutput = z.infer<typeof synthesisOutputSchema>;
@@ -297,7 +299,7 @@ function synthesisPrompt(input: {
     critiques: structured,
   };
   const prefix =
-    "SYNTHESIS_INPUT: Revise the supplied plan using its Spec and only these completed critic results. Preserve the plan's intent and do not invent evidence. Unavailable critics are not approvals. Return ONLY JSON with revisedContent (non-empty Markdown <=12 KiB), agreements, disagreements, risks, openQuestions, references arrays (max 12 strings <=500 chars per text, max 20 references <=240 chars).\n";
+    "SYNTHESIS_INPUT: Consolidate only these completed critic results about the supplied plan and its Spec. Do not rewrite the plan and do not invent evidence. Unavailable critics are not approvals. Return ONLY JSON with agreements, disagreements, risks, openQuestions, references arrays (max 12 strings <=500 chars per text, max 20 references <=240 chars).\n";
   let prompt = `${prefix}${JSON.stringify(source)}`;
   while (Buffer.byteLength(prompt, "utf8") > MAX_SYNTHESIS_INPUT_BYTES) {
     const lastWithFindings = [...source.critiques]
@@ -384,7 +386,10 @@ function parseRevision(raw: string | undefined): HyperPlanRevision | undefined {
   }
 }
 
-async function createIsolatedSession(modelId?: string): Promise<{
+async function createIsolatedSession(
+  modelId?: string,
+  thinkingLevel?: typeof REVIEW_THINKING_LEVEL,
+): Promise<{
   session: IsolatedSession;
   tempDir: string;
 }> {
@@ -426,6 +431,7 @@ async function createIsolatedSession(modelId?: string): Promise<{
       tools: [],
       customTools: [],
       noTools: "all",
+      ...(thinkingLevel ? { thinkingLevel } : {}),
     });
     return { session, tempDir };
   } catch (error) {
@@ -457,6 +463,7 @@ async function runBoundedPrompt(
   timeoutMs: number,
   maxOutputBytes: number,
   modelId?: string,
+  thinkingLevel?: typeof REVIEW_THINKING_LEVEL,
 ): Promise<PromptResult> {
   if (!prompt) {
     return {
@@ -547,7 +554,7 @@ async function runBoundedPrompt(
       }
     };
     try {
-      const created = await createIsolatedSession(modelId);
+      const created = await createIsolatedSession(modelId, thinkingLevel);
       session = created.session;
       tempDir = created.tempDir;
       sessionCreated = true;
@@ -724,19 +731,12 @@ function parseSynthesis(promptResult: PromptResult): SynthesisOutput {
     throw new HyperPlanReviewFailure("empty_synthesis_output", "Synthesis returned no output.");
   }
   try {
-    const result = synthesisOutputSchema.parse(JSON.parse(promptResult.output));
-    if (Buffer.byteLength(result.revisedContent, "utf8") > MAX_REVISED_CONTENT_BYTES) {
-      throw new HyperPlanReviewFailure(
-        "invalid_synthesis_output",
-        `Revised Markdown exceeds ${MAX_REVISED_CONTENT_BYTES} bytes.`,
-      );
-    }
-    return result;
+    return synthesisOutputSchema.parse(JSON.parse(promptResult.output));
   } catch (error) {
     if (error instanceof HyperPlanReviewFailure) throw error;
     throw new HyperPlanReviewFailure(
       "invalid_synthesis_output",
-      "Synthesis returned invalid JSON or an invalid revised Markdown body.",
+      "Synthesis returned invalid JSON.",
     );
   }
 }
@@ -805,6 +805,7 @@ async function runHyperPlanPipeline(
           CRITIC_TIMEOUT_MS,
           MAX_CRITIC_OUTPUT_BYTES,
           modelId,
+          REVIEW_THINKING_LEVEL,
         );
       } catch (error) {
         outcome = {
@@ -865,6 +866,7 @@ async function runHyperPlanPipeline(
         SYNTHESIS_TIMEOUT_MS,
         MAX_SYNTHESIS_OUTPUT_BYTES,
         modelId,
+        REVIEW_THINKING_LEVEL,
       );
       synthesis = parseSynthesis(synthesisResult);
     } catch (error) {
@@ -875,6 +877,8 @@ async function runHyperPlanPipeline(
     const summary: HyperPlanSummary = {
       critiques,
       ...synthesis,
+      // Synthesis no longer rewrites the plan; runHyperPlanRevision produces the revised plan.
+      revisedContent: "",
       agreements:
         completedCritiques.length < 2
           ? []
@@ -938,7 +942,6 @@ export async function runHyperPlanRevision(
   options?: { modelId?: string },
 ): Promise<HyperPlanRevision> {
   const initialPrompt = revisionPrompt(input, {
-    revisedContent: "",
     agreements: [],
     disagreements: [],
     risks: [],

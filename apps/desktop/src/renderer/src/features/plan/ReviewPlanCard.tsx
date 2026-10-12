@@ -135,7 +135,7 @@ export function ReviewPlanCard({
               </div>
             </section>
           ) : null}
-          {hyperPlanStatus === "completed" && hyperPlanSummary ? (
+          {hyperPlanStatus === "completed" && hyperPlanSummary?.revisedContent.trim() ? (
             <>
               <section aria-label="Revised plan preview" className="space-y-2">
                 <div>
