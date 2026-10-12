@@ -113,6 +113,8 @@ export type AgentSessionInfo = {
   kind?: "group_member";
   /** Set on an agent's 1:1 chat (A3): a normal chat in its group's Project. */
   agentId?: string;
+  /** Read-only history (e.g. a migrated group room): shown, never sent to. */
+  readOnly?: boolean;
   createdAt: string;
   updatedAt: string;
 };

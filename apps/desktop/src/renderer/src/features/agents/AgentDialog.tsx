@@ -28,6 +28,7 @@ import {
   type NewGroupAgentInput,
   type UpdateAgentInput,
 } from "../../../../shared/contracts";
+import { shellText } from "../../../../shared/shell-text";
 import { cn } from "../../lib/cn";
 import { selectableModels } from "../../lib/modusModels";
 import type { GroupDialogModel } from "../groups/CreateGroupDialog";
@@ -112,6 +113,7 @@ type AgentDialogGroupProps = {
   onCreate(input: CreateGroupAgentInput): Promise<void>;
   onUpdate(input: UpdateAgentInput & { id: string }): Promise<void>;
   draft?: undefined;
+  profile?: undefined;
 };
 
 type AgentDialogDraftProps = {
@@ -120,10 +122,20 @@ type AgentDialogDraftProps = {
   agent?: undefined;
   onCreate?: undefined;
   onUpdate?: undefined;
+  profile?: undefined;
+};
+
+export type AgentDialogProfileProps = {
+  profile: { takenNames: readonly string[] };
+  group?: undefined;
+  draft?: undefined;
+  agent?: AgentInfo | undefined;
+  onCreate(input: NewGroupAgentInput): Promise<void>;
+  onUpdate(input: UpdateAgentInput & { id: string }): Promise<void>;
 };
 
 export type AgentDialogProps = AgentDialogCommonProps &
-  (AgentDialogGroupProps | AgentDialogDraftProps);
+  (AgentDialogGroupProps | AgentDialogDraftProps | AgentDialogProfileProps);
 
 /**
  * Create / edit an agent (A3): name, role, instructions, model, face and color
@@ -143,6 +155,7 @@ export function AgentDialog(props: AgentDialogProps) {
     defaultModelId,
     onGenerate,
     draft: target,
+    profile,
   } = props;
   const initial = target?.initial;
   const template = getAgentTemplate(agent?.templateId ?? initial?.templateId ?? "");
@@ -163,7 +176,11 @@ export function AgentDialog(props: AgentDialogProps) {
   };
   const [initialAvatar] = useState(() => {
     const seededAvatar = agentAvatarForId(
-      target ? target.seed : `${group?.id}:${group?.members.length}`,
+      target
+        ? target.seed
+        : group
+          ? `${group.id}:${group.members.length}`
+          : (agent?.id ?? "profile"),
     );
     if (agent) {
       return {
@@ -280,12 +297,16 @@ export function AgentDialog(props: AgentDialogProps) {
 
   const takenNames = useMemo(
     () =>
-      target
-        ? target.takenNames
-        : (group?.members ?? [])
-            .filter((member) => member.agentId !== agent?.id)
-            .map((m) => m.name),
-    [target, group?.members, agent?.id],
+      profile
+        ? profile.takenNames.filter(
+            (taken) => !agent || taken.trim().toLowerCase() !== agent.name.trim().toLowerCase(),
+          )
+        : target
+          ? target.takenNames
+          : (group?.members ?? [])
+              .filter((member) => member.agentId !== agent?.id)
+              .map((m) => m.name),
+    [profile, target, group?.members, agent],
   );
   const draft = { name, role, instructions, modelId };
   const problem = agentDialogError(draft, {
@@ -302,7 +323,7 @@ export function AgentDialog(props: AgentDialogProps) {
     setError(null);
     try {
       const roles = target?.roles.map((item) => item.trim()).filter(Boolean) ?? [];
-      const profile = await onGenerate({
+      const generated = await onGenerate({
         ...(group ? { groupId: group.id } : {}),
         ...(roles.length > 0 ? { roles } : {}),
         modelId,
@@ -313,13 +334,13 @@ export function AgentDialog(props: AgentDialogProps) {
       // The role is the user's choice: Regenerate only rewrites the instructions. A new
       // agent with no role yet takes the generated label (Custom, or the role it names).
       if (!agent && roleChoice === "custom" && !customLabel.trim()) {
-        setCustomLabel(profile.role);
+        setCustomLabel(generated.role);
       }
-      setInstructions(profile.instructions);
+      setInstructions(generated.instructions);
       setNotice(
-        profile.generated
+        generated.generated
           ? { text: AGENT_GENERATED_HINT, warning: false }
-          : { text: profile.warning ?? "Couldn't generate.", warning: true },
+          : { text: generated.warning ?? "Couldn't generate.", warning: true },
       );
       return true;
     } catch (caught) {
@@ -371,6 +392,16 @@ export function AgentDialog(props: AgentDialogProps) {
           avatarColor: color,
           avatarShape: shape,
         });
+      } else if (profile && props.onCreate) {
+        await props.onCreate({
+          name: name.trim(),
+          role: savedRole.trim(),
+          instructions,
+          modelId: selectedModel,
+          avatarFace: face,
+          avatarColor: color,
+          avatarShape: shape,
+        });
       } else if (group && props.onCreate) {
         await props.onCreate({
           groupId: group.id,
@@ -413,8 +444,9 @@ export function AgentDialog(props: AgentDialogProps) {
             ? "Generate"
             : "Create";
 
-  const title =
-    agent || target?.mode === "edit"
+  const title = profile
+    ? shellText(agent ? "shell.editProfile" : "shell.newProfile")
+    : agent || target?.mode === "edit"
       ? "Edit agent"
       : initial?.templateId
         ? "Customize agent"

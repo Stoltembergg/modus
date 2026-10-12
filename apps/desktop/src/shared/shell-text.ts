@@ -17,6 +17,10 @@ export const SHELL_TEXT_EN = {
   "shell.pickModel": "Pick a model",
   "shell.effort": "Effort",
   "shell.modelRunning": "Can't change the model while a run is active.",
+  "shell.newProfile": "New profile",
+  "shell.editProfile": "Edit profile",
+  "shell.profileRestoredAs": 'Restored as "{name}"',
+  "shell.readOnlyHistory": "This chat is read-only history.",
 } as const;
 
 export type ShellTextKey = keyof typeof SHELL_TEXT_EN;
@@ -31,6 +35,10 @@ export const SHELL_TEXT_PT: Record<ShellTextKey, string> = {
   "shell.pickModel": "Escolha um modelo",
   "shell.effort": "Esforço",
   "shell.modelRunning": "Não dá para trocar o modelo com uma execução ativa.",
+  "shell.newProfile": "Novo perfil",
+  "shell.editProfile": "Editar perfil",
+  "shell.profileRestoredAs": 'Restaurado como "{name}"',
+  "shell.readOnlyHistory": "Esta conversa é um histórico somente leitura.",
 };
 
 export const SHELL_TEXT_ZH: Record<ShellTextKey, string> = {
@@ -43,6 +51,10 @@ export const SHELL_TEXT_ZH: Record<ShellTextKey, string> = {
   "shell.pickModel": "选择模型",
   "shell.effort": "推理强度",
   "shell.modelRunning": "运行中无法更换模型。",
+  "shell.newProfile": "新建档案",
+  "shell.editProfile": "编辑档案",
+  "shell.profileRestoredAs": "已恢复为“{name}”",
+  "shell.readOnlyHistory": "此对话为只读历史记录。",
 };
 
 const SHELL_TEXT: Record<GroupRoomLocale, Record<ShellTextKey, string>> = {

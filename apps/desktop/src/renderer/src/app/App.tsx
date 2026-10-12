@@ -30,6 +30,7 @@ import type {
   UpdateRestoreUiState,
   WorkspaceInfo,
 } from "../../../shared/contracts";
+import { shellText } from "../../../shared/shell-text";
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_TRANSITION, Sidebar } from "../components/Sidebar";
 import { APP_RAIL_WIDTH, AppRail, type PrimaryDestination } from "../components/shell/AppRail";
 import { AppShell } from "../components/shell/AppShell";
@@ -163,16 +164,31 @@ export function App() {
     ? agentGroups.find((group) => group.id === activeGroupId)
     : undefined;
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>();
-  /** The agent dialog (A3): create in a group, or edit an agent. */
-  const [agentDialog, setAgentDialogState] = useState<{
-    groupId: string;
-    agent?: AgentInfo;
-    /** New on every open: the dialog remounts instead of reviving an exiting instance. */
-    nonce: number;
-  } | null>(null);
+  /** The agent dialog (A3): create in a group, or edit an agent, or create/edit a profile. */
+  const [agentDialog, setAgentDialogState] = useState<
+    | {
+        groupId: string;
+        agent?: AgentInfo | undefined;
+        /** New on every open: the dialog remounts instead of reviving an exiting instance. */
+        nonce: number;
+        profile?: undefined;
+      }
+    | {
+        profile: true;
+        takenNames: readonly string[];
+        agent?: AgentInfo | undefined;
+        nonce: number;
+        groupId?: undefined;
+      }
+    | null
+  >(null);
   const agentDialogSeq = useRef(0);
-  const setAgentDialog = (next: { groupId: string; agent?: AgentInfo } | null) =>
-    setAgentDialogState(next && { ...next, nonce: ++agentDialogSeq.current });
+  const setAgentDialog = (
+    next:
+      | { groupId: string; agent?: AgentInfo }
+      | { profile: true; takenNames: readonly string[]; agent?: AgentInfo }
+      | null,
+  ) => setAgentDialogState(next && { ...next, nonce: ++agentDialogSeq.current });
   const [initialEventsBySession, setInitialEventsBySession] = useState<
     Record<string, AgentEventItem[]>
   >({});
@@ -939,10 +955,29 @@ export function App() {
 
   async function editAgent(agentId: string): Promise<void> {
     try {
-      const agent = (await window.modus.agents.list()).find(
-        (item: AgentInfo) => item.id === agentId,
-      );
-      if (agent?.groupId) setAgentDialog({ groupId: agent.groupId, agent });
+      const allAgents = await window.modus.agents.list();
+      const agent = allAgents.find((item: AgentInfo) => item.id === agentId);
+      if (!agent) return;
+      if (agent.groupId) {
+        setAgentDialog({ groupId: agent.groupId, agent });
+      } else {
+        const takenNames = allAgents
+          .filter((item: AgentInfo) => !item.groupId && !item.archivedAt)
+          .map((item: AgentInfo) => item.name);
+        setAgentDialog({ profile: true, agent, takenNames });
+      }
+    } catch (error) {
+      setSessionCreateError(describeGroupError(error));
+    }
+  }
+
+  async function openNewProfile(): Promise<void> {
+    try {
+      const allAgents = await window.modus.agents.list();
+      const takenNames = allAgents
+        .filter((item: AgentInfo) => !item.groupId && !item.archivedAt)
+        .map((item: AgentInfo) => item.name);
+      setAgentDialog({ profile: true, takenNames });
     } catch (error) {
       setSessionCreateError(describeGroupError(error));
     }
@@ -961,9 +996,10 @@ export function App() {
   /** A 1:1 chat of a blocked group opens read-only, with the room's banner (A3). */
   const activeChatBlocked = agentChatBlocked(activeSession, agentGroups);
 
-  const agentDialogGroup = agentDialog
-    ? agentGroups.find((group) => group.id === agentDialog.groupId)
-    : undefined;
+  const agentDialogGroup =
+    agentDialog && !agentDialog.profile
+      ? agentGroups.find((group) => group.id === agentDialog.groupId)
+      : undefined;
 
   const groupModels = useMemo(
     () =>
@@ -1331,11 +1367,35 @@ export function App() {
                           onOpenAgentChat={(agentId) => void openAgentChat(agentId)}
                           onEditAgent={(agentId) => void editAgent(agentId)}
                           onAddAgent={(groupId) => setAgentDialog({ groupId })}
+                          onNewProfile={() => void openNewProfile()}
                         />
                       </ContextSidebar>
                       {/* Keeps the dialog mounted for its exit spring after onOpenChange(false). */}
                       <AnimatePresence>
-                        {agentDialogGroup && agentDialog ? (
+                        {agentDialog?.profile ? (
+                          <AgentDialog
+                            key={`agent-dialog-${agentDialog.nonce}`}
+                            agent={agentDialog.agent}
+                            defaultModelId={model || undefined}
+                            models={groupModels}
+                            onCreate={async (input) => {
+                              // A new profile opens its first chat (default Project, else No project).
+                              const created = await window.modus.agents.create(input);
+                              await refreshSessions();
+                              await openAgentChat(created.id);
+                            }}
+                            onGenerate={(input) => window.modus.agents.generateProfile(input)}
+                            onOpenChange={(open) => {
+                              if (!open) setAgentDialog(null);
+                            }}
+                            onUpdate={async (input) => {
+                              await window.modus.agents.update(input);
+                              await refreshSessions();
+                            }}
+                            open
+                            profile={{ takenNames: agentDialog.takenNames }}
+                          />
+                        ) : agentDialogGroup && agentDialog ? (
                           <AgentDialog
                             key={`agent-dialog-${agentDialog.nonce}`}
                             agent={agentDialog.agent}
@@ -1541,7 +1601,14 @@ export function App() {
                                 <ChatPane
                                   composerDraft={composerDraftBySession[visibleSession.id]}
                                   composerReplacement={
-                                    activeChatBlocked ? (
+                                    visibleSession.readOnly ? (
+                                      <div
+                                        className="rounded-lg border border-border px-3 py-2 text-fg-muted text-sm"
+                                        role="status"
+                                      >
+                                        {shellText("shell.readOnlyHistory")}
+                                      </div>
+                                    ) : activeChatBlocked ? (
                                       <BlockedBanner
                                         onAction={() => {
                                           const blocked = activeChatBlocked;

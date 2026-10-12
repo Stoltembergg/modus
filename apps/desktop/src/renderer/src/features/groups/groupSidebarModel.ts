@@ -37,13 +37,18 @@ export type GroupAgentRow = {
   chatSessionId: string | undefined;
 };
 
-/** agentId → its 1:1 chat session, from the sidebar's session list. */
+/**
+ * agentId → its chat: the most recently updated WRITABLE one (an agent can
+ * have several chats; read-only history is never "the" chat).
+ */
 export function agentChatSessions(
   sessions: readonly AgentSessionInfo[],
 ): ReadonlyMap<string, AgentSessionInfo> {
   const chats = new Map<string, AgentSessionInfo>();
   for (const session of sessions) {
-    if (session.agentId && session.kind !== "group_member") chats.set(session.agentId, session);
+    if (!session.agentId || session.kind === "group_member" || session.readOnly) continue;
+    const current = chats.get(session.agentId);
+    if (!current || session.updatedAt > current.updatedAt) chats.set(session.agentId, session);
   }
   return chats;
 }

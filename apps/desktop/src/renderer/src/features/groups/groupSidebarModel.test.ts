@@ -133,6 +133,18 @@ describe("group agent rows (A3)", () => {
     expect(rows[1]).toMatchObject({ face: derived.avatarFace, color: derived.avatarColor });
   });
 
+  it("an agent with several chats maps to its newest writable one (read-only skipped)", () => {
+    const chats = agentChatSessions([
+      session("old", { agentId: "a", updatedAt: "2026-01-01T00:00:00.000Z" }),
+      session("new", { agentId: "a", updatedAt: "2026-01-03T00:00:00.000Z" }),
+      session("history", { agentId: "a", readOnly: true, updatedAt: "2026-01-09T00:00:00.000Z" }),
+      session("mid", { agentId: "a", updatedAt: "2026-01-02T00:00:00.000Z" }),
+      session("only-history", { agentId: "z", readOnly: true }),
+    ]);
+    expect(chats.get("a")?.id).toBe("new");
+    expect(chats.has("z")).toBe(false);
+  });
+
   it("the 1:1 chat's activity lights an idle agent (asking = waiting, running = working)", () => {
     const chats = agentChatSessions([session("dm-a", { agentId: "a" })]);
     const running = { running: true, needsInput: false, unread: false, failed: false };

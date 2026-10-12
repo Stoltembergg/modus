@@ -4,6 +4,7 @@ import type {
   CreateGroupAgentInput,
   GenerateAgentProfileInput,
   GeneratedAgentProfile,
+  NewGroupAgentInput,
   UpdateAgentInput,
 } from "../../shared/contracts";
 import { requireAgentModel } from "./agent-model-rule";
@@ -24,6 +25,8 @@ export type AgentsIpcService = {
   listAgents(): AgentInfo[];
   /** A new agent in its (only) group: membership and room session included. */
   createAgentInGroup(input: CreateGroupAgentInput): AgentInfo;
+  /** A standalone profile (no group): name unique among the active groupless profiles. */
+  createProfile(input: NewGroupAgentInput): AgentInfo;
   getAgent(agentId: string): AgentInfo | undefined;
   /** Whether `modelId` belongs to a configured provider (listModels). */
   isModelAvailable(modelId: string): boolean;
@@ -87,12 +90,14 @@ export function registerAgentsIpcHandlers(
     const parsed = parseIpcInput(agentsCreateSchema, input, IPC_CHANNELS.agentsCreate);
     requireAgentModel(service.isModelAvailable, parsed);
     const { groupId, templateId, ...fields } = parsed;
-    return service.createAgentInGroup({
+    const agent = {
       ...definedFields(fields),
       name: parsed.name,
-      groupId,
       ...(templateId !== undefined ? { templateId } : {}),
-    });
+    };
+    return groupId === undefined
+      ? service.createProfile(agent)
+      : service.createAgentInGroup({ ...agent, groupId });
   });
 
   ipc.handle(IPC_CHANNELS.agentsUpdate, (event, input) => {

@@ -56,6 +56,8 @@ export type SidebarGroupsProps = {
   onEditAgent?: ((agentId: string) => void) | undefined;
   /** "Add agent" in the group menu (the agent dialog, create mode). */
   onAddAgent?: ((groupId: string) => void) | undefined;
+  /** "New profile" button next to/near New group. */
+  onNewProfile?: (() => void) | undefined;
 };
 
 /**

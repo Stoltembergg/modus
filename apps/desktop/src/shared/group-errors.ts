@@ -64,6 +64,8 @@ export const GROUP_ERROR_CODES = [
   // belong to a configured provider.
   "agent-model-required",
   "agent-model-unavailable",
+  // A read-only (migrated history) session: no sends, model changes or edits.
+  "session-read-only",
 ] as const;
 
 export type GroupErrorCode = (typeof GROUP_ERROR_CODES)[number];

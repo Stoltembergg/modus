@@ -374,7 +374,7 @@ function requireOneOf<T extends string>(value: T, allowed: readonly T[], field: 
   return value;
 }
 
-function requireGroupRow(groupId: string): GroupRow {
+export function requireGroupRow(groupId: string): GroupRow {
   const row = getDatabase()
     .prepare(`select ${GROUP_COLUMNS} from agent_groups where id = ?`)
     .get(groupId) as GroupRow | undefined;
@@ -633,7 +633,7 @@ type AgentRef = {
   avatar_shape: AgentAvatarShape;
 };
 
-function requireAgentRef(agentId: string): AgentRef {
+export function requireAgentRef(agentId: string): AgentRef {
   const row = getDatabase()
     .prepare("select id, group_id, name, model_id, avatar_shape from agents where id = ?")
     .get(agentId) as AgentRef | undefined;
@@ -642,7 +642,10 @@ function requireAgentRef(agentId: string): AgentRef {
 }
 
 /** Throws `group-project-required` unless `workspaceId` is a real, existing Project. */
-function requireGroupProject(workspaceId: string | null | undefined): { id: string; root: string } {
+export function requireGroupProject(workspaceId: string | null | undefined): {
+  id: string;
+  root: string;
+} {
   if (groupNeedsProject({ workspaceId })) {
     throw new GroupStoreError("group-project-required", "A group needs a Project (folder).");
   }
@@ -702,39 +705,14 @@ export function postMembershipEvent(groupId: string, body: string): void {
 
 /** The 1:1 chat session ids of these agents (A3; kind 'chat', linked by agent_id). */
 export function agentChatSessionIds(agentIds: readonly string[]): string[] {
+  // Writable chats only: read-only (migrated) history is never torn down; deleting
+  // the agent just unlinks it (agent_id → null by the FK).
   const select = getDatabase().prepare(
-    "select id from agent_sessions where agent_id = ? and kind = 'chat'",
+    "select id from agent_sessions where agent_id = ? and kind = 'chat' and read_only = 0",
   );
   return agentIds.flatMap((agentId) =>
     (select.all(agentId) as Array<{ id: string }>).map((row) => row.id),
   );
-}
-
-/**
- * The agent's 1:1 chat (A3): a normal `kind='chat'` session in its group's
- * Project (cwd = the Project root), linked by `agent_id` and made on first
- * open. The existing one is returned as is. A group without a Project cannot
- * make one (`group-project-required`); its agents are still listed.
- */
-export function openAgentChatRow(agentId: string): string {
-  const db = getDatabase();
-  const existing = db
-    .prepare("select id from agent_sessions where agent_id = ? and kind = 'chat'")
-    .get(agentId) as { id: string } | undefined;
-  if (existing) return existing.id;
-  const agent = requireAgentRef(agentId);
-  if (agent.group_id === null) {
-    throw new GroupStoreError("not-a-member", `Agent ${agentId} has no group.`);
-  }
-  const project = requireGroupProject(requireGroupRow(agent.group_id).workspace_id);
-  const sessionId = randomUUID();
-  const now = new Date().toISOString();
-  db.prepare(
-    `insert into agent_sessions
-       (id, workspace_id, title, cwd, status, runtime, model, kind, agent_id, created_at, updated_at)
-     values (?, ?, ?, ?, 'idle', 'pi-sdk', ?, 'chat', ?, ?, ?)`,
-  ).run(sessionId, project.id, agent.name, project.root, agent.model_id, agentId, now, now);
-  return sessionId;
 }
 
 /**

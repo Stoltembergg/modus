@@ -37,7 +37,12 @@ import type {
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
 import { buildPlanMessage } from "../../shared/plan-message";
 import { SUBAGENT_TOOL_NAMES, type ToolProfileName, WAIT_TOOL_NAME } from "../../shared/tools";
-import { agentChatPersonaPrompt, getAgent, requireAgentChatWritable } from "../agents/agents-store";
+import {
+  agentChatPersonaPrompt,
+  getAgent,
+  requireAgentChatWritable,
+  requireSessionWritable,
+} from "../agents/agents-store";
 import { releaseAgentBrowserControl } from "../browser/browser-service";
 import { planTurnContext } from "../context/context-planner";
 import { formatResolvedContext, resolveContext } from "../context/context-service";
@@ -3572,6 +3577,7 @@ export class PiSdkRuntime implements AgentRuntime {
 
   /** The composer model picker and Ctrl+/ are idle-only; main enforces it. */
   private assertModelChangeAllowed(sessionId: string): void {
+    requireSessionWritable(sessionId);
     if (this.isSessionStreaming(sessionId)) throw new Error(MODEL_CHANGE_RUNNING_ERROR);
   }
 

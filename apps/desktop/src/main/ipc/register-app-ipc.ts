@@ -97,6 +97,7 @@ import {
 import {
   createAgentInGroup,
   createGroupWithNewAgents,
+  createProfile,
   getAgent,
   listAgents,
   openAgentChat,
@@ -1546,6 +1547,7 @@ export function registerAppIpc({
   registerAgentsIpcHandlers(ipcMain, assertTrustedSender, {
     listAgents,
     createAgentInGroup,
+    createProfile,
     getAgent,
     isModelAvailable,
     updateAgent,

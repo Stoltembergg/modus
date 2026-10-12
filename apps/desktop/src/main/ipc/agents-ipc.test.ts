@@ -52,6 +52,7 @@ function mockService() {
   return {
     listAgents: vi.fn((): AgentInfo[] => [AGENT]),
     createAgentInGroup: vi.fn((_input: unknown): AgentInfo => AGENT),
+    createProfile: vi.fn((_input: unknown): AgentInfo => AGENT),
     getAgent: vi.fn((_id: string): AgentInfo | undefined => ({ ...AGENT, modelId: MODEL })),
     isModelAvailable: vi.fn((modelId: string) => modelId === MODEL),
     updateAgent: vi.fn((_id: string, _input: unknown): AgentInfo => AGENT),
@@ -87,6 +88,33 @@ async function trustedEvent() {
 }
 
 describe("agents IPC", () => {
+  it("creates a standalone profile when groupId is omitted (same model rule)", async () => {
+    const service = mockService();
+    const handlers = await register(service);
+    const { trusted, unregister } = await trustedEvent();
+    try {
+      expect(
+        handlers.get("agents:create")?.(trusted, {
+          name: " Solo ",
+          modelId: MODEL,
+          defaultWorkspaceId: "ws-1",
+        }),
+      ).toEqual(AGENT);
+      expect(service.createProfile).toHaveBeenCalledWith({
+        name: "Solo",
+        modelId: MODEL,
+        defaultWorkspaceId: "ws-1",
+      });
+      expect(service.createAgentInGroup).not.toHaveBeenCalled();
+      expect(() => handlers.get("agents:create")?.(trusted, { name: "NoModel" })).toThrow(
+        /agent-model-required/,
+      );
+      expect(service.createProfile).toHaveBeenCalledTimes(1);
+    } finally {
+      unregister();
+    }
+  });
+
   it("registers exactly the agents channels", async () => {
     const handlers = await register(mockService());
     expect([...handlers.keys()].sort()).toEqual([...AGENTS_CHANNELS].sort());
@@ -160,8 +188,9 @@ describe("agents IPC", () => {
       expect(call("agents:create", { groupId: "g", name: "A", extra: 1 })).toThrow(
         /Invalid IPC payload/,
       );
-      // An agent belongs to one group: groupId is required.
-      expect(call("agents:create", { name: "A", modelId: MODEL })).toThrow(/Invalid IPC payload/);
+      expect(call("agents:create", { groupId: "", name: "A", modelId: MODEL })).toThrow(
+        /Invalid IPC payload/,
+      );
       expect(call("agents:update", { name: "A" })).toThrow(/Invalid IPC payload/);
       expect(call("agents:create", { groupId: "g", name: "A", avatarFace: "angry" })).toThrow(
         /Invalid IPC payload/,
