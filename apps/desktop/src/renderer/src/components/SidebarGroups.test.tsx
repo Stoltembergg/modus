@@ -369,11 +369,10 @@ describe("Sidebar with groups", () => {
 
   it("shows a flat Projects list and keeps project context collapsed", () => {
     renderSidebar("direct-messages");
-    expect(screen.getByText("Projects")).toBeTruthy();
     expect(screen.getByText("Chat project-chat")).toBeTruthy();
     expect(screen.getByText("Chat inbox-chat")).toBeTruthy();
     expect(screen.queryByTestId("sidebar-groups")).toBeNull();
-    expect(screen.getAllByText("Projects")).toHaveLength(1);
+    expect(screen.queryByText("Projects")).toBeNull();
     expect(screen.queryByText("Repo")).toBeNull();
   });
 

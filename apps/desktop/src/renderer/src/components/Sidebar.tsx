@@ -42,6 +42,7 @@ import type { NewGroupServices } from "../features/groups/NewGroupModal";
 import type { GroupMemberStatesById } from "../features/groups/useWorkingGroups";
 import { cn } from "../lib/cn";
 import { beginResizeGesture, endResizeGesture } from "../lib/resizeGesture";
+import { useShellText } from "../lib/shellText";
 import { ICON, ICON_STROKE } from "../lib/uiDensity";
 import { useScrollFade } from "../lib/useScrollFade";
 import { SidebarGroups } from "./SidebarGroups";
@@ -186,6 +187,7 @@ export function Sidebar({
   onEditAgent,
   onAddAgent,
 }: SidebarProps) {
+  const t = useShellText();
   const [projectsExpanded, setProjectsExpanded] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [pinnedExpanded, setPinnedExpanded] = useState(true);
@@ -394,10 +396,9 @@ export function Sidebar({
 
           {section === "direct-messages" ? (
             <>
-              <SectionLabel>Projects</SectionLabel>
               <AnimatePresence initial={false}>
                 {directMessageSessions.length === 0 ? (
-                  <p className="px-2 py-1 text-2xs text-fg-faint">Your chats will appear here.</p>
+                  <p className="px-2 py-1 text-2xs text-fg-faint">{t("shell.chatsEmpty")}</p>
                 ) : (
                   directMessageSessions.map((session) => (
                     <SessionRow
@@ -1315,10 +1316,6 @@ function SectionHeader({
       </button>
     </div>
   );
-}
-
-function SectionLabel({ children }: { children: string }) {
-  return <div className="px-2 pt-3 pb-0.5 text-2xs font-normal text-fg-faint">{children}</div>;
 }
 
 function formatRelativeTime(value: string): string {

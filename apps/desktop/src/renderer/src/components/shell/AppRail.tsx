@@ -1,4 +1,5 @@
 import { IconCircles, IconMessageCircle, IconSettings } from "@tabler/icons-react";
+import { shellText } from "../../../../shared/shell-text";
 import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { ModusBot } from "../ui/ModusBot";
@@ -10,7 +11,7 @@ export const APP_RAIL_WIDTH = 68;
 
 const DESTINATIONS = [
   { id: "groups", label: "Groups", icon: IconCircles },
-  { id: "direct-messages", label: "Projects", icon: IconMessageCircle },
+  { id: "direct-messages", label: shellText("shell.projects"), icon: IconMessageCircle },
 ] as const;
 
 export function AppRail({

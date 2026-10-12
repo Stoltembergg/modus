@@ -91,6 +91,7 @@ import {
 } from "../features/update/restoreUiState";
 import { UpdateToast } from "../features/update/UpdateToast";
 import { cn } from "../lib/cn";
+import { useShellText } from "../lib/shellText";
 import { useGitBranch } from "../lib/useGitBranch";
 import { TOP_BAR_BREAKPOINTS, useWidthTier } from "../lib/useWidthTier";
 import { beginInitialAppHydration, type InitialAppHydration } from "./initial-hydration";
@@ -1816,13 +1817,16 @@ function WorkspaceMenu({
   onOpenFolder(): void;
   triggerClassName?: string;
 }) {
+  const t = useShellText();
   return (
     <Menu.Root>
       <Menu.Trigger className={triggerClassName}>
         <span className="toolbar-icon">
           <IconFolder size={18} stroke={1.7} />
         </span>
-        <span className="max-w-40 truncate">{activeWorkspace?.displayName ?? "No project"}</span>
+        <span className="max-w-40 truncate">
+          {activeWorkspace?.displayName ?? t("shell.noProject")}
+        </span>
         <IconChevronDown className="toolbar-icon" size={13} stroke={2} />
       </Menu.Trigger>
       <Menu.Portal>
@@ -1836,12 +1840,7 @@ function WorkspaceMenu({
               <span className="flex size-4 shrink-0 items-center justify-center text-accent">
                 {!activeWorkspace ? <IconCheck size={14} stroke={2} /> : null}
               </span>
-              <span className="flex min-w-0 flex-1 flex-col">
-                <span className="truncate">No project</span>
-                <span className="truncate text-2xs text-fg-faint">
-                  Starts a chat without a project
-                </span>
-              </span>
+              <span className="min-w-0 flex-1 truncate">{t("shell.noProject")}</span>
             </Menu.Item>
             {workspaces.length === 0 ? (
               <div className="px-2.5 py-3 text-center text-2xs text-fg-faint">
