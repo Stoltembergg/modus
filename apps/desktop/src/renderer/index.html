@@ -15,6 +15,9 @@
         if (theme === "system") {
           theme = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
         }
+        const look = window.modus?.app?.appearance?.initial?.look === "new" ? "new" : "classic";
+        document.documentElement.dataset.ui = look;
+        if (look === "new" && theme === "dark-plus") theme = "dark";
         document.documentElement.dataset.theme = theme;
         const app = window.modus?.app;
         const glass = app?.isNativeGlassAvailable ? app.isNativeGlassAvailable() : app?.nativeGlass;
@@ -41,6 +44,14 @@
         --startup-canvas: #ffffff;
         --startup-mark: rgb(36 36 36 / 34%);
         --startup-sheen: rgb(0 0 0 / 12%);
+      }
+
+      :root[data-ui="new"] {
+        --startup-canvas: #0f1520;
+      }
+
+      :root[data-ui="new"][data-theme="light"] {
+        --startup-canvas: #f6f8fb;
       }
 
       :root[data-native-glass="true"] body,

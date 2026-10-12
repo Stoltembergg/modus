@@ -2,11 +2,13 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppearanceState } from "../../../../../shared/appearance";
+import { getTheme, setTheme } from "../../../lib/theme";
 import { AppearanceSettingsPanel, transparencyDescription } from "./appearance";
 
 const base: AppearanceState = {
   theme: "dark",
   transparency: "sidebar",
+  look: "classic",
   effectiveTheme: "dark",
   glassMode: "sidebar",
   glass: true,
@@ -74,5 +76,22 @@ describe("Appearance settings — Transparency", () => {
     expect(transparencyDescription({ ...base, theme: "light", effectiveTheme: "light" })).toMatch(
       /every theme/,
     );
+  });
+});
+
+describe("Appearance settings — Color scheme under the new look", () => {
+  it("keeps a stored Eye-care Dark when the selected Dark is clicked again", async () => {
+    setTheme("dark-plus");
+    stubAppearance({ ...base, look: "new" });
+    await act(async () => {
+      render(<AppearanceSettingsPanel />);
+    });
+    const dark = screen.getByRole("button", { name: "Dark" });
+    expect(dark.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(dark);
+    expect(getTheme()).toBe("dark-plus");
+    fireEvent.click(screen.getByRole("button", { name: "Light" }));
+    expect(getTheme()).toBe("light");
+    setTheme("dark");
   });
 });

@@ -33,18 +33,21 @@ describe("appearance IPC", () => {
     expect(appearance.set).not.toHaveBeenCalled();
   });
 
-  it("accepts exactly full | sidebar | off and known themes", () => {
+  it("accepts exactly full | sidebar | off, known themes and look", () => {
     const { handlers, appearance } = register();
     for (const transparency of ["full", "sidebar", "off"]) {
       expect(handlers.get("appearance:set")?.(trusted, { transparency })).toEqual({ glass: false });
       expect(appearance.set).toHaveBeenLastCalledWith({ transparency });
     }
+    expect(handlers.get("appearance:set")?.(trusted, { look: "new" })).toEqual({ glass: false });
+    expect(appearance.set).toHaveBeenLastCalledWith({ look: "new" });
     for (const bad of [
       { transparency: "auto" },
       { transparency: "on" },
       { transparency: null },
       { theme: "neon" },
       { theme: "dark", extra: 1 },
+      { look: "modern" },
       null,
     ]) {
       expect(() => handlers.get("appearance:set")?.(trusted, bad)).toThrow(/Invalid IPC payload/);

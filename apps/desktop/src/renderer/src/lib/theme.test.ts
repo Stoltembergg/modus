@@ -2,7 +2,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ThemeMode } from "./theme";
 
-afterEach(() => {
+afterEach(async () => {
+  const { setThemeLook } = await import("./theme");
+  setThemeLook("classic");
   window.localStorage.clear();
   vi.unstubAllGlobals();
   vi.resetModules();
@@ -73,5 +75,18 @@ describe("theme sync with the main process (D2)", () => {
     const theme = await import("./theme");
     theme.initTheme();
     expect(set).toHaveBeenCalledWith({ theme: "dark-plus" });
+  });
+});
+
+describe("theme look", () => {
+  it("makes applyTheme('dark-plus') write data-theme='dark' when look is new, and restores 'dark-plus' on classic", async () => {
+    const { applyTheme, setThemeLook } = await import("./theme");
+    setThemeLook("new");
+    applyTheme("dark-plus");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+
+    setThemeLook("classic");
+    applyTheme("dark-plus");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark-plus");
   });
 });
