@@ -11,6 +11,8 @@ type ToolbarButtonProps = {
   active?: boolean;
   disabled?: boolean;
   onClick?: () => void;
+  /** Toggle buttons: exposes the on/off state to assistive tech as `aria-pressed`. */
+  pressed?: boolean;
 };
 
 /**
@@ -24,11 +26,13 @@ export function ToolbarButton({
   active = false,
   disabled = false,
   onClick,
+  pressed,
 }: ToolbarButtonProps) {
   return (
     <Tooltip content={label}>
       <button
         aria-label={label}
+        aria-pressed={pressed}
         className={cn(
           "toolbar-icon-button app-no-drag flex items-center justify-center rounded-md transition-colors hover:bg-hover",
           active && "bg-active",

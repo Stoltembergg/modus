@@ -430,8 +430,6 @@ type ChatPaneProps = {
   onOpenReview(cwd?: string): void;
   /** Open the technical event history without adding it to the transcript. */
   onOpenActivity?(): void;
-  /** Open the first-class Connections destination from the Composer. */
-  onOpenConnections?(): void;
   onOpenSubagent?(childSessionId: string): void;
   composerReplacement?: ReactNode;
   composerDraft?: ChatComposerDraft | undefined;
@@ -725,7 +723,6 @@ export function ChatPane({
   onModelConfigChange,
   onOpenReview,
   onOpenActivity,
-  onOpenConnections,
   onOpenSubagent,
   composerReplacement,
   composerDraft,
@@ -1891,7 +1888,6 @@ export function ChatPane({
                         onContextChange={setContextItems}
                         onDraftChange={setComposerFields}
                         onModeChange={setComposerMode}
-                        {...(onOpenConnections ? { onOpenConnections } : {})}
                         onSubmit={(message, context, delivery, attachments, skills, mode) =>
                           submitPrompt(message, context, delivery, attachments, skills, mode)
                         }

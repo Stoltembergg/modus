@@ -34,7 +34,7 @@ function TierProbe() {
   return <span data-testid="tier-probe">{useComposerToolbarTier()}</span>;
 }
 
-function renderAt(width: number, onOpenConnections = vi.fn()) {
+function renderAt(width: number) {
   restore = installFixedWidthResizeObserver(width);
   render(
     <Composer
@@ -45,35 +45,32 @@ function renderAt(width: number, onOpenConnections = vi.fn()) {
       model="gpt-5"
       models={MODELS}
       onContextChange={vi.fn()}
-      onOpenConnections={onOpenConnections}
       onSubmit={vi.fn()}
       workspaceId="w1"
     />,
   );
-  return { onOpenConnections };
 }
 
 describe("Composer toolbar responsive (L3c)", () => {
-  it("lg: Attach and labelled Connections inline, no overflow menu", () => {
+  it("lg: Attach inline, no Connections button, no overflow menu", () => {
     renderAt(700);
     expect(screen.getByTestId("composer-toolbar").dataset.widthTier).toBe("lg");
     expect(screen.getByTestId("tier-probe").textContent).toBe("lg");
     expect(screen.getByRole("button", { name: "Attach files" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Connections" }).textContent).toBe("Connections");
+    expect(screen.queryByRole("button", { name: "Connections" })).toBeNull();
     expect(screen.queryByRole("button", { name: "More actions" })).toBeNull();
   });
 
-  it("md: Connections icon-only (still labelled), no overflow menu", () => {
+  it("md: no Connections button, no overflow menu", () => {
     renderAt(450);
     expect(screen.getByTestId("tier-probe").textContent).toBe("md");
-    const connections = screen.getByRole("button", { name: "Connections" });
-    expect(connections.textContent).toBe("");
+    expect(screen.queryByRole("button", { name: "Connections" })).toBeNull();
     expect(screen.queryByRole("button", { name: "More actions" })).toBeNull();
   });
 
-  it("sm: Attach and Connections move into More actions (keyboard reachable)", async () => {
+  it("sm: Attach moves into More actions (keyboard reachable), no Connections item", async () => {
     const user = userEvent.setup();
-    const { onOpenConnections } = renderAt(330);
+    renderAt(330);
     expect(screen.getByTestId("tier-probe").textContent).toBe("sm");
     expect(screen.queryByRole("button", { name: "Attach files" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Connections" })).toBeNull();
@@ -84,8 +81,7 @@ describe("Composer toolbar responsive (L3c)", () => {
     await user.keyboard("{Enter}");
     const menu = await screen.findByTestId("composer-overflow-menu");
     expect(screen.getByRole("menuitem", { name: "Attach files" })).toBeTruthy();
-    await user.click(screen.getByRole("menuitem", { name: "Connections" }));
-    expect(onOpenConnections).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("menuitem", { name: "Connections" })).toBeNull();
     expect(menu).toBeTruthy();
   });
 });

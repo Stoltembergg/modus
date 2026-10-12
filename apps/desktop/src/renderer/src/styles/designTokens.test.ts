@@ -155,10 +155,14 @@ describe("Modus semantic design tokens", () => {
   });
 
   it("removes the top overflow menu because Settings lives in the app rail", () => {
-    const headerActions =
-      app.split("function HeaderActions(")[1]?.split("function EnvironmentPopover(")[0] ?? "";
+    const headerActions = readFileSync(
+      new URL("../features/agent/SessionHeaderActions.tsx", import.meta.url),
+      "utf8",
+    ).split("export function HeaderActions(")[1];
 
+    expect(headerActions).toBeDefined();
     expect(headerActions).not.toContain("<ChromeMoreMenu");
+    expect(app).not.toContain("<ChromeMoreMenu");
   });
 
   it("keeps the rail aligned with the top chrome across routes and platforms", () => {

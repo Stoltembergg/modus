@@ -3,11 +3,16 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentSessionInfo, WorkspaceInfo } from "../../../../shared/contracts";
+import { reloadTaskChecklistPreference, TASK_CHECKLIST_STORAGE_KEY } from "../../lib/taskChecklist";
 import type { WidthTier } from "../../lib/useWidthTier";
 import { HeaderActions } from "./SessionHeaderActions";
 import { SessionTitlePopover } from "./SessionTitlePopover";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+  reloadTaskChecklistPreference();
+});
 
 const SESSION: AgentSessionInfo = {
   id: "s-1",
@@ -29,7 +34,6 @@ const WORKSPACE: WorkspaceInfo = {
 
 function renderBar(tier: WidthTier, inspectorOpen = false) {
   const onToggleInspector = vi.fn();
-  const onOpenSettings = vi.fn();
   render(
     <div>
       <SessionTitlePopover
@@ -42,27 +46,24 @@ function renderBar(tier: WidthTier, inspectorOpen = false) {
         workspace={WORKSPACE}
       />
       <HeaderActions
-        activeWorkspace={WORKSPACE}
-        branch="main"
-        environmentStats={{ added: 3, removed: 1 }}
         inspectorOpen={inspectorOpen}
-        onOpenSettings={onOpenSettings}
         onToggleInspector={onToggleInspector}
         tier={tier}
       />
     </div>,
   );
-  return { onToggleInspector, onOpenSettings };
+  return { onToggleInspector };
 }
 
 describe("1:1 session top bar responsive (L3c)", () => {
-  it("lg: truncated title with a tooltip, Environment and sidebar icon buttons", () => {
+  it("lg: truncated title with a tooltip, task checklist and sidebar icon buttons", () => {
     renderBar("lg");
     const title = screen.getByTestId("session-title-trigger");
     expect(title.getAttribute("title")).toBe(SESSION.title);
     expect(title.className).toContain("max-w-44");
     expect(screen.getByTestId("session-title-text").className).toContain("truncate-fade");
-    expect(screen.getByRole("button", { name: "Environment" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Hide task checklist" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Environment" })).toBeNull();
     expect(screen.getByRole("button", { name: "Show right sidebar" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Session actions" })).toBeNull();
   });
@@ -72,16 +73,16 @@ describe("1:1 session top bar responsive (L3c)", () => {
     const title = screen.getByTestId("session-title-trigger");
     expect(title.getAttribute("title")).toBe(`${SESSION.title} · modus-desktop`);
     expect(title.querySelector("svg")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Environment" }).textContent).toBe("");
+    expect(screen.getByRole("button", { name: "Hide task checklist" }).textContent).toBe("");
     expect(screen.getByRole("button", { name: "Show right sidebar" })).toBeTruthy();
   });
 
-  it("sm: Environment and the sidebar toggle collapse into Session actions (keyboard)", async () => {
+  it("sm: the checklist and sidebar toggles collapse into Session actions (keyboard)", async () => {
     const user = userEvent.setup();
     const { onToggleInspector } = renderBar("sm", true);
     // sm: the title pill drops its icon; text truncates with the tooltip.
     expect(screen.getByTestId("session-title-trigger").querySelector("svg")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Environment" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Hide task checklist" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Hide right sidebar" })).toBeNull();
     const trigger = screen.getByRole("button", { name: "Session actions" });
     trigger.focus();
@@ -92,14 +93,35 @@ describe("1:1 session top bar responsive (L3c)", () => {
     await user.click(sidebar);
     expect(onToggleInspector).toHaveBeenCalledTimes(1);
 
-    // A checkbox item keeps the menu open; Environment opens its popover from here.
-    await user.click(within(menu).getByRole("menuitem", { name: "Environment" }));
-    expect(await screen.findByRole("button", { name: "Environment settings" })).toBeTruthy();
-    // Esc closes it and focus goes back to the Session actions trigger.
-    await user.keyboard("{Escape}");
-    await vi.waitFor(() =>
-      expect(screen.queryByRole("button", { name: "Environment settings" })).toBeNull(),
-    );
-    await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
+    const checklist = within(menu).getByRole("menuitemcheckbox", { name: "Task checklist" });
+    expect(checklist.getAttribute("aria-checked")).toBe("true");
+    await user.click(checklist);
+    await vi.waitFor(() => expect(checklist.getAttribute("aria-checked")).toBe("false"));
+    expect(localStorage.getItem(TASK_CHECKLIST_STORAGE_KEY)).toBe("false");
+    expect(within(menu).queryByRole("menuitem", { name: "Environment" })).toBeNull();
+  });
+});
+
+describe("task checklist toggle", () => {
+  it("toggles, persists, and restores the checklist preference", async () => {
+    const user = userEvent.setup();
+    renderBar("lg");
+    expect(
+      screen.getByRole("button", { name: "Hide task checklist" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+    // The right-sidebar toggle stays next to it on wide bars.
+    expect(screen.getByRole("button", { name: "Show right sidebar" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Hide task checklist" }));
+    expect(localStorage.getItem(TASK_CHECKLIST_STORAGE_KEY)).toBe("false");
+    const show = screen.getByRole("button", { name: "Show task checklist" });
+    expect(show.dataset.active).toBe("false");
+    expect(show.getAttribute("aria-pressed")).toBe("false");
+    cleanup();
+    // A fresh launch reads the persisted value.
+    reloadTaskChecklistPreference();
+    renderBar("lg");
+    expect(screen.getByRole("button", { name: "Show task checklist" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Show task checklist" }));
+    expect(localStorage.getItem(TASK_CHECKLIST_STORAGE_KEY)).toBe("true");
   });
 });

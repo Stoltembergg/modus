@@ -8,6 +8,7 @@ import {
 } from "../../../../shared/agent-events";
 import type { PlanRef } from "../../../../shared/contracts";
 import { useShellText } from "../../lib/shellText";
+import { useTaskChecklistVisible } from "../../lib/taskChecklist";
 import type { AgentEventHub } from "./agentEventHub";
 import { buildVisibleTimelineBlocks, Timeline } from "./Timeline";
 import { splitTimelinePresentation } from "./timelinePresentation";
@@ -162,10 +163,21 @@ export function ActivityTimeline({
     };
   }, [hub, sessionId, updateHistoryPage]);
 
-  const activityBlocks = useMemo(
+  const checklistVisible = useTaskChecklistVisible();
+  const allActivityBlocks = useMemo(
     () => splitTimelinePresentation(buildVisibleTimelineBlocks(events)).activityBlocks,
     [events],
   );
+  // The top-bar checklist toggle hides standalone to-do cards (nested ones are gated in
+  // ActivityGroup); if that leaves nothing, say so instead of an empty "N events" panel.
+  const activityBlocks = useMemo(
+    () =>
+      checklistVisible
+        ? allActivityBlocks
+        : allActivityBlocks.filter((block) => block.type !== "todos"),
+    [allActivityBlocks, checklistVisible],
+  );
+  const onlyChecklistHidden = activityBlocks.length === 0 && allActivityBlocks.length > 0;
 
   return (
     <section
@@ -213,7 +225,11 @@ export function ActivityTimeline({
           />
         ) : (
           <p className="px-4 py-8 text-center text-xs text-fg-faint">
-            {sessionId ? "No execution activity recorded yet." : t("shell.selectChatForActivity")}
+            {!sessionId
+              ? t("shell.selectChatForActivity")
+              : onlyChecklistHidden
+                ? t("shell.taskChecklistHidden")
+                : "No execution activity recorded yet."}
           </p>
         )}
       </div>
