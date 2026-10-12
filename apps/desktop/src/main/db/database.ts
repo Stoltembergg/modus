@@ -615,11 +615,15 @@ export function migrateDatabase(db: DatabaseSync): void {
     create index if not exists idx_agent_sessions_agent
       on agent_sessions(agent_id, updated_at desc) where agent_id is not null;
     create table if not exists migrated_group_transcripts (
-      group_id text primary key,
-      session_id text references agent_sessions(id) on delete set null,
-      file_path text not null,
+      session_id text primary key references agent_sessions(id) on delete cascade,
+      group_id text not null,
+      body_md text not null,
+      messages_json text not null,
+      checksum text not null,
       created_at text not null
-    );`);
+    );
+    create unique index if not exists idx_migrated_group_transcripts_group
+      on migrated_group_transcripts(group_id);`);
   // Group room Prompt Kit file upload: image + context payloads on user messages.
   addColumn(db, "group_messages", "attachments_json", "text");
   addColumn(db, "group_messages", "context_items_json", "text");

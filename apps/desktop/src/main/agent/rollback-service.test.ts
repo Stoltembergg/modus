@@ -271,6 +271,18 @@ describe("rollbackToUserMessage", () => {
     });
   });
 
+  it("refuses to rewind a read-only session (session-read-only) without touching it", async () => {
+    const sessionId = `rollback-ro-${randomUUID()}`;
+    insertSession(sessionId);
+    getDatabase().prepare("update agent_sessions set read_only = 1 where id = ?").run(sessionId);
+    const runtime = fakeRuntime();
+    await expect(
+      rollbackToUserMessage(runtime as never, { sessionId, userMessageId: "m-1" }),
+    ).rejects.toMatchObject({ code: "session-read-only" });
+    expect(runtime.abort).not.toHaveBeenCalled();
+    expect(runtime.dispose).not.toHaveBeenCalled();
+  });
+
   it("rewinds to before the first message using the root sentinel", async () => {
     const sessionId = `session-${randomUUID()}`;
     const { manager, file } = createPiSession(sessionId);

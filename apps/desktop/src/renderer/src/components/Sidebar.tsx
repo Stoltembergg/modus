@@ -12,6 +12,7 @@ import {
   IconPin,
   IconPinnedOff,
   IconTrash,
+  IconUserPlus,
   IconX,
 } from "@tabler/icons-react";
 import { AnimatePresence, m, useMotionValue, useReducedMotion } from "motion/react";
@@ -302,6 +303,14 @@ export function Sidebar({
             >
               New message
             </NavRow>
+            {onNewProfile ? (
+              <NavRow
+                icon={<IconUserPlus size={SB_ICON} stroke={SB_STROKE} />}
+                onClick={onNewProfile}
+              >
+                {t("shell.newProfile")}
+              </NavRow>
+            ) : null}
           </div>
         ) : null}
 

@@ -145,6 +145,15 @@ function nameOwner(name: string, groupId: string | null): { id: string } | undef
   return (groupId === null ? db.get(name) : db.get(name, groupId)) as { id: string } | undefined;
 }
 
+/** Max agent name length (the IPC schema's `agentFields.name`). */
+export const AGENT_NAME_MAX_LENGTH = 80;
+
+/** "Name n" within AGENT_NAME_MAX_LENGTH: the base is shortened, never the suffix. */
+export function suffixedAgentName(base: string, n: number): string {
+  const suffix = ` ${n}`;
+  return `${base.slice(0, AGENT_NAME_MAX_LENGTH - suffix.length).trimEnd()}${suffix}`;
+}
+
 /** Trimmed, non-empty name that no OTHER agent of the same group has (case-insensitive). */
 function requireFreeName(name: string, groupId: string | null, selfId?: string): string {
   const trimmed = typeof name === "string" ? name.trim() : "";
@@ -573,8 +582,8 @@ export function setAgentArchived(agentId: string, archived: boolean): AgentInfo 
   let name = row.name;
   if (row.group_id === null && nameOwner(name, null) !== undefined) {
     let n = 2;
-    while (nameOwner(`${row.name} ${n}`, null) !== undefined) n += 1;
-    name = `${row.name} ${n}`;
+    while (nameOwner(suffixedAgentName(row.name, n), null) !== undefined) n += 1;
+    name = suffixedAgentName(row.name, n);
   }
   withGroupTransaction(() => {
     db.prepare("update agents set archived_at = null, name = ?, updated_at = ? where id = ?").run(

@@ -118,6 +118,17 @@ describe("profiles (groupless agents)", () => {
     expect(getAgent(third.id)?.name).toBe(base);
   });
 
+  it("the restore rename stays within the 80-character name limit", () => {
+    const base = `${"L".repeat(70)}${crypto.randomUUID().slice(0, 10)}`;
+    expect(base).toHaveLength(80);
+    const first = createProfile({ name: base, modelId: MODEL });
+    setAgentArchived(first.id, true);
+    createProfile({ name: base, modelId: MODEL });
+    const restored = setAgentArchived(first.id, false);
+    expect(restored.name).toHaveLength(80);
+    expect(restored.name).toBe(`${base.slice(0, 78)} 2`);
+  });
+
   it("restoring with a free name keeps it; archiving twice keeps the first date", () => {
     const profile = createProfile({ name: uid("Keep"), modelId: MODEL });
     const archived = setAgentArchived(profile.id, true);

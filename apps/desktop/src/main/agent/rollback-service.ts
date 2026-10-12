@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { AgentRollbackResult, AgentSessionInfo } from "../../shared/contracts";
+import { requireSessionWritable } from "../agents/agents-store";
 import { getDatabase } from "../db/database";
 import { invalidateProjectMemoriesForRuns } from "../memory/project-memory-service";
 import { getAgentSession, updateAgentSessionStatus } from "./agent-store";
@@ -52,6 +53,8 @@ export async function rollbackToUserMessage(
   if (!session) {
     throw new Error(`Agent session not found: ${input.sessionId}`);
   }
+  // Read-only history is never rewound (the IPC checks too).
+  requireSessionWritable(input.sessionId);
 
   const db = getDatabase();
   const runs = db

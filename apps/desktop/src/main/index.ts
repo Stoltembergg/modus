@@ -1,4 +1,10 @@
-import { app, BrowserWindow, type BrowserWindow as BrowserWindowType, nativeTheme } from "electron";
+import {
+  app,
+  BrowserWindow,
+  type BrowserWindow as BrowserWindowType,
+  dialog,
+  nativeTheme,
+} from "electron";
 import { resolveWindowAppearance } from "../shared/window-appearance";
 import {
   shutdownProviderAuthOperations,
@@ -23,6 +29,8 @@ import {
   initializeComposioService,
   shutdownComposioService,
 } from "./composio/composio-service-instance";
+import { getDatabase } from "./db/database";
+import { openDatabaseAtStartup } from "./db/database-startup";
 import {
   createDeepLinkRouter,
   findDeepLinkInArgv,
@@ -155,6 +163,17 @@ if (!app.requestSingleInstanceLock()) {
     .whenReady()
     .then(() => {
       startupTimeline.mark("main.electron-ready");
+      // The first DB open happens here, before any window (and so any IPC call)
+      // exists: a file from a newer Modus gets a clear error box, then quit.
+      if (
+        !openDatabaseAtStartup({
+          open: getDatabase,
+          showErrorBox: (title, content) => dialog.showErrorBox(title, content),
+          quit: () => app.exit(1),
+        })
+      ) {
+        return;
+      }
       installApplicationMenu();
       // Before the window asks for it and before the update service cleans its dir.
       takeRestoreSnapshotAtStartup();

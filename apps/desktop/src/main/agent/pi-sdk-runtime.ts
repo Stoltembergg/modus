@@ -4899,6 +4899,7 @@ export class PiSdkRuntime implements AgentRuntime {
   }
 
   async compact(window: BrowserWindowType, sessionId: string): Promise<void> {
+    requireSessionWritable(sessionId);
     const existing = this.sessions.get(sessionId);
     if (
       isHyperPlanSessionReserved(sessionId) ||

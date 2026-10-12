@@ -1603,7 +1603,7 @@ export function App() {
                                   composerReplacement={
                                     visibleSession.readOnly ? (
                                       <div
-                                        className="rounded-lg border border-border px-3 py-2 text-fg-muted text-sm"
+                                        className="rounded-lg px-3 py-2 text-fg-muted text-sm"
                                         role="status"
                                       >
                                         {shellText("shell.readOnlyHistory")}
