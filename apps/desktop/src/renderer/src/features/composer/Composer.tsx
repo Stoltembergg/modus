@@ -75,9 +75,9 @@ type ComposerProps = {
   /** Opens the first-class Connections view for Composio and provider access. */
   onOpenConnections?(): void;
   /**
-   * L2: the composer has NO model or effort picker for anyone; the model comes from the
-   * default (Settings › Model & Provider / plan default). Only the branch picker remains,
-   * rendered by the host (session state) in this slot.
+   * Session controls rendered by the host (session state): the chat's model chip, the
+   * effort chip when the model has thinking options (PR 2, current chat only), and the
+   * branch picker.
    */
   branchControl?: ReactNode;
   onContextChange(items: ContextItem[]): void;

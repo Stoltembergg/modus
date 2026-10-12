@@ -44,6 +44,7 @@ import {
 import { ComposerDock } from "../composer/ComposerDock";
 import { contextItemKey } from "../composer/composerTokens";
 import type { MentionEditorPart } from "../composer/MentionEditor";
+import { SessionModelPicker } from "../composer/SessionModelPicker";
 import { SessionBranchPicker } from "../git/SessionBranchPicker";
 import { buildPlanMessage, effectiveBuildStatus, normalizePlan } from "../plan/planState";
 import { QuestionsCard } from "../plan/QuestionsCard";
@@ -91,6 +92,21 @@ import { WorkingSubagentBar } from "./WorkingSubagentBar";
  */
 export function turnModelForPane(defaultModel: string, sessionModel?: string | undefined): string {
   return sessionModel || defaultModel;
+}
+
+/** Send is allowed only with a usable model and branch, and a folder (or the No project inbox). */
+export function canSubmitChatComposer(input: {
+  branchBlocked: boolean;
+  modelBlocked: boolean;
+  workspace: WorkspaceInfo | null;
+  sessionWorkspaceId: string;
+  modelId: string | undefined;
+}): boolean {
+  return (
+    !input.branchBlocked &&
+    !input.modelBlocked &&
+    canSubmitPromptForSession(input.workspace, input.sessionWorkspaceId, input.modelId)
+  );
 }
 
 export function canSubmitPromptForSession(
@@ -398,6 +414,8 @@ type ChatPaneProps = {
   models: ModelInfo[];
   /** App-level default model id — fallback when the session has none. */
   defaultModel: string;
+  /** False while the model catalog is still loading (`models` is empty, not "none usable"). */
+  modelsReady?: boolean;
   /** L3b0: Modus provider state (ModelSettingsState.modus) for the inline unavailable notice. */
   modusStatus?: ModusModelsStatus | undefined;
   contextUsage?: ContextUsageInfo | undefined;
@@ -702,6 +720,7 @@ export function ChatPane({
   initialEvents,
   onInitialEventsConsumed,
   onSessionsChanged,
+  modelsReady = true,
   onModelChange,
   onModelConfigChange,
   onOpenReview,
@@ -764,6 +783,7 @@ export function ChatPane({
   };
   // L2: the session's saved branch no longer exists -> sending is blocked until replaced.
   const [branchBlocked, setBranchBlocked] = useState(false);
+  const [modelBlocked, setModelBlocked] = useState(false);
   const [pendingPrompt, setPendingPrompt] = useState(false);
   const [aborting, setAborting] = useState(false);
   const [workingStats, setWorkingStats] = useState<WorkingChangeStats | undefined>();
@@ -1824,18 +1844,34 @@ export function ChatPane({
                     >
                       <Composer
                         integrated
-                        canSubmit={
-                          !branchBlocked &&
-                          canSubmitPromptForSession(workspace, session.workspaceId, paneModel)
-                        }
+                        canSubmit={canSubmitChatComposer({
+                          branchBlocked,
+                          modelBlocked,
+                          workspace,
+                          sessionWorkspaceId: session.workspaceId,
+                          modelId: paneModel,
+                        })}
                         branchControl={
-                          <SessionBranchPicker
-                            cwd={activeCwd}
-                            isRunning={isRunning}
-                            onBlockedChange={setBranchBlocked}
-                            onError={setPromptError}
-                            sessionId={sessionId}
-                          />
+                          <>
+                            <SessionModelPicker
+                              defaultModelId={defaultModel}
+                              isRunning={isRunning}
+                              models={models}
+                              modelsReady={modelsReady}
+                              onBlockedChange={setModelBlocked}
+                              onChanged={onSessionsChanged}
+                              onError={setPromptError}
+                              sessionId={sessionId}
+                              storedModelId={session.model || undefined}
+                            />
+                            <SessionBranchPicker
+                              cwd={activeCwd}
+                              isRunning={isRunning}
+                              onBlockedChange={setBranchBlocked}
+                              onError={setPromptError}
+                              sessionId={sessionId}
+                            />
+                          </>
                         }
                         contextItems={contextItems}
                         cwd={activeCwd}

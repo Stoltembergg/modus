@@ -12,6 +12,11 @@ export const SHELL_TEXT_EN = {
   "shell.noProject": "No project",
   "shell.chatsEmpty": "Your chats will appear here.",
   "shell.selectChatForActivity": "Select a chat to view activity.",
+  "shell.model": "Model",
+  "shell.modelDefault": "Default ({name})",
+  "shell.pickModel": "Pick a model",
+  "shell.effort": "Effort",
+  "shell.modelRunning": "Can't change the model while a run is active.",
 } as const;
 
 export type ShellTextKey = keyof typeof SHELL_TEXT_EN;
@@ -21,6 +26,11 @@ export const SHELL_TEXT_PT: Record<ShellTextKey, string> = {
   "shell.noProject": "Sem projeto",
   "shell.chatsEmpty": "Suas conversas aparecerão aqui.",
   "shell.selectChatForActivity": "Selecione uma conversa para ver a atividade.",
+  "shell.model": "Modelo",
+  "shell.modelDefault": "Padrão ({name})",
+  "shell.pickModel": "Escolha um modelo",
+  "shell.effort": "Esforço",
+  "shell.modelRunning": "Não dá para trocar o modelo com uma execução ativa.",
 };
 
 export const SHELL_TEXT_ZH: Record<ShellTextKey, string> = {
@@ -28,6 +38,11 @@ export const SHELL_TEXT_ZH: Record<ShellTextKey, string> = {
   "shell.noProject": "无项目",
   "shell.chatsEmpty": "你的对话会显示在这里。",
   "shell.selectChatForActivity": "选择一个对话以查看活动。",
+  "shell.model": "模型",
+  "shell.modelDefault": "默认（{name}）",
+  "shell.pickModel": "选择模型",
+  "shell.effort": "推理强度",
+  "shell.modelRunning": "运行中无法更换模型。",
 };
 
 const SHELL_TEXT: Record<GroupRoomLocale, Record<ShellTextKey, string>> = {
@@ -36,6 +51,15 @@ const SHELL_TEXT: Record<GroupRoomLocale, Record<ShellTextKey, string>> = {
   zh: SHELL_TEXT_ZH,
 };
 
-export function shellText(key: ShellTextKey, locale?: string | null): string {
-  return SHELL_TEXT[resolveGroupRoomLocale(locale)][key];
+export type ShellTextVars = Readonly<Record<string, string | number>>;
+
+function fillShellText(template: string, vars?: ShellTextVars): string {
+  if (!vars) return template;
+  return template.replace(/\{(\w+)\}/g, (whole, name: string) =>
+    name in vars ? String(vars[name]) : whole,
+  );
+}
+
+export function shellText(key: ShellTextKey, locale?: string | null, vars?: ShellTextVars): string {
+  return fillShellText(SHELL_TEXT[resolveGroupRoomLocale(locale)][key], vars);
 }

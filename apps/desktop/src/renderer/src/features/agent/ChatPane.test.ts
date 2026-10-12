@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PlanRef } from "../../../../shared/contracts";
 import {
+  canSubmitChatComposer,
   createHyperPlanOperations,
   hyperPlanSourceProjection,
   reconcileHyperPlanReview,
@@ -620,5 +621,24 @@ describe("HyperPlan renderer operations", () => {
       choice: "revision",
       requestId: "new-id",
     });
+  });
+});
+
+describe("canSubmitChatComposer", () => {
+  const base = {
+    branchBlocked: false,
+    modelBlocked: false,
+    workspace: null,
+    sessionWorkspaceId: "modus-inbox-chats",
+    modelId: "openai/gpt-5",
+  };
+  it("allows send with a usable model and branch", () => {
+    expect(canSubmitChatComposer(base)).toBe(true);
+  });
+  it("blocks send while the saved model is unusable", () => {
+    expect(canSubmitChatComposer({ ...base, modelBlocked: true })).toBe(false);
+  });
+  it("blocks send while the saved branch is missing", () => {
+    expect(canSubmitChatComposer({ ...base, branchBlocked: true })).toBe(false);
   });
 });

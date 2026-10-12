@@ -1062,7 +1062,9 @@ export function App() {
         direction,
         sessionId: activeSession?.id,
       });
-      setModel(next.id);
+      // With a chat open this changed only that chat (its composer chip follows the
+      // refreshed session); `model` is the app default and moves only without one.
+      if (!activeSession?.id) setModel(next.id);
       void refreshSessions();
     },
     [activeSession?.id, refreshSessions],
@@ -1555,6 +1557,7 @@ export function App() {
                                   }
                                   contextUsage={contextUsageBySession[visibleSession.id]}
                                   defaultModel={model}
+                                  modelsReady={modelSettings !== null}
                                   modusStatus={modelSettings?.modus}
                                   hub={hubRef.current}
                                   initialEvents={initialEventsBySession[visibleSession.id]}

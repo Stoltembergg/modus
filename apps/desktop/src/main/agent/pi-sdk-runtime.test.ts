@@ -1361,6 +1361,80 @@ describe("PiSdkRuntime", () => {
     expect(mocks.createAgentSession).not.toHaveBeenCalled();
   });
 
+  it("agent:set-model refuses a locked or unavailable model and keeps the stored one", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    getDatabase()
+      .prepare("update agent_sessions set model = ? where id = ?")
+      .run("mock/model", sessionId);
+    vi.mocked(modelService.isUsableModelId).mockImplementation(
+      (modelId) => modelId !== "modus/locked-model",
+    );
+    const runtime = new PiSdkRuntime();
+    try {
+      await expect(
+        runtime.setModel(createWindowStub(), sessionId, "modus/locked-model"),
+      ).rejects.toThrow("Selected model is unavailable: modus/locked-model");
+      const stored = getDatabase()
+        .prepare("select model from agent_sessions where id = ?")
+        .get(sessionId) as { model: string };
+      expect(stored.model).toBe("mock/model");
+    } finally {
+      vi.mocked(modelService.isUsableModelId).mockReturnValue(true);
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("agent:set-model refuses while a run is active", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const runtime = new PiSdkRuntime();
+    vi.spyOn(runtime, "isSessionStreaming").mockReturnValue(true);
+    await expect(runtime.setModel(createWindowStub(), sessionId, "mock/model")).rejects.toThrow(
+      "Can't change the model while a run is active.",
+    );
+  });
+
+  it("agent:cycle-model refuses while a run is active", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const runtime = new PiSdkRuntime();
+    vi.spyOn(runtime, "isSessionStreaming").mockReturnValue(true);
+    await expect(runtime.cycleModel(createWindowStub(), sessionId, "forward")).rejects.toThrow(
+      "Can't change the model while a run is active.",
+    );
+  });
+
+  it("agent:cycle-model skips unavailable, disabled, locked and unusable models", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    getDatabase().prepare("update agent_sessions set model = ? where id = ?").run("p/a", sessionId);
+    const row = (id: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      available: true,
+      enabled: true,
+      ...extra,
+    });
+    vi.mocked(modelService.listModels).mockReturnValue([
+      row("p/a"),
+      row("p/unavailable", { available: false }),
+      row("p/disabled", { enabled: false }),
+      row("p/locked", { locked: "upgrade" }),
+      row("p/unusable"),
+      row("p/b"),
+    ] as never);
+    vi.mocked(modelService.isUsableModelId).mockImplementation((id) => id !== "p/unusable");
+    const runtime = new PiSdkRuntime();
+    try {
+      const next = await runtime.cycleModel(createWindowStub(), sessionId, "forward");
+      expect(next.id).toBe("p/b");
+    } finally {
+      vi.mocked(modelService.listModels).mockReturnValue([{ id: "mock/model" }] as never);
+      vi.mocked(modelService.isUsableModelId).mockReturnValue(true);
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
   it("refuses a cold resume when the stored model was removed", async () => {
     const sessionId = `session-${crypto.randomUUID()}`;
     insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
