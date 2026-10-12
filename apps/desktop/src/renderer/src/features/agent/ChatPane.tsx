@@ -71,6 +71,7 @@ import { ModusUnavailableNotice } from "./ModusUnavailableNotice";
 import { latestPendingPermissionRequest } from "./permissionRequests";
 import { latestPendingQuestionRequest } from "./questionRequests";
 import { RetryStatusBar } from "./RetryStatusBar";
+import { currentRunStage } from "./runStage";
 import { isChatRunning, latestSessionStatus } from "./runState";
 import { SubagentPreviewSheet } from "./SubagentPreviewSheet";
 import { readSessionScroll, rememberSessionScroll } from "./sessionScrollMemory";
@@ -1280,6 +1281,7 @@ export function ChatPane({
   const paneModel = turnModelForPane(defaultModel, session.model);
   const activeCwd = session.cwd;
   const retryStatus = sessionStatus.type === "retry" ? sessionStatus : undefined;
+  const runStage = useMemo(() => currentRunStage(stateAgentEvents), [stateAgentEvents]);
   // The decision card shows only while the plan is unbuilt and not dismissed.
   // Reading the plan's authoritative build status (not a remembered hash) is
   // what stops the card from re-appearing after a build on session re-open.
@@ -1714,6 +1716,7 @@ export function ChatPane({
             {isRunning ? (
               <ChatRunStatus
                 retrying={Boolean(retryStatus)}
+                stage={runStage}
                 {...(onOpenActivity ? { onOpenActivity } : {})}
               />
             ) : null}

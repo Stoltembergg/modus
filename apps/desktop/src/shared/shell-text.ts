@@ -25,6 +25,16 @@ export const SHELL_TEXT_EN = {
   "shell.showTaskChecklist": "Show task checklist",
   "shell.hideTaskChecklist": "Hide task checklist",
   "shell.taskChecklistHidden": "The task checklist is hidden.",
+  "shell.run.working": "Working on your request",
+  "shell.run.retrying": "Retrying the current turn",
+  "shell.run.thinking": "Thinking…",
+  "shell.run.writing": "Writing the response…",
+  "shell.run.runningCommand": "Running {command}",
+  "shell.run.runningTool": "Running {tool}",
+  "shell.run.editing": "Editing {file}",
+  "shell.run.reading": "Reading {file}",
+  "shell.run.searching": "Searching the codebase…",
+  "shell.run.spawningSubagent": "Spawning subagent",
 } as const;
 
 export type ShellTextKey = keyof typeof SHELL_TEXT_EN;
@@ -47,6 +57,16 @@ export const SHELL_TEXT_PT: Record<ShellTextKey, string> = {
   "shell.showTaskChecklist": "Mostrar lista de tarefas",
   "shell.hideTaskChecklist": "Ocultar lista de tarefas",
   "shell.taskChecklistHidden": "A lista de tarefas está oculta.",
+  "shell.run.working": "Trabalhando no seu pedido",
+  "shell.run.retrying": "Tentando o turno de novo",
+  "shell.run.thinking": "Pensando…",
+  "shell.run.writing": "Escrevendo a resposta…",
+  "shell.run.runningCommand": "Executando {command}",
+  "shell.run.runningTool": "Executando {tool}",
+  "shell.run.editing": "Editando {file}",
+  "shell.run.reading": "Lendo {file}",
+  "shell.run.searching": "Buscando no código…",
+  "shell.run.spawningSubagent": "Iniciando subagente",
 };
 
 export const SHELL_TEXT_ZH: Record<ShellTextKey, string> = {
@@ -67,6 +87,16 @@ export const SHELL_TEXT_ZH: Record<ShellTextKey, string> = {
   "shell.showTaskChecklist": "显示任务清单",
   "shell.hideTaskChecklist": "隐藏任务清单",
   "shell.taskChecklistHidden": "任务清单已隐藏。",
+  "shell.run.working": "正在处理你的请求",
+  "shell.run.retrying": "正在重试当前轮次",
+  "shell.run.thinking": "思考中…",
+  "shell.run.writing": "正在撰写回复…",
+  "shell.run.runningCommand": "正在运行 {command}",
+  "shell.run.runningTool": "正在运行 {tool}",
+  "shell.run.editing": "正在编辑 {file}",
+  "shell.run.reading": "正在读取 {file}",
+  "shell.run.searching": "正在搜索代码库…",
+  "shell.run.spawningSubagent": "正在启动子代理",
 };
 
 const SHELL_TEXT: Record<GroupRoomLocale, Record<ShellTextKey, string>> = {
