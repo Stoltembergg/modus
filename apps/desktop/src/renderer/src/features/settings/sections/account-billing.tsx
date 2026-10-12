@@ -94,21 +94,26 @@ export function creditsDescription(
   planName: string,
   locale?: string,
 ): string {
+  const held = wallet.reserved;
   const parts: string[] = [];
   if (wallet.allowance === undefined || wallet.purchased === undefined) {
     parts.push(
       `Credits from your ${planName} plan are used first, then purchased credits, which never expire.`,
     );
-  } else if (wallet.purchased > 0) {
-    parts.push(
-      `${creditCount(wallet.allowance, locale)} from your ${planName} plan are used first, then ${creditCount(wallet.purchased, locale)} purchased, which never expire.`,
-    );
   } else {
-    parts.push(`${creditCount(wallet.allowance, locale)} from your ${planName} plan.`);
+    const allowanceLeft = Math.max(0, wallet.allowance - held);
+    const purchasedLeft = wallet.purchased - Math.max(0, held - wallet.allowance);
+    if (purchasedLeft > 0) {
+      parts.push(
+        `${creditCount(allowanceLeft, locale)} from your ${planName} plan are used first, then ${creditCount(purchasedLeft, locale)} purchased, which never expire.`,
+      );
+    } else {
+      parts.push(`${creditCount(allowanceLeft, locale)} from your ${planName} plan.`);
+    }
   }
-  if (wallet.reserved > 0) {
+  if (held > 0) {
     parts.push(
-      `${creditCount(wallet.reserved, locale)} ${wallet.reserved === 1 ? "is" : "are"} held for requests in progress.`,
+      `Another ${creditCount(held, locale)} ${held === 1 ? "is" : "are"} held for requests in progress.`,
     );
   }
   return parts.join(" ");
@@ -261,6 +266,19 @@ export function BillingSectionView({
       ? "Subscription paused"
       : `${rawStatus.charAt(0).toUpperCase()}${rawStatus.slice(1).replace(/_/g, " ")}`;
 
+  const fallbackPlanDescription = (() => {
+    const parts: string[] = [];
+    if (current && current.monthlyCredits > 0) {
+      parts.push(`Tops up to ${creditCount(current.monthlyCredits)} each month.`);
+    }
+    if (packAccess) {
+      parts.push(`Your credit pack unlocks ${packAccess} models.`);
+    } else if ((state.wallet?.purchased ?? 0) > 0) {
+      parts.push("Credit packs don't change your plan.");
+    }
+    return parts.join(" ");
+  })();
+
   return (
     <SettingsSection
       description={
@@ -314,9 +332,7 @@ export function BillingSectionView({
                           ? `, renews on ${renews}.`
                           : "."
                   }`
-                : packAccess
-                  ? `Buying credits doesn't change your plan. Your credit pack unlocks ${packAccess} models.`
-                  : "Buying credits doesn't change your plan."
+                : fallbackPlanDescription
           }
           title="Current plan"
         />

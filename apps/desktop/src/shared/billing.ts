@@ -86,13 +86,18 @@ export type BillingWallet = {
   planAllowance: number;
   periodEnd: string | null;
   /**
-   * Purchased credits left: the sum of the caller's credited lots' `remaining`
-   * (public.credit_lots). Absent when the lots could not be read.
+   * Purchased credits left: the client counts only lots with status 'credited' (sum of their
+   * remaining). This intentionally differs from the server's private.non_purchased_credits, which
+   * subtracts the remaining of every lot: a refund
+   * (supabase/migrations/20261004040200_l5a_lock_order_starter_models.sql:103-142) removes
+   * least(delta, remaining, balance) and can leave a 'refunded' lot with remaining > 0 (a
+   * shortfall), which the server currently counts as purchased. That is a known server bug, fixed
+   * in a separate PR. Absent when the lots could not be read.
    */
   purchased?: number;
   /**
-   * What is left of the plan allowance: max(0, balance + reserved - purchased), the same split
-   * as private.non_purchased_credits. Absent when the lots could not be read.
+   * What is left of the plan allowance: allowance = max(0, balance + reserved - purchased).
+   * Absent when the lots could not be read.
    */
   allowance?: number;
 };

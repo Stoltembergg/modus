@@ -541,7 +541,7 @@ export function ModelGroupSection({
       >
         <div className="min-w-0">
           <h5 className="text-xs font-normal text-fg-muted">{group.title}</h5>
-          <p className="mt-0.5 text-2xs text-fg-faint">{group.description}</p>
+          <p className="mt-0.5 text-2xs text-fg-subtle">{group.description}</p>
         </div>
         <ReadOnlyPill>{group.models.length.toString()}</ReadOnlyPill>
       </div>

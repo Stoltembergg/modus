@@ -377,7 +377,7 @@ describe("Mercado Pago cancel (L1e)", () => {
     // The next read no longer finds the row (current_period_end passed): Free.
     push(READY);
     await screen.findByRole("button", { name: /^Subscribe$/ });
-    expect(screen.getByText("Buying credits doesn't change your plan.")).toBeTruthy();
+    expect(screen.getByText("Tops up to 1,000 credits each month.")).toBeTruthy();
     confirm.mockRestore();
   });
 
@@ -613,7 +613,7 @@ describe("L5b credit packs", () => {
     const html = markup(PACKS_ONLY, "starter");
     expect(html).toContain(">Free<");
     expect(html).toContain(
-      "Buying credits doesn&#x27;t change your plan. Your credit pack unlocks Starter models.",
+      "Tops up to 1,000 credits each month. Your credit pack unlocks Starter models.",
     );
   });
 
@@ -666,8 +666,8 @@ describe("L5b credit packs", () => {
     expect(creditsDescription({ ...wallet, purchased: 0, allowance: 380 }, "Free", "pt-BR")).toBe(
       "380 credits from your Free plan.",
     );
-    expect(creditsDescription({ ...wallet, reserved: 1 }, "Free", "en-US")).toContain(
-      "1 credit is held for requests in progress.",
+    expect(creditsDescription({ ...wallet, balance: 9639, reserved: 1 }, "Free", "en-US")).toBe(
+      "639 credits from your Free plan are used first, then 9,000 credits purchased, which never expire. Another 1 credit is held for requests in progress.",
     );
     const { purchased: _p, allowance: _a, ...unknownLots } = wallet;
     expect(creditsDescription(unknownLots, "Free")).toBe(
@@ -675,8 +675,82 @@ describe("L5b credit packs", () => {
     );
     const html = markup({ ...PACKS_ONLY, wallet });
     expect(html).toContain(creditsDescription(wallet, "Free"));
-    expect(html).not.toContain(formatCredits(1000));
+    // The Credits row shows the remaining allowance; 1,000 only appears as the plan's monthly top-up.
+    expect(creditsDescription(wallet, "Free")).not.toContain(formatCredits(1000));
     expect(html).toContain(`>${formatCredits(9640)}<`);
+  });
+
+  it("splits allowance and purchased correctly when credits are reserved (adds up to balance pill)", () => {
+    const wallet = {
+      balance: 9640,
+      reserved: 360,
+      planAllowance: 1000,
+      periodEnd: null,
+      allowance: 1000,
+      purchased: 9000,
+    };
+    expect(creditsDescription(wallet, "Free", "en-US")).toBe(
+      "640 credits from your Free plan are used first, then 9,000 credits purchased, which never expire. Another 360 credits are held for requests in progress.",
+    );
+    expect(640 + 9000).toBe(wallet.balance);
+    const html = markup({ ...PACKS_ONLY, wallet });
+    expect(html).toContain(`>${formatCredits(9640)}<`);
+    expect(html).toContain(creditsDescription(wallet, "Free"));
+
+    const exceededAllowance = {
+      balance: 9000,
+      reserved: 1500,
+      planAllowance: 1000,
+      periodEnd: null,
+      allowance: 1000,
+      purchased: 9500,
+    };
+    expect(creditsDescription(exceededAllowance, "Free", "en-US")).toBe(
+      "0 credits from your Free plan are used first, then 9,000 credits purchased, which never expire. Another 1,500 credits are held for requests in progress.",
+    );
+  });
+
+  it("Current plan row for not-subscribed users describes monthly top-up neutrally", () => {
+    // Free never bought -> exactly "Tops up to 1,000 credits each month." (no "change your plan")
+    const freeNeverBought = markup(READY);
+    expect(freeNeverBought).toContain("Tops up to 1,000 credits each month.");
+    expect(freeNeverBought).not.toContain("change your plan");
+
+    render(
+      <BillingSectionView
+        busy={false}
+        onCheckout={noop}
+        onPortal={noop}
+        onRefresh={noop}
+        onCancel={noop}
+        onBuyCredits={noop}
+        state={READY}
+      />,
+    );
+    expect(screen.getByText("Tops up to 1,000 credits each month.")).toBeTruthy();
+    cleanup();
+
+    // Free + Starter pack access -> "Tops up to 1,000 credits each month. Your credit pack unlocks Starter models."
+    const freeWithStarter = markup(PACKS_ONLY, "starter");
+    expect(freeWithStarter).toContain(
+      "Tops up to 1,000 credits each month. Your credit pack unlocks Starter models.",
+    );
+
+    // Free with purchased > 0 and no access plan -> "Tops up to 1,000 credits each month. Credit packs don't change your plan."
+    const freeWithPurchased = markup({
+      ...READY,
+      wallet: {
+        balance: 6000,
+        reserved: 0,
+        planAllowance: 1000,
+        periodEnd: null,
+        allowance: 1000,
+        purchased: 5000,
+      },
+    });
+    expect(freeWithPurchased).toContain(
+      "Tops up to 1,000 credits each month. Credit packs don&#x27;t change your plan.",
+    );
   });
 
   it("with a subscription plan on sale, packs are offered next to Subscribe", () => {

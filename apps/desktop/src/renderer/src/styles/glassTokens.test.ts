@@ -102,6 +102,7 @@ describe("glass tokens (D1)", () => {
       [
         "--glass-alpha-chrome",
         "--glass-alpha-overlay",
+        "--glass-alpha-strip",
         "--glass-blur",
         "--glass-saturate",
         "--glass-filter",
@@ -118,6 +119,7 @@ describe("glass tokens (D1)", () => {
     expect(tokens).toEqual({
       "--glass-alpha-chrome": "78%",
       "--glass-alpha-overlay": "82%",
+      "--glass-alpha-strip": "78%",
       "--glass-blur": "18px",
       "--glass-saturate": "1.12",
       "--glass-filter": "blur(var(--glass-blur)) saturate(var(--glass-saturate))",
@@ -162,6 +164,53 @@ describe("glass tokens (D1)", () => {
     expect(worst("dark-plus", "--glass-alpha-chrome", "--color-fg", [WHITE], 0.72)).toBeLessThan(
       4.5,
     );
+  });
+
+  it("(b) sticky title strips (--glass-alpha-strip): every strip base with the text it carries meets the gate", () => {
+    const strip = (theme: Theme, base: string, text: string, backdrops: Rgb[]) =>
+      Math.min(
+        ...backdrops.map((bg) =>
+          contrast(color(theme, text), over(alpha("--glass-alpha-strip"), color(theme, base), bg)),
+        ),
+      );
+
+    const strips: Record<string, string[]> = {
+      "--color-elevated": ["--color-fg-subtle"],
+      "--color-canvas": ["--color-fg", "--color-fg-muted"],
+      "--color-panel": ["--color-fg-muted", "--color-fg-subtle"],
+    };
+
+    for (const theme of THEMES) {
+      const likely = theme === "light" ? WHITE : BLACK;
+      for (const [base, texts] of Object.entries(strips)) {
+        for (const text of texts) {
+          const at = `${theme} ${base} ${text}`;
+          if (text === "--color-fg") {
+            expect(strip(theme, base, text, [WHITE, GREY, BLACK]), at).toBeGreaterThanOrEqual(4.5);
+          } else if (text === "--color-fg-muted") {
+            expect(strip(theme, base, text, [GREY, likely]), at).toBeGreaterThanOrEqual(4.5);
+          } else if (text === "--color-fg-subtle") {
+            expect(strip(theme, base, text, [GREY]), at).toBeGreaterThanOrEqual(3);
+          }
+        }
+      }
+    }
+
+    // Provider group description moved off fg-faint because it fails the 3:1 gate on dark panel.
+    expect(strip("dark", "--color-panel", "--color-fg-faint", [GREY])).toBeLessThan(3);
+  });
+
+  it("(b) the provider model-group strip carries no fg-faint text", () => {
+    const ui = readFileSync(
+      new URL("../features/settings/settings-provider-ui.tsx", import.meta.url),
+      "utf8",
+    );
+    const start = ui.indexOf('data-strip="panel"');
+    expect(start).toBeGreaterThan(-1);
+    const end = ui.indexOf("</div>\n        <ReadOnlyPill", start);
+    const slice = ui.slice(start, end !== -1 ? end : start + 600);
+    expect(slice).toContain("text-fg-subtle");
+    expect(slice).not.toContain("text-fg-faint");
   });
 
   it("(c) the solid fallback is last, zeroes every tier and wins order and specificity", () => {
