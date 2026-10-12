@@ -40,6 +40,7 @@ export function migrateAppearancePreferences(raw: unknown): AppearancePreference
       ? transparency.data
       : DEFAULT_APPEARANCE_PREFERENCES.transparency,
     look: look.success ? look.data : DEFAULT_APPEARANCE_PREFERENCES.look,
+    ...(record.transparencyChosen === true ? { transparencyChosen: true as const } : {}),
   };
 }
 

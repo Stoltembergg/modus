@@ -3,6 +3,7 @@ import {
   type AppearancePreferences,
   applyAppearanceInput,
   effectiveThemeFor,
+  effectiveTransparency,
   NEW_LOOK_SOLID_WINDOW_BACKGROUND,
   NEW_LOOK_WINDOW_SYMBOL_COLOR,
   type OsAppearance,
@@ -96,46 +97,43 @@ describe("resolveAppearance (D2 state matrix)", () => {
     expect(themeSourceFor("dark-plus")).toBe("dark");
   });
 
-  it("applies appearance input with look transitions and preserves defaults appropriately", () => {
-    // classic->new with sidebar becomes full
-    expect(
-      applyAppearanceInput(
-        { theme: "dark", transparency: "sidebar", look: "classic" },
-        { look: "new" },
-      ),
-    ).toEqual({ theme: "dark", transparency: "full", look: "new" });
+  it("never rewrites Transparency when the look changes", () => {
+    const classic = { theme: "dark", transparency: "sidebar", look: "classic" } as const;
+    const toNew = applyAppearanceInput(classic, { look: "new" });
+    expect(toNew).toEqual({ theme: "dark", transparency: "sidebar", look: "new" });
+    expect(effectiveTransparency(toNew)).toBe("full");
+    // Round trip classic -> new -> classic restores the original exactly.
+    const back = applyAppearanceInput(toNew, { look: "classic" });
+    expect(back).toEqual(classic);
+    expect(effectiveTransparency(back)).toBe("sidebar");
+    // Theme-only input keeps look and Transparency.
+    expect(applyAppearanceInput(toNew, { theme: "light" })).toEqual({
+      theme: "light",
+      transparency: "sidebar",
+      look: "new",
+    });
+  });
 
-    // classic->new with off stays off
-    expect(
-      applyAppearanceInput(
-        { theme: "dark", transparency: "off", look: "classic" },
-        { look: "new" },
-      ),
-    ).toEqual({ theme: "dark", transparency: "off", look: "new" });
-
-    // classic->new with explicit transparency in same input keeps it
-    expect(
-      applyAppearanceInput(
-        { theme: "dark", transparency: "sidebar", look: "classic" },
-        { look: "new", transparency: "sidebar" },
-      ),
-    ).toEqual({ theme: "dark", transparency: "sidebar", look: "new" });
-
-    // new->classic keeps full
-    expect(
-      applyAppearanceInput(
-        { theme: "dark", transparency: "full", look: "new" },
-        { look: "classic" },
-      ),
-    ).toEqual({ theme: "dark", transparency: "full", look: "classic" });
-
-    // theme-only input keeps look
-    expect(
-      applyAppearanceInput(
-        { theme: "dark", transparency: "full", look: "new" },
-        { theme: "light" },
-      ),
-    ).toEqual({ theme: "light", transparency: "full", look: "new" });
+  it("respects an explicit Transparency in both looks", () => {
+    const classic = { theme: "dark", transparency: "sidebar", look: "classic" } as const;
+    // Explicit Sidebar is kept under New.
+    const pickedSidebar = applyAppearanceInput(classic, { transparency: "sidebar" });
+    expect(pickedSidebar).toEqual({ ...classic, transparencyChosen: true });
+    const underNew = applyAppearanceInput(pickedSidebar, { look: "new" });
+    expect(effectiveTransparency(underNew)).toBe("sidebar");
+    // Picking Sidebar while already on New is kept too.
+    const onNew = applyAppearanceInput(classic, { look: "new" });
+    expect(effectiveTransparency(applyAppearanceInput(onNew, { transparency: "sidebar" }))).toBe(
+      "sidebar",
+    );
+    // An explicit Full on New survives going back to Classic.
+    const pickedFull = applyAppearanceInput(onNew, { transparency: "full" });
+    expect(effectiveTransparency(applyAppearanceInput(pickedFull, { look: "classic" }))).toBe(
+      "full",
+    );
+    // Legacy files without the flag: anything but the classic default was a choice.
+    expect(effectiveTransparency({ transparency: "off", look: "new" })).toBe("off");
+    expect(effectiveTransparency({ transparency: "full", look: "classic" })).toBe("full");
   });
 
   it("resolves effective theme according to look", () => {

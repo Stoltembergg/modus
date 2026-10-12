@@ -77,4 +77,21 @@ describe("index.html first frame (D2)", () => {
       theme: "dark-plus",
     });
   });
+
+  it("treats an invalid or non-string look as classic and keeps the stored theme", () => {
+    for (const look of ["next", "NEW", "", 1, null, { value: "new" }]) {
+      const modus = {
+        app: {
+          nativeGlass: true,
+          isNativeGlassAvailable: () => true,
+          appearance: { initial: { glassMode: "sidebar", glass: true, look } },
+        },
+      };
+      expect(runFirstFrame(modus, "dark-plus"), JSON.stringify(look)).toMatchObject({
+        ui: "classic",
+        theme: "dark-plus",
+        transparency: "sidebar",
+      });
+    }
+  });
 });

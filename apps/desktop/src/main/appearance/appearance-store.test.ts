@@ -103,4 +103,21 @@ describe("appearance store (userData JSON)", () => {
     });
     expect(readFileSync(join(dir, APPEARANCE_FILE_NAME), "utf8")).toBe(before);
   });
+
+  it("keeps the explicit-Transparency flag only when it is literally true", () => {
+    const picked = {
+      theme: "dark",
+      transparency: "sidebar",
+      look: "new",
+      transparencyChosen: true,
+    };
+    expect(migrateAppearancePreferences(picked)).toEqual(picked);
+    for (const flag of [false, "true", 1]) {
+      expect(migrateAppearancePreferences({ ...picked, transparencyChosen: flag })).toEqual({
+        theme: "dark",
+        transparency: "sidebar",
+        look: "new",
+      });
+    }
+  });
 });

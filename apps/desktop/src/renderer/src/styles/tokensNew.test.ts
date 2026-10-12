@@ -169,7 +169,7 @@ describe("new look tokens: values", () => {
       "--color-surface": "#ffffff",
       "--color-elevated": "#ffffff",
       "--color-fg": "#161c27",
-      "--color-fg-muted": "#4a5465",
+      "--color-fg-muted": "#3f4959",
       "--color-fg-subtle": "#535d6f",
       "--color-fg-faint": "#626c7e",
       "--color-accent": "#1f5fe0",
@@ -233,6 +233,9 @@ describe("new look tokens: contrast gate", () => {
           worst(color(theme, "--color-fg-muted"), surface, [GREY, likely]),
           `${at} muted`,
         ).toBeGreaterThanOrEqual(4.5);
+        // TODO(redesign shell PR): subtle carries text-2xs labels and should reach
+        // 4.5:1 here (today ~4.27 dark / ~3.97 light over window glass on grey);
+        // see "Redesign pending" item 1 in HANDOFF.md.
         expect(
           worst(color(theme, "--color-fg-subtle"), surface, [GREY]),
           `${at} subtle`,
@@ -268,6 +271,17 @@ describe("new look tokens: contrast gate", () => {
           4.5,
         );
       }
+    }
+  });
+
+  it("(c) muted and subtle stay distinct steps on the canvas, in both themes", () => {
+    for (const theme of THEMES) {
+      const canvas = color(theme, "--color-canvas");
+      const muted = contrast(color(theme, "--color-fg-muted"), canvas);
+      const subtle = contrast(color(theme, "--color-fg-subtle"), canvas);
+      const faint = contrast(color(theme, "--color-fg-faint"), canvas);
+      expect(muted / subtle, `${theme} muted vs subtle`).toBeGreaterThanOrEqual(1.2);
+      expect(subtle, `${theme} subtle above faint`).toBeGreaterThan(faint);
     }
   });
 

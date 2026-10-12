@@ -102,11 +102,6 @@
   --glass-blur: 20px;
   --glass-saturate: 1.3;
 
-  /* Type: same Inter ramp, plus three title steps for later primitives. */
-  --text-title: calc(17px * var(--ui-scale));
-  --text-headline: calc(22px * var(--ui-scale));
-  --text-display: calc(28px * var(--ui-scale));
-
   /* Spacing */
   --space-row-height: 32px;
   --space-content-gutter: 20px;
@@ -126,7 +121,7 @@
   --color-code-bg: #ffffff;
 
   --color-fg: #161c27;
-  --color-fg-muted: #4a5465;
+  --color-fg-muted: #3f4959;
   --color-fg-subtle: #535d6f;
   --color-fg-faint: #626c7e;
   --color-fg-placeholder: #9aa3b2;

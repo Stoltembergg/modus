@@ -23,8 +23,15 @@ export type TransparencyPreference = "full" | "sidebar" | "off";
 export type LookPreference = "classic" | "new";
 export type AppearancePreferences = {
   theme: ThemePreference;
+  /** Stored Transparency. Applied as-is only once chosen (see effectiveTransparency). */
   transparency: TransparencyPreference;
   look: LookPreference;
+  /**
+   * True once the user picked a Transparency mode. Until then each look uses
+   * its own default (classic "sidebar", new "full"), resolved at read time so
+   * switching looks never rewrites Transparency. Absent means false.
+   */
+  transparencyChosen?: true;
 };
 export type AppearanceSetInput = {
   theme?: ThemePreference | undefined;
@@ -39,31 +46,48 @@ export const DEFAULT_APPEARANCE_PREFERENCES: AppearancePreferences = {
   look: "classic",
 };
 
-/** Transparency the new look starts with (the concept is glass end to end). */
+/** Transparency each look uses until the user picks one (the new concept is glass end to end). */
 export const NEW_LOOK_DEFAULT_TRANSPARENCY: TransparencyPreference = "full";
 
+export function defaultTransparencyFor(look: LookPreference): TransparencyPreference {
+  return look === "new"
+    ? NEW_LOOK_DEFAULT_TRANSPARENCY
+    : DEFAULT_APPEARANCE_PREFERENCES.transparency;
+}
+
 /**
- * Merge a set() input into the stored preferences. Switching the look to
- * "new" while Transparency is still the classic default ("sidebar") moves it
- * to the new look's default ("full"), unless the same input picks a
- * Transparency explicitly. Switching back to classic leaves Transparency as
- * it is: every mode is valid in both looks.
+ * Transparency that applies. An explicit choice always wins. Files written
+ * before the flag existed count as chosen when they hold anything but the
+ * classic default, because that was the only way to get another value.
+ */
+export function effectiveTransparency(
+  preferences: Pick<AppearancePreferences, "transparency" | "transparencyChosen"> & {
+    look?: LookPreference | undefined;
+  },
+): TransparencyPreference {
+  const chosen =
+    preferences.transparencyChosen === true ||
+    preferences.transparency !== DEFAULT_APPEARANCE_PREFERENCES.transparency;
+  return chosen
+    ? preferences.transparency
+    : defaultTransparencyFor(preferences.look ?? DEFAULT_APPEARANCE_PREFERENCES.look);
+}
+
+/**
+ * Merge a set() input into the stored preferences. Changing the look writes
+ * only `look`; picking a Transparency stores it and marks it as chosen.
  */
 export function applyAppearanceInput(
   preferences: AppearancePreferences,
   input: AppearanceSetInput,
 ): AppearancePreferences {
-  const look = input.look ?? preferences.look;
-  let transparency = input.transparency ?? preferences.transparency;
-  if (
-    input.transparency === undefined &&
-    look === "new" &&
-    preferences.look !== "new" &&
-    preferences.transparency === DEFAULT_APPEARANCE_PREFERENCES.transparency
-  ) {
-    transparency = NEW_LOOK_DEFAULT_TRANSPARENCY;
-  }
-  return { theme: input.theme ?? preferences.theme, transparency, look };
+  const chosen = preferences.transparencyChosen === true || input.transparency !== undefined;
+  return {
+    theme: input.theme ?? preferences.theme,
+    transparency: input.transparency ?? preferences.transparency,
+    look: input.look ?? preferences.look,
+    ...(chosen ? { transparencyChosen: true as const } : {}),
+  };
 }
 
 export type OsAppearance = {
@@ -175,11 +199,24 @@ export function resolveAppearance({
   preferences: Omit<AppearancePreferences, "look"> & { look?: LookPreference | undefined };
   os: OsAppearance;
 }): AppearanceState {
-  const look = preferences.look ?? DEFAULT_APPEARANCE_PREFERENCES.look;
-  const effectiveTheme = effectiveThemeFor(preferences.theme, os.dark, look);
-  const blockedBy = glassBlockReason(window.glass === "native", preferences, os);
+  const { transparencyChosen: _chosen, ...stored } = preferences;
+  const look = stored.look ?? DEFAULT_APPEARANCE_PREFERENCES.look;
+  // The state carries the Transparency that applies, so Settings shows it.
+  const transparency = effectiveTransparency({ ...preferences, look });
+  const effectiveTheme = effectiveThemeFor(stored.theme, os.dark, look);
+  const blockedBy = glassBlockReason(window.glass === "native", { transparency }, os);
   const glass = blockedBy === null;
   const material: GlassMaterial = !glass ? "none" : window.chrome === "macos" ? "vibrancy" : "mica";
-  const glassMode = glass ? preferences.transparency : "off";
-  return { ...preferences, look, effectiveTheme, glassMode, glass, material, blockedBy, os };
+  const glassMode = glass ? transparency : "off";
+  return {
+    ...stored,
+    transparency,
+    look,
+    effectiveTheme,
+    glassMode,
+    glass,
+    material,
+    blockedBy,
+    os,
+  };
 }

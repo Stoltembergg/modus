@@ -144,6 +144,7 @@ describe("appearance controller", () => {
       theme: "dark",
       transparency: "off",
       look: "classic",
+      transparencyChosen: true,
     });
     expect(calls).toEqual(["send:false"]);
     for (const callback of scheduled) callback();
@@ -169,8 +170,8 @@ describe("appearance controller", () => {
     expect(scheduled).toHaveLength(0);
   });
 
-  it("switches to new look from defaults, promotes transparency to full, and uses new-look colour when solid", () => {
-    const { controller, scheduled } = setup();
+  it("switches to new look from defaults, applies Full without storing it, and uses new-look colour when solid", () => {
+    const { controller, scheduled, store } = setup();
     const { window, raw, calls } = fakeWindow();
     controller.attach(window, { nativeGlassAvailable: true });
     calls.length = 0;
@@ -181,6 +182,18 @@ describe("appearance controller", () => {
       glassMode: "full",
       transparency: "full",
     });
+    // Only the look is stored: Full is the new look's default, resolved on read.
+    expect(store.write).toHaveBeenLastCalledWith({
+      theme: "dark",
+      transparency: "sidebar",
+      look: "new",
+    });
+    expect(controller.set({ look: "classic" })).toMatchObject({
+      look: "classic",
+      transparency: "sidebar",
+      glassMode: "sidebar",
+    });
+    controller.set({ look: "new" });
 
     // Turning off transparency to verify solid background with new look
     calls.length = 0;

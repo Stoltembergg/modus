@@ -52,14 +52,17 @@ export function AppearanceSettingsPanel() {
                 value={appearance?.look ?? "classic"}
               />
             }
-            description="Try the new look with a blue accent, deeper glass and softer corners. You can switch back at any time."
+            description="Switch between the classic and new design."
             title="Look"
           />
           <SettingsRow
             control={
               <Segmented
                 label="theme"
-                onChange={setTheme}
+                onChange={(next) => {
+                  // Under New a stored Eye-care Dark shows as Dark: re-picking it must not erase it.
+                  if (next !== themeValue) setTheme(next);
+                }}
                 options={themeOptions}
                 value={themeValue}
               />
