@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentEvent, SessionRunStatus } from "../../../../shared/contracts";
-import { IDLE_STATUS, latestSessionStatus } from "./runState";
+import { IDLE_STATUS, isChatRunning, latestSessionStatus } from "./runState";
 
 const SESSION = "s";
 
@@ -57,5 +57,26 @@ describe("latestSessionStatus", () => {
     // A transient runtime.error or tool activity after `busy` must NOT change
     // the working state — only the runtime's own status events do.
     expect(latestSessionStatus(wrap([busy, runtimeError, toolEnded]))).toEqual({ type: "busy" });
+  });
+});
+
+describe("isChatRunning (Working on your request indicator)", () => {
+  const running = (events: AgentEvent[], aborting = false, pendingPrompt = false) =>
+    isChatRunning({ status: latestSessionStatus(wrap(events)), aborting, pendingPrompt });
+
+  it("shows while the run is busy, retrying, or the prompt is still being sent", () => {
+    expect(running([busy])).toBe(true);
+    expect(running([busy, retry])).toBe(true);
+    expect(running([], false, true)).toBe(true);
+  });
+
+  it("hides when the run finishes", () => {
+    expect(running([busy, toolEnded, idle])).toBe(false);
+  });
+
+  it("hides as soon as the run is cancelled, before the runtime reports idle", () => {
+    expect(running([busy], true)).toBe(false);
+    expect(running([busy], true, true)).toBe(false);
+    expect(running([busy, idle])).toBe(false);
   });
 });

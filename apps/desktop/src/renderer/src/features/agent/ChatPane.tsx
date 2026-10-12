@@ -64,13 +64,14 @@ import {
   optimisticUserPromptEvents,
   prependAgentEventPage,
 } from "./agentEventHub";
+import { ChatRunStatus } from "./ChatRunStatus";
 import { ConversationTimeline } from "./ConversationTimeline";
 import { ChangesStrip } from "./changes/ChangesStrip";
 import { ModusUnavailableNotice } from "./ModusUnavailableNotice";
 import { latestPendingPermissionRequest } from "./permissionRequests";
 import { latestPendingQuestionRequest } from "./questionRequests";
 import { RetryStatusBar } from "./RetryStatusBar";
-import { latestSessionStatus } from "./runState";
+import { isChatRunning, latestSessionStatus } from "./runState";
 import { SubagentPreviewSheet } from "./SubagentPreviewSheet";
 import { readSessionScroll, rememberSessionScroll } from "./sessionScrollMemory";
 import {
@@ -916,7 +917,11 @@ export function ChatPane({
   // working (anything but idle), so a transient error never unlocks input
   // mid-turn. `pendingPrompt` is the optimistic bridge until the first status.
   const sessionStatus = useMemo(() => latestSessionStatus(stateAgentEvents), [stateAgentEvents]);
-  const isRunning = !aborting && (sessionStatus.type !== "idle" || pendingPrompt);
+  const isRunning = isChatRunning({
+    status: sessionStatus,
+    aborting,
+    pendingPrompt: Boolean(pendingPrompt),
+  });
   // Authoritative: keep SDK hot only while a turn is live (DB status or stream).
   const keepRuntimeHotRef = useRef(false);
   keepRuntimeHotRef.current = isSubagentSessionWorking(session.status) || isRunning;
@@ -1617,24 +1622,6 @@ export function ChatPane({
         onDismiss={(processId) => updateProcessStopNotice(processStopScope, processId, undefined)}
       />
 
-      {isRunning ? (
-        <div
-          className="flex min-h-8 shrink-0 items-center gap-2 border-b border-hairline px-5 text-xs text-fg-muted"
-          data-testid="chat-run-status"
-          role="status"
-        >
-          <VortexMark className="size-4 shrink-0" />
-          <span>{retryStatus ? "Retrying the current turn" : "Working on your request"}</span>
-          <button
-            className="ml-auto rounded px-1.5 py-0.5 text-fg-faint transition-colors hover:bg-hover hover:text-fg"
-            onClick={onOpenActivity}
-            type="button"
-          >
-            Activity
-          </button>
-        </div>
-      ) : null}
-
       <div className="relative flex min-h-0 min-w-0 flex-1">
         {isLite ? null : (
           <ConversationTimeline blocks={transcriptBlocks} scrollContainer={scrollContainer} />
@@ -1724,6 +1711,12 @@ export function ChatPane({
         <div className="min-w-0 max-w-full shrink-0 px-4 pb-4">
           {/* Same .chat-column token as Timeline's content wrapper — one width authority. */}
           <div className="chat-column relative">
+            {isRunning ? (
+              <ChatRunStatus
+                retrying={Boolean(retryStatus)}
+                {...(onOpenActivity ? { onOpenActivity } : {})}
+              />
+            ) : null}
             {autoScroll.showScrollToLatest ? (
               <div className="pointer-events-none absolute bottom-full left-1/2 z-30 mb-2 -translate-x-1/2">
                 <button

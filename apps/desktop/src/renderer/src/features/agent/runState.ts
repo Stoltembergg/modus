@@ -30,3 +30,21 @@ export function latestSessionStatus(events: Array<{ event: AgentEvent }>): Sessi
   }
   return IDLE_STATUS;
 }
+
+/**
+ * Whether the chat is "working" — drives the composer lock and the
+ * "Working on your request" indicator. Busy/retrying status or a prompt still
+ * being sent counts; an in-flight cancel (aborting) hides it immediately, and
+ * the runtime's idle status (run finished, failed or cancelled) clears it.
+ */
+export function isChatRunning({
+  status,
+  aborting,
+  pendingPrompt,
+}: {
+  status: SessionRunStatus;
+  aborting: boolean;
+  pendingPrompt: boolean;
+}): boolean {
+  return !aborting && (status.type !== "idle" || pendingPrompt);
+}
