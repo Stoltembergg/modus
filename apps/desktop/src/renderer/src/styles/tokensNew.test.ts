@@ -143,6 +143,7 @@ describe("new look tokens: values", () => {
       "--color-success",
       "--color-danger",
       "--status-warning",
+      "--color-dialog-warning",
     ];
     const table = (theme: Theme) => Object.fromEntries(names.map((n) => [n, raw(theme, n)]));
     expect(table("dark")).toEqual({
@@ -162,6 +163,7 @@ describe("new look tokens: values", () => {
       "--color-success": "#34c38f",
       "--color-danger": "#f06a6a",
       "--status-warning": "#f2b84b",
+      "--color-dialog-warning": "#f2b84b",
     });
     expect(table("light")).toEqual({
       "--color-canvas": "#f6f8fb",
@@ -180,6 +182,7 @@ describe("new look tokens: values", () => {
       "--color-success": "#138a5e",
       "--color-danger": "#d23b3b",
       "--status-warning": "#a76500",
+      "--color-dialog-warning": "#8a5300",
     });
     expect({
       chrome: decl(dark, "--glass-alpha-chrome"),
@@ -272,6 +275,72 @@ describe("new look tokens: contrast gate", () => {
         );
       }
     }
+  });
+
+  it("(c) warning text >= 4.5:1 on every solid surface, its own notice fill and the dialog glass", () => {
+    for (const theme of THEMES) {
+      const warning = color(theme, "--color-dialog-warning");
+      for (const base of [
+        "--color-canvas",
+        "--color-panel",
+        "--color-surface",
+        "--color-elevated",
+      ]) {
+        const bg = color(theme, base);
+        expect(contrast(warning, bg), `${theme} ${base}`).toBeGreaterThanOrEqual(4.5);
+        // Notices: text-warning on bg-warning/10 over the surface.
+        expect(
+          contrast(warning, over(0.1, warning, bg)),
+          `${theme} notice on ${base}`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+      // Dialogs sit on the overlay tier (g3) over any backdrop.
+      expect(
+        worst(warning, tiers(theme)["overlay (g3)"] as [Rgb, number], [WHITE, GREY, BLACK]),
+        `${theme} overlay`,
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("(c) classic dialog warning >= 4.5:1 on classic surfaces and its notice fill (dark, light, dark-plus)", () => {
+    const classic = appCss.replace(/\/\*[\s\S]*?\*\//g, "");
+    const base = block(classic, "@theme {").body;
+    const themes: Record<string, string> = {
+      dark: base,
+      light: block(classic, ':root[data-theme="light"] {').body,
+      "dark-plus": block(classic, ':root[data-theme="dark-plus"] {').body,
+    };
+    const resolve = (body: string, name: string): Rgb => {
+      let value = decl(body, name) ?? decl(base, name);
+      for (let i = 0; value?.startsWith("var(") && i < 4; i += 1) {
+        const ref = value.slice(4, -1).trim();
+        value = decl(body, ref) ?? decl(base, ref);
+      }
+      const hex = value?.match(/^#([0-9a-f]{6})$/i)?.[1];
+      if (!hex) throw new Error(`${name}: not a hex colour (${value})`);
+      return [0, 2, 4].map((i) => Number.parseInt(hex.slice(i, i + 2), 16)) as Rgb;
+    };
+    for (const [theme, body] of Object.entries(themes)) {
+      const warning = resolve(body, "--color-dialog-warning");
+      for (const name of [
+        "--color-canvas",
+        "--color-panel",
+        "--color-surface",
+        "--color-elevated",
+      ]) {
+        const bg = resolve(body, name);
+        expect(contrast(warning, bg), `${theme} ${name}`).toBeGreaterThanOrEqual(4.5);
+        expect(
+          contrast(warning, over(0.1, warning, bg)),
+          `${theme} notice on ${name}`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it("(a) the dialog warning is the only warning colour key: no --color-warning theme token", () => {
+    expect(appCss).not.toMatch(/^\s*--color-warning:/m);
+    expect(css).not.toMatch(/^\s*--color-warning:/m);
   });
 
   it("(c) muted and subtle stay distinct steps on the canvas, in both themes", () => {

@@ -1,4 +1,8 @@
-import { type AgentTemplate, agentAvatarForId } from "../../../../shared/agent-templates";
+import {
+  AGENT_TEMPLATES,
+  type AgentTemplate,
+  agentAvatarForId,
+} from "../../../../shared/agent-templates";
 import type {
   AgentAvatarColor,
   AgentAvatarFace,
@@ -220,9 +224,80 @@ export function dialogMember(
   };
 }
 
-/** The footer counter: "N/10". */
-export function newGroupCounter(count: number): string {
-  return `${count}/${GROUP_MAX_MEMBERS}`;
+/** The footer counter: "N of M" (localized, default "en"). */
+export function newGroupCounter(count: number, locale: string | null = "en"): string {
+  return groupText("newGroup.countOf", locale, { count, max: GROUP_MAX_MEMBERS });
+}
+
+/**
+ * When removing a member, determines the new lead:
+ * - If the removed member is not the lead, returns leadKey unchanged.
+ * - If the removed member is the lead, moves to the first remaining member
+ *   (in order) whose template has `suggestedLead` (Planner); with none, the
+ *   first remaining member; null only when nobody is left.
+ */
+export function leadAfterRemoval(
+  members: readonly NewGroupMember[],
+  removedKey: string,
+  leadKey: string | null,
+  templates: readonly AgentTemplate[] = AGENT_TEMPLATES,
+): string | null {
+  if (leadKey !== removedKey) return leadKey;
+  const remaining = members.filter((member) => member.key !== removedKey);
+  const suggestedTemplates = new Set(
+    templates.filter((template) => template.suggestedLead).map((template) => template.id),
+  );
+  const nextLead = remaining.find(
+    (member) => member.templateId && suggestedTemplates.has(member.templateId),
+  );
+  // No suggested lead left: the first remaining member leads (null when the group is empty).
+  return (nextLead ?? remaining[0])?.key ?? null;
+}
+
+/**
+ * Returns an updated member preserving identity (key, source, templateId,
+ * copiedFromAgentId) and taking editable fields from the agent input.
+ */
+export function editedMember(member: NewGroupMember, input: NewGroupAgentInput): NewGroupMember {
+  return {
+    key: member.key,
+    source: member.source,
+    ...(member.templateId ? { templateId: member.templateId } : {}),
+    ...(member.copiedFromAgentId ? { copiedFromAgentId: member.copiedFromAgentId } : {}),
+    name: input.name,
+    role: input.role ?? "",
+    instructions: input.instructions ?? "",
+    modelId: input.modelId ?? "",
+    avatarFace: input.avatarFace ?? member.avatarFace,
+    avatarColor: input.avatarColor ?? member.avatarColor,
+    ...(input.avatarShape || member.avatarShape
+      ? { avatarShape: input.avatarShape ?? member.avatarShape }
+      : {}),
+  };
+}
+
+/**
+ * Lists members belonging to a card (template: same templateId;
+ * copy source: same copiedFromAgentId; custom: source "custom").
+ */
+export function membersFromCard(
+  members: readonly NewGroupMember[],
+  card: {
+    templateId?: string;
+    copiedFromAgentId?: string;
+    source?: NewGroupMemberSource;
+  },
+): NewGroupMember[] {
+  if (card.templateId) {
+    return members.filter((member) => member.templateId === card.templateId);
+  }
+  if (card.copiedFromAgentId) {
+    return members.filter((member) => member.copiedFromAgentId === card.copiedFromAgentId);
+  }
+  if (card.source) {
+    return members.filter((member) => member.source === card.source);
+  }
+  return [];
 }
 
 /**

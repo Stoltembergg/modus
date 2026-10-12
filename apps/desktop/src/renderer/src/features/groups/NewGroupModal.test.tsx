@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AGENT_TEMPLATES, getAgentTemplate } from "../../../../shared/agent-templates";
 import type {
@@ -81,6 +82,7 @@ function renderModal({
   ),
   addFolder = vi.fn(async () => null as WorkspaceInfo | null),
   defaultWorkspaceId = null as string | null,
+  strict = false,
 } = {}) {
   const onOpenChange = vi.fn();
   const services: NewGroupServices = {
@@ -88,7 +90,7 @@ function renderModal({
     addFolder,
     generateProfile: generate,
   };
-  render(
+  const element = (
     <NewGroupModal
       defaultModelId="m-2"
       defaultWorkspaceId={defaultWorkspaceId}
@@ -99,26 +101,24 @@ function renderModal({
       open
       services={services}
       workspaces={WORKSPACES}
-    />,
+    />
   );
+  // StrictMode runs state updaters twice, as the dev app does (main.tsx).
+  render(strict ? <StrictMode>{element}</StrictMode> : element);
   const modal = screen.getByTestId("new-group-modal");
   return { modal, create, generate, addFolder, onOpenChange, services };
 }
 
 const createButton = (modal: HTMLElement) =>
-  within(modal).getByRole("button", { name: "Create" }) as HTMLButtonElement;
+  within(modal).getByRole("button", { name: "Create group" }) as HTMLButtonElement;
 const folder = (modal: HTMLElement) =>
   within(modal).getByRole("combobox", { name: "Folder" }) as HTMLSelectElement;
-const memberNames = (modal: HTMLElement) =>
-  within(modal)
-    .getAllByRole("textbox", { name: /^Name of member / })
-    .map((input) => (input as HTMLInputElement).value);
 const counter = (modal: HTMLElement) => within(modal).getByTestId("new-group-counter").textContent;
 const hint = (modal: HTMLElement) => within(modal).getByTestId("new-group-hint").textContent;
 
 afterEach(() => cleanup());
 
-describe("NewGroupModal (A4)", () => {
+describe("NewGroupModal (A4 redesigned)", () => {
   it("the folder comes first and is required: Projects plus Add folder…, never Chats", async () => {
     const user = userEvent.setup();
     const added = workspace("ws-3", "New repo");
@@ -138,24 +138,120 @@ describe("NewGroupModal (A4)", () => {
     expect(folder(modal).value).toBe("ws-2");
   });
 
-  it("template cards show avatar, name, role and description; multi-select repeats with a suffix", async () => {
+  it("has no right-hand Members column", () => {
+    const { modal } = renderModal();
+    expect(modal.querySelector('section[aria-label="Members"]')).toBeNull();
+    expect(within(modal).queryByRole("region", { name: "Members" })).toBeNull();
+    expect(within(modal).queryByRole("heading", { name: "Members" })).toBeNull();
+  });
+
+  it("collab pipeline suggestion row has no middle dot and shows Added when pipeline templates exist", async () => {
+    const user = userEvent.setup();
+    const { modal } = renderModal({ defaultWorkspaceId: "ws-1" });
+    const pipeline = within(modal).getByTestId("collab-pipeline");
+    expect(pipeline.textContent).toContain("Planner → Builder → Reviewer");
+    expect(pipeline.textContent).not.toContain("·");
+    expect(within(pipeline).queryByText("Added")).toBeNull();
+
+    await user.click(pipeline);
+    expect(within(pipeline).getByText("Added")).toBeTruthy();
+    expect(
+      within(modal)
+        .getByRole("button", { name: "Planner is the lead" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+  });
+
+  it("panel focus: Name on open, back to the originating card on Back / Add", async () => {
+    const user = userEvent.setup();
+    const { modal } = renderModal({ defaultWorkspaceId: "ws-1" });
+    await user.click(within(modal).getByRole("button", { name: "Add Planner" }));
+    // Edit -> Back: the same Edit button gets focus again.
+    await user.click(within(modal).getByRole("button", { name: "Edit Planner" }));
+    expect(document.activeElement).toBe(
+      within(screen.getByTestId("agent-dialog")).getByRole("textbox", { name: "Name" }),
+    );
+    const backs = within(screen.getByTestId("agent-dialog")).getAllByRole("button", {
+      name: "Back",
+    });
+    await user.click(backs[backs.length - 1] as HTMLElement);
+    await waitFor(() => expect(screen.queryByTestId("agent-dialog")).toBeNull());
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        within(modal).getByRole("button", { name: "Edit Planner" }),
+      ),
+    );
+    // Customize -> Add to group: Customize is gone, focus lands in the same card.
+    await user.click(within(modal).getByRole("button", { name: "Customize Reviewer" }));
+    await user.click(
+      within(screen.getByTestId("agent-dialog")).getByRole("button", { name: "Add to group" }),
+    );
+    await waitFor(() => expect(screen.queryByTestId("agent-dialog")).toBeNull());
+    await waitFor(() =>
+      expect(
+        within(modal).getByTestId("template-card-reviewer").contains(document.activeElement),
+      ).toBe(true),
+    );
+  });
+
+  it("StrictMode: the pipeline's Planner really is the lead (keys are not minted inside an updater)", async () => {
+    const user = userEvent.setup();
+    const { modal, create } = renderModal({ defaultWorkspaceId: "ws-1", strict: true });
+    // A member first, so a dangling lead key would fall back to Builder, not Planner.
+    await user.click(within(modal).getByRole("button", { name: "Add Builder" }));
+    await user.click(within(modal).getByTestId("collab-pipeline"));
+    expect(
+      within(modal)
+        .getByRole("button", { name: "Planner is the lead" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    await user.click(createButton(modal));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create.mock.calls[0]?.[0].leadName).toBe("Planner");
+  });
+
+  it("template cards show avatar, name, role and description; template card added once shows Edit/remove/crown and hides Customize", async () => {
     const user = userEvent.setup();
     const { modal } = renderModal();
     expect(within(modal).getAllByTestId(/^template-card-/)).toHaveLength(AGENT_TEMPLATES.length);
     const card = within(modal).getByTestId("template-card-builder");
     expect(card.textContent).toContain(template("builder").description);
     expect(card.querySelector("svg")).not.toBeNull();
-    await user.click(within(modal).getByRole("button", { name: "Add Builder" }));
-    await user.click(within(modal).getByRole("button", { name: "Add Builder" }));
-    await user.click(within(modal).getByRole("button", { name: "Add Explorer" }));
-    expect(memberNames(modal)).toEqual(["Builder", "Builder 2", "Explorer"]);
+
+    // Not added yet: Customize and + Add buttons exist
+    expect(within(card).getByRole("button", { name: "Customize Builder" })).toBeTruthy();
+    expect(within(card).getByRole("button", { name: "Add Builder" })).toBeTruthy();
+
+    await user.click(within(card).getByRole("button", { name: "Add Builder" }));
+
+    // Added once: card shows member's name, crown, "Added" tag, Edit, remove, + Add another; Customize is hidden
     expect(card.dataset.selected).toBe("true");
-    expect(card.textContent).toContain("×2");
-    // The suffixed name is editable.
-    const second = within(modal).getByRole("textbox", { name: "Name of member 2" });
-    await user.clear(second);
-    await user.type(second, "Bea");
-    expect(memberNames(modal)).toEqual(["Builder", "Bea", "Explorer"]);
+    expect(within(card).getByText("Added")).toBeTruthy();
+    expect(within(card).queryByRole("button", { name: "Customize Builder" })).toBeNull();
+    expect(within(card).getByRole("button", { name: "Edit Builder" })).toBeTruthy();
+    expect(within(card).getByRole("button", { name: "Remove Builder" })).toBeTruthy();
+    expect(within(card).getByRole("button", { name: "Make Builder lead" })).toBeTruthy();
+    expect(within(card).getByRole("button", { name: "Add Builder" })).toBeTruthy(); // "+ Add another"
+  });
+
+  it("template card added twice shows '2 added' and two member lines", async () => {
+    const user = userEvent.setup();
+    const { modal, create } = renderModal({ defaultWorkspaceId: "ws-1" });
+    const card = within(modal).getByTestId("template-card-builder");
+    await user.click(within(card).getByRole("button", { name: "Add Builder" }));
+    await user.click(within(card).getByRole("button", { name: "Add Builder" })); // Add another
+
+    expect(within(card).getByText("2 added")).toBeTruthy();
+    expect(within(card).getByRole("button", { name: "Edit Builder" })).toBeTruthy();
+    expect(within(card).getByRole("button", { name: "Edit Builder 2" })).toBeTruthy();
+    expect(within(card).getByRole("button", { name: "Remove Builder" })).toBeTruthy();
+    expect(within(card).getByRole("button", { name: "Remove Builder 2" })).toBeTruthy();
+    expect(within(card).getByRole("button", { name: "Make Builder lead" })).toBeTruthy();
+    expect(within(card).getByRole("button", { name: "Make Builder 2 lead" })).toBeTruthy();
+
+    await user.click(createButton(modal));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create.mock.calls[0]?.[0].members.map((m) => m.name)).toEqual(["Builder", "Builder 2"]);
   });
 
   it("a suggestedLead template comes in as Lead; the lead can be changed", async () => {
@@ -168,81 +264,184 @@ describe("NewGroupModal (A4)", () => {
         .getByRole("button", { name: "Planner is the lead" })
         .getAttribute("aria-pressed"),
     ).toBe("true");
-    // A second suggested lead does not steal it.
+
+    // Adding Planner again gives Planner 2 a "Make lead" button
     await user.click(within(modal).getByRole("button", { name: "Add Planner" }));
     expect(within(modal).getByRole("button", { name: "Make Planner 2 lead" })).toBeTruthy();
+
+    // Move lead to Builder
     await user.click(within(modal).getByRole("button", { name: "Make Builder lead" }));
     expect(within(modal).getByRole("button", { name: "Make Planner lead" })).toBeTruthy();
+
     await user.click(createButton(modal));
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
     expect(create.mock.calls[0]?.[0].leadName).toBe("Builder");
   });
 
-  it("Customize opens the agent dialog prefilled; the edited copy keeps its templateId", async () => {
-    const user = userEvent.setup();
-    const { modal, create } = renderModal({ defaultWorkspaceId: "ws-1" });
-    await user.click(within(modal).getByRole("button", { name: "Add Reviewer" }));
-    await user.click(within(modal).getByRole("button", { name: "Customize Reviewer" }));
-    const dialog = screen.getByTestId("agent-dialog");
-    expect(within(dialog).getByText("Customize agent")).toBeTruthy();
-    const name = within(dialog).getByRole("textbox", { name: "Name" }) as HTMLInputElement;
-    expect(name.value).toBe("Reviewer 2");
-    const role = within(dialog).getByRole("combobox", { name: "Role" }) as HTMLSelectElement;
-    expect(role.value).toBe("reviewer");
-    expect(within(dialog).getByTestId("agent-work-types").textContent).toBe(
-      "Handles code and review tasks. Reviews.",
-    );
-    expect(
-      (within(dialog).getByRole("textbox", { name: "Instructions" }) as HTMLTextAreaElement).value,
-    ).toBe(template("reviewer").instructions);
-    await user.selectOptions(role, "custom");
-    await user.type(
-      within(dialog).getByRole("textbox", { name: "Custom role" }),
-      "Security reviewer",
-    );
-    await user.click(within(dialog).getByRole("button", { name: "Add" }));
-    await waitFor(() => expect(screen.queryByTestId("agent-dialog")).toBeNull());
-    expect(memberNames(modal)).toEqual(["Reviewer", "Reviewer 2"]);
-    await user.click(createButton(modal));
-    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
-    expect(create.mock.calls[0]?.[0].members[1]).toMatchObject({
-      templateId: "reviewer",
-      name: "Reviewer 2",
-      role: "Security reviewer",
-    });
-    // A template on the app default model sends no modelId.
-    expect(create.mock.calls[0]?.[0].members[1]).not.toHaveProperty("modelId");
-  });
-
-  it("Copy from another group adds an independent normal member (no templateId), suffixing a taken name", async () => {
+  it("removing the lead member moves lead to the next suggested lead (Planner)", async () => {
     const user = userEvent.setup();
     const { modal, create } = renderModal({ defaultWorkspaceId: "ws-1" });
     await user.click(within(modal).getByRole("button", { name: "Add Builder" }));
-    await user.click(within(modal).getByRole("tab", { name: "Copy from another group" }));
-    await user.click(await within(modal).findByRole("button", { name: "Copy Builder from Alpha" }));
-    expect(memberNames(modal)).toEqual(["Builder", "Builder 2"]);
+    await user.click(within(modal).getByRole("button", { name: "Add Planner" }));
+    await user.click(within(modal).getByRole("button", { name: "Add Reviewer" }));
+
+    // Move lead to Builder
+    await user.click(within(modal).getByRole("button", { name: "Make Builder lead" }));
     expect(
       within(modal)
-        .getAllByTestId("new-group-member-source")
-        .map((node) => node.textContent),
-    ).toEqual(["Template", "Copy"]);
+        .getByRole("button", { name: "Builder is the lead" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+
+    // Remove Builder -> lead moves to Planner
+    await user.click(within(modal).getByRole("button", { name: "Remove Builder" }));
+    expect(
+      within(modal)
+        .getByRole("button", { name: "Planner is the lead" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+
     await user.click(createButton(modal));
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
-    const copy = create.mock.calls[0]?.[0].members[1];
-    // The source is a template agent: the copy still carries no templateId.
-    expect(copy).toEqual({
-      copiedFromAgentId: "a-1",
-      name: "Builder 2",
-      role: "Fixer",
-      instructions: "Fix what breaks.",
-      modelId: "m-1",
-      avatarFace: "cheeky",
-      avatarColor: "red",
-      avatarShape: "circle",
+    expect(create.mock.calls[0]?.[0].leadName).toBe("Planner");
+  });
+
+  it("Customize opens the agent dialog prefilled in plain mode; mode is add with 'Add to group'", async () => {
+    const user = userEvent.setup();
+    const { modal, create } = renderModal({ defaultWorkspaceId: "ws-1" });
+    await user.click(within(modal).getByRole("button", { name: "Add Reviewer" }));
+    // Reviewer card is added, so its Customize is hidden; Explorer is not added, Customize Explorer is available
+    await user.click(within(modal).getByRole("button", { name: "Customize Explorer" }));
+
+    const dialog = screen.getByTestId("agent-dialog");
+    expect(within(dialog).getByText("Customize agent")).toBeTruthy();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1); // No nested modal over modal!
+
+    const name = within(dialog).getByRole("textbox", { name: "Name" }) as HTMLInputElement;
+    expect(name.value).toBe("Explorer");
+    const role = within(dialog).getByRole("combobox", { name: "Role" }) as HTMLSelectElement;
+    expect(role.value).toBe("explorer");
+
+    await user.selectOptions(role, "custom");
+    await user.type(within(dialog).getByRole("textbox", { name: "Custom role" }), "Deep searcher");
+
+    // Submit button in add mode is "Add to group"
+    await user.click(within(dialog).getByRole("button", { name: "Add to group" }));
+    await waitFor(() => expect(screen.queryByTestId("agent-dialog")).toBeNull());
+
+    await user.click(createButton(modal));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create.mock.calls[0]?.[0].members[1]).toMatchObject({
+      templateId: "explorer",
+      name: "Explorer",
+      role: "Deep searcher",
     });
   });
 
-  it("New agent: Generate sends the roles chosen in the modal (no group yet), then Add", async () => {
+  it("Edit opens the in-dialog panel (no second role=dialog) and saving replaces the member in place", async () => {
+    const user = userEvent.setup();
+    const { modal, create } = renderModal({ defaultWorkspaceId: "ws-1" });
+    await user.click(within(modal).getByRole("button", { name: "Add Builder" }));
+    await user.click(within(modal).getByRole("button", { name: "Add Reviewer" }));
+
+    // Click Edit on Builder card
+    await user.click(within(modal).getByRole("button", { name: "Edit Builder" }));
+
+    const dialog = screen.getByTestId("agent-dialog");
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(within(dialog).getByText("Edit agent")).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "Save changes" })).toBeTruthy();
+    // Header back button and the footer Back.
+    expect(within(dialog).getAllByRole("button", { name: "Back" })).toHaveLength(2);
+
+    const nameInput = within(dialog).getByRole("textbox", { name: "Name" }) as HTMLInputElement;
+    expect(nameInput.value).toBe("Builder");
+    await user.clear(nameInput);
+    await user.type(nameInput, "Master Builder");
+
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(screen.queryByTestId("agent-dialog")).toBeNull());
+
+    // Card now displays "Master Builder"
+    expect(within(modal).getByRole("button", { name: "Edit Master Builder" })).toBeTruthy();
+
+    await user.click(createButton(modal));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create.mock.calls[0]?.[0].members[0]).toMatchObject({
+      templateId: "builder",
+      name: "Master Builder",
+    });
+  });
+
+  it("Remove from group in the edit panel removes the member and returns to the list", async () => {
+    const user = userEvent.setup();
+    const { modal } = renderModal({ defaultWorkspaceId: "ws-1" });
+    await user.click(within(modal).getByRole("button", { name: "Add Builder" }));
+    await user.click(within(modal).getByRole("button", { name: "Add Reviewer" }));
+
+    await user.click(within(modal).getByRole("button", { name: "Edit Builder" }));
+    const dialog = screen.getByTestId("agent-dialog");
+    const removeBtn = within(dialog).getByRole("button", { name: "Remove from group" });
+    expect(removeBtn).toBeTruthy();
+
+    await user.click(removeBtn);
+    await waitFor(() => expect(screen.queryByTestId("agent-dialog")).toBeNull());
+
+    expect(counter(modal)).toBe("1 of 10");
+    // Builder is no longer added
+    const builderCard = within(modal).getByTestId("template-card-builder");
+    expect(within(builderCard).queryByText("Added")).toBeNull();
+    expect(within(builderCard).getByRole("button", { name: "Customize Builder" })).toBeTruthy();
+  });
+
+  it("copied and custom members appear as cards in the Templates tab and show Added state on their tabs", async () => {
+    const user = userEvent.setup();
+    const { modal, create } = renderModal({ defaultWorkspaceId: "ws-1" });
+
+    // 1. From another group tab: copy an agent
+    await user.click(within(modal).getByRole("tab", { name: "From another group" }));
+    await user.click(await within(modal).findByRole("button", { name: "Copy Builder from Alpha" }));
+
+    // On "From another group" tab, copied agent row shows Added, Edit and remove, and Copy button stays
+    expect(within(modal).getByText("Added")).toBeTruthy();
+    expect(within(modal).getByRole("button", { name: "Edit Builder" })).toBeTruthy();
+    expect(within(modal).getByRole("button", { name: "Remove Builder" })).toBeTruthy();
+    expect(within(modal).getByRole("button", { name: "Copy Builder from Alpha" })).toBeTruthy();
+
+    // 2. New agent tab: add a custom agent
+    await user.click(within(modal).getByRole("tab", { name: "New agent" }));
+    await user.click(within(modal).getByRole("button", { name: "New agent…" }));
+    const dialog = screen.getByTestId("agent-dialog");
+    await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Cy");
+    await user.type(within(dialog).getByRole("textbox", { name: "Custom role" }), "Scribe");
+    await user.click(within(dialog).getByRole("button", { name: "Add to group" }));
+    await waitFor(() => expect(screen.queryByTestId("agent-dialog")).toBeNull());
+
+    // On "New agent" tab, custom member card shows Added, Edit, remove
+    expect(within(modal).getByRole("button", { name: "Edit Cy" })).toBeTruthy();
+    expect(within(modal).getByRole("button", { name: "Remove Cy" })).toBeTruthy();
+
+    // 3. Switch to Templates tab: both copied and custom members appear as member cards FIRST in the list
+    await user.click(within(modal).getByRole("tab", { name: "Templates" }));
+    expect(within(modal).getByRole("button", { name: "Edit Builder" })).toBeTruthy();
+    expect(within(modal).getByRole("button", { name: "Edit Cy" })).toBeTruthy();
+    expect(within(modal).getByText("Copied from Alpha")).toBeTruthy();
+    // The custom card's description (the tab of the same name is a role=tab).
+    expect(
+      within(modal)
+        .getAllByText("New agent")
+        .filter((node) => !node.closest('[role="tab"]')),
+    ).toHaveLength(1);
+
+    await user.click(createButton(modal));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    const members = create.mock.calls[0]?.[0].members;
+    expect(members).toHaveLength(2);
+    expect(members?.[0]).toMatchObject({ copiedFromAgentId: "a-1", name: "Builder" });
+    expect(members?.[1]).toMatchObject({ name: "Cy" });
+  });
+
+  it("New agent: Generate sends the roles chosen in the modal (no group yet), then Add to group", async () => {
     const user = userEvent.setup();
     const { modal, generate, create } = renderModal({ defaultWorkspaceId: "ws-1" });
     await user.click(within(modal).getByRole("button", { name: "Add Planner" }));
@@ -262,9 +461,9 @@ describe("NewGroupModal (A4)", () => {
         (within(dialog).getByRole("textbox", { name: "Custom role" }) as HTMLInputElement).value,
       ).toBe("Release writer"),
     );
-    await user.click(within(dialog).getByRole("button", { name: "Add" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to group" }));
     await waitFor(() => expect(screen.queryByTestId("agent-dialog")).toBeNull());
-    expect(memberNames(modal)).toEqual(["Planner", "Reviewer", "Cy"]);
+
     await user.click(createButton(modal));
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
     const custom = create.mock.calls[0]?.[0].members[2];
@@ -277,27 +476,27 @@ describe("NewGroupModal (A4)", () => {
     expect(custom).not.toHaveProperty("templateId");
   });
 
-  it("counts N/10: Create is disabled at 1 and 11, enabled at 2 and 10", async () => {
+  it("counts N of 10: Create group is disabled at 1 and 11, enabled at 2 and 10", async () => {
     const user = userEvent.setup();
     const { modal } = renderModal({ defaultWorkspaceId: "ws-1" });
     const add = () => user.click(within(modal).getByRole("button", { name: "Add Builder" }));
-    expect(counter(modal)).toBe("0/10");
+    expect(counter(modal)).toBe("0 of 10");
     await add();
-    expect(counter(modal)).toBe("1/10");
+    expect(counter(modal)).toBe("1 of 10");
     expect(createButton(modal).disabled).toBe(true);
     expect(hint(modal)).toBe(NEW_GROUP_HINTS.min);
     await add();
-    expect(counter(modal)).toBe("2/10");
+    expect(counter(modal)).toBe("2 of 10");
     expect(createButton(modal).disabled).toBe(false);
     for (let index = 0; index < 8; index += 1) await add();
-    expect(counter(modal)).toBe("10/10");
+    expect(counter(modal)).toBe("10 of 10");
     expect(createButton(modal).disabled).toBe(false);
     await add();
-    expect(counter(modal)).toBe("11/10");
+    expect(counter(modal)).toBe("11 of 10");
     expect(createButton(modal).disabled).toBe(true);
     expect(hint(modal)).toBe(NEW_GROUP_HINTS.max);
     await user.click(within(modal).getByRole("button", { name: "Remove Builder 11" }));
-    expect(counter(modal)).toBe("10/10");
+    expect(counter(modal)).toBe("10 of 10");
     expect(createButton(modal).disabled).toBe(false);
   });
 
@@ -307,19 +506,23 @@ describe("NewGroupModal (A4)", () => {
     for (let index = 0; index < 10; index += 1) {
       await user.click(within(modal).getByRole("button", { name: "Add Builder" }));
     }
-    const shapes = within(modal)
-      .getAllByTestId("new-group-member")
-      .map((row) => row.querySelector<HTMLElement>('[data-testid="agent-avatar"]')?.dataset.shape);
-    expect(new Set(shapes).size).toBe(10);
+    const card = within(modal).getByTestId("template-card-builder");
+    const avatars = Array.from(card.querySelectorAll<HTMLElement>('[data-testid="agent-avatar"]'));
+    // 1 header avatar + 10 member line avatars
+    const lineShapes = avatars
+      .slice(1)
+      .map((avatar) => avatar.dataset.shape)
+      .filter(Boolean);
+    expect(new Set(lineShapes).size).toBe(10);
   });
 
-  it("Create sends ONE group:create with every member, then closes", async () => {
+  it("Create group sends ONE group:create with every member, then closes", async () => {
     const user = userEvent.setup();
     const { modal, create, onOpenChange } = renderModal({ defaultWorkspaceId: "ws-2" });
     await user.type(within(modal).getByRole("textbox", { name: "Name" }), "Release squad");
     await user.click(within(modal).getByRole("button", { name: "Add Planner" }));
     await user.click(within(modal).getByRole("button", { name: "Add Builder" }));
-    await user.click(within(modal).getByRole("tab", { name: "Copy from another group" }));
+    await user.click(within(modal).getByRole("tab", { name: "From another group" }));
     await user.click(await within(modal).findByRole("button", { name: "Copy Zed from Alpha" }));
     await user.click(createButton(modal));
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
@@ -402,14 +605,18 @@ describe("NewGroupModal blank name in the room locale (C6)", () => {
     const { modal, input } = await createBlank("pt-BR", {
       folder: "Pasta",
       add: "Adicionar",
-      create: "Criar",
+      create: "Criar grupo",
     });
     expect((within(modal).getByPlaceholderText("Novo grupo") as HTMLInputElement).value).toBe("");
     expect(input.name).toBe("Novo grupo");
   });
 
   it("zh: stores 新群组", async () => {
-    const { input } = await createBlank("zh-CN", { folder: "文件夹", add: "添加", create: "创建" });
+    const { input } = await createBlank("zh-CN", {
+      folder: "文件夹",
+      add: "添加",
+      create: "创建群组",
+    });
     expect(input.name).toBe("新群组");
   });
 
@@ -417,7 +624,7 @@ describe("NewGroupModal blank name in the room locale (C6)", () => {
     const { input } = await createBlank("en-US", {
       folder: "Folder",
       add: "Add",
-      create: "Create",
+      create: "Create group",
     });
     expect(input.name).toBe("New group");
   });
@@ -428,7 +635,7 @@ describe("NewGroupModal blank name in the room locale (C6)", () => {
       const { modal, input } = await createBlank(undefined, {
         folder: "Folder",
         add: "Add",
-        create: "Create",
+        create: "Create group",
       });
       expect(within(modal).getByPlaceholderText("New group")).toBeTruthy();
       expect(input.name).toBe("New group");

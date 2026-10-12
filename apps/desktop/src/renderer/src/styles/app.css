@@ -102,6 +102,10 @@
   /* 语义色：仅真正的成功/错误状态，平时不出现 */
   --color-success: #3fae87;
   --color-danger: #ef4444;
+  /* Caution text for the group / agent dialogs only (their notice and the lead crown).
+     Not named "warning": a --color-warning theme key would light up every text-warning /
+     bg-warning utility already in the codebase. Classic keeps the amber it used before. */
+  --color-dialog-warning: #fbbf24;
 
   /* Diff 行底纹：Git 面板、agent diff、整文件预览共用同一套语义层。 */
   --color-diff-add-bg: #23352b;
@@ -767,6 +771,7 @@
   /* Semantic — darkened for contrast on white */
   --color-success: #1f9d6b;
   --color-danger: #ef4444;
+  --color-dialog-warning: #92400e;
 
   /* Diff line tints — light theme. Matches the muted Cursor-style review wash. */
   --color-diff-add-bg: #e5f0e1;
@@ -850,6 +855,7 @@
 
   --color-success: #3fae87;
   --color-danger: #ef4444;
+  --color-dialog-warning: #fbbf24;
   --color-diff-add-bg: #26362d;
   --color-diff-add-gutter: #31483a;
   --color-diff-del-bg: #3c2c29;

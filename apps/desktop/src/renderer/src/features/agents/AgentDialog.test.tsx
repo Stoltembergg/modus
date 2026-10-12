@@ -7,6 +7,7 @@ import {
   AGENT_FALLBACK_INSTRUCTIONS,
   AGENT_FALLBACK_ROLE,
   AGENT_GENERATION_WARNING,
+  AGENT_TEMPLATES,
 } from "../../../../shared/agent-templates";
 import type {
   AgentGroupWithMembers,
@@ -716,11 +717,11 @@ describe("AgentDialog exit guard", () => {
     const user = userEvent.setup();
     const onAdd = vi.fn();
     const { dialog, onOpenChange } = renderDraft(onAdd);
-    await user.click(within(dialog).getByRole("button", { name: "Add" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to group" }));
     expect(onAdd).toHaveBeenCalledTimes(1);
     expect(onOpenChange).toHaveBeenCalledWith(false);
     // Still mounted (exit animation): a second click / Enter must not add a duplicate.
-    await user.click(within(dialog).getByRole("button", { name: "Add" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add to group" }));
     fireEvent.submit(form(dialog));
     expect(onAdd).toHaveBeenCalledTimes(1);
     expect(onOpenChange).toHaveBeenCalledTimes(1);
@@ -931,10 +932,119 @@ describe("AgentDialog work types follow the role", () => {
     expect(screen.getByTestId("agent-work-types").textContent).toBe(
       "Handles code tasks. Implements and verifies.",
     );
-    await user.click(screen.getByRole("button", { name: "Add" }));
+    await user.click(screen.getByRole("button", { name: "Add to group" }));
     expect(onAdd).toHaveBeenCalledWith(
       expect.objectContaining({ templateId: "builder", role: "Builder" }),
     );
     noLists(onAdd.mock.calls[0]?.[0]);
+  });
+});
+
+describe("AgentDialog group drafts (New group panel)", () => {
+  const roleSelect = (dialog: HTMLElement) =>
+    within(dialog).getByRole("combobox", { name: "Role" }) as HTMLSelectElement;
+  const workTypes = (dialog: HTMLElement) =>
+    within(dialog).getByTestId("agent-work-types").textContent;
+  const draftDialog = (draft: Partial<Parameters<typeof AgentDialog>[0]["draft"] & object>) => {
+    const onAdd = vi.fn();
+    const onOpenChange = vi.fn();
+    render(
+      <AgentDialog
+        open
+        surface="plain"
+        models={MODELS}
+        onOpenChange={onOpenChange}
+        onGenerate={async () => GENERATED}
+        draft={{ title: "Draft", seed: "seed", takenNames: [], roles: [], onAdd, ...draft }}
+      />,
+    );
+    return { dialog: screen.getByTestId("agent-dialog"), onAdd, onOpenChange };
+  };
+
+  it("a copy shows its source's lists, and a new role recalculates with the warning", async () => {
+    const user = userEvent.setup();
+    const source: AgentInfo = { ...ANA, capabilityIds: ["verify"], supportedTaskKinds: ["code"] };
+    const { dialog } = draftDialog({
+      sourceAgent: source,
+      initial: { name: "Ana 2", role: "Reviewer", copiedFromAgentId: "a-1", modelId: "m-1" },
+    });
+    expect(workTypes(dialog)).toBe("Handles code tasks. Verifies.");
+    expect(within(dialog).queryByText(CUSTOM_WORK_TYPES_WARNING)).toBeNull();
+    await user.selectOptions(roleSelect(dialog), "builder");
+    expect(workTypes(dialog)).toBe("Handles code tasks. Implements and verifies.");
+    expect(within(dialog).getByText(CUSTOM_WORK_TYPES_WARNING)).toBeTruthy();
+  });
+
+  it("Use Builder's defaults resets name, role, instructions and look", async () => {
+    const user = userEvent.setup();
+    const builder = AGENT_TEMPLATES.find((t) => t.id === "builder");
+    if (!builder) throw new Error("builder template");
+    const { dialog } = draftDialog({
+      defaultName: "Builder 2",
+      initial: {
+        templateId: "builder",
+        name: "Bob",
+        role: "Builder",
+        instructions: "Something else.",
+        avatarFace: "wink",
+        avatarColor: "teal",
+      },
+    });
+    await user.clear(field(dialog, "Name"));
+    await user.type(field(dialog, "Name"), "Zed");
+    await user.selectOptions(roleSelect(dialog), "reviewer");
+    await user.click(within(dialog).getByRole("button", { name: "Use Builder's defaults" }));
+    expect(field(dialog, "Name").value).toBe("Builder 2");
+    expect(roleSelect(dialog).value).toBe("builder");
+    expect((screen.getByTestId("agent-instructions") as HTMLTextAreaElement).value).toBe(
+      builder.instructions,
+    );
+  });
+
+  it("plain edit panel: Back, Save changes, Remove from group and the footer note", async () => {
+    const user = userEvent.setup();
+    const onRemove = vi.fn();
+    const { dialog, onAdd } = draftDialog({
+      mode: "edit",
+      onRemove,
+      footerNote: "4 of 10",
+      initial: { name: "Ana", role: "Reviewer", modelId: "m-1", templateId: "reviewer" },
+    });
+    expect(within(dialog).getByText("Edit agent")).toBeTruthy();
+    expect(screen.getByTestId("agent-dialog-footer-note").textContent).toBe("4 of 10");
+    const backs = within(dialog).getAllByRole("button", { name: "Back" });
+    expect(backs).toHaveLength(2);
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    await waitFor(() =>
+      expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({ name: "Ana" })),
+    );
+    cleanup();
+    const back = draftDialog({ mode: "edit", initial: { name: "Ana", templateId: "reviewer" } });
+    await user.click(
+      within(back.dialog).getAllByRole("button", { name: "Back" })[0] as HTMLElement,
+    );
+    expect(back.onOpenChange).toHaveBeenCalledWith(false);
+    cleanup();
+    const again = draftDialog({
+      mode: "edit",
+      onRemove,
+      initial: { name: "Ana", role: "Reviewer", templateId: "reviewer" },
+    });
+    await user.click(within(again.dialog).getByRole("button", { name: "Remove from group" }));
+    expect(onRemove).toHaveBeenCalledTimes(1);
+  });
+
+  it("defaults link only in the New group panel; the standalone Edit agent dialog has none", () => {
+    const builderAgent: AgentInfo = { ...ANA, name: "Bob", role: "Builder", templateId: "builder" };
+    renderDialog({ agent: builderAgent });
+    expect(screen.queryByRole("button", { name: /defaults$/ })).toBeNull();
+    cleanup();
+    draftDialog({ initial: { templateId: "builder", name: "Builder", role: "Builder" } });
+    expect(screen.getByRole("button", { name: "Use Builder's defaults" })).toBeTruthy();
+  });
+
+  it("the plain panel focuses Name on open", () => {
+    const { dialog } = draftDialog({ initial: { templateId: "builder", name: "Builder" } });
+    expect(document.activeElement).toBe(field(dialog, "Name"));
   });
 });

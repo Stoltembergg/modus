@@ -47,7 +47,8 @@ const ALLOWED: Record<string, Record<string, string>> = {
     "→": "arrow glyph before the addressee's name",
   },
   "NewGroupModal.tsx": {
-    "×": "multiplier glyph before a template count",
+    '[data-testid^="template-card-"], [data-testid^="member-card-"], [data-testid^="copy-card-"]':
+      "CSS selector for returning focus to a card (not rendered)",
   },
   "../agent/SearchToolCard.tsx": {
     Home: "keyboard event key name (roving focus), not rendered",
