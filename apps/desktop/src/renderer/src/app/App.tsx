@@ -1838,7 +1838,9 @@ function WorkspaceMenu({
               </span>
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate">No project</span>
-                <span className="truncate text-2xs text-fg-faint">Starts a Direct Message</span>
+                <span className="truncate text-2xs text-fg-faint">
+                  Starts a chat without a project
+                </span>
               </span>
             </Menu.Item>
             {workspaces.length === 0 ? (
