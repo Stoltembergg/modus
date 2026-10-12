@@ -364,17 +364,16 @@ describe("Sidebar with groups", () => {
     renderSidebar();
     expect(screen.getByTestId("sidebar-groups")).toBeTruthy();
     expect(screen.queryByText("Projects")).toBeNull();
-    expect(screen.queryByText("Direct Messages")).toBeNull();
     expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
   });
 
-  it("shows a flat Direct Messages list and keeps project context collapsed", () => {
+  it("shows a flat Projects list and keeps project context collapsed", () => {
     renderSidebar("direct-messages");
-    expect(screen.getByText("Direct Messages")).toBeTruthy();
+    expect(screen.getByText("Projects")).toBeTruthy();
     expect(screen.getByText("Chat project-chat")).toBeTruthy();
     expect(screen.getByText("Chat inbox-chat")).toBeTruthy();
     expect(screen.queryByTestId("sidebar-groups")).toBeNull();
-    expect(screen.queryByText("Projects")).toBeNull();
+    expect(screen.getAllByText("Projects")).toHaveLength(1);
     expect(screen.queryByText("Repo")).toBeNull();
   });
 
@@ -392,7 +391,7 @@ describe("Sidebar with groups", () => {
     expect(screen.queryByText("Chat inbox-chat")).toBeNull();
   });
 
-  it("keeps an agent's 1:1 chat in Direct Messages and outside Project context", async () => {
+  it("keeps an agent's 1:1 chat in Projects and outside Project context", async () => {
     const noop = vi.fn();
     const user = userEvent.setup();
     render(

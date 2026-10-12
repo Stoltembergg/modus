@@ -1822,7 +1822,7 @@ function WorkspaceMenu({
         <span className="toolbar-icon">
           <IconFolder size={18} stroke={1.7} />
         </span>
-        <span className="max-w-40 truncate">{activeWorkspace?.displayName ?? "No folder"}</span>
+        <span className="max-w-40 truncate">{activeWorkspace?.displayName ?? "No project"}</span>
         <IconChevronDown className="toolbar-icon" size={13} stroke={2} />
       </Menu.Trigger>
       <Menu.Portal>
@@ -1837,8 +1837,10 @@ function WorkspaceMenu({
                 {!activeWorkspace ? <IconCheck size={14} stroke={2} /> : null}
               </span>
               <span className="flex min-w-0 flex-1 flex-col">
-                <span className="truncate">No folder</span>
-                <span className="truncate text-2xs text-fg-faint">Starts a Direct Message</span>
+                <span className="truncate">No project</span>
+                <span className="truncate text-2xs text-fg-faint">
+                  Starts a chat without a project
+                </span>
               </span>
             </Menu.Item>
             {workspaces.length === 0 ? (

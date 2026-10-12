@@ -10,7 +10,7 @@ export const APP_RAIL_WIDTH = 68;
 
 const DESTINATIONS = [
   { id: "groups", label: "Groups", icon: IconCircles },
-  { id: "direct-messages", label: "Direct Messages", icon: IconMessageCircle },
+  { id: "direct-messages", label: "Projects", icon: IconMessageCircle },
 ] as const;
 
 export function AppRail({
