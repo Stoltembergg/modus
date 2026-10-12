@@ -317,4 +317,96 @@ echo "purchase rate limit: created=$created10 too_many=$limited10 errors=$errors
   || { cat "$out"/rl*; fail "purchase rate limit under concurrency"; }
 echo "ok - 6 parallel purchases for one user: exactly 5 created, 1 too_many_purchases"
 
+# 11) #199: a pack refund racing settle_usage on the same reservation
+# Packs need Mercado Pago on; keep the previous settings and put them back afterwards (the Deno
+# integration tests run next against this same database).
+settings11="$(q "select mercadopago_enabled || ',' || mercadopago_subscriptions_enabled from private.billing_settings")"
+q "update private.billing_settings set mercadopago_enabled = true"
+pay11() { echo "{\"id\":\"$1\",\"status\":\"$2\",\"status_detail\":null,\"amount_minor\":3690,\"refunded_minor\":$3,\"live_mode\":false,\"collector_id\":\"777\",\"currency\":\"BRL\",\"external_reference\":\"$4\"}"; }
+
+# Ordering A: session 1 locks wallet and refunds; session 2 settles usage 0.4s later.
+uid11_a="$(q "select tests.create_user('race-owed-A@example.com', true)")"
+pur11_a="$(q "set role service_role; select private.mp_create_purchase('$uid11_a', 'credits_5k') ->> 'purchase_id'")"
+pay_json_a="$(pay11 910001 approved 0 "$pur11_a")"
+code_a="$(q "set role service_role; select private.process_mp_purchase_payment('$pay_json_a'::jsonb, '{\"live_mode\": false, \"collector_id\": \"777\"}'::jsonb, null) ->> 'code'")"
+[[ "$code_a" == "credited" ]] || fail "setup A: credited"
+q "set role service_role; select private.reserve_credits('$uid11_a', 'owed-1', 5800)" >/dev/null
+ref_json_a="$(pay11 910001 refunded 3690 "$pur11_a")"
+
+( "$PSQL" -X -q -t -A -v ON_ERROR_STOP=1 >"$out/oa1" 2>&1 <<SQL
+begin;
+set local role service_role;
+select 'locked' from public.credit_wallets where user_id = '$uid11_a' for update;
+select pg_sleep(1.5);
+select private.process_mp_purchase_payment('$ref_json_a'::jsonb, '{"live_mode": false, "collector_id": "777"}'::jsonb, null) ->> 'code';
+commit;
+SQL
+  echo "exit=$?" >>"$out/oa1" ) &
+sleep 0.4
+( "$PSQL" -X -q -t -A -v ON_ERROR_STOP=1 >"$out/oa2" 2>&1 <<SQL
+set role service_role;
+select private.settle_usage('$uid11_a', 'owed-1', 300, 'm', 'p') ->> 'code';
+SQL
+  echo "exit=$?" >>"$out/oa2" ) &
+wait
+
+grep -qi deadlock "$out/oa1" "$out/oa2" && { cat "$out/oa1" "$out/oa2"; fail "ordering A: deadlock"; }
+grep -q '^exit=0$' "$out/oa1" && grep -q '^exit=0$' "$out/oa2" \
+  || { cat "$out/oa1" "$out/oa2"; fail "ordering A: both sessions succeed"; }
+
+wallet11_a="$(q "select balance || '/' || reserved || '/' || shortfall_owed from public.credit_wallets where user_id = '$uid11_a'")"
+lot11_a="$(q "select remaining || ':' || status from public.credit_lots where user_id = '$uid11_a'")"
+ledger11_a="$(q "select sum(amount) from public.credit_transactions where user_id = '$uid11_a'")"
+# A: the refund lands first (4800 owed), the settle collects it. B: the settle lands first, the
+# refund takes everything from the balance and nothing is owed.
+owed11_a="$(q "select coalesce(sum(amount), 0) from public.credit_transactions where user_id = '$uid11_a' and idempotency_key = 'shortfall:owed-1'")"
+echo "ordering A: wallet=$wallet11_a lot=$lot11_a ledger=$ledger11_a collected=$owed11_a"
+[[ "$wallet11_a" == 700/0/0 && "$lot11_a" == 0:refunded && "$ledger11_a" == 700 \
+   && "$owed11_a" == -4800 ]] \
+  || { cat "$out/oa1" "$out/oa2"; fail "ordering A: consistent result"; }
+
+# Ordering B: session 1 locks wallet and settles; session 2 refunds 0.4s later.
+uid11_b="$(q "select tests.create_user('race-owed-B@example.com', true)")"
+pur11_b="$(q "set role service_role; select private.mp_create_purchase('$uid11_b', 'credits_5k') ->> 'purchase_id'")"
+pay_json_b="$(pay11 910002 approved 0 "$pur11_b")"
+code_b="$(q "set role service_role; select private.process_mp_purchase_payment('$pay_json_b'::jsonb, '{\"live_mode\": false, \"collector_id\": \"777\"}'::jsonb, null) ->> 'code'")"
+[[ "$code_b" == "credited" ]] || fail "setup B: credited"
+q "set role service_role; select private.reserve_credits('$uid11_b', 'owed-1', 5800)" >/dev/null
+ref_json_b="$(pay11 910002 refunded 3690 "$pur11_b")"
+
+( "$PSQL" -X -q -t -A -v ON_ERROR_STOP=1 >"$out/ob1" 2>&1 <<SQL
+begin;
+set local role service_role;
+select 'locked' from public.credit_wallets where user_id = '$uid11_b' for update;
+select pg_sleep(1.5);
+select private.settle_usage('$uid11_b', 'owed-1', 300, 'm', 'p') ->> 'code';
+commit;
+SQL
+  echo "exit=$?" >>"$out/ob1" ) &
+sleep 0.4
+( "$PSQL" -X -q -t -A -v ON_ERROR_STOP=1 >"$out/ob2" 2>&1 <<SQL
+set role service_role;
+select private.process_mp_purchase_payment('$ref_json_b'::jsonb, '{"live_mode": false, "collector_id": "777"}'::jsonb, null) ->> 'code';
+SQL
+  echo "exit=$?" >>"$out/ob2" ) &
+wait
+
+grep -qi deadlock "$out/ob1" "$out/ob2" && { cat "$out/ob1" "$out/ob2"; fail "ordering B: deadlock"; }
+grep -q '^exit=0$' "$out/ob1" && grep -q '^exit=0$' "$out/ob2" \
+  || { cat "$out/ob1" "$out/ob2"; fail "ordering B: both sessions succeed"; }
+
+wallet11_b="$(q "select balance || '/' || reserved || '/' || shortfall_owed from public.credit_wallets where user_id = '$uid11_b'")"
+lot11_b="$(q "select remaining || ':' || status from public.credit_lots where user_id = '$uid11_b'")"
+ledger11_b="$(q "select sum(amount) from public.credit_transactions where user_id = '$uid11_b'")"
+# A: the refund lands first (4800 owed), the settle collects it. B: the settle lands first, the
+# refund takes everything from the balance and nothing is owed.
+owed11_b="$(q "select coalesce(sum(amount), 0) from public.credit_transactions where user_id = '$uid11_b' and idempotency_key = 'shortfall:owed-1'")"
+echo "ordering B: wallet=$wallet11_b lot=$lot11_b ledger=$ledger11_b collected=$owed11_b"
+[[ "$wallet11_b" == 700/0/0 && "$lot11_b" == 0:refunded && "$ledger11_b" == 700 \
+   && "$owed11_b" == 0 ]] \
+  || { cat "$out/ob1" "$out/ob2"; fail "ordering B: consistent result"; }
+
+echo "ok - pack refund racing settle_usage on the same reservation: orderings A and B both reach 700/0/0, lot refunded, ledger consistent"
+q "update private.billing_settings set mercadopago_enabled = ${settings11%%,*}, mercadopago_subscriptions_enabled = ${settings11##*,}"
+
 rm -rf "$out"
