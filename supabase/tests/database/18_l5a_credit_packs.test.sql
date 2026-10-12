@@ -270,8 +270,11 @@ select is(pg_temp.state(:'c'), '500+5500|5000', 'C: 5500 reserved in flight');
 select tests.as_service_role();
 select is(pg_temp.process(pg_temp.pay(:'pc', '5010', 'refunded', 3690, 3690)), 'reversed', 'C: refund in flight');
 select tests.clear_authentication();
-select is(pg_temp.state(:'c'), '0+5500|4500', 'C: only the available balance (500) is taken, never the reserve');
+select is(pg_temp.state(:'c'), '0+5500|0',
+  'C: only the available balance (500) is taken, never the reserve; the refunded lot keeps nothing');
 select is((select shortfall from public.credit_lots where payment_id = 5010), 4500::bigint, 'C: shortfall 4500');
+select is((select shortfall_owed from public.credit_wallets where user_id = :'c'), 4500::bigint,
+  'C: the 4500 held by the reservation are owed (collected on release; see test 21)');
 select ok((select sum(remaining) from public.credit_lots where user_id = :'c')
           <= (select balance + reserved from public.credit_wallets where user_id = :'c'),
   'C: invariant sum(remaining) <= balance + reserved');
