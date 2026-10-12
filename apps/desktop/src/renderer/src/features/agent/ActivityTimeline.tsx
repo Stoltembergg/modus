@@ -7,6 +7,7 @@ import {
   prependAgentEventPage,
 } from "../../../../shared/agent-events";
 import type { PlanRef } from "../../../../shared/contracts";
+import { useShellText } from "../../lib/shellText";
 import type { AgentEventHub } from "./agentEventHub";
 import { buildVisibleTimelineBlocks, Timeline } from "./Timeline";
 import { splitTimelinePresentation } from "./timelinePresentation";
@@ -41,6 +42,7 @@ export function ActivityTimeline({
   onOpenPlan?(plan: PlanRef): void;
   onOpenSubagent?(childSessionId: string): void;
 }) {
+  const t = useShellText();
   const [events, setEvents] = useState(() => (sessionId ? hub.getHistory(sessionId) : []));
   const [historyPage, setHistoryPage] = useState<ActivityHistoryPage>({
     hasOlder: false,
@@ -211,7 +213,7 @@ export function ActivityTimeline({
           />
         ) : (
           <p className="px-4 py-8 text-center text-xs text-fg-faint">
-            {sessionId ? "No execution activity recorded yet." : "Select a chat to view activity."}
+            {sessionId ? "No execution activity recorded yet." : t("shell.selectChatForActivity")}
           </p>
         )}
       </div>
