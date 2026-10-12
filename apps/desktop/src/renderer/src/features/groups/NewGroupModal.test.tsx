@@ -187,13 +187,19 @@ describe("NewGroupModal (A4)", () => {
     expect(within(dialog).getByText("Customize agent")).toBeTruthy();
     const name = within(dialog).getByRole("textbox", { name: "Name" }) as HTMLInputElement;
     expect(name.value).toBe("Reviewer 2");
-    const role = within(dialog).getByRole("textbox", { name: "Role" }) as HTMLInputElement;
-    expect(role.value).toBe(template("reviewer").role);
+    const role = within(dialog).getByRole("combobox", { name: "Role" }) as HTMLSelectElement;
+    expect(role.value).toBe("reviewer");
+    expect(within(dialog).getByTestId("agent-work-types").textContent).toBe(
+      "Handles code and review tasks. Reviews.",
+    );
     expect(
       (within(dialog).getByRole("textbox", { name: "Instructions" }) as HTMLTextAreaElement).value,
     ).toBe(template("reviewer").instructions);
-    await user.clear(role);
-    await user.type(role, "Security reviewer");
+    await user.selectOptions(role, "custom");
+    await user.type(
+      within(dialog).getByRole("textbox", { name: "Custom role" }),
+      "Security reviewer",
+    );
     await user.click(within(dialog).getByRole("button", { name: "Add" }));
     await waitFor(() => expect(screen.queryByTestId("agent-dialog")).toBeNull());
     expect(memberNames(modal)).toEqual(["Reviewer", "Reviewer 2"]);
@@ -225,8 +231,7 @@ describe("NewGroupModal (A4)", () => {
     const copy = create.mock.calls[0]?.[0].members[1];
     // The source is a template agent: the copy still carries no templateId.
     expect(copy).toEqual({
-      capabilityIds: [],
-      supportedTaskKinds: [],
+      copiedFromAgentId: "a-1",
       name: "Builder 2",
       role: "Fixer",
       instructions: "Fix what breaks.",
@@ -254,7 +259,7 @@ describe("NewGroupModal (A4)", () => {
     });
     await waitFor(() =>
       expect(
-        (within(dialog).getByRole("textbox", { name: "Role" }) as HTMLInputElement).value,
+        (within(dialog).getByRole("textbox", { name: "Custom role" }) as HTMLInputElement).value,
       ).toBe("Release writer"),
     );
     await user.click(within(dialog).getByRole("button", { name: "Add" }));

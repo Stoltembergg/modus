@@ -10,7 +10,6 @@ vi.mock("electron", () => ({ app: { getPath: () => userData } }));
 
 const { getDatabase } = await import("../db/database");
 const { ensureChatsWorkspace } = await import("../workspace/workspace-store");
-const { updateAgent } = await import("../agents/agents-store");
 const { createAgentGroupWithMembers, listAgentGroupMembers, listGroupMessages, listGroupTasks } =
   await import("./group-store");
 const { createGroupTask } = await import("./group-task-store");
@@ -146,10 +145,16 @@ function crew() {
         : member.sessionId === builder
           ? ["implement", "verify", "docs"]
           : ["review", "verify"];
-    updateAgent(member.agentId, {
-      capabilityIds,
-      supportedTaskKinds: ["code", "docs", "design", "review"],
-    });
+    // Hand-picked lists, saved as an older dialog would have stored them.
+    getDatabase()
+      .prepare(
+        "update agents set capability_ids_json = ?, supported_task_kinds_json = ? where id = ?",
+      )
+      .run(
+        JSON.stringify(capabilityIds),
+        JSON.stringify(["code", "docs", "design", "review"]),
+        member.agentId,
+      );
   }
   return { group, planner, builder, reviewer };
 }

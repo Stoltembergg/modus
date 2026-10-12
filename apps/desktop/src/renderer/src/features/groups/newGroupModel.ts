@@ -9,10 +9,6 @@ import type {
 } from "../../../../shared/contracts";
 import { AGENT_AVATAR_SHAPES, allocateUniqueGroupAvatarShapes } from "../../../../shared/contracts";
 import { GROUP_MAX_MEMBERS, GROUP_MIN_MEMBERS } from "../../../../shared/group-blocked";
-import {
-  type GroupMemberCapabilities,
-  normalizeGroupMemberCapabilities,
-} from "../../../../shared/group-capabilities";
 import { groupText } from "../../../../shared/group-room-locale";
 
 /*
@@ -24,11 +20,17 @@ import { groupText } from "../../../../shared/group-room-locale";
 /** Where a member of the modal came from (only a template carries `templateId`). */
 export type NewGroupMemberSource = "template" | "copy" | "custom";
 
-export type NewGroupMember = Partial<GroupMemberCapabilities> & {
+/*
+ * No member carries its work lists: main derives them from the template, the
+ * role, or (for a copy) the source agent's saved lists.
+ */
+export type NewGroupMember = {
   /** Stable key in the modal (the Lead points at it; names are editable). */
   key: string;
   source: NewGroupMemberSource;
   templateId?: string;
+  /** A copy: the agent whose saved work lists the new one keeps. */
+  copiedFromAgentId?: string;
   name: string;
   role: string;
   instructions: string;
@@ -98,7 +100,6 @@ export function templateMember(
       template.name,
       members.map((member) => member.name),
     ),
-    ...normalizeGroupMemberCapabilities(template),
     role: template.role,
     instructions: template.instructions,
     modelId: "",
@@ -133,13 +134,14 @@ export function applyCollabPipeline(
 
 /**
  * "Copy from another group": an independent copy (name, role, instructions,
- * model, avatar and explicit capability metadata) that becomes a normal member:
- * no templateId, no history, a new agent. A copied template agent on the app default (null)
+ * model, avatar, and the source's saved work lists via `copiedFromAgentId`)
+ * that becomes a normal member: no templateId, no history, a new agent. A copied template agent on the app default (null)
  * takes `fallbackModelId`, because a member without a template needs a model.
  */
 export function copyMember(
   agent: Pick<
     AgentInfo,
+    | "id"
     | "name"
     | "role"
     | "instructions"
@@ -147,8 +149,6 @@ export function copyMember(
     | "avatarFace"
     | "avatarColor"
     | "avatarShape"
-    | "capabilityIds"
-    | "supportedTaskKinds"
   >,
   members: readonly NewGroupMember[],
   key: string,
@@ -161,7 +161,7 @@ export function copyMember(
       agent.name,
       members.map((member) => member.name),
     ),
-    ...normalizeGroupMemberCapabilities(agent),
+    copiedFromAgentId: agent.id,
     role: agent.role,
     instructions: agent.instructions,
     modelId: agent.modelId ?? fallbackModelId,
@@ -209,7 +209,6 @@ export function dialogMember(
       input.name,
       members.map((member) => member.name),
     ),
-    ...normalizeGroupMemberCapabilities(input),
     role: input.role ?? "",
     instructions: input.instructions ?? "",
     modelId: input.modelId ?? "",
@@ -257,7 +256,7 @@ export function newGroupMemberInput(member: NewGroupMember): NewGroupAgentInput 
   const modelId = member.modelId;
   return {
     ...(member.templateId ? { templateId: member.templateId } : {}),
-    ...normalizeGroupMemberCapabilities(member),
+    ...(member.copiedFromAgentId ? { copiedFromAgentId: member.copiedFromAgentId } : {}),
     name: member.name.trim(),
     role: member.role.trim(),
     instructions: member.instructions,

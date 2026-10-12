@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { effectiveCapabilities } from "../../shared/agent-roles";
 import { agentAvatarForId } from "../../shared/agent-templates";
 import type {
   AgentAvatarColor,
@@ -107,6 +108,7 @@ type MemberRow = {
   agent_avatar_face: AgentAvatarFace;
   agent_avatar_color: AgentAvatarColor;
   agent_avatar_shape: AgentAvatarShape;
+  agent_template_id: string | null;
   capability_ids_json: string;
   supported_task_kinds_json: string;
 };
@@ -149,7 +151,8 @@ const GROUP_COLUMNS = "id, name, workspace_id, mode, lead_session_id, created_at
 const MEMBER_SELECT = `select m.group_id, m.session_id, m.role, m.agent_id, m.joined_at,
     a.name as agent_name, a.role as agent_role, a.archived_at as agent_archived_at,
     a.avatar_face as agent_avatar_face, a.avatar_color as agent_avatar_color,
-    a.avatar_shape as agent_avatar_shape, a.capability_ids_json, a.supported_task_kinds_json
+    a.avatar_shape as agent_avatar_shape, a.template_id as agent_template_id,
+    a.capability_ids_json, a.supported_task_kinds_json
   from agent_group_members m join agents a on a.id = m.agent_id`;
 const MESSAGE_COLUMNS = `id, group_id, author_kind, author_session_id, reply_to_message_id,
   to_session_id, chain_id, kind, body, mentions_json, attachments_json, context_items_json, created_at,
@@ -177,9 +180,14 @@ function toMember(row: MemberRow): AgentGroupMember {
     agentId: row.agent_id,
     name: row.agent_name,
     agentRole: row.agent_role,
-    ...normalizeGroupMemberCapabilities({
-      capabilityIds: JSON.parse(row.capability_ids_json ?? "[]"),
-      supportedTaskKinds: JSON.parse(row.supported_task_kinds_json ?? "[]"),
+    // Saved lists as they are; empty ones read as the agent's derived role.
+    ...effectiveCapabilities({
+      ...normalizeGroupMemberCapabilities({
+        capabilityIds: JSON.parse(row.capability_ids_json ?? "[]"),
+        supportedTaskKinds: JSON.parse(row.supported_task_kinds_json ?? "[]"),
+      }),
+      role: row.agent_role,
+      ...(row.agent_template_id ? { templateId: row.agent_template_id } : {}),
     }),
     ...(row.agent_archived_at !== null ? { archived: true as const } : {}),
     avatarFace: row.agent_avatar_face,

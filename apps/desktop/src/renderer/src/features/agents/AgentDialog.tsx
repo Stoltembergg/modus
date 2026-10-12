@@ -2,6 +2,16 @@ import { Dialog } from "@base-ui/react/dialog";
 import { IconRefresh } from "@tabler/icons-react";
 import { m, type Transition, useIsPresent, useReducedMotion } from "motion/react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  AGENT_ROLES,
+  type AgentRoleId,
+  capabilitiesForRole,
+  describeCapabilities,
+  effectiveCapabilities,
+  getAgentRole,
+  hasCustomWorkTypes,
+  roleIdForLabel,
+} from "../../../../shared/agent-roles";
 import { agentAvatarForId, getAgentTemplate } from "../../../../shared/agent-templates";
 import {
   AGENT_AVATAR_COLORS,
@@ -18,22 +28,17 @@ import {
   type NewGroupAgentInput,
   type UpdateAgentInput,
 } from "../../../../shared/contracts";
-import {
-  GROUP_CAPABILITY_IDS,
-  GROUP_SUPPORTED_TASK_KINDS,
-  normalizeGroupMemberCapabilities,
-} from "../../../../shared/group-capabilities";
 import { cn } from "../../lib/cn";
 import { selectableModels } from "../../lib/modusModels";
 import type { GroupDialogModel } from "../groups/CreateGroupDialog";
 import { describeGroupError } from "../groups/groupErrors";
-import { useGroupText } from "../groups/groupRoomI18n";
 import { AgentAvatar } from "./AgentAvatar";
 import { AGENT_AVATAR_FILL } from "./agentAvatarModel";
 import { agentDialogError, needsProfileGeneration } from "./agentDialogModel";
 import { ModelPicker } from "./ModelPicker";
 
 export const AGENT_GENERATED_HINT = "Generated. Review the role and instructions, then save.";
+export const CUSTOM_WORK_TYPES_WARNING = "This agent has custom work types that will be replaced.";
 
 const FIELD = cn(
   "h-9 w-full rounded-lg border border-hairline bg-canvas/70 px-3 text-sm text-fg outline-none",
@@ -126,8 +131,7 @@ export function AgentDialog(props: AgentDialogProps) {
     draft: target,
   } = props;
   const initial = target?.initial;
-  const t = useGroupText();
-  const capabilityTemplate = getAgentTemplate(agent?.templateId ?? initial?.templateId ?? "");
+  const template = getAgentTemplate(agent?.templateId ?? initial?.templateId ?? "");
   const custom = !(agent?.templateId ?? initial?.templateId);
   // Mounted per open (the parent renders it only while open): state starts from the agent.
   const surface = props.surface ?? "dialog";
@@ -164,17 +168,36 @@ export function AgentDialog(props: AgentDialogProps) {
     return { ...seededAvatar, avatarShape: availableShape(seededAvatar.avatarShape) };
   });
   const [name, setName] = useState(agent?.name ?? initial?.name ?? "");
-  const [role, setRole] = useState(agent?.role ?? initial?.role ?? "");
+  // Role: one of the known roles, or Custom with its own label (the only part stored).
+  const initialRole = agent?.role ?? initial?.role ?? "";
+  const initialRoleId = roleIdForLabel(initialRole);
+  const [roleChoice, setRoleChoice] = useState<AgentRoleId>(initialRoleId);
+  const [customLabel, setCustomLabel] = useState(initialRoleId === "custom" ? initialRole : "");
+  const role = roleChoice === "custom" ? customLabel : getAgentRole(roleChoice).label;
+  // A Custom label that names a known role is that role (same rule as main).
+  const effectiveRoleId = roleIdForLabel(role);
+  const roleChanged = effectiveRoleId !== initialRoleId;
+  // Untouched selection: send the stored text back as it was (Planner stays Planner).
+  const savedRole = roleChoice === initialRoleId && roleChoice !== "custom" ? initialRole : role;
+  // What the agent will handle, computed exactly like main does on save.
+  const workTypes = agent
+    ? roleChanged
+      ? capabilitiesForRole(effectiveRoleId)
+      : effectiveCapabilities(agent)
+    : template && effectiveRoleId === roleIdForLabel(template.role)
+      ? effectiveCapabilities(template)
+      : capabilitiesForRole(effectiveRoleId);
+  const replacesCustomWorkTypes =
+    !!agent &&
+    roleChanged &&
+    hasCustomWorkTypes({
+      role: agent.role,
+      ...(agent.templateId ? { templateId: agent.templateId } : {}),
+      capabilityIds: agent.capabilityIds ?? [],
+      supportedTaskKinds: agent.supportedTaskKinds ?? [],
+    });
   const [instructions, setInstructions] = useState(
     agent?.instructions ?? initial?.instructions ?? "",
-  );
-  const [capabilities, setCapabilities] = useState(() =>
-    normalizeGroupMemberCapabilities(
-      agent ?? {
-        ...getAgentTemplate(initial?.templateId ?? ""),
-        ...initial,
-      },
-    ),
   );
   const [description, setDescription] = useState("");
   // Locked Modus models are not offered (nor valid for a new pick); the saved one stays.
@@ -248,7 +271,11 @@ export function AgentDialog(props: AgentDialogProps) {
         ...(description.trim() ? { description: description.trim() } : {}),
         ...(agent ? { agentId: agent.id } : {}),
       });
-      setRole(profile.role);
+      // The role is the user's choice: Regenerate only rewrites the instructions. A new
+      // agent with no role yet takes the generated label (Custom, or the role it names).
+      if (!agent && roleChoice === "custom" && !customLabel.trim()) {
+        setCustomLabel(profile.role);
+      }
       setInstructions(profile.instructions);
       setNotice(
         profile.generated
@@ -280,9 +307,8 @@ export function AgentDialog(props: AgentDialogProps) {
       closingRef.current = true; // before onAdd: a re-entrant submit must not add it twice
       target.onAdd({
         ...(initial?.templateId ? { templateId: initial.templateId } : {}),
-        ...capabilities,
         name: name.trim(),
-        role: role.trim(),
+        role: savedRole.trim(),
         instructions,
         ...(selectedModel ? { modelId: selectedModel } : {}),
         avatarFace: face,
@@ -298,9 +324,8 @@ export function AgentDialog(props: AgentDialogProps) {
       if (agent && props.onUpdate) {
         await props.onUpdate({
           id: agent.id,
-          ...capabilities,
           name: name.trim(),
-          role: role.trim(),
+          role: savedRole.trim(),
           instructions,
           ...(selectedModel !== (agent.modelId ?? "") ? { modelId: selectedModel || null } : {}),
           avatarFace: face,
@@ -310,9 +335,8 @@ export function AgentDialog(props: AgentDialogProps) {
       } else if (group && props.onCreate) {
         await props.onCreate({
           groupId: group.id,
-          ...capabilities,
           name: name.trim(),
-          role: role.trim(),
+          role: savedRole.trim(),
           instructions,
           modelId: selectedModel,
           avatarFace: face,
@@ -449,14 +473,39 @@ export function AgentDialog(props: AgentDialogProps) {
               </button>
             ) : null}
           </div>
-          <input
-            className={FIELD}
+          <select
+            className={cn(FIELD, "px-2")}
             id={roleId}
-            maxLength={80}
-            onChange={(event) => setRole(event.target.value)}
-            placeholder={custom ? "Leave empty to generate" : "e.g. Reviewer"}
-            value={role}
-          />
+            onChange={(event) => setRoleChoice(event.target.value as AgentRoleId)}
+            value={roleChoice}
+          >
+            {AGENT_ROLES.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          {roleChoice === "custom" ? (
+            <input
+              aria-label="Custom role"
+              className={FIELD}
+              maxLength={80}
+              onChange={(event) => setCustomLabel(event.target.value)}
+              placeholder={custom && !agent ? "Leave empty to generate" : "e.g. Release notes"}
+              value={customLabel}
+            />
+          ) : null}
+          <p className="text-2xs text-fg-subtle" data-testid="agent-work-types">
+            {describeCapabilities(workTypes)}
+          </p>
+          {replacesCustomWorkTypes ? (
+            <p
+              className="rounded-md border border-amber-400/30 bg-amber-400/10 px-2 py-1 text-2xs text-amber-400 [:root[data-theme=light]_&]:text-amber-800"
+              role="status"
+            >
+              {CUSTOM_WORK_TYPES_WARNING}
+            </p>
+          ) : null}
         </div>
 
         <label className="flex flex-col gap-1.5">
@@ -469,62 +518,6 @@ export function AgentDialog(props: AgentDialogProps) {
             value={instructions}
           />
         </label>
-
-        <p className="mt-1 text-2xs text-fg-faint">
-          Choose the work this agent supports. These choices do not grant tool access.
-        </p>
-        {(!capabilities.capabilityIds.length || !capabilities.supportedTaskKinds.length) && (
-          <p className="text-2xs text-warning">{t("agents.capabilitiesUnconfigured")}</p>
-        )}
-        {capabilityTemplate && (
-          <div className="flex flex-col items-start gap-1">
-            <button
-              type="button"
-              className={cn(
-                "rounded-lg border border-hairline px-2.5 py-1 text-2xs text-fg-subtle hover:border-hairline-strong hover:text-fg",
-                PRESS,
-              )}
-              disabled={busy !== null}
-              onClick={() => setCapabilities(normalizeGroupMemberCapabilities(capabilityTemplate))}
-            >
-              {t("agents.applyTemplateCapabilities", { name: capabilityTemplate.name })}
-            </button>
-            <span className="text-2xs text-fg-subtle">{t("agents.templateCapabilitiesHint")}</span>
-          </div>
-        )}
-        {(
-          [
-            ["capabilityIds", "Capabilities", "Capability", GROUP_CAPABILITY_IDS],
-            ["supportedTaskKinds", "Supported task kinds", "Task kind", GROUP_SUPPORTED_TASK_KINDS],
-          ] as const
-        ).map(([field, title, label, options]) => (
-          <fieldset className="flex flex-col gap-1" key={field} disabled={busy !== null}>
-            <legend className={cn(LABEL, "mb-1.5")}>{title}</legend>
-            <div className="flex flex-wrap gap-x-3 gap-y-1.5">
-              {options.map((option) => (
-                <label className="flex items-center gap-1.5 text-2xs text-fg-muted" key={option}>
-                  <input
-                    className="size-3.5 accent-accent"
-                    type="checkbox"
-                    aria-label={`${label} ${option}`}
-                    checked={(capabilities[field] as string[]).includes(option)}
-                    onChange={(event) =>
-                      setCapabilities((current) =>
-                        normalizeGroupMemberCapabilities({
-                          ...current,
-                          [field]: event.target.checked
-                            ? [...current[field], option]
-                            : current[field].filter((value) => value !== option),
-                        }),
-                      )
-                    }
-                  />
-                  {option}
-                </label>
-              ))}
-            </div>
-          </fieldset>
-        ))}
 
         <fieldset className="flex flex-col gap-1">
           <legend className={cn(LABEL, "mb-1.5")}>Face</legend>
@@ -606,7 +599,7 @@ export function AgentDialog(props: AgentDialogProps) {
           className={cn(
             "mx-5 mt-3 rounded-lg px-2.5 py-1.5 text-xs",
             notice.warning
-              ? "border border-amber-400/30 bg-amber-400/10 text-amber-400"
+              ? "border border-amber-400/30 bg-amber-400/10 text-amber-400 [:root[data-theme=light]_&]:text-amber-800"
               : "text-fg-faint",
           )}
           data-testid="agent-dialog-notice"

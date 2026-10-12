@@ -5,11 +5,6 @@ import {
   AGENT_AVATAR_SHAPES,
 } from "../../shared/contracts";
 import {
-  GROUP_CAPABILITY_IDS,
-  GROUP_SUPPORTED_TASK_KINDS,
-  normalizeGroupMemberCapabilities,
-} from "../../shared/group-capabilities";
-import {
   MAX_RESTORE_DRAFT_CHARS,
   MAX_RESTORE_DRAFTS,
   MAX_RESTORE_UI_STATE_BYTES,
@@ -203,19 +198,6 @@ export const agentFields = {
   avatarFace: z.enum(AGENT_AVATAR_FACES),
   avatarColor: z.enum(AGENT_AVATAR_COLORS),
   avatarShape: z.enum(AGENT_AVATAR_SHAPES),
-  capabilityIds: z
-    .array(z.enum(GROUP_CAPABILITY_IDS))
-    .max(64)
-    .transform(
-      (capabilityIds) => normalizeGroupMemberCapabilities({ capabilityIds }).capabilityIds,
-    ),
-  supportedTaskKinds: z
-    .array(z.enum(GROUP_SUPPORTED_TASK_KINDS))
-    .max(64)
-    .transform(
-      (supportedTaskKinds) =>
-        normalizeGroupMemberCapabilities({ supportedTaskKinds }).supportedTaskKinds,
-    ),
 };
 
 /** Cap on `roles` (the modal holds at most a few more than the 10-member limit). */
@@ -242,9 +224,9 @@ export const newGroupAgentSchema = z
     avatarFace: agentFields.avatarFace.optional(),
     avatarColor: agentFields.avatarColor.optional(),
     avatarShape: agentFields.avatarShape.optional(),
-    capabilityIds: agentFields.capabilityIds.optional(),
-    supportedTaskKinds: agentFields.supportedTaskKinds.optional(),
     templateId: z.string().min(1).max(128).optional(),
+    /** "Copy from another group": main copies this agent's saved work lists. */
+    copiedFromAgentId: z.string().min(1).max(128).optional(),
   })
   .strict();
 

@@ -482,30 +482,21 @@ describe("IPC schemas", () => {
   });
 });
 
-it("validates capabilities on every agent and group creation path", async () => {
+it("rejects work lists on every agent and group creation path; copies name their source", async () => {
   const schemas = await import("./schemas");
   const split = await import("./schemas-part-04");
   for (const source of [schemas, split]) {
-    const metadata = { capabilityIds: ["review", "review"], supportedTaskKinds: ["code", "code"] };
-    const member = { name: "Custom", modelId: "m-1", ...metadata };
-    expect(source.agentsCreateSchema.parse({ ...member, groupId: "g-1" })).toMatchObject({
-      capabilityIds: ["review"],
-      supportedTaskKinds: ["code"],
-    });
-    expect(source.agentsUpdateSchema.parse({ id: "a-1", ...metadata })).toMatchObject({
-      capabilityIds: ["review"],
-      supportedTaskKinds: ["code"],
-    });
+    const member = { name: "Custom", modelId: "m-1", role: "Builder" };
     expect(
-      source.groupCreateSchema.parse({ name: "Group", workspaceId: "w-1", members: [member] })
-        .members[0],
-    ).toMatchObject({ capabilityIds: ["review"], supportedTaskKinds: ["code"] });
+      source.groupCreateSchema.parse({
+        name: "Group",
+        workspaceId: "w-1",
+        members: [{ ...member, copiedFromAgentId: "a-9" }],
+      }).members[0],
+    ).toEqual({ ...member, copiedFromAgentId: "a-9" });
     for (const invalid of [
-      { capabilityIds: ["shell"] },
-      { supportedTaskKinds: ["implement"] },
-      { capabilityIds: "review" },
-      { capabilityIds: null },
-      { supportedTaskKinds: null },
+      { capabilityIds: ["review"] },
+      { supportedTaskKinds: ["code"] },
       { tools: ["shell"] },
     ]) {
       expect(

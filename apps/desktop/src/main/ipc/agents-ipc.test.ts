@@ -316,7 +316,7 @@ describe("agents IPC", () => {
   });
 });
 
-it("validates and forwards explicit capabilities without granting tools", async () => {
+it("never accepts work lists from the renderer: main derives them from the role", async () => {
   const service = mockService();
   const handlers = await register(service);
   const { trusted, unregister } = await trustedEvent();
@@ -324,38 +324,32 @@ it("validates and forwards explicit capabilities without granting tools", async 
     handlers.get("agents:create")?.(trusted, {
       groupId: "g-1",
       name: "Custom",
+      role: "Builder",
       modelId: MODEL,
-      capabilityIds: ["verify", "implement", "verify"],
-      supportedTaskKinds: ["code", "code"],
     });
     expect(service.createAgentInGroup).toHaveBeenCalledWith({
       groupId: "g-1",
       name: "Custom",
+      role: "Builder",
       modelId: MODEL,
-      capabilityIds: ["implement", "verify"],
-      supportedTaskKinds: ["code"],
     });
-    handlers.get("agents:update")?.(trusted, {
-      id: "a-1",
-      capabilityIds: [],
-      supportedTaskKinds: [],
-    });
-    expect(service.updateAgent).toHaveBeenCalledWith("a-1", {
-      capabilityIds: [],
-      supportedTaskKinds: [],
-    });
-    expect(() =>
-      handlers.get("agents:update")?.(trusted, { id: "a-1", capabilityIds: ["shell"] }),
-    ).toThrow(/Invalid IPC/);
-    expect(() =>
-      handlers.get("agents:create")?.(trusted, {
-        groupId: "g-1",
-        name: "Custom",
-        modelId: MODEL,
-        capabilityIds: ["implement"],
-        tools: ["shell"],
-      }),
-    ).toThrow(/Invalid IPC/);
+    for (const extra of [
+      { capabilityIds: ["implement"] },
+      { supportedTaskKinds: ["code"] },
+      { tools: ["shell"] },
+    ]) {
+      expect(() =>
+        handlers.get("agents:create")?.(trusted, {
+          groupId: "g-1",
+          name: "Custom",
+          modelId: MODEL,
+          ...extra,
+        }),
+      ).toThrow(/Invalid IPC/);
+      expect(() => handlers.get("agents:update")?.(trusted, { id: "a-1", ...extra })).toThrow(
+        /Invalid IPC/,
+      );
+    }
   } finally {
     unregister();
   }
