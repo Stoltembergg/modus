@@ -29,6 +29,8 @@ describe("openDatabaseAtStartup", () => {
     const message = deps.showErrorBox.mock.calls[0]?.[1] as string;
     expect(message).toMatch(/reinstall the newer Modus/);
     expect(message).toMatch(/backup/);
+    expect(message).toContain("/data/backups/modus-*-pre-groups.db");
+    expect(message).not.toContain("modus.sqlite.backup");
     expect(deps.quit).toHaveBeenCalledTimes(1);
   });
 

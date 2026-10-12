@@ -1,3 +1,4 @@
+import { dirname, join } from "node:path";
 import { DatabaseTooNewError } from "./database";
 
 export type DatabaseStartupDeps = {
@@ -8,11 +9,17 @@ export type DatabaseStartupDeps = {
 
 export const DATABASE_TOO_NEW_TITLE = "Modus can't open your data";
 
+/** The pre-migration backup (plan §2.5): <userData>/backups/modus-*-pre-groups.db. */
+export function backupPattern(dbPath: string): string {
+  const dir = dbPath ? dirname(dbPath) : "<userData>";
+  return join(dir, "backups", "modus-*-pre-groups.db");
+}
+
 export function databaseTooNewMessage(error: DatabaseTooNewError): string {
   return [
     `Your Modus data (${error.dbPath || "modus.sqlite"}) was upgraded by a newer version of Modus (schema ${error.version}).`,
     "This version can't read it, and it has not changed the file.",
-    "To continue, reinstall the newer Modus. Or quit Modus and restore the backup copy of that file made before the upgrade (modus.sqlite.backup-* next to it, if present).",
+    `To continue, reinstall the newer Modus. Or quit Modus and restore the backup made before the upgrade: ${backupPattern(error.dbPath)} (copy it over the file above).`,
   ].join("\n\n");
 }
 
