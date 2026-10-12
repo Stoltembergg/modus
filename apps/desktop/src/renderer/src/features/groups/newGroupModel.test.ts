@@ -115,12 +115,17 @@ describe("newGroupModel (A4)", () => {
       expect(leadAfterRemoval(list, "k0", "k0")).toBe("k1");
     });
 
-    it("clears lead (returns null) when lead is removed and no Planner remains", () => {
+    it("falls back to the first remaining member when no Planner remains", () => {
       const list = [
         templateMember(builder as NonNullable<typeof builder>, [], "k0"),
         templateMember(reviewer, [], "k1"),
+        templateMember(builder as NonNullable<typeof builder>, [], "k2"),
       ];
-      // k0 is lead, remove k0 -> no suggestedLead template, returns null
+      expect(leadAfterRemoval(list, "k0", "k0")).toBe("k1");
+    });
+
+    it("clears the lead only when the last member is removed", () => {
+      const list = [templateMember(reviewer, [], "k0")];
       expect(leadAfterRemoval(list, "k0", "k0")).toBeNull();
     });
 

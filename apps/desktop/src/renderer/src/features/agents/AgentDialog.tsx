@@ -259,6 +259,12 @@ export function AgentDialog(props: AgentDialogProps) {
   }
   const roleId = useId();
 
+  // The plain panel has no Base UI popup to apply initialFocus: focus Name on open.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: on mount only.
+  useEffect(() => {
+    if (surface === "plain") nameRef.current?.focus();
+  }, []);
+
   /** "Use {template}'s defaults": name, role, instructions and look, all back to the template. */
   function applyTemplateDefaults(): void {
     if (!template) return;
@@ -466,7 +472,8 @@ export function AgentDialog(props: AgentDialogProps) {
             </>
           )}
         </div>
-        {template ? (
+        {/* New group panel only: the standalone Edit agent dialog has no "defaults" to go back to. */}
+        {template && target ? (
           <button
             className={cn(
               "ml-auto shrink-0 rounded-md px-1.5 py-1 font-medium text-accent text-xs hover:bg-hover",
@@ -568,7 +575,7 @@ export function AgentDialog(props: AgentDialogProps) {
           </p>
           {replacesCustomWorkTypes ? (
             <p
-              className="rounded-md border border-warning/30 bg-warning/10 px-2 py-1 text-2xs text-warning"
+              className="rounded-md border border-dialog-warning/30 bg-dialog-warning/10 px-2 py-1 text-2xs text-dialog-warning"
               role="status"
             >
               {CUSTOM_WORK_TYPES_WARNING}
@@ -672,7 +679,7 @@ export function AgentDialog(props: AgentDialogProps) {
           className={cn(
             "mx-5 mt-3 rounded-lg px-2.5 py-1.5 text-xs",
             notice.warning
-              ? "border border-warning/30 bg-warning/10 text-warning"
+              ? "border border-dialog-warning/30 bg-dialog-warning/10 text-dialog-warning"
               : "text-fg-faint",
           )}
           data-testid="agent-dialog-notice"

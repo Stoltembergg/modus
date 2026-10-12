@@ -92,6 +92,7 @@ type AgentDialogRequest =
 
 type AgentDialogState = (AgentDialogRequest & { nonce: number }) | null;
 
+// Sits after the Added pill, so a hidden (non-lead) crown never pushes the pill away from the name.
 function LeadCrownButton({
   member,
   isLead,
@@ -115,7 +116,7 @@ function LeadCrownButton({
       className={cn(
         "flex h-7 w-7 items-center justify-center rounded p-1 transition-opacity",
         isLead
-          ? "text-warning opacity-100"
+          ? "text-dialog-warning opacity-100"
           : groupVariant === "line"
             ? "text-fg-faint opacity-0 group-hover/line:opacity-100 group-focus-within/line:opacity-100 hover:text-fg"
             : "text-fg-faint opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 hover:text-fg",
@@ -128,6 +129,10 @@ function LeadCrownButton({
     </button>
   );
 }
+
+/** Cards that can take focus back when the in-dialog panel closes. */
+const CARD_SELECTOR =
+  '[data-testid^="template-card-"], [data-testid^="member-card-"], [data-testid^="copy-card-"]';
 
 /**
  * "New group" (A4 redesigned). Folder first (required; Projects plus "Add folder…",
@@ -227,12 +232,59 @@ export function NewGroupModal({
     );
   }
 
-  const openCustomize = (template: AgentTemplate) =>
+  // Where the panel was opened from, so Back (or saving) returns focus there:
+  // the list is unmounted while the panel shows, so we keep the button's label
+  // and its card, and look them up again once the list is back.
+  const popupRef = useRef<HTMLDivElement>(null);
+  const panelOrigin = useRef<{ label: string | null; card: string | null } | null>(null);
+  const rememberOrigin = () => {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement) || !popupRef.current?.contains(active)) {
+      panelOrigin.current = null;
+      return;
+    }
+    panelOrigin.current = {
+      label: active.getAttribute("aria-label") ?? active.textContent?.trim() ?? null,
+      card: active.closest<HTMLElement>(CARD_SELECTOR)?.dataset.testid ?? null,
+    };
+  };
+  const openCustomize = (template: AgentTemplate) => {
+    rememberOrigin();
     setAgentDialogState({ type: "customize", template, nonce: ++agentDialogSeq.current });
-  const openCustom = () => setAgentDialogState({ type: "custom", nonce: ++agentDialogSeq.current });
-  const openEdit = (memberKey: string) =>
+  };
+  const openCustom = () => {
+    rememberOrigin();
+    setAgentDialogState({ type: "custom", nonce: ++agentDialogSeq.current });
+  };
+  const openEdit = (memberKey: string) => {
+    rememberOrigin();
     setAgentDialogState({ type: "edit", memberKey, nonce: ++agentDialogSeq.current });
+  };
   const closePanel = () => setAgentDialogState(null);
+
+  useEffect(() => {
+    if (agentDialog !== null || !panelOrigin.current) return;
+    const origin = panelOrigin.current;
+    panelOrigin.current = null;
+    const root = popupRef.current;
+    if (!root) return;
+    const buttons = (scope: ParentNode) => [...scope.querySelectorAll<HTMLElement>("button")];
+    const byLabel = (scope: ParentNode) =>
+      buttons(scope).find(
+        (button) =>
+          (button.getAttribute("aria-label") ?? button.textContent?.trim()) === origin.label,
+      );
+    const card = origin.card
+      ? root.querySelector<HTMLElement>(`[data-testid="${origin.card}"]`)
+      : null;
+    // Same button if it is still there (Edit, New agent…), else the card it lived in
+    // (Customize turns into Edit once added), else the selected tab.
+    const target =
+      (card && (byLabel(card) ?? buttons(card)[0])) ??
+      byLabel(root) ??
+      root.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+    target?.focus({ preventScroll: false });
+  }, [agentDialog]);
 
   async function chooseFolder(value: string): Promise<void> {
     setFolderError(undefined);
@@ -422,6 +474,7 @@ export function NewGroupModal({
             "data-starting-style:scale-[0.96] data-starting-style:opacity-0",
           )}
           data-testid="new-group-modal"
+          ref={popupRef}
         >
           <AnimatePresence initial={false} mode="popLayout">
             {dialogTarget ? (
@@ -600,14 +653,14 @@ export function NewGroupModal({
                                     <span className="truncate font-medium text-fg text-xs">
                                       {member.name}
                                     </span>
+                                    <span className="rounded bg-chip px-1.5 py-0.5 font-medium text-2xs text-fg-subtle">
+                                      {t("newGroup.added")}
+                                    </span>
                                     <LeadCrownButton
                                       isLead={isLead}
                                       member={member}
                                       onToggle={() => setLeadKey(isLead ? null : member.key)}
                                     />
-                                    <span className="rounded bg-chip px-1.5 py-0.5 font-medium text-2xs text-fg-subtle">
-                                      {t("newGroup.added")}
-                                    </span>
                                     {needsModel ? (
                                       <span className="font-medium text-2xs text-danger">
                                         {t("newGroup.needsModel")}
@@ -672,7 +725,7 @@ export function NewGroupModal({
                                       {template.suggestedLead ? (
                                         <IconCrown
                                           aria-label={t("newGroup.suggestedLead")}
-                                          className="text-warning"
+                                          className="text-dialog-warning"
                                           size={12}
                                         />
                                       ) : null}
@@ -737,14 +790,14 @@ export function NewGroupModal({
                                       <span className="truncate font-medium text-fg text-xs">
                                         {member.name}
                                       </span>
+                                      <span className="rounded bg-chip px-1.5 py-0.5 font-medium text-2xs text-fg-subtle">
+                                        {t("newGroup.added")}
+                                      </span>
                                       <LeadCrownButton
                                         isLead={isLead}
                                         member={member}
                                         onToggle={() => setLeadKey(isLead ? null : member.key)}
                                       />
-                                      <span className="rounded bg-chip px-1.5 py-0.5 font-medium text-2xs text-fg-subtle">
-                                        {t("newGroup.added")}
-                                      </span>
                                     </div>
                                     {member.role && member.role !== member.name ? (
                                       <div className="text-2xs text-fg-subtle">{member.role}</div>
@@ -908,6 +961,7 @@ export function NewGroupModal({
 
                             return (
                               <li
+                                data-testid={`copy-card-${agent.id}`}
                                 className={cn(
                                   "flex flex-col gap-2 rounded-xl p-3 transition-colors",
                                   count > 0
@@ -931,6 +985,9 @@ export function NewGroupModal({
                                       </span>
                                       {count === 1 && single ? (
                                         <>
+                                          <span className="rounded bg-chip px-1.5 py-0.5 font-medium text-2xs text-fg-subtle">
+                                            {t("newGroup.added")}
+                                          </span>
                                           <LeadCrownButton
                                             isLead={single.key === leadKey}
                                             member={single}
@@ -938,9 +995,6 @@ export function NewGroupModal({
                                               setLeadKey(single.key === leadKey ? null : single.key)
                                             }
                                           />
-                                          <span className="rounded bg-chip px-1.5 py-0.5 font-medium text-2xs text-fg-subtle">
-                                            {t("newGroup.added")}
-                                          </span>
                                           {!single.modelId ? (
                                             <span className="font-medium text-2xs text-danger">
                                               {t("newGroup.needsModel")}
@@ -1107,14 +1161,14 @@ export function NewGroupModal({
                                       <span className="truncate font-medium text-fg text-xs">
                                         {member.name}
                                       </span>
+                                      <span className="rounded bg-chip px-1.5 py-0.5 font-medium text-2xs text-fg-subtle">
+                                        {t("newGroup.added")}
+                                      </span>
                                       <LeadCrownButton
                                         isLead={isLead}
                                         member={member}
                                         onToggle={() => setLeadKey(isLead ? null : member.key)}
                                       />
-                                      <span className="rounded bg-chip px-1.5 py-0.5 font-medium text-2xs text-fg-subtle">
-                                        {t("newGroup.added")}
-                                      </span>
                                       {needsModel ? (
                                         <span className="font-medium text-2xs text-danger">
                                           {t("newGroup.needsModel")}

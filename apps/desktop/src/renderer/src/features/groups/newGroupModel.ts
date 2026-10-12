@@ -233,7 +233,8 @@ export function newGroupCounter(count: number, locale: string | null = "en"): st
  * When removing a member, determines the new lead:
  * - If the removed member is not the lead, returns leadKey unchanged.
  * - If the removed member is the lead, moves to the first remaining member
- *   (in order) whose template has `suggestedLead` (Planner). If none, null.
+ *   (in order) whose template has `suggestedLead` (Planner); with none, the
+ *   first remaining member; null only when nobody is left.
  */
 export function leadAfterRemoval(
   members: readonly NewGroupMember[],
@@ -249,7 +250,8 @@ export function leadAfterRemoval(
   const nextLead = remaining.find(
     (member) => member.templateId && suggestedTemplates.has(member.templateId),
   );
-  return nextLead ? nextLead.key : null;
+  // No suggested lead left: the first remaining member leads (null when the group is empty).
+  return (nextLead ?? remaining[0])?.key ?? null;
 }
 
 /**

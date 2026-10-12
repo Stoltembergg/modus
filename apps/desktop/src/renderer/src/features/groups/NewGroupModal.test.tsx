@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AGENT_TEMPLATES, getAgentTemplate } from "../../../../shared/agent-templates";
 import type {
@@ -81,6 +82,7 @@ function renderModal({
   ),
   addFolder = vi.fn(async () => null as WorkspaceInfo | null),
   defaultWorkspaceId = null as string | null,
+  strict = false,
 } = {}) {
   const onOpenChange = vi.fn();
   const services: NewGroupServices = {
@@ -88,7 +90,7 @@ function renderModal({
     addFolder,
     generateProfile: generate,
   };
-  render(
+  const element = (
     <NewGroupModal
       defaultModelId="m-2"
       defaultWorkspaceId={defaultWorkspaceId}
@@ -99,8 +101,10 @@ function renderModal({
       open
       services={services}
       workspaces={WORKSPACES}
-    />,
+    />
   );
+  // StrictMode runs state updaters twice, as the dev app does (main.tsx).
+  render(strict ? <StrictMode>{element}</StrictMode> : element);
   const modal = screen.getByTestId("new-group-modal");
   return { modal, create, generate, addFolder, onOpenChange, services };
 }
@@ -156,6 +160,54 @@ describe("NewGroupModal (A4 redesigned)", () => {
         .getByRole("button", { name: "Planner is the lead" })
         .getAttribute("aria-pressed"),
     ).toBe("true");
+  });
+
+  it("panel focus: Name on open, back to the originating card on Back / Add", async () => {
+    const user = userEvent.setup();
+    const { modal } = renderModal({ defaultWorkspaceId: "ws-1" });
+    await user.click(within(modal).getByRole("button", { name: "Add Planner" }));
+    // Edit -> Back: the same Edit button gets focus again.
+    await user.click(within(modal).getByRole("button", { name: "Edit Planner" }));
+    expect(document.activeElement).toBe(
+      within(screen.getByTestId("agent-dialog")).getByRole("textbox", { name: "Name" }),
+    );
+    const backs = within(screen.getByTestId("agent-dialog")).getAllByRole("button", {
+      name: "Back",
+    });
+    await user.click(backs[backs.length - 1] as HTMLElement);
+    await waitFor(() => expect(screen.queryByTestId("agent-dialog")).toBeNull());
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        within(modal).getByRole("button", { name: "Edit Planner" }),
+      ),
+    );
+    // Customize -> Add to group: Customize is gone, focus lands in the same card.
+    await user.click(within(modal).getByRole("button", { name: "Customize Reviewer" }));
+    await user.click(
+      within(screen.getByTestId("agent-dialog")).getByRole("button", { name: "Add to group" }),
+    );
+    await waitFor(() => expect(screen.queryByTestId("agent-dialog")).toBeNull());
+    await waitFor(() =>
+      expect(
+        within(modal).getByTestId("template-card-reviewer").contains(document.activeElement),
+      ).toBe(true),
+    );
+  });
+
+  it("StrictMode: the pipeline's Planner really is the lead (keys are not minted inside an updater)", async () => {
+    const user = userEvent.setup();
+    const { modal, create } = renderModal({ defaultWorkspaceId: "ws-1", strict: true });
+    // A member first, so a dangling lead key would fall back to Builder, not Planner.
+    await user.click(within(modal).getByRole("button", { name: "Add Builder" }));
+    await user.click(within(modal).getByTestId("collab-pipeline"));
+    expect(
+      within(modal)
+        .getByRole("button", { name: "Planner is the lead" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    await user.click(createButton(modal));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create.mock.calls[0]?.[0].leadName).toBe("Planner");
   });
 
   it("template cards show avatar, name, role and description; template card added once shows Edit/remove/crown and hides Customize", async () => {

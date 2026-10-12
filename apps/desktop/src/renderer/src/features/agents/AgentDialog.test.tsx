@@ -1033,4 +1033,18 @@ describe("AgentDialog group drafts (New group panel)", () => {
     await user.click(within(again.dialog).getByRole("button", { name: "Remove from group" }));
     expect(onRemove).toHaveBeenCalledTimes(1);
   });
+
+  it("defaults link only in the New group panel; the standalone Edit agent dialog has none", () => {
+    const builderAgent: AgentInfo = { ...ANA, name: "Bob", role: "Builder", templateId: "builder" };
+    renderDialog({ agent: builderAgent });
+    expect(screen.queryByRole("button", { name: /defaults$/ })).toBeNull();
+    cleanup();
+    draftDialog({ initial: { templateId: "builder", name: "Builder", role: "Builder" } });
+    expect(screen.getByRole("button", { name: "Use Builder's defaults" })).toBeTruthy();
+  });
+
+  it("the plain panel focuses Name on open", () => {
+    const { dialog } = draftDialog({ initial: { templateId: "builder", name: "Builder" } });
+    expect(document.activeElement).toBe(field(dialog, "Name"));
+  });
 });
