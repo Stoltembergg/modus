@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { AgentGroupMember, GroupTask, GroupTaskKind } from "../../shared/contracts";
 
 let userData: string;
 
@@ -32,6 +33,9 @@ const {
 const { AGENT_TEMPLATES, agentAvatarForId, getAgentTemplate } = await import(
   "../../shared/agent-templates"
 );
+const { CUSTOM_ROLE_CAPABILITIES, capabilitiesForRole } = await import("../../shared/agent-roles");
+const { groupTaskToolRequirements } = await import("../../shared/group-task-tool-policy");
+const { routeGroupTask } = await import("../groups/group-capability-router");
 
 function uid(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`;
@@ -419,68 +423,230 @@ describe("migration: group members become agents", () => {
   });
 });
 
-describe("explicit agent capabilities", () => {
-  it("custom_agent_can_edit_capabilities", () => {
-    const agent = createAgent({
-      name: uid("Custom"),
-      instructions: "Existing persona",
+describe("agent work lists follow the role", () => {
+  const KINDS = ["legacy", "code", "docs", "design", "review", "research", "question"] as const;
+  const STAGES = ["plan", "implement", "verify", "review", "deliver"] as const;
+  // Every tool capability any typed task can require, so only the work lists decide.
+  const ALL_TOOL_CAPABILITIES = [
+    ...new Set(
+      KINDS.flatMap((kind) =>
+        STAGES.flatMap((stage) =>
+          (["owner", "reviewer"] as const).flatMap((role) =>
+            [true, false].flatMap(
+              (coordinator) =>
+                groupTaskToolRequirements({
+                  kind,
+                  stage,
+                  requiredCheckKinds: [],
+                  role,
+                  coordinator,
+                }).requiredCapabilities,
+            ),
+          ),
+        ),
+      ),
+    ),
+  ];
+  const receivable = (lists: { capabilityIds?: string[]; supportedTaskKinds?: string[] }) => {
+    const member: AgentGroupMember = {
+      sessionId: "s",
+      groupId: "g",
+      agentId: "a",
+      name: "A",
+      agentRole: "",
+      joinedAt: "now",
+      capabilityIds: lists.capabilityIds ?? [],
+      supportedTaskKinds: (lists.supportedTaskKinds ?? []) as GroupTaskKind[],
+    };
+    const pairs: string[] = [];
+    for (const kind of KINDS) {
+      for (const stage of STAGES) {
+        const task: GroupTask = {
+          id: "t",
+          groupId: "g",
+          title: "t",
+          kind,
+          stage,
+          status: "open",
+          priority: "normal",
+          createdAt: "now",
+          updatedAt: "now",
+        };
+        const result = routeGroupTask({
+          task,
+          workState: {
+            groupId: "g",
+            tasks: [task],
+            members: [member],
+            gates: {},
+            omitted: { tasks: 0, members: 0, criteria: 0 },
+            budgets: {
+              remainingAgentMessages: 9,
+              remainingMemberWakes: 9,
+              remainingInputTokens: 9,
+            },
+          },
+          memberAvailability: { s: "available" },
+          currentLoad: {},
+          toolConfigurations: { s: { profile: "chat", activeToolNames: ["all"] } },
+          toolRegistry: {
+            resolveActiveTools: () => ["all"],
+            capabilitiesFor: () => ALL_TOOL_CAPABILITIES,
+          } as never,
+        });
+        if (result.candidateSessionIds.includes("s")) pairs.push(`${kind}/${stage}`);
+      }
+    }
+    return pairs;
+  };
+  const savedRow = (id: string) => {
+    const row = getDatabase()
+      .prepare("select capability_ids_json, supported_task_kinds_json from agents where id = ?")
+      .get(id) as { capability_ids_json: string; supported_task_kinds_json: string };
+    return {
+      capabilityIds: JSON.parse(row.capability_ids_json) as string[],
+      supportedTaskKinds: JSON.parse(row.supported_task_kinds_json) as string[],
+    };
+  };
+
+  it("agents saved before keep every task kind they could receive (empty ones may only gain)", () => {
+    const empty = createAgent({ name: uid("Empty"), role: "Builder", modelId: "m-1" });
+    const legacyTemplate = createAgent({
+      name: uid("Old oracle"),
+      role: "Advisor",
+      templateId: "oracle",
+    });
+    const fromTemplate = createAgentFromTemplate("builder", { name: uid("Builder") });
+    const handPicked = createAgent({
+      name: uid("Picked"),
+      role: "Reviewer",
       modelId: "m-1",
-      capabilityIds: ["verify", "implement", "verify"],
-      supportedTaskKinds: ["docs", "code", "docs"],
+      capabilityIds: ["implement", "review"],
+      supportedTaskKinds: ["code", "docs", "design", "review", "research", "question"],
     });
-    expect(getAgent(agent.id)).toMatchObject({
-      capabilityIds: ["implement", "verify"],
-      supportedTaskKinds: ["code", "docs"],
-      instructions: "Existing persona",
-      modelId: "m-1",
-    });
-    updateAgent(agent.id, { capabilityIds: ["review"], supportedTaskKinds: ["review"] });
-    expect(getAgent(agent.id)).toMatchObject({
-      capabilityIds: ["review"],
-      supportedTaskKinds: ["review"],
-      instructions: "Existing persona",
-      modelId: "m-1",
-    });
-    expect(Object.keys(getAgent(agent.id) ?? {})).not.toContain("tools");
-    updateAgent(agent.id, { capabilityIds: [], supportedTaskKinds: [] });
-    expect(getAgent(agent.id)).toMatchObject({ capabilityIds: [], supportedTaskKinds: [] });
+    const freeText = createAgent({ name: uid("Notes"), role: "Release notes", modelId: "m-1" });
+    const seeded = [empty, legacyTemplate, fromTemplate, handPicked, freeText];
+    // What routing saw before this change: the saved lists, unread.
+    const before = new Map(seeded.map((agent) => [agent.id, savedRow(agent.id)]));
+    expect(before.get(empty.id)).toEqual({ capabilityIds: [], supportedTaskKinds: [] });
+    expect(before.get(freeText.id)).toEqual({ capabilityIds: [], supportedTaskKinds: [] });
+
+    // Edits that keep the role (what the dialog sends) never touch the lists.
+    for (const agent of seeded) {
+      updateAgent(agent.id, { name: `${agent.name} 2`, instructions: "Edited", modelId: "m-2" });
+      updateAgent(agent.id, { role: ` ${agent.role.toUpperCase()} ` });
+      expect(savedRow(agent.id)).toEqual(before.get(agent.id));
+    }
+    migrateDatabase(getDatabase());
+
+    for (const agent of seeded) {
+      const saved = before.get(agent.id) as ReturnType<typeof savedRow>;
+      const after = getAgent(agent.id) ?? {};
+      const was = receivable(saved);
+      const now = receivable(after);
+      expect(now, agent.name).toEqual(expect.arrayContaining(was));
+      if (saved.capabilityIds.length && saved.supportedTaskKinds.length) {
+        expect(after, agent.name).toMatchObject(saved);
+        expect(now, agent.name).toEqual(was);
+      }
+      // Legacy tasks keep passing for everyone.
+      for (const stage of STAGES) expect(now).toContain(`legacy/${stage}`);
+    }
+    // Empty lists read as the derived role: template first, then the label, else Custom.
+    expect(getAgent(empty.id)).toMatchObject(capabilitiesForRole("builder"));
+    expect(getAgent(legacyTemplate.id)).toMatchObject(capabilitiesForRole("advisor"));
+    expect(getAgent(freeText.id)).toMatchObject(CUSTOM_ROLE_CAPABILITIES);
   });
-  it("legacy_missing_capabilities_stay_empty", () => {
-    const agent = createAgent({
-      name: uid("Reviewer"),
-      role: "Builder",
-      instructions: "Use shell to implement and verify",
-    });
-    expect(agent).toMatchObject({ capabilityIds: [], supportedTaskKinds: [] });
-  });
-  it("renaming_role_does_not_change_capabilities", () => {
-    const agent = createAgentFromTemplate("builder", { name: uid("Builder") });
-    updateAgent(agent.id, {
-      name: uid("Reviewer"),
-      role: "Researcher",
-      instructions: "Review everything",
-    });
-    expect(getAgent(agent.id)).toMatchObject({
-      capabilityIds: ["implement", "verify"],
-      supportedTaskKinds: ["code"],
-    });
-  });
-  it("template_capabilities_are_explicit and returned by the roster", () => {
+
+  it("new agents get their template's or their role's lists; Custom otherwise", () => {
     const group = createGroupWithNewAgents({
-      name: uid("Capabilities"),
+      name: uid("Roles"),
       workspaceId: insertWorkspace(),
       members: [
         { name: "Build", templateId: "builder" },
-        { name: "Custom Builder", role: "Builder", modelId: "m-1" },
+        { name: "Build as reviewer", templateId: "builder", role: "Reviewer" },
+        { name: "Custom Builder", role: "builder", modelId: "m-1" },
+        { name: "Planner by name", role: "Planner", modelId: "m-1" },
+        { name: "Notes", role: "Release notes", modelId: "m-1" },
+      ],
+    });
+    expect(
+      group.members.map(({ capabilityIds, supportedTaskKinds }) => ({
+        capabilityIds,
+        supportedTaskKinds,
+      })),
+    ).toEqual([
+      capabilitiesForRole("builder"),
+      capabilitiesForRole("reviewer"),
+      capabilitiesForRole("builder"),
+      capabilitiesForRole("lead"),
+      CUSTOM_ROLE_CAPABILITIES,
+    ]);
+    for (const member of group.members) {
+      expect(savedRow(member.agentId)).toMatchObject({
+        capabilityIds: member.capabilityIds,
+        supportedTaskKinds: member.supportedTaskKinds,
+      });
+    }
+    expectAgentError(() => createAgentFromTemplate("custom-builder"), "invalid-value");
+  });
+
+  it("changing the role recalculates; keeping it keeps hand-picked lists", () => {
+    const agent = createAgent({
+      name: uid("Picked"),
+      role: "Reviewer",
+      modelId: "m-1",
+      capabilityIds: ["implement", "review"],
+      supportedTaskKinds: ["code", "design"],
+    });
+    updateAgent(agent.id, { role: "reviewer", instructions: "Still a reviewer" });
+    expect(getAgent(agent.id)).toMatchObject({
+      capabilityIds: ["implement", "review"],
+      supportedTaskKinds: ["code", "design"],
+    });
+    updateAgent(agent.id, { role: "Librarian" });
+    expect(getAgent(agent.id)).toMatchObject(capabilitiesForRole("librarian"));
+    // Custom labels are one role: renaming within Custom keeps the lists.
+    updateAgent(agent.id, { role: "Docs helper" });
+    expect(getAgent(agent.id)).toMatchObject(CUSTOM_ROLE_CAPABILITIES);
+    updateAgent(agent.id, { role: "Release notes" });
+    expect(savedRow(agent.id)).toEqual(CUSTOM_ROLE_CAPABILITIES);
+  });
+
+  it("a copy keeps the source's saved lists, not its role's", () => {
+    const source = createAgent({
+      name: uid("Source"),
+      role: "Builder",
+      modelId: "m-1",
+      capabilityIds: ["implement", "review"],
+      supportedTaskKinds: ["code", "review"],
+    });
+    const group = createGroupWithNewAgents({
+      name: uid("Copies"),
+      workspaceId: insertWorkspace(),
+      members: [
+        { name: "Copy", role: "Builder", modelId: "m-1", copiedFromAgentId: source.id },
+        { name: "Other", templateId: "planner" },
       ],
     });
     expect(group.members[0]).toMatchObject({
-      capabilityIds: ["implement", "verify"],
-      supportedTaskKinds: ["code"],
+      capabilityIds: ["implement", "review"],
+      supportedTaskKinds: ["code", "review"],
     });
-    expect(group.members[1]).toMatchObject({ capabilityIds: [], supportedTaskKinds: [] });
-    expectAgentError(() => createAgentFromTemplate("custom-builder"), "invalid-value");
+    expectAgentError(
+      () =>
+        createGroupWithNewAgents({
+          name: uid("Missing"),
+          workspaceId: insertWorkspace(),
+          members: [
+            { name: "Copy", modelId: "m-1", copiedFromAgentId: "missing-agent" },
+            { name: "Other", templateId: "planner" },
+          ],
+        }),
+      "agent-not-found",
+    );
   });
+
   it("migrates missing columns to empty and preserves all profile fields idempotently", () => {
     const db = new DatabaseSync(":memory:");
     try {
@@ -523,38 +689,4 @@ describe("explicit agent capabilities", () => {
       db.close();
     }
   });
-});
-
-it("rejects malformed explicit metadata on update instead of keeping previous values", () => {
-  const agent = createAgent({
-    name: uid("Validate"),
-    capabilityIds: ["implement"],
-    supportedTaskKinds: ["code"],
-  });
-  expectAgentError(
-    () => updateAgent(agent.id, { capabilityIds: null as unknown as string[] }),
-    "invalid-value",
-  );
-  expect(getAgent(agent.id)).toMatchObject({
-    capabilityIds: ["implement"],
-    supportedTaskKinds: ["code"],
-  });
-});
-
-it("explicit empty template overrides survive group creation", () => {
-  const group = createGroupWithNewAgents({
-    name: uid("Override"),
-    workspaceId: insertWorkspace(),
-    members: [
-      { name: "No caps", templateId: "builder", capabilityIds: [], supportedTaskKinds: [] },
-      {
-        name: "Docs",
-        templateId: "builder",
-        capabilityIds: ["docs"],
-        supportedTaskKinds: ["docs"],
-      },
-    ],
-  });
-  expect(group.members[0]).toMatchObject({ capabilityIds: [], supportedTaskKinds: [] });
-  expect(group.members[1]).toMatchObject({ capabilityIds: ["docs"], supportedTaskKinds: ["docs"] });
 });

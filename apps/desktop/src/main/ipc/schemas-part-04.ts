@@ -80,8 +80,6 @@ export const agentsCreateSchema = z
     avatarFace: agentFields.avatarFace.optional(),
     avatarColor: agentFields.avatarColor.optional(),
     avatarShape: agentFields.avatarShape.optional(),
-    capabilityIds: agentFields.capabilityIds.optional(),
-    supportedTaskKinds: agentFields.supportedTaskKinds.optional(),
   })
   .strict();
 
@@ -96,8 +94,6 @@ export const agentsUpdateSchema = z
     avatarFace: agentFields.avatarFace.optional(),
     avatarColor: agentFields.avatarColor.optional(),
     avatarShape: agentFields.avatarShape.optional(),
-    capabilityIds: agentFields.capabilityIds.optional(),
-    supportedTaskKinds: agentFields.supportedTaskKinds.optional(),
   })
   .strict();
 

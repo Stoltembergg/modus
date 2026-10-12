@@ -1807,7 +1807,7 @@ export class GroupRuntime {
       case "member-unavailable":
         return `${targetName} is busy or unavailable`;
       case "capabilities-unconfigured":
-        return `${targetName} has no configured capabilities or supported task kinds; open Edit agent and select them, or apply its official template capabilities`;
+        return `${targetName} handles no typed tasks`;
       case "capability-incompatible":
         return `${targetName} cannot take kind=${task?.kind ?? "unknown"}, stage=${task ? groupTaskRoutingStage(task) : "unknown"}; declared capabilityIds=${JSON.stringify(target?.capabilityIds ?? [])}, supportedTaskKinds=${JSON.stringify(target?.supportedTaskKinds ?? [])}${task?.stage === "plan" && (task.kind === "code" || task.kind === "docs") ? "; the active owner must explicitly advance the task to implement before handing it to an implementer" : ""}`;
       case "tools-inactive":

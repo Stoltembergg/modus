@@ -1378,7 +1378,7 @@ const DESCRIPTIONS: Record<GroupToolName, { label: string; description: string; 
     group_assign_task: {
       label: "Assign group task",
       description:
-        "Coordinator mode, Lead only: give a task to a member (yourself included). Check declared capabilityIds/supportedTaskKinds against its current stage first; empty metadata needs user configuration. An open task moves to in_progress with that owner; an in_progress task owned by someone else is reassigned. Posts and queues the new owner only when dispatch is accepted; a refusal is an error, not a successful wake. in_review, done and cancelled tasks cannot be assigned.",
+        "Coordinator mode, Lead only: give a task to a member (yourself included). Check declared capabilityIds/supportedTaskKinds against its current stage first; they follow from the member's role. An open task moves to in_progress with that owner; an in_progress task owned by someone else is reassigned. Posts and queues the new owner only when dispatch is accepted; a refusal is an error, not a successful wake. in_review, done and cancelled tasks cannot be assigned.",
       snippet:
         "group_assign_task(taskId, memberId, note?, expectedVersion?, operationId?) — as coordinator, hand a task to a member.",
     },

@@ -38,6 +38,7 @@ describe("newGroupModel (A4)", () => {
   it("a copy is a normal member: no templateId, the source's fields, a suffixed name", () => {
     const copy = copyMember(
       {
+        id: "agent-1",
         name: "Builder",
         role: "Fixer",
         instructions: "Fix it.",
@@ -52,8 +53,7 @@ describe("newGroupModel (A4)", () => {
     expect(copy).toEqual({
       key: "c1",
       source: "copy",
-      capabilityIds: [],
-      supportedTaskKinds: [],
+      copiedFromAgentId: "agent-1",
       name: "Builder 2",
       role: "Fixer",
       instructions: "Fix it.",
@@ -66,6 +66,7 @@ describe("newGroupModel (A4)", () => {
     expect(
       copyMember(
         {
+          id: "agent-2",
           name: "X",
           role: "",
           instructions: "",
@@ -120,8 +121,6 @@ describe("newGroupModel (A4)", () => {
       members: [
         {
           templateId: "planner",
-          capabilityIds: planner.capabilityIds,
-          supportedTaskKinds: planner.supportedTaskKinds,
           name: "Boss",
           role: planner.role,
           instructions: planner.instructions,
@@ -130,8 +129,6 @@ describe("newGroupModel (A4)", () => {
         },
         {
           templateId: "builder",
-          capabilityIds: builder?.capabilityIds,
-          supportedTaskKinds: builder?.supportedTaskKinds,
           name: "Builder",
           role: builder?.role,
           instructions: builder?.instructions,
@@ -167,40 +164,29 @@ describe("newGroupModel (A4)", () => {
   });
 });
 
-it("preserves explicit dialog capabilities in the group creation payload", () => {
-  const member = dialogMember(
-    {
-      name: "Custom",
-      role: "Builder",
-      modelId: "m-1",
-      capabilityIds: ["docs"],
-      supportedTaskKinds: ["docs"],
-    },
-    [],
-    "cap",
-    { avatarFace: "happy", avatarColor: "blue" },
-  );
-  expect(newGroupMemberInput(member)).toMatchObject({
-    capabilityIds: ["docs"],
-    supportedTaskKinds: ["docs"],
+it("never sends work lists: dialog members carry only their role", () => {
+  const member = dialogMember({ name: "Custom", role: "Builder", modelId: "m-1" }, [], "cap", {
+    avatarFace: "happy",
+    avatarColor: "blue",
   });
+  const input = newGroupMemberInput(member);
+  expect(input).toMatchObject({ name: "Custom", role: "Builder" });
+  expect(input).not.toHaveProperty("capabilityIds");
+  expect(input).not.toHaveProperty("supportedTaskKinds");
 });
 
-it("preserves configured capabilities when copying an agent into group:create", () => {
-  const agent = {
-    name: "Reviewer",
-    role: "Reviewer",
-    instructions: "Review diffs.",
-    modelId: "m-1",
-    avatarFace: "curious" as const,
-    avatarColor: "amber" as const,
-    avatarShape: "circle" as const,
-    templateId: "reviewer",
-    capabilityIds: ["review", "review"],
-    supportedTaskKinds: ["code", "code"] as const,
-  };
+it("a copy sends its source agent id so main keeps the saved lists", () => {
   const copy = copyMember(
-    { ...agent, supportedTaskKinds: [...agent.supportedTaskKinds] },
+    {
+      id: "reviewer-agent",
+      name: "Reviewer",
+      role: "Reviewer",
+      instructions: "Review diffs.",
+      modelId: "m-1",
+      avatarFace: "curious",
+      avatarColor: "amber",
+      avatarShape: "circle",
+    },
     members(1),
     "copy",
   );
@@ -212,36 +198,11 @@ it("preserves configured capabilities when copying an agent into group:create", 
   });
   expect(payload.members[1]).toMatchObject({
     name: "Reviewer",
-    capabilityIds: ["review"],
-    supportedTaskKinds: ["code"],
+    copiedFromAgentId: "reviewer-agent",
   });
+  expect(payload.members[1]).not.toHaveProperty("capabilityIds");
   expect(payload.members[1]?.templateId).toBeUndefined();
-  expect(agent.capabilityIds).toEqual(["review", "review"]);
-});
-
-it("keeps legacy copied capability metadata empty without inferring from the profile", () => {
-  const copy = copyMember(
-    {
-      name: "Builder",
-      role: "Reviewer",
-      instructions: "Implement and verify with shell.",
-      modelId: "m-1",
-      avatarFace: "happy",
-      avatarColor: "blue",
-      avatarShape: "circle",
-    },
-    members(1),
-    "legacy-copy",
-  );
-  const payload = newGroupCreateInput({
-    name: "Crew",
-    workspaceId: "ws",
-    members: [...members(1), copy],
-    leadKey: "legacy-copy",
-  });
-  expect(copy).toMatchObject({ capabilityIds: [], supportedTaskKinds: [] });
-  expect(payload.members[1]).toMatchObject({ capabilityIds: [], supportedTaskKinds: [] });
-  expect(payload.members[1]?.templateId).toBeUndefined();
+  expect(payload.members[0]).not.toHaveProperty("copiedFromAgentId");
 });
 
 describe("newGroupCreateInput blank-name default follows the room locale (C6)", () => {

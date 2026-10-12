@@ -1,4 +1,9 @@
 import { randomUUID } from "node:crypto";
+import {
+  capabilitiesForRole,
+  effectiveCapabilities,
+  roleIdForLabel,
+} from "../../shared/agent-roles";
 import { agentAvatarForId, getAgentTemplate } from "../../shared/agent-templates";
 import {
   AGENT_AVATAR_COLORS,
@@ -26,7 +31,10 @@ import {
   groupBlockedReason,
   groupMembersUpdateCountError,
 } from "../../shared/group-blocked";
-import { normalizeGroupMemberCapabilities } from "../../shared/group-capabilities";
+import {
+  type GroupMemberCapabilities,
+  normalizeGroupMemberCapabilities,
+} from "../../shared/group-capabilities";
 import { getAgentSession } from "../agent/agent-store";
 import { getDatabase, uniqueAgentName } from "../db/database";
 import {
@@ -72,11 +80,23 @@ type AgentRow = {
 const AGENT_COLUMNS = `id, group_id, name, role, instructions, model_id, default_workspace_id,
   avatar_face, avatar_color, avatar_shape, template_id, created_at, updated_at, archived_at, capability_ids_json, supported_task_kinds_json`;
 
+/** The lists exactly as saved (empty for agents saved before they existed). */
+function savedCapabilities(
+  row: Pick<AgentRow, "capability_ids_json" | "supported_task_kinds_json">,
+) {
+  return normalizeGroupMemberCapabilities({
+    capabilityIds: JSON.parse(row.capability_ids_json ?? "[]"),
+    supportedTaskKinds: JSON.parse(row.supported_task_kinds_json ?? "[]"),
+  });
+}
+
 function toAgent(row: AgentRow): AgentInfo {
   return {
-    ...normalizeGroupMemberCapabilities({
-      capabilityIds: JSON.parse(row.capability_ids_json ?? "[]"),
-      supportedTaskKinds: JSON.parse(row.supported_task_kinds_json ?? "[]"),
+    // Saved lists as they are; empty ones read as the agent's derived role.
+    ...effectiveCapabilities({
+      ...savedCapabilities(row),
+      role: row.role,
+      ...(row.template_id !== null ? { templateId: row.template_id } : {}),
     }),
     id: row.id,
     ...(row.group_id !== null ? { groupId: row.group_id } : {}),
@@ -137,7 +157,7 @@ function requireAvatar<T extends string>(value: T, allowed: readonly T[], field:
   return value;
 }
 
-function requireCapabilities(input: UpdateAgentInput) {
+function requireCapabilities(input: Partial<GroupMemberCapabilities>) {
   try {
     return normalizeGroupMemberCapabilities(input);
   } catch {
@@ -145,12 +165,13 @@ function requireCapabilities(input: UpdateAgentInput) {
   }
 }
 
-type AgentCreateFields = CreateAgentInput & {
-  templateId?: string;
-  groupId?: string;
-  /** A template's default shape can move to the next free silhouette in a group. */
-  preferredAvatarShape?: AgentAvatarShape;
-};
+type AgentCreateFields = CreateAgentInput &
+  Partial<GroupMemberCapabilities> & {
+    templateId?: string;
+    groupId?: string;
+    /** A template's default shape can move to the next free silhouette in a group. */
+    preferredAvatarShape?: AgentAvatarShape;
+  };
 
 function allocateNewGroupShape(
   groupId: string,
@@ -257,16 +278,27 @@ export function createAgent(input: AgentCreateFields): AgentInfo {
  * role, instructions and avatar; explicit fields win.
  */
 function newAgentFields(input: NewGroupAgentInput, groupId: string | undefined): AgentCreateFields {
-  const { templateId, ...fields } = input;
+  const { templateId, copiedFromAgentId, ...fields } = input;
   const base = { ...fields, ...(groupId !== undefined ? { groupId } : {}) };
-  if (templateId === undefined) return base;
+  if (templateId === undefined) {
+    // A copy keeps the source's saved lists; any other new agent follows its role.
+    const capabilities =
+      copiedFromAgentId !== undefined
+        ? savedCapabilities(requireAgentRow(copiedFromAgentId))
+        : capabilitiesForRole(roleIdForLabel(fields.role));
+    return { ...base, ...capabilities };
+  }
   const template = getAgentTemplate(templateId);
   if (!template) {
     throw new GroupStoreError("invalid-value", `Unknown agent template: ${templateId}`);
   }
+  // Template agents handle their template's work, unless the role picked names another role.
+  const capabilities =
+    fields.role !== undefined && roleIdForLabel(fields.role) !== roleIdForLabel(template.role)
+      ? capabilitiesForRole(roleIdForLabel(fields.role))
+      : { capabilityIds: template.capabilityIds, supportedTaskKinds: template.supportedTaskKinds };
   return {
-    capabilityIds: template.capabilityIds,
-    supportedTaskKinds: template.supportedTaskKinds,
+    ...capabilities,
     role: template.role,
     instructions: template.instructions,
     avatarFace: template.avatarFace,
@@ -417,14 +449,13 @@ export function updateGroupMembers(input: UpdateAgentGroupMembersInput): {
 /** Changes only the given fields; `null` clears the model / default Project. */
 export function updateAgent(agentId: string, input: UpdateAgentInput): AgentInfo {
   const row = requireAgentRow(agentId);
-  const capabilities = requireCapabilities({
-    capabilityIds:
-      input.capabilityIds !== undefined ? input.capabilityIds : JSON.parse(row.capability_ids_json),
-    supportedTaskKinds:
-      input.supportedTaskKinds !== undefined
-        ? input.supportedTaskKinds
-        : JSON.parse(row.supported_task_kinds_json),
-  });
+  // Saved lists stay exactly as they are until the role changes; a new role
+  // replaces them with that role's lists.
+  const roleChanged =
+    input.role !== undefined && roleIdForLabel(input.role) !== roleIdForLabel(row.role);
+  const capabilities = roleChanged
+    ? capabilitiesForRole(roleIdForLabel(input.role))
+    : savedCapabilities(row);
   const nextModelId = input.modelId !== undefined ? input.modelId || null : row.model_id;
   const avatarShape = requireAvatar(
     input.avatarShape ?? row.avatar_shape,

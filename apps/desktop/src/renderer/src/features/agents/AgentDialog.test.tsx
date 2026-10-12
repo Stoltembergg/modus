@@ -17,7 +17,7 @@ import type {
 import { encodeGroupErrorMessage } from "../../../../shared/group-errors";
 import type { PickableModel } from "../../lib/modusModels";
 import { GROUP_ERROR_MESSAGES } from "../groups/groupErrors";
-import { AGENT_GENERATED_HINT, AgentDialog } from "./AgentDialog";
+import { AGENT_GENERATED_HINT, AgentDialog, CUSTOM_WORK_TYPES_WARNING } from "./AgentDialog";
 import { AGENT_NAME_REQUIRED, agentDialogError, needsProfileGeneration } from "./agentDialogModel";
 import { normalizeSearch } from "./ModelPicker";
 
@@ -250,9 +250,10 @@ describe("AgentDialog", () => {
   it("shows every field with a 48 px animated preview that follows face and color", async () => {
     const user = userEvent.setup();
     const { dialog } = renderDialog();
-    for (const name of ["Name", "Role", "Instructions", /What should it help with/]) {
+    for (const name of ["Name", "Custom role", "Instructions", /What should it help with/]) {
       expect(field(dialog, name)).toBeTruthy();
     }
+    expect(within(dialog).getByRole("combobox", { name: "Role" })).toBeTruthy();
     expect(modelTrigger(dialog).dataset.value).toBe("m-2");
     const preview = within(dialog)
       .getAllByTestId("agent-avatar")
@@ -302,7 +303,7 @@ describe("AgentDialog", () => {
       name: "Cy",
       description: "release notes",
     });
-    await waitFor(() => expect(field(dialog, "Role").value).toBe(GENERATED.role));
+    await waitFor(() => expect(field(dialog, "Custom role").value).toBe(GENERATED.role));
     expect(field(dialog, "Instructions").value).toBe(GENERATED.instructions);
     expect(within(dialog).getByTestId("agent-dialog-notice").textContent).toBe(
       AGENT_GENERATED_HINT,
@@ -311,8 +312,8 @@ describe("AgentDialog", () => {
     expect(within(dialog).queryByRole("button", { name: "Generate" })).toBeNull();
     expect(within(dialog).getByRole("button", { name: "Create" })).toBeTruthy();
 
-    await user.clear(field(dialog, "Role"));
-    await user.type(field(dialog, "Role"), "Scribe");
+    await user.clear(field(dialog, "Custom role"));
+    await user.type(field(dialog, "Custom role"), "Scribe");
     await user.click(within(dialog).getByRole("button", { name: "Create" }));
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
     expect(generate).toHaveBeenCalledTimes(1);
@@ -331,7 +332,7 @@ describe("AgentDialog", () => {
     const { dialog, generate, create } = renderDialog();
     await user.type(field(dialog, "Name"), "Cy");
     expect(within(dialog).getByRole("button", { name: "Generate" })).toBeTruthy();
-    await user.type(field(dialog, "Role"), "Scribe");
+    await user.type(field(dialog, "Custom role"), "Scribe");
     await user.click(within(dialog).getByRole("button", { name: "Create" }));
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
     expect(generate).not.toHaveBeenCalled();
@@ -348,7 +349,7 @@ describe("AgentDialog", () => {
     const { dialog, create } = renderDialog({ generate });
     await user.type(field(dialog, "Name"), "Cy");
     await user.click(within(dialog).getByRole("button", { name: "Generate" }));
-    await waitFor(() => expect(field(dialog, "Role").value).toBe(AGENT_FALLBACK_ROLE));
+    await waitFor(() => expect(field(dialog, "Custom role").value).toBe(AGENT_FALLBACK_ROLE));
     expect(field(dialog, "Instructions").value).toBe(AGENT_FALLBACK_INSTRUCTIONS);
     const notice = within(dialog).getByTestId("agent-dialog-notice");
     expect(notice.textContent).toBe(AGENT_GENERATION_WARNING);
@@ -370,7 +371,7 @@ describe("AgentDialog", () => {
         GROUP_ERROR_MESSAGES["agent-model-unavailable"],
       ),
     );
-    expect(field(dialog, "Role").value).toBe("");
+    expect(field(dialog, "Custom role").value).toBe("");
     // Nothing was generated: the button still offers Generate.
     expect(within(dialog).getByRole("button", { name: "Generate" })).toBeTruthy();
   });
@@ -390,7 +391,7 @@ describe("AgentDialog", () => {
       name: "Ana",
       agentId: "a-1",
     });
-    await waitFor(() => expect(field(dialog, "Role").value).toBe(GENERATED.role));
+    await waitFor(() => expect(field(dialog, "Custom role").value).toBe(GENERATED.role));
     await user.click(within(dialog).getByRole("button", { name: "Color pink" }));
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
@@ -400,8 +401,6 @@ describe("AgentDialog", () => {
       name: "Ana",
       role: GENERATED.role,
       instructions: GENERATED.instructions,
-      capabilityIds: [],
-      supportedTaskKinds: [],
       avatarFace: "wink",
       avatarColor: "pink",
       avatarShape: "squircle",
@@ -433,7 +432,7 @@ describe("AgentDialog", () => {
     });
     const { dialog, onOpenChange } = renderDialog({ create });
     await user.type(field(dialog, "Name"), "Cy");
-    await user.type(field(dialog, "Role"), "Scribe");
+    await user.type(field(dialog, "Custom role"), "Scribe");
     await user.click(within(dialog).getByRole("button", { name: "Create" }));
     await waitFor(() =>
       expect(within(dialog).getByRole("alert").textContent).toBe(
@@ -463,7 +462,7 @@ describe("AgentDialog", () => {
     const { dialog } = renderDialog({ models: MODELS.slice(0, 1), create });
     expect(modelTrigger(dialog).dataset.value).toBe("");
     await user.type(field(dialog, "Name"), "Cy");
-    await user.type(field(dialog, "Role"), "Scribe");
+    await user.type(field(dialog, "Custom role"), "Scribe");
     await user.click(within(dialog).getByRole("button", { name: "Create" }));
 
     await waitFor(() =>
@@ -733,52 +732,108 @@ describe("AgentDialog exit guard", () => {
   });
 });
 
-describe("AgentDialog explicit capabilities", () => {
-  it("custom_agent_can_edit_capabilities", async () => {
-    const user = userEvent.setup();
-    const { dialog, onUpdate } = renderDialog({ agent: ANA });
-    await user.click(within(dialog).getByRole("checkbox", { name: "Capability implement" }));
-    await user.click(within(dialog).getByRole("checkbox", { name: "Task kind code" }));
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
-    await waitFor(() =>
-      expect(onUpdate).toHaveBeenCalledWith(
-        expect.objectContaining({ capabilityIds: ["implement"], supportedTaskKinds: ["code"] }),
-      ),
-    );
+describe("AgentDialog work types follow the role", () => {
+  const roleSelect = (dialog: HTMLElement) =>
+    within(dialog).getByRole("combobox", { name: "Role" }) as HTMLSelectElement;
+  const workTypes = (dialog: HTMLElement) =>
+    within(dialog).getByTestId("agent-work-types").textContent;
+  const noLists = (payload: unknown) => {
+    expect(payload).not.toHaveProperty("capabilityIds");
+    expect(payload).not.toHaveProperty("supportedTaskKinds");
+  };
+
+  it("has no work type checkboxes or template button; Role offers the seven roles and Custom", () => {
+    const { dialog } = renderDialog({ agent: ANA });
+    expect(within(dialog).queryAllByRole("checkbox")).toHaveLength(0);
+    expect(within(dialog).queryByText(/Apply capabilities/)).toBeNull();
+    expect(within(dialog).queryByText(/Choose the work this agent supports/)).toBeNull();
+    expect([...roleSelect(dialog).options].map((option) => option.text)).toEqual([
+      "Lead",
+      "Builder",
+      "Reviewer",
+      "Explorer",
+      "Librarian",
+      "Advisor",
+      "Designer",
+      "Custom",
+    ]);
+    expect(roleSelect(dialog).value).toBe("reviewer");
   });
-  it("creating a custom agent preserves explicit choices across persona generation", async () => {
+
+  it("shows what the agent handles as a plain sentence", async () => {
     const user = userEvent.setup();
-    const { dialog, create } = renderDialog();
-    await user.type(field(dialog, "Name"), "Writer");
-    await user.click(within(dialog).getByRole("checkbox", { name: "Capability docs" }));
-    await user.click(within(dialog).getByRole("checkbox", { name: "Task kind docs" }));
-    await user.click(within(dialog).getByRole("button", { name: "Generate" }));
-    await waitFor(() => expect(field(dialog, "Role").value).toBe(GENERATED.role));
-    await user.click(within(dialog).getByRole("button", { name: "Create" }));
-    await waitFor(() =>
-      expect(create).toHaveBeenCalledWith(
-        expect.objectContaining({ capabilityIds: ["docs"], supportedTaskKinds: ["docs"] }),
-      ),
+    const { dialog } = renderDialog();
+    // A new custom agent starts on Custom: no implement, review or code.
+    expect(roleSelect(dialog).value).toBe("custom");
+    expect(workTypes(dialog)).toBe(
+      "Handles docs, research and question tasks. Researches and writes docs.",
     );
+    await user.selectOptions(roleSelect(dialog), "builder");
+    expect(workTypes(dialog)).toBe("Handles code tasks. Implements and verifies.");
+    expect(workTypes(dialog)).not.toContain("·");
   });
-  it("renaming_role_does_not_change_capabilities", async () => {
+
+  it("warns before replacing hand-picked work types, and recalculates on save", async () => {
     const user = userEvent.setup();
     const { dialog, onUpdate } = renderDialog({
       agent: { ...ANA, capabilityIds: ["verify"], supportedTaskKinds: ["code"] },
     });
-    await user.clear(field(dialog, "Role"));
-    await user.type(field(dialog, "Role"), "Planner");
-    await user.click(within(dialog).getByRole("button", { name: "Regenerate" }));
-    await waitFor(() => expect(field(dialog, "Role").value).toBe(GENERATED.role));
+    expect(workTypes(dialog)).toBe("Handles code tasks. Verifies.");
+    expect(within(dialog).queryByText(CUSTOM_WORK_TYPES_WARNING)).toBeNull();
+    await user.selectOptions(roleSelect(dialog), "builder");
+    expect(within(dialog).getByText(CUSTOM_WORK_TYPES_WARNING)).toBeTruthy();
+    expect(CUSTOM_WORK_TYPES_WARNING).toBe(
+      "This agent has custom work types that will be replaced.",
+    );
+    expect(workTypes(dialog)).toBe("Handles code tasks. Implements and verifies.");
+    // Back to the old role: nothing is replaced, no warning.
+    await user.selectOptions(roleSelect(dialog), "reviewer");
+    expect(within(dialog).queryByText(CUSTOM_WORK_TYPES_WARNING)).toBeNull();
+    await user.selectOptions(roleSelect(dialog), "builder");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
-    await waitFor(() =>
-      expect(onUpdate).toHaveBeenCalledWith(
-        expect.objectContaining({ capabilityIds: ["verify"], supportedTaskKinds: ["code"] }),
-      ),
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0]?.[0]).toMatchObject({ id: "a-1", role: "Builder" });
+    noLists(onUpdate.mock.calls[0]?.[0]);
+  });
+
+  it("does not warn when the saved work types are the old role's", async () => {
+    const user = userEvent.setup();
+    const { dialog } = renderDialog({
+      agent: { ...ANA, capabilityIds: ["review"], supportedTaskKinds: ["code", "review"] },
+    });
+    await user.selectOptions(roleSelect(dialog), "librarian");
+    expect(within(dialog).queryByText(CUSTOM_WORK_TYPES_WARNING)).toBeNull();
+    expect(workTypes(dialog)).toBe(
+      "Handles docs, research and question tasks. Researches and writes docs.",
     );
   });
-  it("template selection fills explicit metadata and supports clearing it in group drafts", async () => {
+
+  it("an agent saved without work types shows its template's", () => {
+    const { dialog } = renderDialog({ agent: { ...ANA, role: "Builder", templateId: "builder" } });
+    expect(roleSelect(dialog).value).toBe("builder");
+    expect(workTypes(dialog)).toBe("Handles code tasks. Implements and verifies.");
+  });
+
+  it("a free-text role is Custom and keeps its label", async () => {
     const user = userEvent.setup();
+    const { dialog, onUpdate } = renderDialog({ agent: { ...ANA, role: "Release notes" } });
+    expect(roleSelect(dialog).value).toBe("custom");
+    expect(field(dialog, "Custom role").value).toBe("Release notes");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0]?.[0]).toMatchObject({ role: "Release notes" });
+  });
+
+  it("create and group drafts send no work lists", async () => {
+    const user = userEvent.setup();
+    const { dialog, create } = renderDialog();
+    await user.type(field(dialog, "Name"), "Writer");
+    await user.type(field(dialog, "Custom role"), "Scribe");
+    await user.click(within(dialog).getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    noLists(create.mock.calls[0]?.[0]);
+    cleanup();
+
     const onAdd = vi.fn();
     render(
       <AgentDialog
@@ -796,25 +851,13 @@ describe("AgentDialog explicit capabilities", () => {
         }}
       />,
     );
-    expect(screen.getByRole("checkbox", { name: "Capability implement" })).toHaveProperty(
-      "checked",
-      true,
+    expect(screen.getByTestId("agent-work-types").textContent).toBe(
+      "Handles code tasks. Implements and verifies.",
     );
-    await user.click(screen.getByRole("checkbox", { name: "Capability implement" }));
     await user.click(screen.getByRole("button", { name: "Add" }));
     expect(onAdd).toHaveBeenCalledWith(
-      expect.objectContaining({
-        templateId: "builder",
-        capabilityIds: ["verify"],
-        supportedTaskKinds: ["code"],
-      }),
+      expect.objectContaining({ templateId: "builder", role: "Builder" }),
     );
-  });
-  it("legacy template agents keep empty metadata when editing", () => {
-    renderDialog({ agent: { ...ANA, templateId: "builder" } });
-    expect(screen.getByRole("checkbox", { name: "Capability implement" })).toHaveProperty(
-      "checked",
-      false,
-    );
+    noLists(onAdd.mock.calls[0]?.[0]);
   });
 });

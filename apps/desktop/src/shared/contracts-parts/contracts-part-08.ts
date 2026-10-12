@@ -132,8 +132,11 @@ export type AgentInfo = Partial<GroupMemberCapabilities> & {
   archivedAt?: string;
 };
 
-/** `agents:create` payload. */
-export type CreateAgentInput = Partial<GroupMemberCapabilities> & {
+/**
+ * `agents:create` payload. The work an agent handles (capabilityIds,
+ * supportedTaskKinds) is never sent: main derives it (shared/agent-roles.ts).
+ */
+export type CreateAgentInput = {
   name: string;
   role?: string;
   instructions?: string;
@@ -150,7 +153,11 @@ export type CreateAgentInput = Partial<GroupMemberCapabilities> & {
  * `group:create`). Without `templateId` a `modelId` of a configured provider is
  * required (`agent-model-required` / `agent-model-unavailable`).
  */
-export type NewGroupAgentInput = CreateAgentInput & { templateId?: string };
+export type NewGroupAgentInput = CreateAgentInput & {
+  templateId?: string;
+  /** "Copy from another group": the copy keeps this agent's saved work lists. */
+  copiedFromAgentId?: string;
+};
 
 /** `agents:create` payload: the agent joins `groupId` (its only group). */
 export type CreateGroupAgentInput = NewGroupAgentInput & { groupId: string };
