@@ -75,13 +75,16 @@ export function openDatabaseAtStartup(deps: DatabaseStartupDeps): boolean {
         deps.quit();
         return false;
       }
-      const choice = deps.showMigrationError(error);
+      // "Show backup" only reveals the folder and re-shows this same screen:
+      // it must not call open() again (that would take another backup and
+      // spend a migration attempt).
+      let choice = deps.showMigrationError(error);
+      while (choice === "backup") {
+        deps.showBackup?.(error.backup);
+        choice = deps.showMigrationError(error);
+      }
       if (choice === "retry") {
         force = true;
-        continue;
-      }
-      if (choice === "backup") {
-        deps.showBackup?.(error.backup);
         continue;
       }
       deps.quit();

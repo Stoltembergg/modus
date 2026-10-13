@@ -81,6 +81,27 @@ describe("openDatabaseAtStartup: groups migration failure", async () => {
     expect(deps.quit).toHaveBeenCalledTimes(1);
   });
 
+  it("Show backup never calls open again nor spends an attempt", () => {
+    const choices = ["backup", "backup", "backup", "quit"] as const;
+    let i = 0;
+    const err = failure();
+    const deps = {
+      open: vi.fn(() => {
+        throw err;
+      }),
+      showErrorBox: vi.fn(),
+      quit: vi.fn(),
+      showMigrationError: vi.fn(() => choices[i++] ?? "quit"),
+      showBackup: vi.fn(),
+    };
+    expect(openDatabaseAtStartup(deps)).toBe(false);
+    expect(deps.open).toHaveBeenCalledTimes(1);
+    expect(deps.showBackup).toHaveBeenCalledTimes(3);
+    expect(deps.showMigrationError).toHaveBeenCalledTimes(4);
+    for (const call of deps.showMigrationError.mock.calls) expect(call[0]).toBe(err);
+    expect(err.attempts).toBe(3);
+  });
+
   it("without a screen, falls back to an error box that says nothing was lost", async () => {
     const { GROUPS_MIGRATION_ERROR_TITLE } = await import("./database-startup");
     const deps = {
