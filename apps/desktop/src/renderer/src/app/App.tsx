@@ -63,13 +63,9 @@ import { addContextItemToDraft } from "../features/agent/ChatPane";
 import { HeaderActions } from "../features/agent/SessionHeaderActions";
 import { SessionTitlePopover } from "../features/agent/SessionTitlePopover";
 import { AgentDialog } from "../features/agents/AgentDialog";
-import {
-  Composer,
-  type ComposerDraft,
-  createEmptyComposerDraft,
-} from "../features/composer/Composer";
+import { type ComposerDraft, createEmptyComposerDraft } from "../features/composer/Composer";
 import { contextItemKey } from "../features/composer/composerTokens";
-import { HeroModelPicker } from "../features/composer/SessionModelPicker";
+import { HomeComposer } from "../features/composer/HomeComposer";
 import { BranchSwitcher } from "../features/git/BranchSwitcher";
 import { INSPECTOR_MIN_WIDTH } from "../features/inspector/inspector-layout";
 import { normalizePlan } from "../features/plan/planState";
@@ -1403,7 +1399,7 @@ export function App() {
                               }}
                             >
                               <div className="relative z-10 w-full max-w-[680px] -translate-y-4">
-                                <Composer
+                                <HomeComposer
                                   canSubmit={canCreateSession}
                                   contextItems={heroContextItems}
                                   cwd={activeWorkspace?.rootPath}
@@ -1416,16 +1412,10 @@ export function App() {
                                       onError={setSessionCreateError}
                                     />
                                   }
-                                  branchControl={
-                                    <HeroModelPicker
-                                      defaultModelId={model}
-                                      models={models}
-                                      onValueChange={setHeroModel}
-                                      value={heroModel}
-                                    />
-                                  }
+                                  defaultModelId={model}
+                                  heroModel={heroModel}
+                                  onHeroModelChange={setHeroModel}
                                   mode={heroMode}
-                                  model={heroModel || model}
                                   models={models}
                                   onContextChange={setHeroContextItems}
                                   onModeChange={setHeroMode}
