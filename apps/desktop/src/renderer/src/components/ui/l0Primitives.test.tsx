@@ -10,7 +10,7 @@ vi.mock("motion/react", async (importOriginal) => {
 });
 
 import { RevealOnMount } from "./RevealOnMount";
-import { SendStopIcon, sendStopPath } from "./SendStopIcon";
+import { SendStopIcon } from "./SendStopIcon";
 import { StreamingCaret } from "./StreamingCaret";
 import { TaskCheck } from "./TaskCheck";
 import { WorkingText } from "./WorkingText";
@@ -155,13 +155,13 @@ describe("SendStopIcon", () => {
     expect(container.firstElementChild?.getAttribute("aria-hidden")).toBe("true");
   });
 
-  it("morphs one path from the arrow to the square", () => {
-    expect(sendStopPath(0)).toBe(
-      "M12.00 4.50L18.50 11.00L14.25 11.00L14.25 19.50L9.75 19.50L9.75 11.00L5.50 11.00Z",
-    );
-    expect(sendStopPath(1)).toBe(
-      "M12.00 6.00L18.00 6.00L18.00 12.00L18.00 18.00L6.00 18.00L6.00 12.00L6.00 6.00Z",
-    );
+  it("swaps instantly under reduced motion", () => {
+    const { container } = render(<SendStopIcon busy />);
+    const layers = container.querySelectorAll("[data-icon]");
+    expect(layers).toHaveLength(2);
+    for (const layer of layers) {
+      expect(layer.getAttribute("class")).toContain("motion-reduce:transition-none");
+    }
   });
 });
 

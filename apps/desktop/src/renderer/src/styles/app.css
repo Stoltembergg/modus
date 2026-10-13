@@ -3086,8 +3086,7 @@ body
 }
 
 /*
- * Composer surface, adapted from React Bits PromptBar (MIT + Commons Clause):
- * one continuous rounded field, no border or divider, theme glass fill.
+ * Composer surface: one continuous rounded field, no border or divider, theme glass fill.
  * Solid fill unless native glass + Transparency "full".
  */
 .composer-glass {
