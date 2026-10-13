@@ -860,6 +860,21 @@ export function App() {
     }
   }
 
+  /** Edit an existing agent profile (its 1:1 chat row). Its own name is not "taken". */
+  async function openEditProfile(agentId: string): Promise<void> {
+    try {
+      const allAgents = await window.modus.agents.list();
+      const agent = allAgents.find((item: AgentInfo) => item.id === agentId);
+      if (!agent) return;
+      const takenNames = allAgents
+        .filter((item: AgentInfo) => !item.groupId && !item.archivedAt && item.id !== agentId)
+        .map((item: AgentInfo) => item.name);
+      setAgentDialog({ profile: true, takenNames, agent });
+    } catch (error) {
+      setSessionCreateError(describeAgentError(error));
+    }
+  }
+
   async function openNewProfile(): Promise<void> {
     try {
       const allAgents = await window.modus.agents.list();
@@ -1155,6 +1170,7 @@ export function App() {
                         onPinProject={(id, pinned) => void pinProject(id, pinned)}
                         onPinSession={(session, pinned) => void pinSession(session, pinned)}
                         onRenameSession={(id, title) => void renameSession(id, title)}
+                        onEditAgentProfile={(agentId) => void openEditProfile(agentId)}
                         onRenameProject={(id, displayName) => void renameProject(id, displayName)}
                         onArchiveProjectChats={(id) => void archiveProjectChats(id)}
                         onDeleteProjectChats={(id) => void deleteProjectChats(id)}

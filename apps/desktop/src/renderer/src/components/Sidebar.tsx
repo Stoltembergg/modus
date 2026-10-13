@@ -12,6 +12,7 @@ import {
   IconPin,
   IconPinnedOff,
   IconTrash,
+  IconUserEdit,
   IconUserPlus,
   IconX,
 } from "@tabler/icons-react";
@@ -84,6 +85,8 @@ type SidebarProps = {
   onNewWorkspaceSession(workspace: WorkspaceInfo): void;
   onPinSession(session: AgentSessionInfo, pinned: boolean): void;
   onRenameSession?(id: string, title: string): void;
+  /** An agent's 1:1 chat: open that agent's profile for editing. */
+  onEditAgentProfile?(agentId: string): void;
   onArchiveSession(session: AgentSessionInfo): void;
   onRestoreSession(session: AgentSessionInfo): void;
   onDeleteSession(session: AgentSessionInfo): void;
@@ -130,6 +133,7 @@ export function Sidebar({
   onWidthChange,
   canCreateSession,
   onRenameSession,
+  onEditAgentProfile,
   onNewProfile,
   embedded = false,
 }: SidebarProps) {
@@ -253,6 +257,11 @@ export function Sidebar({
                       event.stopPropagation();
                       onPinSession(session, false);
                     }}
+                    onEditProfile={
+                      session.agentId && onEditAgentProfile
+                        ? () => onEditAgentProfile(session.agentId as string)
+                        : undefined
+                    }
                     onRename={(title) => onRenameSession?.(session.id, title)}
                     onArchive={(event) => {
                       event.stopPropagation();
@@ -296,6 +305,11 @@ export function Sidebar({
                     event.stopPropagation();
                     onPinSession(session, !session.pinnedAt);
                   }}
+                  onEditProfile={
+                    session.agentId && onEditAgentProfile
+                      ? () => onEditAgentProfile(session.agentId as string)
+                      : undefined
+                  }
                   onRename={(title) => onRenameSession?.(session.id, title)}
                   onSelect={() => onSelectSession(session)}
                   pinned={Boolean(session.pinnedAt)}
@@ -339,6 +353,7 @@ export function Sidebar({
                     onNewSession={() => onNewWorkspaceSession(workspace)}
                     onPinSession={onPinSession}
                     onRenameSession={(id, title) => onRenameSession?.(id, title)}
+                    onEditAgentProfile={onEditAgentProfile}
                     onRestoreSession={onRestoreSession}
                     onSelectSession={onSelectSession}
                     activeSessionId={activeSessionId}
@@ -446,6 +461,7 @@ function WorkspaceItem({
   onNewSession,
   onPinSession,
   onRenameSession,
+  onEditAgentProfile,
   onArchiveSession,
   onRestoreSession,
   onDeleteSession,
@@ -469,6 +485,7 @@ function WorkspaceItem({
   onNewSession(): void;
   onPinSession(session: AgentSessionInfo, pinned: boolean): void;
   onRenameSession(id: string, title: string): void;
+  onEditAgentProfile?: ((agentId: string) => void) | undefined;
   onArchiveSession(session: AgentSessionInfo): void;
   onRestoreSession(session: AgentSessionInfo): void;
   onDeleteSession(session: AgentSessionInfo): void;
@@ -566,6 +583,11 @@ function WorkspaceItem({
                   event.stopPropagation();
                   onPinSession(session, !session.pinnedAt);
                 }}
+                onEditProfile={
+                  session.agentId && onEditAgentProfile
+                    ? () => onEditAgentProfile(session.agentId as string)
+                    : undefined
+                }
                 onRename={(title) => onRenameSession(session.id, title)}
                 onSelect={() => onSelectSession(session)}
                 pinned={Boolean(session.pinnedAt)}
@@ -624,6 +646,7 @@ function SessionRow({
   onSelect,
   onPin,
   onRename,
+  onEditProfile,
   onArchive,
   onDelete,
 }: {
@@ -635,6 +658,7 @@ function SessionRow({
   onSelect(): void;
   onPin(event: MouseEvent<HTMLButtonElement>): void;
   onRename(title: string): void;
+  onEditProfile?: (() => void) | undefined;
   onArchive(event: MouseEvent<HTMLButtonElement>): void;
   onDelete(event: MouseEvent<HTMLButtonElement>): void;
 }) {
@@ -737,6 +761,17 @@ function SessionRow({
         <IconButton label="Rename session" onClick={startRename}>
           <IconPencil size={SB_ACTION} stroke={SB_ACTION_STROKE} />
         </IconButton>
+        {onEditProfile ? (
+          <IconButton
+            label="Edit agent profile"
+            onClick={(event) => {
+              event.stopPropagation();
+              onEditProfile();
+            }}
+          >
+            <IconUserEdit size={SB_ACTION} stroke={SB_ACTION_STROKE} />
+          </IconButton>
+        ) : null}
         <IconButton label="Archive" onClick={onArchive}>
           <IconArchive size={SB_ACTION} stroke={SB_ACTION_STROKE} />
         </IconButton>
