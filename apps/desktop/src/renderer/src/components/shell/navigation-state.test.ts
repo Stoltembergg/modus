@@ -3,6 +3,7 @@ import {
   closeSettingsNavigation,
   INITIAL_PRIMARY_NAVIGATION,
   navigatePrimary,
+  normalizePrimaryDestination,
   restorePrimaryNavigation,
 } from "./navigation-state";
 
@@ -18,11 +19,11 @@ describe("primary navigation", () => {
     const projects = navigatePrimary(INITIAL_PRIMARY_NAVIGATION, "settings");
     expect(projects).toEqual({ active: "settings", settingsReturnTo: "direct-messages" });
 
-    const groups = navigatePrimary(projects, "groups");
-    const settings = navigatePrimary(groups, "settings");
+    const back = navigatePrimary(projects, "direct-messages");
+    const settings = navigatePrimary(back, "settings");
     expect(closeSettingsNavigation(settings)).toEqual({
-      active: "groups",
-      settingsReturnTo: "groups",
+      active: "direct-messages",
+      settingsReturnTo: "direct-messages",
     });
   });
 
@@ -42,5 +43,11 @@ describe("primary navigation", () => {
         activeSessionId: null,
       }),
     ).toEqual({ active: "settings", settingsReturnTo: "direct-messages" });
+  });
+
+  it("maps the retired Groups destination (and unknown values) to Projects", () => {
+    expect(normalizePrimaryDestination("groups")).toBe("direct-messages");
+    expect(normalizePrimaryDestination(undefined)).toBe("direct-messages");
+    expect(normalizePrimaryDestination("settings")).toBe("settings");
   });
 });

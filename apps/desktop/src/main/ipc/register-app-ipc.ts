@@ -130,6 +130,12 @@ import {
 } from "../browser/browser-service";
 import { getComposioService } from "../composio/composio-service-instance";
 import { resolveContext, searchContext } from "../context/context-service";
+import { getDatabase } from "../db/database";
+import {
+  dismissGroupsMigrationNotice,
+  readGroupsMigrationNotice,
+  readMigratedGroupTranscript,
+} from "../db/groups-migration-notice";
 import { addDocSource, listDocSources, searchDocs } from "../docs/docs-service";
 import { listDirectory, readWorkspaceFile, writeWorkspaceFile } from "../files/files-service";
 import {
@@ -254,10 +260,7 @@ import { registerAuthIpcHandlers } from "./auth-ipc";
 import { registerBillingIpcHandlers } from "./billing-ipc";
 import { IPC_CHANNELS } from "./channels";
 import { registerComposioIpcHandlers } from "./composio-ipc";
-import { registerGroupIntegrationIpcHandlers } from "./group-integration-ipc";
-import { registerGroupIpcHandlers, toGroupIpcError } from "./group-ipc";
-import { registerGroupRuntimeIpcHandlers } from "./group-runtime-ipc";
-import { registerGroupWorkIpcHandlers } from "./group-work-ipc";
+import { toGroupIpcError } from "./group-ipc";
 import { registerHarnessInsightsIpcHandlers } from "./harness-insights-ipc";
 import { registerHyperPlanIpcHandlers } from "./hyperplan-ipc";
 import { registerProjectMemoryIpcHandlers } from "./project-memory-ipc";
@@ -1573,64 +1576,22 @@ export function registerAppIpc({
       ),
   });
   registerComposioIpcHandlers(ipcMain, assertTrustedSender, getComposioService);
-  registerGroupIpcHandlers(ipcMain, assertTrustedSender, {
-    listAgentGroupsWithMembers: () => listAgentGroupsWithMembers(),
-    createAgentGroupWithMembers: (input) => createGroupWithNewAgents(input),
-    isModelAvailable,
-    renameAgentGroup,
-    deleteAgentGroup: (groupId) => deleteGroupWithSessions(groupId),
-    addAgentGroupMember: (input) => addAgentToGroup(input),
-    removeAgentGroupMember: (groupId, sessionId) => removeMemberWithSessions(groupId, sessionId),
-    setAgentGroupLead,
-    setAgentGroupMode,
-    setAgentGroupWorkspace,
-    updateAgentGroupMembers: (input) => updateMembersWithSessions(input),
-    listGroupTasks: (groupId) => listGroupTasks(groupId),
-    cancelGroupTask,
-    listGroupDecisions: (groupId) => listGroupDecisions(groupId),
-    deleteGroupDecision,
+  // Groups were retired in PR 4: no group:* handler is registered, so the group
+  // runtime, proactivity and wake loops (all lazily started by them) never run.
+  ipcMain.handle(IPC_CHANNELS.groupsMigrationNotice, (event) => {
+    assertTrustedSender(event);
+    return readGroupsMigrationNotice(getDatabase());
   });
-  registerGroupWorkIpcHandlers(ipcMain, assertTrustedSender, {
-    getGroupWorkState: (groupId, executionId) => getGroupWorkState(groupId, executionId),
-    getGroupTaskDetails: (groupId, taskId) => getGroupTaskDetails(groupId, taskId),
-    listGroupTaskTransitions: (taskId) => {
-      getGroupTask(taskId);
-      return listGroupTaskTransitions(taskId);
-    },
-    updateGroupTaskDraft,
-    getGroupProactivityMode: (groupId) => getGroupRuntime().getProactivityMode(groupId),
-    setGroupProactivityMode: (groupId, mode) => getGroupRuntime().setProactivityMode(groupId, mode),
-    listGroupSuggestions: (groupId) => getGroupRuntime().listSuggestions(groupId),
-    resolveGroupSuggestion: (input) => getGroupRuntime().resolveGroupSuggestion(input),
+  ipcMain.handle(IPC_CHANNELS.groupsMigrationNoticeDismiss, (event) => {
+    assertTrustedSender(event);
+    dismissGroupsMigrationNotice(getDatabase());
   });
-  registerGroupIntegrationIpcHandlers(
-    ipcMain,
-    assertTrustedSender,
-    createGroupIntegrationService(),
-    emitGroupRuntimeEvent,
-  );
-  setGroupTaskChangedSink((change) =>
-    emitGroupRuntimeEvent({ type: "group.task-changed", ...change }),
-  );
-  // "X joined as <role>" / "X left the group" reach the room live (A3), through
-  // the same broadcast as room messages, once their transaction commits.
-  setGroupMembershipMessageSink((message) =>
-    emitGroupRuntimeEvent({ type: "group.message", groupId: message.groupId, message }),
-  );
-  // Member task tools (review / changes) wake members through the GroupRuntime.
-  setGroupTaskWakeSink(
-    (wake) => getGroupRuntime().handleTaskWake(wake),
-    (input) => getGroupRuntime().validateTaskDispatch(input),
-  );
-  setGroupWorktreeReadySink((ready) => getGroupRuntime().handleWorktreeReady(ready));
-  // Resolved lazily: the GroupRuntime subscribes to the agent runtime on first use.
-  registerGroupRuntimeIpcHandlers(ipcMain, assertTrustedSender, {
-    postUserMessage: (input) => getGroupRuntime().postUserMessage(input),
-    resumeExecution: (input) => getGroupRuntime().resumeExecution(input),
-    listGroupMessages: (groupId, options) => listGroupMessages(groupId, options),
-    workingGroupIds: () => getGroupRuntime().workingGroupIds(),
-    memberStates: () => getGroupRuntime().memberStates(),
-    stopGroup: (groupId) => getGroupRuntime().stopGroup(groupId),
+  ipcMain.handle(IPC_CHANNELS.migratedGroupTranscript, (event, sessionId: unknown) => {
+    assertTrustedSender(event);
+    return readMigratedGroupTranscript(
+      getDatabase(),
+      parseIpcInput(sessionIdSchema, sessionId, IPC_CHANNELS.migratedGroupTranscript),
+    );
   });
 
   registerProjectMemoryIpcHandlers(ipcMain, assertTrustedSender, {

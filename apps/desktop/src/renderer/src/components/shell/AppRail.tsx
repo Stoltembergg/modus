@@ -1,4 +1,4 @@
-import { IconCircles, IconMessageCircle, IconSettings } from "@tabler/icons-react";
+import { IconMessageCircle, IconSettings } from "@tabler/icons-react";
 import { shellText } from "../../../../shared/shell-text";
 import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
@@ -10,7 +10,6 @@ export type { PrimaryDestination } from "./navigation-state";
 export const APP_RAIL_WIDTH = 68;
 
 const DESTINATIONS = [
-  { id: "groups", label: "Groups", icon: IconCircles },
   { id: "direct-messages", label: shellText("shell.projects"), icon: IconMessageCircle },
 ] as const;
 

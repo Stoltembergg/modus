@@ -49,6 +49,9 @@ export const IPC_CHANNELS = {
   agentsDelete: "agents:delete",
   /** The agent's 1:1 chat, made on first open (A3). */
   agentsOpenChat: "agents:open-chat",
+  groupsMigrationNotice: "app:groups-migration-notice",
+  groupsMigrationNoticeDismiss: "app:groups-migration-notice-dismiss",
+  migratedGroupTranscript: "agent:migrated-group-transcript",
   /** One LLM call for a custom agent's { role, instructions } (A3). */
   agentsGenerateProfile: "agents:generate-profile",
   groupPostMessage: "group:post-message",

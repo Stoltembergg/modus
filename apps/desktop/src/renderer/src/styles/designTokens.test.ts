@@ -143,15 +143,9 @@ describe("Modus semantic design tokens", () => {
     expect(app).not.toContain("CaptionButton");
   });
 
-  it("keeps the Groups empty state concise with beams confined to its background", () => {
-    const emptyState = app.split('key="groups-empty"')[1]?.split(") : visibleGroup ?")[0] ?? "";
-
-    expect(emptyState).toContain("AGENTIC TEAMS");
-    expect(emptyState).not.toContain("Choose a group from the sidebar");
-    expect(emptyState).toContain("group-empty-beams");
-    expect(css).toContain(".group-empty-beams");
-    expect(css).toContain("@keyframes group-empty-beam-sweep");
-    expect(css).toContain("@media (prefers-reduced-motion: reduce)");
+  it("has no Groups empty state (Groups were retired in PR 4)", () => {
+    expect(app).not.toContain('key="groups-empty"');
+    expect(app).not.toContain("AGENTIC TEAMS");
   });
 
   it("removes the top overflow menu because Settings lives in the app rail", () => {

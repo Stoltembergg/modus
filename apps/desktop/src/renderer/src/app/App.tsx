@@ -12,14 +12,12 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import type { SecurityState } from "../../../preload/types";
 import type {
   AgentEvent,
-  AgentGroupWithMembers,
   AgentInfo,
   AgentMode,
   AgentSessionInfo,
   BrowserEvent,
   ContextItem,
   ContextUsageInfo,
-  CreateAgentGroupInput,
   ModelInfo,
   ModelSettingsState,
   PlanRef,
@@ -67,18 +65,13 @@ import {
 } from "../features/composer/Composer";
 import { contextItemKey } from "../features/composer/composerTokens";
 import { BranchSwitcher } from "../features/git/BranchSwitcher";
-import type { GroupMembersChange } from "../features/groups/CreateGroupDialog";
-import { BlockedBanner, GroupRoom } from "../features/groups/GroupRoom";
-import { describeGroupError } from "../features/groups/groupErrors";
-import { agentChatBlocked } from "../features/groups/groupSidebarModel";
-import type { NewGroupServices } from "../features/groups/NewGroupModal";
-import {
-  groupActivityState,
-  isGroupRunning,
-  useGroupMemberStates,
-} from "../features/groups/useWorkingGroups";
 import { INSPECTOR_MIN_WIDTH } from "../features/inspector/inspector-layout";
 import { normalizePlan } from "../features/plan/planState";
+import {
+  GroupsMovedNotice,
+  MigratedTranscript,
+  useMigratedTranscript,
+} from "../features/projects/groupsMigration";
 import type { SettingsSectionId } from "../features/settings/settings-types";
 import {
   createUiStatePusher,
@@ -90,6 +83,7 @@ import {
   type UiStatePusher,
 } from "../features/update/restoreUiState";
 import { UpdateToast } from "../features/update/UpdateToast";
+import { describeAgentError } from "../lib/agentErrors";
 import { cn } from "../lib/cn";
 import { useShellText } from "../lib/shellText";
 import { useGitBranch } from "../lib/useGitBranch";
@@ -134,8 +128,6 @@ export function App() {
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceInfo | null>(null);
   const [agentSessions, setAgentSessions] = useState<AgentSessionInfo[]>([]);
-  const [agentGroups, setAgentGroups] = useState<AgentGroupWithMembers[]>([]);
-  const groupMemberStates = useGroupMemberStates();
   useEffect(() => {
     const applyNativeGlass = (available: boolean): void => {
       setNativeGlass(available);
@@ -146,47 +138,20 @@ export function App() {
     );
     return window.modus?.app.onNativeGlassChange(applyNativeGlass);
   }, []);
-  const isGroupWorking = useCallback(
-    (group: AgentGroupWithMembers) => isGroupRunning(groupMemberStates, group.id),
-    [groupMemberStates],
-  );
-  const isGroupWaiting = useCallback(
-    (group: AgentGroupWithMembers) => groupActivityState(groupMemberStates, group.id) === "waiting",
-    [groupMemberStates],
-  );
-  /** The group whose room fills the main panel (instead of a chat). */
-  const [activeGroupId, setActiveGroupId] = useState<string | undefined>();
-  const [groupChromeHost, setGroupChromeHost] = useState<HTMLElement | null>(null);
   // L3c: the 1:1 top bar collapses by its own width (same cut-offs as the group header).
   const [topBarRef, topBarTier] = useWidthTier<HTMLElement>(TOP_BAR_BREAKPOINTS);
-  const activeGroup = activeGroupId
-    ? agentGroups.find((group) => group.id === activeGroupId)
-    : undefined;
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>();
-  /** The agent dialog (A3): create in a group, or edit an agent, or create/edit a profile. */
-  const [agentDialog, setAgentDialogState] = useState<
-    | {
-        groupId: string;
-        agent?: AgentInfo | undefined;
-        /** New on every open: the dialog remounts instead of reviving an exiting instance. */
-        nonce: number;
-        profile?: undefined;
-      }
-    | {
-        profile: true;
-        takenNames: readonly string[];
-        agent?: AgentInfo | undefined;
-        nonce: number;
-        groupId?: undefined;
-      }
-    | null
-  >(null);
+  /** The profile dialog: create or edit an agent profile. */
+  const [agentDialog, setAgentDialogState] = useState<{
+    profile: true;
+    takenNames: readonly string[];
+    agent?: AgentInfo | undefined;
+    /** New on every open: the dialog remounts instead of reviving an exiting instance. */
+    nonce: number;
+  } | null>(null);
   const agentDialogSeq = useRef(0);
   const setAgentDialog = (
-    next:
-      | { groupId: string; agent?: AgentInfo }
-      | { profile: true; takenNames: readonly string[]; agent?: AgentInfo }
-      | null,
+    next: { profile: true; takenNames: readonly string[]; agent?: AgentInfo } | null,
   ) => setAgentDialogState(next && { ...next, nonce: ++agentDialogSeq.current });
   const [initialEventsBySession, setInitialEventsBySession] = useState<
     Record<string, AgentEventItem[]>
@@ -282,18 +247,6 @@ export function App() {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
 
-  // Opening any chat (sidebar, member chip, new session) closes the group room.
-  useEffect(() => {
-    if (activeSessionId) setActiveGroupId(undefined);
-  }, [activeSessionId]);
-
-  // The open group was deleted (here or elsewhere): back to the hero.
-  useEffect(() => {
-    if (activeGroupId && !agentGroups.some((group) => group.id === activeGroupId)) {
-      setActiveGroupId(undefined);
-    }
-  }, [activeGroupId, agentGroups]);
-
   useEffect(() => {
     activeWorkspaceRef.current = activeWorkspace;
   }, [activeWorkspace]);
@@ -337,26 +290,11 @@ export function App() {
     });
   }, []);
 
-  const refreshGroups = useCallback(async (): Promise<void> => {
-    try {
-      setAgentGroups(await window.modus.group.list());
-    } catch (error) {
-      console.warn("[groups] failed to load agent groups", error);
-    }
-  }, []);
-
   const refreshSessions = useCallback(async (): Promise<void> => {
-    // Groups ride along: deleting chats/projects cascades to memberships.
-    const groupsRefresh = refreshGroups();
     setAgentSessions(
       await window.modus.agent.list({ includeSessionId: activeSessionIdRef.current }),
     );
-    await groupsRefresh;
-  }, [refreshGroups]);
-
-  useEffect(() => {
-    if (window.modus) void refreshGroups();
-  }, [refreshGroups]);
+  }, []);
 
   function publishLocalAgentEvent(event: AgentEvent): void {
     hubRef.current.publish({
@@ -736,22 +674,21 @@ export function App() {
     setActiveSessionId(session.id);
   }
 
-  async function openGroupTaskSession(sessionId: string): Promise<void> {
+  /** Open a chat by id (the groups-moved notice links the migrated room chats). */
+  async function openSessionById(sessionId: string): Promise<void> {
     const existing = agentSessions.find((session) => session.id === sessionId);
     if (existing) {
       selectSession(existing);
       return;
     }
     try {
-      const persistedSessions: AgentSessionInfo[] = await window.modus.agent.list({
+      const persisted: AgentSessionInfo[] = await window.modus.agent.list({
         includeSessionId: sessionId,
       });
-      const persisted = persistedSessions.find(
-        (session: AgentSessionInfo) => session.id === sessionId,
-      );
-      if (persisted) selectSession(persisted);
+      const session = persisted.find((item: AgentSessionInfo) => item.id === sessionId);
+      if (session) selectSession(session);
     } catch (error) {
-      setSessionCreateError(describeGroupError(error));
+      setSessionCreateError(describeAgentError(error));
     }
   }
 
@@ -797,15 +734,7 @@ export function App() {
    * first prompt (`submitHeroPrompt`), so "New chat" never spawns an empty
    * session — it just returns to the hero, optionally switching workspace first.
    */
-  function selectGroup(group: AgentGroupWithMembers): void {
-    setSessionCreateError(undefined);
-    navigateToPrimary("groups");
-    setActiveSessionId(undefined);
-    setActiveGroupId(group.id);
-  }
-
   function openNewChat(workspace?: WorkspaceInfo | null): void {
-    setActiveGroupId(undefined);
     if (workspace !== undefined) {
       setActiveWorkspace(workspace);
     }
@@ -911,57 +840,13 @@ export function App() {
     await refreshSessions();
   }
 
-  /* ── Agent Groups — sidebar Groups section ─────────────────────────────── */
-
-  async function createGroup(input: CreateAgentGroupInput): Promise<void> {
-    // Errors propagate so the dialog can show them and stay open.
-    await window.modus.group.create(input);
-    await refreshGroups();
-  }
-
-  /** The create-group modal (A4): existing IPC only (no new channel). */
-  const newGroupServices: NewGroupServices = {
-    listAgents: () => window.modus.agents.list(),
-    addFolder: async () => {
-      // The same "Add folder…" flow as the sidebar: pick a folder, it becomes a Project.
-      const workspace = await window.modus.workspace.open();
-      if (workspace) setWorkspaces(await window.modus.workspace.list());
-      return workspace;
-    },
-    generateProfile: (input) => window.modus.agents.generateProfile(input),
-  };
-
-  async function updateGroupMembers(groupId: string, change: GroupMembersChange): Promise<void> {
-    // ONE all-or-nothing call (adds, removes and lead in one transaction); errors
-    // propagate so the "Manage members" dialog can show them and stay open.
-    setAgentGroups(await window.modus.group.updateMembers({ groupId, ...change }));
-  }
-
-  /** An agent in the sidebar: open its 1:1 chat (created on first open, in the group's Project). */
+  /** An agent in the sidebar: open its 1:1 chat (created on first open, in its default Project, else No project). */
   async function openAgentChat(agentId: string): Promise<void> {
     try {
       const session = await window.modus.agents.openChat(agentId);
       selectSession(session);
     } catch (error) {
-      setSessionCreateError(describeGroupError(error));
-    }
-  }
-
-  async function editAgent(agentId: string): Promise<void> {
-    try {
-      const allAgents = await window.modus.agents.list();
-      const agent = allAgents.find((item: AgentInfo) => item.id === agentId);
-      if (!agent) return;
-      if (agent.groupId) {
-        setAgentDialog({ groupId: agent.groupId, agent });
-      } else {
-        const takenNames = allAgents
-          .filter((item: AgentInfo) => !item.groupId && !item.archivedAt)
-          .map((item: AgentInfo) => item.name);
-        setAgentDialog({ profile: true, agent, takenNames });
-      }
-    } catch (error) {
-      setSessionCreateError(describeGroupError(error));
+      setSessionCreateError(describeAgentError(error));
     }
   }
 
@@ -973,29 +858,11 @@ export function App() {
         .map((item: AgentInfo) => item.name);
       setAgentDialog({ profile: true, takenNames });
     } catch (error) {
-      setSessionCreateError(describeGroupError(error));
+      setSessionCreateError(describeAgentError(error));
     }
   }
 
-  /** "Choose folder" on a group without a Project: pick a folder, then move the group there. */
-  async function chooseGroupFolder(groupId: string): Promise<void> {
-    const workspace = await window.modus.workspace.open();
-    if (!workspace) return;
-    setWorkspaces(await window.modus.workspace.list());
-    await runGroupAction(() =>
-      window.modus.group.setWorkspace({ groupId, workspaceId: workspace.id }),
-    );
-  }
-
-  /** A 1:1 chat of a blocked group opens read-only, with the room's banner (A3). */
-  const activeChatBlocked = agentChatBlocked(activeSession, agentGroups);
-
-  const agentDialogGroup =
-    agentDialog && !agentDialog.profile
-      ? agentGroups.find((group) => group.id === agentDialog.groupId)
-      : undefined;
-
-  const groupModels = useMemo(
+  const profileModels = useMemo(
     () =>
       models
         .filter((item) => item.available && item.enabled)
@@ -1008,15 +875,6 @@ export function App() {
         })),
     [models],
   );
-
-  async function runGroupAction(action: () => Promise<AgentGroupWithMembers[]>): Promise<void> {
-    try {
-      setAgentGroups(await action());
-    } catch (error) {
-      setSessionCreateError(describeGroupError(error));
-      await refreshGroups();
-    }
-  }
 
   async function revealProject(id: string): Promise<void> {
     await window.modus.workspace.reveal(id).catch(() => {});
@@ -1114,15 +972,15 @@ export function App() {
 
   const hasSession = Boolean(activeSession);
   const visibleSession = primaryNavigation.active === "direct-messages" ? activeSession : undefined;
-  const visibleGroup = primaryNavigation.active === "groups" ? activeGroup : undefined;
-  const visibleGroupWorkspace = visibleGroup
-    ? workspaces.find((workspace) => workspace.id === visibleGroup.workspaceId)
-    : undefined;
   const activeCwd =
     visibleSession?.cwd ??
-    visibleGroupWorkspace?.rootPath ??
     (primaryNavigation.active === "direct-messages" ? activeWorkspace?.rootPath : undefined);
   const branch = useGitBranch(activeCwd);
+  const migratedTranscript = useMigratedTranscript(
+    visibleSession?.id,
+    visibleSession?.readOnly === true,
+    window.modus?.agents.migratedTranscript,
+  );
   const isMac = window.modus?.app.platform === "darwin";
 
   useEffect(() => {
@@ -1281,9 +1139,7 @@ export function App() {
                     <>
                       <ContextSidebar>
                         <Sidebar
-                          section={
-                            primaryNavigation.active === "groups" ? "groups" : "direct-messages"
-                          }
+                          section="direct-messages"
                           activityBySession={activityBySession}
                           agentSessions={rootSessions}
                           canCreateSession={canCreateSession}
@@ -1312,39 +1168,6 @@ export function App() {
                           open={responsiveSidebarOpen}
                           width={sidebarWidth}
                           workspaces={workspaces}
-                          groups={agentGroups}
-                          groupModels={groupModels}
-                          defaultGroupModelId={model || undefined}
-                          isGroupWorking={isGroupWorking}
-                          isGroupWaiting={isGroupWaiting}
-                          activeGroupId={activeGroup?.id}
-                          onSelectGroup={selectGroup}
-                          activeWorkspaceId={
-                            activeWorkspace?.inbox ? null : (activeWorkspace?.id ?? null)
-                          }
-                          onCreateGroup={createGroup}
-                          newGroupServices={newGroupServices}
-                          onUpdateGroupMembers={updateGroupMembers}
-                          onRenameGroup={(id, name) =>
-                            void runGroupAction(() => window.modus.group.rename({ id, name }))
-                          }
-                          onDeleteGroup={(id) =>
-                            void runGroupAction(() => window.modus.group.remove(id))
-                          }
-                          onRemoveGroupMember={(groupId, sessionId) =>
-                            void runGroupAction(() =>
-                              window.modus.group.removeMember({ groupId, sessionId }),
-                            )
-                          }
-                          onSetGroupLead={(groupId, sessionId) =>
-                            void runGroupAction(() =>
-                              window.modus.group.setLead({ groupId, sessionId }),
-                            )
-                          }
-                          groupMemberStates={groupMemberStates}
-                          onOpenAgentChat={(agentId) => void openAgentChat(agentId)}
-                          onEditAgent={(agentId) => void editAgent(agentId)}
-                          onAddAgent={(groupId) => setAgentDialog({ groupId })}
                           onNewProfile={() => void openNewProfile()}
                         />
                       </ContextSidebar>
@@ -1355,7 +1178,7 @@ export function App() {
                             key={`agent-dialog-${agentDialog.nonce}`}
                             agent={agentDialog.agent}
                             defaultModelId={model || undefined}
-                            models={groupModels}
+                            models={profileModels}
                             onCreate={async (input) => {
                               // A new profile opens its first chat (default Project, else No project).
                               const created = await window.modus.agents.create(input);
@@ -1372,28 +1195,6 @@ export function App() {
                             }}
                             open
                             profile={{ takenNames: agentDialog.takenNames }}
-                          />
-                        ) : agentDialogGroup && agentDialog ? (
-                          <AgentDialog
-                            key={`agent-dialog-${agentDialog.nonce}`}
-                            agent={agentDialog.agent}
-                            defaultModelId={model || undefined}
-                            group={agentDialogGroup}
-                            models={groupModels}
-                            onCreate={async (input) => {
-                              await window.modus.agents.create(input);
-                              await refreshGroups();
-                            }}
-                            onGenerate={(input) => window.modus.agents.generateProfile(input)}
-                            onOpenChange={(open) => {
-                              if (!open) setAgentDialog(null);
-                            }}
-                            onUpdate={async (input) => {
-                              await window.modus.agents.update(input);
-                              // The 1:1 chat is titled after the agent.
-                              await refreshSessions();
-                            }}
-                            open
                           />
                         ) : null}
                       </AnimatePresence>
@@ -1439,13 +1240,7 @@ export function App() {
                                 triggerClassName="app-no-drag flex h-7 min-w-0 max-w-[190px] items-center gap-1.5 rounded-md px-2 text-xs text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
                               />
                             ) : null}
-                            {visibleGroup ? (
-                              <div
-                                className="app-no-drag flex min-w-0 flex-1 items-center"
-                                data-testid="group-chrome-host"
-                                ref={setGroupChromeHost}
-                              />
-                            ) : visibleSession ? (
+                            {visibleSession ? (
                               <SessionTitlePopover
                                 branch={branch}
                                 contextUsage={contextUsageBySession[visibleSession.id]}
@@ -1459,21 +1254,14 @@ export function App() {
                               />
                             ) : null}
                           </div>
-                          <div
-                            className={cn(
-                              "flex h-full items-center justify-end",
-                              !visibleGroup && "flex-1",
-                            )}
-                          >
-                            {visibleGroup ? null : (
-                              <div className="pr-2">
-                                <HeaderActions
-                                  inspectorOpen={responsiveInspectorOpen}
-                                  onToggleInspector={() => setInspectorOpen((open) => !open)}
-                                  tier={topBarTier}
-                                />
-                              </div>
-                            )}
+                          <div className={cn("flex h-full items-center justify-end", "flex-1")}>
+                            <div className="pr-2">
+                              <HeaderActions
+                                inspectorOpen={responsiveInspectorOpen}
+                                onToggleInspector={() => setInspectorOpen((open) => !open)}
+                                tier={topBarTier}
+                              />
+                            </div>
                           </div>
                         </TopBar>
 
@@ -1484,6 +1272,11 @@ export function App() {
                           className="absolute top-11 right-3 z-30"
                         />
 
+                        <GroupsMovedNotice
+                          api={window.modus?.groupsMigration}
+                          onOpenSession={(sessionId) => void openSessionById(sessionId)}
+                        />
+
                         {sessionCreateError ? (
                           <div className="mx-6 mb-2 rounded-md border border-danger/30 bg-danger/8 px-3 py-2 text-xs text-danger">
                             {sessionCreateError}
@@ -1491,72 +1284,7 @@ export function App() {
                         ) : null}
 
                         <AnimatePresence mode="wait">
-                          {primaryNavigation.active === "groups" && !visibleGroup ? (
-                            <m.div
-                              animate={{ opacity: 1, y: 0 }}
-                              className="group-empty-state relative isolate flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden px-8"
-                              exit={reduceMotion ? { opacity: 1 } : { opacity: 0, y: -3 }}
-                              initial={reduceMotion ? false : { opacity: 0, y: 4 }}
-                              key="groups-empty"
-                              transition={{ duration: reduceMotion ? 0 : 0.12, ease: "easeOut" }}
-                            >
-                              <div aria-hidden className="group-empty-beams">
-                                <span className="group-empty-beam" />
-                                <span className="group-empty-beam" />
-                                <span className="group-empty-beam" />
-                              </div>
-                              <div className="relative z-10 max-w-md text-center">
-                                <p className="mb-2 text-2xs font-medium uppercase tracking-[0.14em] text-fg-faint">
-                                  AGENTIC TEAMS
-                                </p>
-                                <h1 className="text-xl font-medium tracking-tight text-fg">
-                                  Keep shared work moving
-                                </h1>
-                              </div>
-                            </m.div>
-                          ) : visibleGroup ? (
-                            <m.div
-                              animate={{ opacity: 1, y: 0 }}
-                              className="flex min-h-0 min-w-0 flex-1"
-                              exit={reduceMotion ? { opacity: 1 } : { opacity: 0, y: -3 }}
-                              initial={reduceMotion ? false : { opacity: 0, y: 4 }}
-                              key={`group:${visibleGroup.id}`}
-                              transition={{ duration: reduceMotion ? 0 : 0.12, ease: "easeOut" }}
-                            >
-                              <GroupRoom
-                                chromeHost={groupChromeHost}
-                                defaultModelId={model || undefined}
-                                group={visibleGroup}
-                                key={visibleGroup.id}
-                                memberStates={groupMemberStates}
-                                models={groupModels}
-                                onChooseFolder={() => void chooseGroupFolder(visibleGroup.id)}
-                                onDelete={() => {
-                                  const id = visibleGroup.id;
-                                  setActiveGroupId(undefined);
-                                  void runGroupAction(() => window.modus.group.remove(id));
-                                }}
-                                onOpenFile={openWorkspaceFile}
-                                onOpenSession={(sessionId) => void openGroupTaskSession(sessionId)}
-                                onAgentsChanged={() => void refreshGroups()}
-                                onAddAgent={() => setAgentDialog({ groupId: visibleGroup.id })}
-                                onRename={(name) =>
-                                  void runGroupAction(() =>
-                                    window.modus.group.rename({ id: visibleGroup.id, name }),
-                                  )
-                                }
-                                onSetMode={(mode) =>
-                                  void runGroupAction(() =>
-                                    window.modus.group.setMode({ groupId: visibleGroup.id, mode }),
-                                  )
-                                }
-                                onUpdateMembers={(change) =>
-                                  updateGroupMembers(visibleGroup.id, change)
-                                }
-                                workspaces={workspaces}
-                              />
-                            </m.div>
-                          ) : visibleSession ? (
+                          {visibleSession ? (
                             <m.div
                               animate={{ opacity: 1, y: 0 }}
                               className="flex min-h-0 min-w-0 flex-1"
@@ -1571,78 +1299,71 @@ export function App() {
                                 layout: SIDEBAR_TRANSITION,
                               }}
                             >
-                              <Suspense fallback={<ModusLoadingFallback />}>
-                                <ChatPane
-                                  composerDraft={composerDraftBySession[visibleSession.id]}
-                                  composerReplacement={
-                                    visibleSession.readOnly ? (
-                                      <div
-                                        className="rounded-lg px-3 py-2 text-fg-muted text-sm"
-                                        role="status"
-                                      >
-                                        {shellText("shell.readOnlyHistory")}
-                                      </div>
-                                    ) : activeChatBlocked ? (
-                                      <BlockedBanner
-                                        onAction={() => {
-                                          const blocked = activeChatBlocked;
-                                          if (blocked.reason === "project-required") {
-                                            void chooseGroupFolder(blocked.group.id);
-                                          } else {
-                                            selectGroup(blocked.group);
-                                          }
-                                        }}
-                                        reason={activeChatBlocked.reason}
-                                      />
-                                    ) : undefined
-                                  }
-                                  contextUsage={contextUsageBySession[visibleSession.id]}
-                                  defaultModel={model}
-                                  modelsReady={modelSettings !== null}
-                                  modusStatus={modelSettings?.modus}
-                                  hub={hubRef.current}
-                                  initialEvents={initialEventsBySession[visibleSession.id]}
-                                  key={visibleSession.id}
-                                  models={models}
-                                  onModelChange={setModel}
-                                  onModelConfigChange={(next, thinkingVariant) =>
-                                    void updateModelThinking(next, thinkingVariant)
-                                  }
-                                  onOpenReview={openReview}
-                                  onOpenActivity={openActivity}
-                                  onComposerDraftChange={(update) =>
-                                    updateSessionComposerDraft(visibleSession.id, update)
-                                  }
-                                  onInitialEventsConsumed={(sessionId) => {
-                                    setInitialEventsBySession((current) => {
-                                      if (!current[sessionId]) {
-                                        return current;
-                                      }
-                                      const next = { ...current };
-                                      delete next[sessionId];
-                                      return next;
-                                    });
-                                  }}
-                                  onOpenPlan={openPlan}
-                                  onOpenFile={openWorkspaceFile}
-                                  onOpenTerminal={openTerminal}
-                                  onOpenSubagent={openSubagent}
-                                  subagentSessions={agentSessions.filter(
-                                    (session) => session.parentSessionId === visibleSession.id,
-                                  )}
-                                  {...(responsiveInspectorOpen &&
-                                  inspectorTab === "subagents" &&
-                                  selectedSubagentId
-                                    ? { inspectorLiveSessionId: selectedSubagentId }
-                                    : {})}
-                                  onPlanUpdated={rememberActivePlan}
-                                  onSessionsChanged={() => void refreshSessions()}
-                                  session={visibleSession}
-                                  workspace={
-                                    workspaceById.get(visibleSession.workspaceId) ?? activeWorkspace
-                                  }
-                                />
-                              </Suspense>
+                              {migratedTranscript !== null ? (
+                                <MigratedTranscript body={migratedTranscript} />
+                              ) : (
+                                <Suspense fallback={<ModusLoadingFallback />}>
+                                  <ChatPane
+                                    composerDraft={composerDraftBySession[visibleSession.id]}
+                                    composerReplacement={
+                                      visibleSession.readOnly ? (
+                                        <div
+                                          className="rounded-lg px-3 py-2 text-fg-muted text-sm"
+                                          role="status"
+                                        >
+                                          {shellText("shell.readOnlyHistory")}
+                                        </div>
+                                      ) : undefined
+                                    }
+                                    contextUsage={contextUsageBySession[visibleSession.id]}
+                                    defaultModel={model}
+                                    modelsReady={modelSettings !== null}
+                                    modusStatus={modelSettings?.modus}
+                                    hub={hubRef.current}
+                                    initialEvents={initialEventsBySession[visibleSession.id]}
+                                    key={visibleSession.id}
+                                    models={models}
+                                    onModelChange={setModel}
+                                    onModelConfigChange={(next, thinkingVariant) =>
+                                      void updateModelThinking(next, thinkingVariant)
+                                    }
+                                    onOpenReview={openReview}
+                                    onOpenActivity={openActivity}
+                                    onComposerDraftChange={(update) =>
+                                      updateSessionComposerDraft(visibleSession.id, update)
+                                    }
+                                    onInitialEventsConsumed={(sessionId) => {
+                                      setInitialEventsBySession((current) => {
+                                        if (!current[sessionId]) {
+                                          return current;
+                                        }
+                                        const next = { ...current };
+                                        delete next[sessionId];
+                                        return next;
+                                      });
+                                    }}
+                                    onOpenPlan={openPlan}
+                                    onOpenFile={openWorkspaceFile}
+                                    onOpenTerminal={openTerminal}
+                                    onOpenSubagent={openSubagent}
+                                    subagentSessions={agentSessions.filter(
+                                      (session) => session.parentSessionId === visibleSession.id,
+                                    )}
+                                    {...(responsiveInspectorOpen &&
+                                    inspectorTab === "subagents" &&
+                                    selectedSubagentId
+                                      ? { inspectorLiveSessionId: selectedSubagentId }
+                                      : {})}
+                                    onPlanUpdated={rememberActivePlan}
+                                    onSessionsChanged={() => void refreshSessions()}
+                                    session={visibleSession}
+                                    workspace={
+                                      workspaceById.get(visibleSession.workspaceId) ??
+                                      activeWorkspace
+                                    }
+                                  />
+                                </Suspense>
+                              )}
                             </m.div>
                           ) : (
                             <m.div

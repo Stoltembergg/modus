@@ -1233,17 +1233,19 @@ describe("dedicated HyperPlan review IPC", () => {
   });
 });
 
-describe("group integration IPC registration", () => {
+describe("groups retired (PR 4)", () => {
   beforeEach(() => mocks.handlers.clear());
 
-  it("registers all integration preview, mutation, state, and refresh handlers", () => {
+  it("registers no group:* handler, and the migration notice/transcript handlers instead", () => {
     registerAppIpc();
-
-    expect(mocks.handlers.has(IPC_CHANNELS.groupIntegrationPreview)).toBe(true);
-    expect(mocks.handlers.has(IPC_CHANNELS.groupIntegrationApply)).toBe(true);
-    expect(mocks.handlers.has(IPC_CHANNELS.groupIntegrationAbort)).toBe(true);
-    expect(mocks.handlers.has(IPC_CHANNELS.groupIntegrationState)).toBe(true);
-    expect(mocks.handlers.has(IPC_CHANNELS.groupIntegrationRefresh)).toBe(true);
+    const groupChannels = [...mocks.handlers.keys()].filter((channel) =>
+      String(channel).startsWith("group:"),
+    );
+    expect(groupChannels).toEqual([]);
+    expect(mocks.handlers.has(IPC_CHANNELS.groupIntegrationPreview)).toBe(false);
+    expect(mocks.handlers.has(IPC_CHANNELS.groupsMigrationNotice)).toBe(true);
+    expect(mocks.handlers.has(IPC_CHANNELS.groupsMigrationNoticeDismiss)).toBe(true);
+    expect(mocks.handlers.has(IPC_CHANNELS.migratedGroupTranscript)).toBe(true);
   });
 });
 

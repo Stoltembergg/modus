@@ -445,3 +445,13 @@ export type AgentRunInfo = {
  * A point-in-time snapshot of the session's working tree, taken before each
  * run so any agent change can be rolled back from the timeline.
  */
+
+/** One-time "groups moved to Projects" notice (PR 4). */
+export type GroupsMigrationNotice = {
+  /** The groups → projects migration has run on this database. */
+  migrated: boolean;
+  /** Show the notice now (once, only when at least one group moved). */
+  show: boolean;
+  groups: Array<{ groupId: string; sessionId: string; title: string; workspaceId: string }>;
+  backup: string | null;
+};

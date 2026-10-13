@@ -28,9 +28,9 @@ import type {
   PromptImageAttachment,
   SkillSelection,
 } from "../../../../shared/contracts";
-import { GroupMenuItem } from "../../components/sidebar-groups/helpers";
 import { ComposerRunningSweep } from "../../components/ui/ComposerRunningSweep";
 import { ImageThumb } from "../../components/ui/ImageViewer";
+import { MenuRow } from "../../components/ui/MenuRow";
 import { SendStopIcon } from "../../components/ui/SendStopIcon";
 import { cn } from "../../lib/cn";
 import { ContextUsageRing, contextUsagePercent, formatUsagePercent } from "../../lib/contextUsage";
@@ -674,12 +674,12 @@ export function Composer({
                       className="origin-(--transform-origin) min-w-[184px] popup-chrome popup-motion p-1"
                       data-testid="composer-overflow-menu"
                     >
-                      <GroupMenuItem
+                      <MenuRow
                         icon={<IconPlus size={ICON.sm} stroke={ICON_STROKE.sm} />}
                         onClick={() => fileInputRef.current?.click()}
                       >
                         Attach files
-                      </GroupMenuItem>
+                      </MenuRow>
                     </Menu.Popup>
                   </Menu.Positioner>
                 </Menu.Portal>
