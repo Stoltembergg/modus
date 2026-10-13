@@ -172,7 +172,10 @@ describe("Modus semantic design tokens", () => {
     );
     expect(css).toMatch(/\.menu-bar\s*\{[^}]*height: var\(--space-native-titlebar\)/su);
     expect(css).toMatch(/\.toolbar-row\s*\{[^}]*height: var\(--space-native-titlebar\)/su);
-    expect(app).toContain("topChromeClearance={!settingsOpen}");
+    // One animated sidebar replaced the rail + context panel; it clears the
+    // macOS traffic lights itself outside Settings (which keeps its MenuBar).
+    expect(app).toContain("trafficLightClearance={isMac && !settingsOpen}");
+    expect(app).not.toContain("<AppRail");
   });
 
   it("keeps the Direct Messages folder selector out of its composer footer", () => {

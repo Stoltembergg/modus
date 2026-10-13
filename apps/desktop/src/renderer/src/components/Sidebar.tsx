@@ -99,6 +99,8 @@ type SidebarProps = {
   canCreateSession: boolean;
   /** "New profile" button next to/near New group. */
   onNewProfile?(): void;
+  /** Render only the scrolling list, for the animated app sidebar (no panel, no resize). */
+  embedded?: boolean;
 };
 
 export function Sidebar({
@@ -129,6 +131,7 @@ export function Sidebar({
   canCreateSession,
   onRenameSession,
   onNewProfile,
+  embedded = false,
 }: SidebarProps) {
   const t = useShellText();
   const [projectsExpanded, setProjectsExpanded] = useState(false);
@@ -216,6 +219,169 @@ export function Sidebar({
     onWidthChange(finalWidth);
   };
 
+  const list = (
+    <div
+      className={cn(
+        "scroll-thin min-h-0 flex-1 overflow-y-auto px-2 pb-2",
+        (fadeTop || fadeBottom) && "scroll-fade",
+      )}
+      {...(fadeTop ? { "data-fade-top": "" } : {})}
+      {...(fadeBottom ? { "data-fade-bottom": "" } : {})}
+      ref={scrollFadeRef}
+    >
+      {/* 📌 Pinned section — global, above Projects and Chats */}
+      {section === "direct-messages" && pinnedSessions.length > 0 && (
+        <>
+          <SectionHeader
+            expanded={pinnedExpanded}
+            onToggle={() => setPinnedExpanded((expanded) => !expanded)}
+          >
+            📌 Pinned
+          </SectionHeader>
+
+          <CollapsibleMotion open={pinnedExpanded} preset="default">
+            <div data-testid="sidebar-pinned">
+              <AnimatePresence initial={false}>
+                {pinnedSessions.map((session) => (
+                  <SessionRow
+                    key={session.id}
+                    activity={activityBySession[session.id]}
+                    isActive={activeSessionId === session.id}
+                    pinned={true}
+                    onSelect={() => onSelectSession(session)}
+                    onPin={(event) => {
+                      event.stopPropagation();
+                      onPinSession(session, false);
+                    }}
+                    onRename={(title) => onRenameSession?.(session.id, title)}
+                    onArchive={(event) => {
+                      event.stopPropagation();
+                      onArchiveSession(session);
+                    }}
+                    onDelete={(event) => {
+                      event.stopPropagation();
+                      onDeleteSession(session);
+                    }}
+                    title={session.title}
+                    updatedAt={session.updatedAt}
+                  />
+                ))}
+              </AnimatePresence>
+            </div>
+          </CollapsibleMotion>
+          <div className="mt-1" />
+        </>
+      )}
+
+      {section === "direct-messages" ? (
+        <>
+          <AnimatePresence initial={false}>
+            {directMessageSessions.length === 0 ? (
+              <p className="px-2 py-1 text-2xs text-fg-faint">{t("shell.chatsEmpty")}</p>
+            ) : (
+              directMessageSessions.map((session) => (
+                <SessionRow
+                  key={session.id}
+                  activity={activityBySession[session.id]}
+                  isActive={activeSessionId === session.id}
+                  onArchive={(event) => {
+                    event.stopPropagation();
+                    onArchiveSession(session);
+                  }}
+                  onDelete={(event) => {
+                    event.stopPropagation();
+                    onDeleteSession(session);
+                  }}
+                  onPin={(event) => {
+                    event.stopPropagation();
+                    onPinSession(session, !session.pinnedAt);
+                  }}
+                  onRename={(title) => onRenameSession?.(session.id, title)}
+                  onSelect={() => onSelectSession(session)}
+                  pinned={Boolean(session.pinnedAt)}
+                  title={session.title}
+                  updatedAt={session.updatedAt}
+                />
+              ))
+            )}
+          </AnimatePresence>
+        </>
+      ) : null}
+
+      {section === "direct-messages" ? (
+        <div className="mt-3 border-t border-hairline pt-2" data-testid="sidebar-project-context">
+          <SectionHeader
+            expanded={projectsExpanded}
+            onToggle={() => setProjectsExpanded((expanded) => !expanded)}
+          >
+            Project context
+          </SectionHeader>
+
+          <CollapsibleMotion open={projectsExpanded} preset="default">
+            <AnimatePresence initial={false}>
+              {workspaces.map((workspace) => (
+                <m.div
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={reduceMotion ? { opacity: 1 } : { opacity: 0, y: -4 }}
+                  initial={reduceMotion ? false : { opacity: 0, y: 4 }}
+                  key={workspace.id}
+                  layout
+                  transition={{
+                    duration: reduceMotion ? 0 : LIST_MOTION.duration,
+                    ease: LIST_MOTION.ease,
+                  }}
+                >
+                  <WorkspaceItem
+                    activityBySession={activityBySession}
+                    onArchiveSession={onArchiveSession}
+                    onDeleteSession={onDeleteSession}
+                    onListArchivedSessions={onListArchivedSessions}
+                    onNewSession={() => onNewWorkspaceSession(workspace)}
+                    onPinSession={onPinSession}
+                    onRenameSession={(id, title) => onRenameSession?.(id, title)}
+                    onRestoreSession={onRestoreSession}
+                    onSelectSession={onSelectSession}
+                    activeSessionId={activeSessionId}
+                    sessions={sessionsByWorkspace.get(workspace.id) ?? []}
+                    workspace={workspace}
+                    renaming={renamingId === workspace.id}
+                    onStartRename={() => setRenamingId(workspace.id)}
+                    onCommitRename={(name) => {
+                      setRenamingId(null);
+                      const next = name.trim();
+                      if (next && next !== workspace.displayName) {
+                        onRenameProject(workspace.id, next);
+                      }
+                    }}
+                    onCancelRename={() => setRenamingId(null)}
+                    onPin={() => onPinProject(workspace.id, !workspace.pinned)}
+                    onReveal={() => onRevealProject(workspace.id)}
+                    onArchiveChats={() => onArchiveProjectChats(workspace.id)}
+                    onDeleteChats={() => onDeleteProjectChats(workspace.id)}
+                    onRemove={() => onRemoveProject(workspace.id)}
+                    groupNames={NO_NAMES}
+                  />
+                </m.div>
+              ))}
+            </AnimatePresence>
+            <div className="mt-1">
+              <NavRow
+                icon={<IconFolderPlus size={SB_ICON} stroke={SB_STROKE} />}
+                muted
+                onClick={onOpenWorkspace}
+              >
+                Open workspace
+              </NavRow>
+            </div>
+          </CollapsibleMotion>
+        </div>
+      ) : null}
+    </div>
+  );
+
+  // Inside the animated app sidebar: just the list (nav rows live in the rail).
+  if (embedded) return list;
+
   return (
     <m.aside
       className="app-context-sidebar relative flex shrink-0 flex-col overflow-hidden bg-panel"
@@ -252,166 +418,7 @@ export function Sidebar({
           </div>
         ) : null}
 
-        <div
-          className={cn(
-            "scroll-thin min-h-0 flex-1 overflow-y-auto px-2 pb-2",
-            (fadeTop || fadeBottom) && "scroll-fade",
-          )}
-          {...(fadeTop ? { "data-fade-top": "" } : {})}
-          {...(fadeBottom ? { "data-fade-bottom": "" } : {})}
-          ref={scrollFadeRef}
-        >
-          {/* 📌 Pinned section — global, above Projects and Chats */}
-          {section === "direct-messages" && pinnedSessions.length > 0 && (
-            <>
-              <SectionHeader
-                expanded={pinnedExpanded}
-                onToggle={() => setPinnedExpanded((expanded) => !expanded)}
-              >
-                📌 Pinned
-              </SectionHeader>
-
-              <CollapsibleMotion open={pinnedExpanded} preset="default">
-                <div data-testid="sidebar-pinned">
-                  <AnimatePresence initial={false}>
-                    {pinnedSessions.map((session) => (
-                      <SessionRow
-                        key={session.id}
-                        activity={activityBySession[session.id]}
-                        isActive={activeSessionId === session.id}
-                        pinned={true}
-                        onSelect={() => onSelectSession(session)}
-                        onPin={(event) => {
-                          event.stopPropagation();
-                          onPinSession(session, false);
-                        }}
-                        onRename={(title) => onRenameSession?.(session.id, title)}
-                        onArchive={(event) => {
-                          event.stopPropagation();
-                          onArchiveSession(session);
-                        }}
-                        onDelete={(event) => {
-                          event.stopPropagation();
-                          onDeleteSession(session);
-                        }}
-                        title={session.title}
-                        updatedAt={session.updatedAt}
-                      />
-                    ))}
-                  </AnimatePresence>
-                </div>
-              </CollapsibleMotion>
-              <div className="mt-1" />
-            </>
-          )}
-
-          {section === "direct-messages" ? (
-            <>
-              <AnimatePresence initial={false}>
-                {directMessageSessions.length === 0 ? (
-                  <p className="px-2 py-1 text-2xs text-fg-faint">{t("shell.chatsEmpty")}</p>
-                ) : (
-                  directMessageSessions.map((session) => (
-                    <SessionRow
-                      key={session.id}
-                      activity={activityBySession[session.id]}
-                      isActive={activeSessionId === session.id}
-                      onArchive={(event) => {
-                        event.stopPropagation();
-                        onArchiveSession(session);
-                      }}
-                      onDelete={(event) => {
-                        event.stopPropagation();
-                        onDeleteSession(session);
-                      }}
-                      onPin={(event) => {
-                        event.stopPropagation();
-                        onPinSession(session, !session.pinnedAt);
-                      }}
-                      onRename={(title) => onRenameSession?.(session.id, title)}
-                      onSelect={() => onSelectSession(session)}
-                      pinned={Boolean(session.pinnedAt)}
-                      title={session.title}
-                      updatedAt={session.updatedAt}
-                    />
-                  ))
-                )}
-              </AnimatePresence>
-            </>
-          ) : null}
-
-          {section === "direct-messages" ? (
-            <div
-              className="mt-3 border-t border-hairline pt-2"
-              data-testid="sidebar-project-context"
-            >
-              <SectionHeader
-                expanded={projectsExpanded}
-                onToggle={() => setProjectsExpanded((expanded) => !expanded)}
-              >
-                Project context
-              </SectionHeader>
-
-              <CollapsibleMotion open={projectsExpanded} preset="default">
-                <AnimatePresence initial={false}>
-                  {workspaces.map((workspace) => (
-                    <m.div
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={reduceMotion ? { opacity: 1 } : { opacity: 0, y: -4 }}
-                      initial={reduceMotion ? false : { opacity: 0, y: 4 }}
-                      key={workspace.id}
-                      layout
-                      transition={{
-                        duration: reduceMotion ? 0 : LIST_MOTION.duration,
-                        ease: LIST_MOTION.ease,
-                      }}
-                    >
-                      <WorkspaceItem
-                        activityBySession={activityBySession}
-                        onArchiveSession={onArchiveSession}
-                        onDeleteSession={onDeleteSession}
-                        onListArchivedSessions={onListArchivedSessions}
-                        onNewSession={() => onNewWorkspaceSession(workspace)}
-                        onPinSession={onPinSession}
-                        onRenameSession={(id, title) => onRenameSession?.(id, title)}
-                        onRestoreSession={onRestoreSession}
-                        onSelectSession={onSelectSession}
-                        activeSessionId={activeSessionId}
-                        sessions={sessionsByWorkspace.get(workspace.id) ?? []}
-                        workspace={workspace}
-                        renaming={renamingId === workspace.id}
-                        onStartRename={() => setRenamingId(workspace.id)}
-                        onCommitRename={(name) => {
-                          setRenamingId(null);
-                          const next = name.trim();
-                          if (next && next !== workspace.displayName) {
-                            onRenameProject(workspace.id, next);
-                          }
-                        }}
-                        onCancelRename={() => setRenamingId(null)}
-                        onPin={() => onPinProject(workspace.id, !workspace.pinned)}
-                        onReveal={() => onRevealProject(workspace.id)}
-                        onArchiveChats={() => onArchiveProjectChats(workspace.id)}
-                        onDeleteChats={() => onDeleteProjectChats(workspace.id)}
-                        onRemove={() => onRemoveProject(workspace.id)}
-                        groupNames={NO_NAMES}
-                      />
-                    </m.div>
-                  ))}
-                </AnimatePresence>
-                <div className="mt-1">
-                  <NavRow
-                    icon={<IconFolderPlus size={SB_ICON} stroke={SB_STROKE} />}
-                    muted
-                    onClick={onOpenWorkspace}
-                  >
-                    Open workspace
-                  </NavRow>
-                </div>
-              </CollapsibleMotion>
-            </div>
-          ) : null}
-        </div>
+        {list}
       </m.div>
       {open ? (
         <button
