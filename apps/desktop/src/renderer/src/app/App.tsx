@@ -85,6 +85,7 @@ import {
   type UiStatePusher,
 } from "../features/update/restoreUiState";
 import { UpdateToast } from "../features/update/UpdateToast";
+import { useSidebarToggleShortcut } from "../hooks/useSidebarToggleShortcut";
 import { describeAgentError } from "../lib/agentErrors";
 import { cn } from "../lib/cn";
 import { useShellText } from "../lib/shellText";
@@ -1011,6 +1012,8 @@ export function App() {
     window.modus?.agents.migratedTranscript,
   );
   const isMac = window.modus?.app.platform === "darwin";
+  const toggleSidebar = useCallback(() => setSidebarOpen((open) => !open), []);
+  useSidebarToggleShortcut(toggleSidebar, isMac);
 
   useEffect(() => {
     const next = { sessionId: activeSessionId, workspaceId: activeWorkspace?.id };
