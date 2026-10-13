@@ -14,8 +14,10 @@ export function ComposerDock({
   const hasRails = Boolean(rails);
 
   return (
+    // No overflow-hidden: the slash and @ menus are absolute popups rendered
+    // above the prompt (bottom-full) and would be clipped away by the dock.
     <div
-      className="composer-dock-shell composer-glass relative flex flex-col overflow-hidden"
+      className="composer-dock-shell composer-glass relative flex flex-col"
       data-composer-surface
       data-testid="composer-dock"
       data-ui-surface="raised"

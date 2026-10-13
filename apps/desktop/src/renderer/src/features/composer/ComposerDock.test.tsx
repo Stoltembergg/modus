@@ -19,4 +19,13 @@ describe("ComposerDock", () => {
     expect(dock.contains(screen.getByTestId("composer-input"))).toBe(true);
     expect(document.querySelectorAll("[data-composer-surface]")).toHaveLength(1);
   });
+
+  it("does not clip popups (slash and @ menus) that open above the prompt", () => {
+    render(
+      <ComposerDock>
+        <div>Prompt</div>
+      </ComposerDock>,
+    );
+    expect(screen.getByTestId("composer-dock").className).not.toMatch(/overflow-(hidden|clip)/);
+  });
 });
