@@ -34,7 +34,6 @@ import type {
 import { CHATS_WORKSPACE_ID } from "../../../../shared/contracts";
 import { VortexMark } from "../../components/ui/VortexMark";
 import { lookupModel } from "../../lib/modelIdentity";
-import { useTaskChecklistVisible } from "../../lib/taskChecklist";
 import {
   Composer,
   type ComposerDraft,
@@ -81,7 +80,7 @@ import {
   isSubagentSessionWorking,
   subagentActivityLabel,
 } from "./subagentUi";
-import { buildVisibleTimelineBlocks, latestTodosBlock, Timeline } from "./Timeline";
+import { buildVisibleTimelineBlocks, pinnedTodosForRail, Timeline } from "./Timeline";
 import { TodosCard } from "./TodosCard";
 import { splitTimelinePresentation } from "./timelinePresentation";
 import { useAutoScroll } from "./useAutoScroll";
@@ -851,14 +850,8 @@ export function ChatPane({
   const previewSession = subagentSessions?.find((child) => child.id === previewSubagentId);
   const canPreviewSubagents = Boolean(subagentSessions && onOpenSubagent);
   const showChangesRail = Boolean(workingStats && workingStats.fileCount > 0);
-  const checklistVisible = useTaskChecklistVisible();
-  const pinnedTodos = useMemo(() => latestTodosBlock(stateAgentEvents), [stateAgentEvents]);
-  const showTodosRail = Boolean(
-    checklistVisible &&
-      pinnedTodos &&
-      pinnedTodos.todos.length > 0 &&
-      (pinnedTodos.updating || pinnedTodos.todos.some((todo) => todo.status !== "completed")),
-  );
+  const pinnedTodos = useMemo(() => pinnedTodosForRail(stateAgentEvents), [stateAgentEvents]);
+  const showTodosRail = Boolean(pinnedTodos);
   const hasComposerRails =
     showTodosRail || runningProcesses.length > 0 || workingSubagents.length > 0 || showChangesRail;
   const activeComposerDraft = composerDraft ?? localComposerDraft;

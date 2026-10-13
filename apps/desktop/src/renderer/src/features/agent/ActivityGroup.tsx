@@ -8,7 +8,6 @@ import { ThinkingStates } from "../../components/ui/ThinkingStates";
 import { WorkingText } from "../../components/ui/WorkingText";
 import { WorkStatusLine } from "../../components/ui/WorkStatusLine";
 import { cn } from "../../lib/cn";
-import { useTaskChecklistVisible } from "../../lib/taskChecklist";
 import { MessageBlock } from "./MessageBlock";
 import { SubagentRow } from "./SubagentRow";
 import { subagentActivityLabel } from "./subagentUi";
@@ -276,7 +275,7 @@ export function WorkActivityRow({
       />
     );
   }
-  if (item.type === "todos") return <TaskChecklist {...item} />;
+  if (item.type === "todos") return <TodosCard {...item} />;
   if (item.type === "subagent") {
     return (
       <SubagentRow
@@ -438,9 +437,3 @@ export const WorkFold = memo(function WorkFold({
     </div>
   );
 });
-
-/** TodosCard gated by the top-bar "task checklist" toggle (persisted preference). */
-function TaskChecklist(props: Parameters<typeof TodosCard>[0]) {
-  const visible = useTaskChecklistVisible();
-  return visible ? <TodosCard {...props} /> : null;
-}

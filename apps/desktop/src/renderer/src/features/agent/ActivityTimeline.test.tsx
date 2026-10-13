@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEventItem,
@@ -7,7 +7,6 @@ import type {
   AgentEventPageOptions,
 } from "../../../../shared/agent-events";
 import type { PlanRef } from "../../../../shared/contracts";
-import { reloadTaskChecklistPreference, setTaskChecklistVisible } from "../../lib/taskChecklist";
 import { ActivityTimeline } from "./ActivityTimeline";
 import { AgentEventHub } from "./agentEventHub";
 
