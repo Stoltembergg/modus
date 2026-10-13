@@ -46,6 +46,34 @@ function describeCdp(input: Record<string, unknown>): ToolCallDescription {
   };
 }
 
+function prefixLines(text: string, prefix: string): string[] {
+  return text.split("\n").map((line) => `${prefix}${line}`);
+}
+
+/** Every replacement in an edit call rendered as one diff: removed lines with "-", added with "+". */
+export function editDiff(input: Record<string, unknown>): string {
+  const pairs: Array<{ oldText: string; newText: string }> = [];
+  const pushPair = (value: unknown) => {
+    const item = record(value);
+    const oldText = item.oldText ?? item.old_string ?? item.oldString;
+    const newText = item.newText ?? item.new_string ?? item.newString;
+    if (typeof oldText === "string" || typeof newText === "string") {
+      pairs.push({
+        oldText: typeof oldText === "string" ? oldText : "",
+        newText: typeof newText === "string" ? newText : "",
+      });
+    }
+  };
+  if (Array.isArray(input.edits)) for (const edit of input.edits) pushPair(edit);
+  else pushPair(input);
+  if (!pairs.length) return JSON.stringify(input, null, 2);
+  return pairs
+    .map(({ oldText, newText }) =>
+      ["@@", ...prefixLines(oldText, "-"), ...prefixLines(newText, "+")].join("\n"),
+    )
+    .join("\n");
+}
+
 export function describeToolCall(toolName: string, rawInput: unknown): ToolCallDescription {
   const input = record(rawInput);
   if (toolName === "browser_cdp") return describeCdp(input);
@@ -61,8 +89,11 @@ export function describeToolCall(toolName: string, rawInput: unknown): ToolCallD
   if (command !== undefined) return { summary: `Run a shell command`, details: command };
   const path = str(input.path);
   if (path !== undefined) {
-    if (toolName === "write") return { summary: `Write file ${path}` };
-    if (toolName === "edit") return { summary: `Edit file ${path}` };
+    if (toolName === "write") {
+      const content = typeof input.content === "string" ? input.content : "";
+      return { summary: `Write file ${path}`, details: content };
+    }
+    if (toolName === "edit") return { summary: `Edit file ${path}`, details: editDiff(input) };
     return { summary: `Use ${toolName} on ${path}` };
   }
   return { summary: `Use tool ${toolName}`, details: JSON.stringify(input, null, 2) };
