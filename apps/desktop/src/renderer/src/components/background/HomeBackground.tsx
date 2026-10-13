@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import ShapeGrid from "./ShapeGrid";
+import { GridBackground } from "./GridBackground";
 
 /** Hover tint: the Modus logo purple at low opacity. */
 export const HOME_GRID_HOVER = "rgba(134, 63, 245, 0.18)";
@@ -42,7 +42,7 @@ function useThemeLineColor(): string {
 }
 
 /**
- * Animated grid behind the home composer. ShapeGrid already honours
+ * Animated grid behind the home composer. GridBackground already honours
  * prefers-reduced-motion and stops while off-screen; this also pauses it
  * while the window is hidden.
  */
@@ -55,15 +55,10 @@ export function HomeBackground() {
       className="pointer-events-auto absolute inset-0 z-0"
       data-testid="home-background"
     >
-      <ShapeGrid
-        clickCascade={false}
-        direction="diagonal"
-        fade={0}
+      <GridBackground
         hoverColor={HOME_GRID_HOVER}
-        hoverFillColor={HOME_GRID_HOVER}
         lineColor={lineColor}
         paused={hidden}
-        shape="square"
         speed={0.3}
       />
     </div>

@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 const desktopDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const repoRoot = resolve(desktopDir, "../..");
 const rendererDir = join(desktopDir, "src/renderer/src");
-const uiDir = join(rendererDir, "components/ui");
+const componentsDir = join(rendererDir, "components");
 
 // The upstream mark, assembled so this guard does not itself carry it.
 const MARK = new RegExp(["react", "[\\s-]?", "bits"].join(""), "i");
@@ -20,6 +20,7 @@ const REMOVED_COMPONENTS = [
   "GradientWaves",
   "PromptSendGlyph",
   "ScrollReveal",
+  "ShapeGrid",
   "ShinyText",
   "SpringCheck",
   "TextType",
@@ -37,9 +38,9 @@ function read(path: string): string {
   return readFileSync(path, "utf8");
 }
 
-describe("no third-party component marks left in components/ui", () => {
-  it("no file under components/ui carries the upstream mark", () => {
-    const marked = walk(uiDir)
+describe("no third-party component marks left in components/", () => {
+  it("no file anywhere under components/ carries the upstream mark", () => {
+    const marked = walk(componentsDir)
       .filter((path) => MARK.test(read(path)))
       .map((path) => relative(repoRoot, path));
     expect(marked).toEqual([]);
