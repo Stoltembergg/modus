@@ -28,10 +28,7 @@ export function AppearanceSettingsPanel() {
 
   return (
     <>
-      <SettingsPageHeader
-        description="Visual preferences aligned with the current Modus desktop theme."
-        title="Appearance"
-      />
+      <SettingsPageHeader description="Theme and transparency." title="Appearance" />
       <SettingsSection title="Theme">
         <SettingsList>
           <SettingsRow

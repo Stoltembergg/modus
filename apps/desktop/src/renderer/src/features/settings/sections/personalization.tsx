@@ -90,7 +90,7 @@ export function PersonalizationSettingsPanel() {
             </button>
           </>
         }
-        description="Persistent AGENTS.md guidance loaded before workspace rules."
+        description="Instructions applied to your workspace."
         title="Personalization"
       />
 

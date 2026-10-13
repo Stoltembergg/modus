@@ -13,14 +13,14 @@ export function SettingsPageHeader({
   title: string;
 }) {
   return (
-    <header
-      data-strip="clear"
-      className="sticky-glass-strip sticky top-0 z-10 -mx-10 -mt-16 flex items-end justify-between gap-5 px-10 pt-16 pb-8"
-    >
+    <header className="flex items-start justify-between gap-4 pb-1">
       <div className="min-w-0">
-        <h2 className="text-lg font-normal text-fg">{title}</h2>
+        <h2 className="text-base font-medium text-fg">{title}</h2>
         <p
-          className={cn("mt-2 text-sm text-fg-muted", singleLineDescription && "truncate")}
+          className={cn(
+            "mt-1 max-w-2xl text-xs leading-4 text-fg-muted",
+            singleLineDescription && "truncate",
+          )}
           title={singleLineDescription ? description : undefined}
         >
           {description}
@@ -41,10 +41,12 @@ export function SettingsSection({
   title: string;
 }) {
   return (
-    <section className="flex flex-col gap-4">
+    <section className="flex flex-col gap-3">
       <div className="min-w-0">
-        <h3 className="text-md font-normal text-fg">{title}</h3>
-        {description ? <p className="mt-1 text-xs text-fg-faint">{description}</p> : null}
+        <h3 className="text-sm font-medium text-fg">{title}</h3>
+        {description ? (
+          <p className="mt-0.5 text-xs leading-4 text-fg-faint">{description}</p>
+        ) : null}
       </div>
       {children}
     </section>
@@ -69,10 +71,10 @@ export function SettingsRow({
   title: string;
 }) {
   return (
-    <div className="flex min-h-[72px] items-center gap-5 border-hairline-soft border-b px-5 py-4 last:border-b-0">
+    <div className="flex min-h-[60px] items-center gap-4 border-hairline-soft border-b px-4 py-3 last:border-b-0">
       <div className="min-w-0 flex-1">
         <div className="text-sm text-fg">{title}</div>
-        <div className="mt-1 text-xs text-fg-muted">{description}</div>
+        <div className="mt-0.5 text-xs leading-4 text-fg-muted">{description}</div>
       </div>
       <div className="shrink-0">{control}</div>
     </div>

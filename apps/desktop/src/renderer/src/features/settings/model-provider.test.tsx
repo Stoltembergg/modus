@@ -27,7 +27,6 @@ vi.mock("./sections/personalization", () => ({ PersonalizationSettingsPanel: () 
 vi.mock("./sections/project-memory", () => ({ ProjectMemorySettingsPanel: () => null }));
 vi.mock("./sections/rules", () => ({ RulesSettingsPanel: () => null }));
 vi.mock("./sections/skills", () => ({ SkillsSettingsPanel: () => null }));
-vi.mock("./sections/subagents", () => ({ SubagentsSettingsPanel: () => null }));
 
 import { SettingsPanel } from "./SettingsPanel";
 

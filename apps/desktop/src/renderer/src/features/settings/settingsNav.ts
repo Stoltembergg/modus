@@ -28,7 +28,6 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavEntry[] = [
   { id: "personalization", label: "Personalization", group: "interface" },
   { id: "mcp", label: "MCP & Integrations", group: "workspace" },
   { id: "skills", label: "Skills", group: "workspace" },
-  { id: "subagents", label: "Subagents", group: "workspace" },
   { id: "rules", label: "Rules", group: "workspace" },
 ];
 

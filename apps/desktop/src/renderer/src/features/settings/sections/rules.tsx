@@ -127,7 +127,7 @@ export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
             </button>
           </>
         }
-        description="Project rules are injected into every agent session automatically when marked Always Apply (AGENTS.md, CLAUDE.md, .cursorrules, or .cursor/rules/*.mdc with alwaysApply: true). Other rules stay available through the @rules context attachment."
+        description="Choose which project instructions apply automatically."
         title="Rules"
       />
 

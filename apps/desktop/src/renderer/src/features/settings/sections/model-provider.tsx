@@ -123,10 +123,6 @@ export function ModelProviderSettingsPanel({
 }) {
   const [providerQuery, setProviderQuery] = useState("");
   const providers = useMemo(() => [...connected, ...popular], [connected, popular]);
-  const enabledModelCount = useMemo(
-    () => providers.reduce((total, provider) => total + provider.enabledModelCount, 0),
-    [providers],
-  );
 
   return (
     <>
@@ -158,15 +154,9 @@ export function ModelProviderSettingsPanel({
             </button>
           </>
         }
-        description="Connect PI providers, enable models, and choose reasoning behavior."
+        description="Connect providers and choose available models."
         title="Model & Provider"
       />
-
-      <div className="flex flex-wrap gap-2">
-        <ReadOnlyPill>{`${connected.length} connected`}</ReadOnlyPill>
-        <ReadOnlyPill>{`${enabledModelCount} enabled models`}</ReadOnlyPill>
-        <ReadOnlyPill>{`${providers.length} providers`}</ReadOnlyPill>
-      </div>
 
       {models && onSetDefaultModel ? (
         <DefaultModelSetting

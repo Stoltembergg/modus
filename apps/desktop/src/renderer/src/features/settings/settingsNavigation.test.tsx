@@ -17,12 +17,11 @@ const NAV_LABELS = [
   "Personalization",
   "MCP & Integrations",
   "Skills",
-  "Subagents",
   "Rules",
 ] as const;
 
 const GROUPED_NAV = {
-  Workspace: ["MCP & Integrations", "Skills", "Subagents", "Rules"],
+  Workspace: ["MCP & Integrations", "Skills", "Rules"],
   Models: ["Model & Provider"],
   Interface: ["General", "Account", "Appearance", "Personalization"],
 } as const;
@@ -88,7 +87,6 @@ describe("filterSettingsNav", () => {
   it("matches partial labels as a substring", () => {
     expect(filterSettingsNav(SETTINGS_NAV_ITEMS, "en").map((item) => item.label)).toEqual([
       "General",
-      "Subagents",
     ]);
   });
 
@@ -173,8 +171,8 @@ describe("Settings navigation search", () => {
     expect(navLabels(markup)).toEqual(["Personalization"]);
 
     const acrossAll = renderSidebar({ query: "en" });
-    expect(groupHeadings(acrossAll)).toEqual(["Workspace", "Interface"]);
-    expect(navLabels(acrossAll)).toEqual(["Subagents", "General"]);
+    expect(groupHeadings(acrossAll)).toEqual(["Interface"]);
+    expect(navLabels(acrossAll)).toEqual(["General"]);
   });
 
   it("shows an empty state when no nav item matches", () => {
@@ -188,15 +186,15 @@ describe("Settings navigation search", () => {
 
   it("keeps the active section when it is filtered out of the nav", () => {
     const onSectionChange = vi.fn();
-    const markup = renderSidebar({ activeSection: "subagents", onSectionChange, query: "model" });
+    const markup = renderSidebar({ activeSection: "account", onSectionChange, query: "model" });
 
     expect(navLabels(markup)).toEqual(["Model & Provider"]);
     expect(activeNavLabel(markup)).toBeUndefined();
     expect(onSectionChange).not.toHaveBeenCalled();
 
-    const cleared = renderSidebar({ activeSection: "subagents", onSectionChange, query: "" });
+    const cleared = renderSidebar({ activeSection: "account", onSectionChange, query: "" });
     expect(navLabels(cleared)).toEqual(RENDERED_NAV_LABELS);
-    expect(activeNavLabel(cleared)).toBe("Subagents");
+    expect(activeNavLabel(cleared)).toBe("Account");
     expect(onSectionChange).not.toHaveBeenCalled();
   });
 });
