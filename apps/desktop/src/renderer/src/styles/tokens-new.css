@@ -49,27 +49,28 @@
   /* States */
   --color-hover: rgba(255, 255, 255, 0.05);
   --color-active: rgba(255, 255, 255, 0.08);
-  --color-selected: rgba(47, 107, 242, 0.16);
+  --color-selected: rgba(134, 63, 245, 0.16);
   --color-chip-faint: rgba(255, 255, 255, 0.04);
   --color-chip: rgba(255, 255, 255, 0.06);
   --color-chip-strong: rgba(255, 255, 255, 0.09);
 
-  /* One accent: blue replaces the orange send, the Build blue and the focus purple. */
-  --color-accent: #2f6bf2;
-  --color-accent-hover: #4a7ff5;
-  --color-accent-active: #2459d6;
+  /* One accent: the Modus logo purple (#863ff5, assets/modus-logo.svg) replaces the
+     orange send, the Build blue and the classic focus purple. */
+  --color-accent: #863ff5;
+  --color-accent-hover: #8d4bf6;
+  --color-accent-active: #7a35e8;
   --color-on-accent: #ffffff;
-  --color-build: #2f6bf2;
-  --color-build-hover: #4a7ff5;
+  --color-build: #863ff5;
+  --color-build-hover: #8d4bf6;
   --color-build-fg: #ffffff;
-  --color-focus-ring: #5b8cff;
-  --color-focus-ring-soft: #7aa5ff;
-  --color-selection: rgba(47, 107, 242, 0.36);
-  --color-link: #7aa5ff;
-  --color-link-hover: #9dbdff;
-  --accent-text: #7aa5ff;
-  --accent-soft: rgba(47, 107, 242, 0.16);
-  --accent-edge: rgba(122, 165, 255, 0.28);
+  --color-focus-ring: #a77bf9;
+  --color-focus-ring-soft: #b48cfa;
+  --color-selection: rgba(134, 63, 245, 0.36);
+  --color-link: #b48cfa;
+  --color-link-hover: #c9acfc;
+  --accent-text: #b48cfa;
+  --accent-soft: rgba(134, 63, 245, 0.16);
+  --accent-edge: rgba(180, 140, 250, 0.28);
 
   /* Status */
   --color-success: #34c38f;
@@ -139,24 +140,24 @@
 
   --color-hover: rgba(16, 24, 40, 0.04);
   --color-active: rgba(16, 24, 40, 0.07);
-  --color-selected: rgba(31, 95, 224, 0.1);
+  --color-selected: rgba(134, 63, 245, 0.1);
   --color-chip-faint: rgba(16, 24, 40, 0.035);
   --color-chip: rgba(16, 24, 40, 0.055);
   --color-chip-strong: rgba(16, 24, 40, 0.09);
 
-  --color-accent: #1f5fe0;
-  --color-accent-hover: #2f6bf2;
-  --color-accent-active: #1a4fbf;
-  --color-build: #1f5fe0;
-  --color-build-hover: #2f6bf2;
-  --color-focus-ring: #1f5fe0;
-  --color-focus-ring-soft: #2f6bf2;
-  --color-selection: rgba(31, 95, 224, 0.18);
-  --color-link: #1f5fe0;
-  --color-link-hover: #1a4fbf;
-  --accent-text: #1f5fe0;
-  --accent-soft: rgba(31, 95, 224, 0.1);
-  --accent-edge: rgba(31, 95, 224, 0.22);
+  --color-accent: #863ff5;
+  --color-accent-hover: #7a35e8;
+  --color-accent-active: #6c2bd9;
+  --color-build: #863ff5;
+  --color-build-hover: #7a35e8;
+  --color-focus-ring: #7a35e8;
+  --color-focus-ring-soft: #863ff5;
+  --color-selection: rgba(134, 63, 245, 0.18);
+  --color-link: #6c2bd9;
+  --color-link-hover: #5b21b6;
+  --accent-text: #6c2bd9;
+  --accent-soft: rgba(134, 63, 245, 0.1);
+  --accent-edge: rgba(134, 63, 245, 0.22);
 
   --color-success: #138a5e;
   --color-danger: #d23b3b;

@@ -155,11 +155,11 @@ describe("new look tokens: values", () => {
       "--color-fg-muted": "#a9b2c0",
       "--color-fg-subtle": "#939dac",
       "--color-fg-faint": "#7a8494",
-      "--color-accent": "#2f6bf2",
-      "--color-accent-hover": "#4a7ff5",
-      "--color-accent-active": "#2459d6",
-      "--color-focus-ring": "#5b8cff",
-      "--color-link": "#7aa5ff",
+      "--color-accent": "#863ff5",
+      "--color-accent-hover": "#8d4bf6",
+      "--color-accent-active": "#7a35e8",
+      "--color-focus-ring": "#a77bf9",
+      "--color-link": "#b48cfa",
       "--color-success": "#34c38f",
       "--color-danger": "#f06a6a",
       "--status-warning": "#f2b84b",
@@ -174,11 +174,11 @@ describe("new look tokens: values", () => {
       "--color-fg-muted": "#3f4959",
       "--color-fg-subtle": "#535d6f",
       "--color-fg-faint": "#626c7e",
-      "--color-accent": "#1f5fe0",
-      "--color-accent-hover": "#2f6bf2",
-      "--color-accent-active": "#1a4fbf",
-      "--color-focus-ring": "#1f5fe0",
-      "--color-link": "#1f5fe0",
+      "--color-accent": "#863ff5",
+      "--color-accent-hover": "#7a35e8",
+      "--color-accent-active": "#6c2bd9",
+      "--color-focus-ring": "#7a35e8",
+      "--color-link": "#6c2bd9",
       "--color-success": "#138a5e",
       "--color-danger": "#d23b3b",
       "--status-warning": "#a76500",
@@ -205,13 +205,24 @@ describe("new look tokens: values", () => {
     expect(light).not.toMatch(/--glass-alpha-/);
   });
 
-  it("(b) one accent: send, Build and focus all point at the blue family", () => {
+  it("(b) one accent: the Modus logo purple, shared by send, Build and focus", () => {
+    const logo = readFileSync(new URL("../assets/modus-logo.svg", import.meta.url), "utf8");
+    const logoFills = new Set(
+      [...logo.matchAll(/fill="(#[0-9a-f]{6})"/gi)].map((m) => m[1]?.toLowerCase()),
+    );
+    expect([...logoFills]).toEqual(["#863ff5"]);
     for (const theme of THEMES) {
+      expect(raw(theme, "--color-accent"), `${theme} accent is the logo purple`).toBe("#863ff5");
       expect(raw(theme, "--color-build")).toBe(raw(theme, "--color-accent"));
-      const [r, g, b] = color(theme, "--color-focus-ring");
-      expect(b, `${theme} focus ring is blue`).toBeGreaterThan(Math.max(r, g));
+      for (const name of ["--color-accent", "--color-focus-ring", "--color-link"]) {
+        const [r, g, b] = color(theme, name);
+        expect(b, `${theme} ${name} is purple`).toBeGreaterThan(Math.max(r, g));
+        expect(r, `${theme} ${name} is purple, not blue`).toBeGreaterThan(g + 30);
+      }
     }
-    expect(withoutComments).not.toMatch(/133,\s*63,\s*244|#853ff4|#f54e00/i);
+    expect(withoutComments).not.toMatch(
+      /47,\s*107,\s*242|31,\s*95,\s*224|#2f6bf2|#1f5fe0|#f54e00/i,
+    );
   });
 
   it("(b) native window colours mirror the new canvas and text", () => {
@@ -359,6 +370,10 @@ describe("new look tokens: contrast gate", () => {
       expect(
         contrast(WHITE, color(theme, "--color-accent")),
         `${theme} accent`,
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(
+        contrast(WHITE, color(theme, "--color-accent-hover")),
+        `${theme} hover`,
       ).toBeGreaterThanOrEqual(4.5);
       expect(
         contrast(WHITE, color(theme, "--color-accent-active")),
