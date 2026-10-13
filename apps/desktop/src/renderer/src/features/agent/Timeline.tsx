@@ -20,6 +20,7 @@ import { CopyButton } from "../../components/ui/CopyButton";
 import { RevealOnMount } from "../../components/ui/RevealOnMount";
 import { Tooltip } from "../../components/ui/Tooltip";
 import { formatClock } from "../../lib/formatClock";
+import { visibleSubagentPrompt } from "../../lib/subagentPrompt";
 import { formatTokenCount } from "../../lib/tokenUsage";
 import {
   collectRunSources,
@@ -979,6 +980,11 @@ export function buildBlocks(
     }
   }
 
+  for (const block of blocks) {
+    if (block.type === "message" && block.role === "user") {
+      block.content = visibleSubagentPrompt(block.content);
+    }
+  }
   return blocks;
 }
 
