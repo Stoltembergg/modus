@@ -50,7 +50,9 @@ function renderSidebar({
 }
 
 function activeNavLabel(markup: string): string | undefined {
-  const activeButton = markup.split("<button").find((chunk) => chunk.includes("bg-active"));
+  const activeButton = markup
+    .split("<button")
+    .find((chunk) => chunk.includes('aria-current="page"'));
   return activeButton ? navLabels(activeButton)[0] : undefined;
 }
 
@@ -196,5 +198,27 @@ describe("Settings navigation search", () => {
     expect(navLabels(cleared)).toEqual(RENDERED_NAV_LABELS);
     expect(activeNavLabel(cleared)).toBe("Subagents");
     expect(onSectionChange).not.toHaveBeenCalled();
+  });
+});
+
+describe("Settings nav inside the app sidebar", () => {
+  it("embedded nav drops its own column chrome and marks the active item by color only", () => {
+    const markup = renderToStaticMarkup(
+      <SettingsSidebar
+        activeSection="appearance"
+        embedded
+        onBack={() => undefined}
+        onQueryChange={() => undefined}
+        onSectionChange={() => undefined}
+        query=""
+      />,
+    );
+    expect(markup).toContain('data-settings-nav="embedded"');
+    expect(markup).not.toContain("app-settings-sidebar");
+    expect(markup).not.toContain("w-[260px]");
+    expect(markup).not.toContain("border-t");
+    const active = markup.split("<button").find((chunk) => chunk.includes('aria-current="page"'));
+    expect(active).toContain("text-accent");
+    expect(active).not.toContain("bg-active");
   });
 });

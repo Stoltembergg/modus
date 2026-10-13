@@ -1,5 +1,6 @@
 import { m, useReducedMotion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type {
   CustomProviderConfig,
   ModelProviderDetail,
@@ -11,6 +12,7 @@ import type {
   WorkspaceInfo,
 } from "../../../../shared/contracts";
 import { ContentTransition } from "../../components/ui/ContentTransition";
+import { cn } from "../../lib/cn";
 import { AccountSettingsPanel } from "./sections/account";
 import { AppearanceSettingsPanel } from "./sections/appearance";
 import { GeneralSettingsPanel } from "./sections/general";
@@ -70,6 +72,8 @@ type SettingsPanelProps = {
   workspaceCwd?: string | undefined;
   /** Recent workspaces — used as project MCP scopes. */
   workspaces?: WorkspaceInfo[] | undefined;
+  /** App sidebar slot: when set, the settings nav renders there instead of its own column. */
+  navContainer?: HTMLElement | null | undefined;
 };
 
 export function SettingsPanel({
@@ -80,6 +84,7 @@ export function SettingsPanel({
   workspaceCwd,
   workspaces = [],
   initialSection = "model-provider",
+  navContainer,
 }: SettingsPanelProps) {
   const reduceMotion = useReducedMotion();
   const closeStartedRef = useRef(false);
@@ -494,7 +499,10 @@ export function SettingsPanel({
   return (
     <m.div
       animate={isClosing ? { opacity: 0, y: -3 } : { opacity: 1, y: 0 }}
-      className="surface-app flex min-h-0 flex-1 overflow-hidden"
+      className={cn(
+        "flex min-h-0 flex-1 overflow-hidden",
+        navContainer === undefined && "surface-app",
+      )}
       initial={reduceMotion ? false : { opacity: 0, y: 4 }}
       aria-hidden={isClosing}
       inert={isClosing}
@@ -506,15 +514,30 @@ export function SettingsPanel({
       style={{ pointerEvents: isClosing ? "none" : "auto" }}
       transition={{ duration: reduceMotion ? 0 : 0.14, ease: [0.22, 1, 0.36, 1] }}
     >
-      <SettingsSidebar
-        activeSection={activeSection}
-        onBack={closeSettings}
-        onQueryChange={setSettingsQuery}
-        onSectionChange={setActiveSection}
-        query={settingsQuery}
-      />
+      {navContainer
+        ? createPortal(
+            <SettingsSidebar
+              activeSection={activeSection}
+              embedded
+              onBack={closeSettings}
+              onQueryChange={setSettingsQuery}
+              onSectionChange={setActiveSection}
+              query={settingsQuery}
+            />,
+            navContainer,
+          )
+        : null}
+      {navContainer === undefined ? (
+        <SettingsSidebar
+          activeSection={activeSection}
+          onBack={closeSettings}
+          onQueryChange={setSettingsQuery}
+          onSectionChange={setActiveSection}
+          query={settingsQuery}
+        />
+      ) : null}
 
-      <main className="surface-main scroll-thin min-w-0 flex-1 overflow-y-auto border-hairline-strong border-l">
+      <main className="surface-main scroll-thin min-w-0 flex-1 overflow-y-auto">
         <ContentTransition
           className="mx-auto flex w-full max-w-[1080px] flex-col gap-8 px-10 pt-16 pb-12"
           transitionKey={activeSection}

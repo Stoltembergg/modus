@@ -179,6 +179,7 @@ export function App() {
   const [primaryNavigation, setPrimaryNavigation] = useState(INITIAL_PRIMARY_NAVIGATION);
   const primaryNavigationTouchedRef = useRef(false);
   const settingsOpen = primaryNavigation.active === "settings";
+  const [settingsNavSlot, setSettingsNavSlot] = useState<HTMLDivElement | null>(null);
   const [settingsInitialSection, setSettingsInitialSection] =
     useState<SettingsSectionId>("model-provider");
   const navigateToPrimary = useCallback((destination: PrimaryDestination) => {
@@ -1032,7 +1033,7 @@ export function App() {
   const sidebarFits =
     layoutWidth === 0 ||
     layoutWidth >= appSidebarReservedWidth(true) + MAIN_MIN_WIDTH + WORKSPACE_GUTTER * 3;
-  const responsiveSidebarOpen = sidebarOpen && sidebarFits && !settingsOpen;
+  const responsiveSidebarOpen = sidebarOpen && sidebarFits;
   const sidebarSpace = appSidebarReservedWidth(responsiveSidebarOpen);
   const showInspectorForRoute = primaryNavigation.active === "direct-messages" && hasSession;
   const inspectorSpace = showInspectorForRoute && inspectorOpen ? inspectorWidth : 0;
@@ -1132,22 +1133,17 @@ export function App() {
               {/* Settings keeps a dedicated titlebar. Conversation chrome uses the
                   main toolbar as the drag/traffic-light row so there is no empty
                   band above the chat header. */}
-              {settingsOpen ? <MenuBar /> : null}
 
               <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                 <div
                   className="app-layout-row surface-app flex min-h-0 min-w-0 flex-1"
                   ref={layoutRowRef}
-                  style={
-                    primaryNavigation.active === "settings"
-                      ? undefined
-                      : {
-                          gap: WORKSPACE_GUTTER,
-                          paddingTop: 0,
-                          paddingRight: WORKSPACE_GUTTER,
-                          paddingBottom: WORKSPACE_GUTTER,
-                        }
-                  }
+                  style={{
+                    gap: WORKSPACE_GUTTER,
+                    paddingTop: 0,
+                    paddingRight: WORKSPACE_GUTTER,
+                    paddingBottom: WORKSPACE_GUTTER,
+                  }}
                 >
                   <AppSidebar
                     active={primaryNavigation.active}
@@ -1159,9 +1155,15 @@ export function App() {
                     onNewProfile={() => void openNewProfile()}
                     onPinnedChange={setSidebarOpen}
                     pinned={responsiveSidebarOpen}
-                    trafficLightClearance={isMac && !settingsOpen}
+                    trafficLightClearance={isMac}
                   >
-                    {settingsOpen ? null : (
+                    {settingsOpen ? (
+                      <div
+                        className="flex min-h-0 flex-1 flex-col"
+                        data-settings-nav-slot=""
+                        ref={setSettingsNavSlot}
+                      />
+                    ) : (
                       <Sidebar
                         embedded
                         section="direct-messages"
@@ -1199,17 +1201,30 @@ export function App() {
                     )}
                   </AppSidebar>
                   {settingsOpen ? (
-                    <Suspense fallback={<ModusLoadingFallback />}>
-                      <SettingsPanel
-                        initialSection={settingsInitialSection}
-                        onClose={closeSettings}
-                        onRefresh={refreshModelSettings}
-                        onRefreshCatalog={refreshModelCatalog}
-                        state={modelSettings}
-                        workspaces={workspaces}
-                        workspaceCwd={activeWorkspace?.rootPath}
+                    <div
+                      className="surface-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-b-lg"
+                      data-shell-layer="settings-surface"
+                    >
+                      <div
+                        aria-hidden="true"
+                        className={cn(
+                          "toolbar-row shrink-0",
+                          (isMac || windowChrome === "windows-overlay") && "app-drag",
+                        )}
                       />
-                    </Suspense>
+                      <Suspense fallback={<ModusLoadingFallback />}>
+                        <SettingsPanel
+                          initialSection={settingsInitialSection}
+                          navContainer={settingsNavSlot}
+                          onClose={closeSettings}
+                          onRefresh={refreshModelSettings}
+                          onRefreshCatalog={refreshModelCatalog}
+                          state={modelSettings}
+                          workspaces={workspaces}
+                          workspaceCwd={activeWorkspace?.rootPath}
+                        />
+                      </Suspense>
+                    </div>
                   ) : (
                     <>
                       {/* Keeps the dialog mounted for its exit spring after onOpenChange(false). */}
@@ -1512,56 +1527,6 @@ export function App() {
         </NativeSurfaceProvider>
       </TooltipProvider>
     </LazyMotion>
-  );
-}
-
-/**
- * Top chrome strip (36px) — settings only:
- *   - macOS: native traffic lights only; File/Edit/View/Help live in the system menu bar
- *   - Windows/Linux: native controls; the renderer contributes menu labels only
- *
- * Conversation layout folds drag / traffic-light clearance into the sidebar +
- * main toolbar so the chat header sits flush with the window top.
- */
-function MenuBar() {
-  const isMac = window.modus?.app.platform === "darwin";
-  const windowChrome = window.modus?.app.windowChrome ?? "system";
-
-  return (
-    <div
-      className={cn(
-        "menu-bar flex shrink-0 items-center bg-panel",
-        (isMac || windowChrome === "windows-overlay") && "app-drag",
-        windowChrome === "windows-overlay" && "pr-[138px]",
-        // Clear native traffic lights (positioned at ~14,14 in main-window).
-        isMac && "pl-[76px]",
-      )}
-    >
-      <div className={cn("flex flex-1 items-center gap-0.5", !isMac && "pl-2.5")}>
-        {isMac ? null : (
-          <>
-            <MenuItem>File</MenuItem>
-            <MenuItem>Edit</MenuItem>
-            <MenuItem>View</MenuItem>
-            <MenuItem>Help</MenuItem>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function MenuItem({ children }: { children: string }) {
-  return (
-    <button
-      className={cn(
-        "app-no-drag flex h-7 items-center rounded-md px-2 text-xs font-normal text-fg-subtle",
-        "transition-colors hover:bg-hover hover:text-fg",
-      )}
-      type="button"
-    >
-      {children}
-    </button>
   );
 }
 
