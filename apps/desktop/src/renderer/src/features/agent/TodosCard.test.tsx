@@ -45,4 +45,14 @@ describe("TodosCard", () => {
     expect(markup).toContain(textClass);
     expect(markup).toContain(iconClass);
   });
+
+  it("drops the wire border when bare inside the Composer glass", () => {
+    const todo: TodoItem = { id: "t", content: "Ship", status: "pending" };
+    expect(renderToStaticMarkup(<TodosCard bare todos={[todo]} updating={false} />)).not.toMatch(
+      /timeline-wire|border/,
+    );
+    expect(renderToStaticMarkup(<TodosCard todos={[todo]} updating={false} />)).toContain(
+      "timeline-wire",
+    );
+  });
 });

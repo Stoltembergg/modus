@@ -323,7 +323,7 @@ export function Sidebar({
       ) : null}
 
       {section === "direct-messages" ? (
-        <div className="mt-3 border-t border-hairline pt-2" data-testid="sidebar-project-context">
+        <div className="mt-5" data-testid="sidebar-project-context">
           <SectionHeader
             expanded={projectsExpanded}
             onToggle={() => setProjectsExpanded((expanded) => !expanded)}

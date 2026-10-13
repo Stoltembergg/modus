@@ -35,7 +35,7 @@ function StartupCommitReporter() {
 initTheme();
 initAppearanceAttributes();
 
-// The To-dos top-bar toggle is gone (pinned To-dos is always shown); drop its stale preference.
+// The To-dos top-bar toggle is gone (pinned To-dos appears when the agent creates a checklist); drop its stale preference.
 try {
   localStorage.removeItem("modus.taskChecklist.visible");
 } catch {
