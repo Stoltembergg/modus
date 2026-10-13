@@ -3,9 +3,18 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { domMax, LazyMotion } from "motion/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AppSidebar, appSidebarReservedWidth } from "./AppSidebar";
+import {
+  AppSidebar,
+  appSidebarReservedWidth,
+  readSidebarPinned,
+  SIDEBAR_PINNED_KEY,
+  writeSidebarPinned,
+} from "./AppSidebar";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  window.localStorage.clear();
+});
 
 function renderSidebar(props: Partial<Parameters<typeof AppSidebar>[0]> = {}, list?: ReactNode) {
   const handlers = {
@@ -78,5 +87,14 @@ describe("AppSidebar", () => {
     expect(
       (screen.getByRole("button", { name: "New message" }) as HTMLButtonElement).disabled,
     ).toBe(true);
+  });
+
+  it("defaults to the collapsed rail and remembers the user's pin choice", () => {
+    window.localStorage.removeItem(SIDEBAR_PINNED_KEY);
+    expect(readSidebarPinned()).toBe(false);
+    writeSidebarPinned(true);
+    expect(readSidebarPinned()).toBe(true);
+    writeSidebarPinned(false);
+    expect(readSidebarPinned()).toBe(false);
   });
 });

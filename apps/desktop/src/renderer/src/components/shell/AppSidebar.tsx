@@ -37,6 +37,25 @@ export type AppSidebarProps = {
   children?: ReactNode;
 };
 
+export const SIDEBAR_PINNED_KEY = "modus.sidebar.pinned";
+
+/** Saved pin choice; with nothing saved the sidebar starts as the collapsed rail. */
+export function readSidebarPinned(): boolean {
+  try {
+    return window.localStorage.getItem(SIDEBAR_PINNED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function writeSidebarPinned(pinned: boolean): void {
+  try {
+    window.localStorage.setItem(SIDEBAR_PINNED_KEY, pinned ? "true" : "false");
+  } catch {
+    // Storage unavailable: the choice lasts for this session only.
+  }
+}
+
 /** Width the layout reserves for the sidebar (an unpinned hover never reflows main). */
 export function appSidebarReservedWidth(pinned: boolean): number {
   return pinned ? SIDEBAR_EXPANDED_WIDTH : SIDEBAR_COLLAPSED_WIDTH;

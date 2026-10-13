@@ -33,7 +33,12 @@ import { shellText } from "../../../shared/shell-text";
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_TRANSITION, Sidebar } from "../components/Sidebar";
 import type { PrimaryDestination } from "../components/shell/AppRail";
 import { AppShell } from "../components/shell/AppShell";
-import { AppSidebar, appSidebarReservedWidth } from "../components/shell/AppSidebar";
+import {
+  AppSidebar,
+  appSidebarReservedWidth,
+  readSidebarPinned,
+  writeSidebarPinned,
+} from "../components/shell/AppSidebar";
 import { MainSurface } from "../components/shell/MainSurface";
 import {
   closeSettingsNavigation,
@@ -227,7 +232,12 @@ export function App() {
     primaryNavigationTouchedRef.current = true;
     setPrimaryNavigation((current) => closeSettingsNavigation(current));
   }, []);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Pinned open (300px) vs the 60px hover rail. Default is the rail; the
+  // user's pin choice is remembered across launches.
+  const [sidebarOpen, setSidebarOpen] = useState(readSidebarPinned);
+  useEffect(() => {
+    writeSidebarPinned(sidebarOpen);
+  }, [sidebarOpen]);
   const [sidebarWidth, setSidebarWidth] = useState(300);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [inspectorWidth, setInspectorWidth] = useState(384);
