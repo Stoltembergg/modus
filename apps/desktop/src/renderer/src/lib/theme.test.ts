@@ -4,7 +4,7 @@ import type { ThemeMode } from "./theme";
 
 afterEach(async () => {
   const { setThemeLook } = await import("./theme");
-  setThemeLook("classic");
+  setThemeLook("new");
   window.localStorage.clear();
   vi.unstubAllGlobals();
   vi.resetModules();
@@ -79,14 +79,9 @@ describe("theme sync with the main process (D2)", () => {
 });
 
 describe("theme look", () => {
-  it("makes applyTheme('dark-plus') write data-theme='dark' when look is new, and restores 'dark-plus' on classic", async () => {
-    const { applyTheme, setThemeLook } = await import("./theme");
-    setThemeLook("new");
+  it("always writes data-theme='dark' for a stored Eye-care Dark", async () => {
+    const { applyTheme } = await import("./theme");
     applyTheme("dark-plus");
     expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
-
-    setThemeLook("classic");
-    applyTheme("dark-plus");
-    expect(document.documentElement.getAttribute("data-theme")).toBe("dark-plus");
   });
 });

@@ -62,7 +62,7 @@ const RECEIVER_HTML = `<!doctype html>
   --color-danger: #ef4444;
   --color-build: #3b82f6;
   --color-build-fg: #ffffff;
-  --color-accent: #f54e00;
+  --color-accent: #863ff5;
   --color-on-accent: #ffffff;
 }
 html, body {
