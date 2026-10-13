@@ -350,6 +350,16 @@ function HyperPlanChoiceCard({
             </p>
           ) : null}
         </div>
+        {preview.revision.warnings?.length ? (
+          <ul
+            className="mb-3 space-y-1 rounded-lg bg-warning/10 px-3 py-2 text-xs text-warning"
+            data-testid="hyperplan-revision-warnings"
+          >
+            {preview.revision.warnings.map((warning) => (
+              <li key={warning}>{warning}</li>
+            ))}
+          </ul>
+        ) : null}
         <MarkdownMessage
           className="modus-plan-markdown text-sm"
           content={preview.revision.content}

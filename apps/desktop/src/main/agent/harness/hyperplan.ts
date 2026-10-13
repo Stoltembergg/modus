@@ -1,10 +1,15 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { LoadExtensionsResult, ResourceLoader } from "@earendil-works/pi-coding-agent";
+import type {
+  Extension,
+  LoadExtensionsResult,
+  ResourceLoader,
+} from "@earendil-works/pi-coding-agent";
 import {
   createAgentSession,
   createExtensionRuntime,
+  createSyntheticSourceInfo,
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
@@ -94,59 +99,50 @@ const synthesisOutputSchema = z.object({
 
 type CriticOutput = z.infer<typeof criticOutputSchema>;
 type SynthesisOutput = z.infer<typeof synthesisOutputSchema>;
-const revisionOutputSchema = z
-  .object({
-    title: z.string().trim().min(1).max(500),
-    overview: z.string().trim().min(1).max(2_000),
-    content: z.string().trim().min(1).max(100_000),
-    todos: z
+// Unknown keys (status, evidence, notes…) are stripped, never fatal: models add them freely.
+const revisionOutputSchema = z.object({
+  title: z.string().trim().min(1).max(500),
+  overview: z.string().trim().min(1).max(2_000),
+  content: z.string().trim().min(1).max(100_000),
+  todos: z
+    .array(
+      z.object({
+        id: z.string().trim().min(1).max(120),
+        content: z.string().trim().min(1).max(2_000),
+        acceptanceCriterionIds: z.array(z.string().trim().min(1).max(120)).max(100).optional(),
+      }),
+    )
+    .min(1)
+    .max(100),
+  spec: z.object({
+    requirements: z
       .array(
-        z
-          .object({
-            id: z.string().trim().min(1).max(120),
-            content: z.string().trim().min(1).max(2_000),
-            acceptanceCriterionIds: z.array(z.string().trim().min(1).max(120)).max(100).optional(),
-          })
-          .strict(),
+        z.object({
+          id: z.string().trim().min(1).max(120),
+          text: z.string().trim().min(1).max(2_000),
+        }),
       )
       .min(1)
       .max(100),
-    spec: z
-      .object({
-        requirements: z
-          .array(
-            z
-              .object({
-                id: z.string().trim().min(1).max(120),
-                text: z.string().trim().min(1).max(2_000),
-              })
-              .strict(),
-          )
-          .min(1)
-          .max(100),
-        acceptanceCriteria: z
-          .array(
-            z
-              .object({
-                id: z.string().trim().min(1).max(120),
-                requirementId: z.string().trim().min(1).max(120),
-                description: z.string().trim().min(1).max(2_000),
-                todoIds: z.array(z.string().trim().min(1).max(120)).max(100),
-                requiredCheckKinds: z
-                  .array(z.enum(["tests", "typecheck", "lint", "build"]))
-                  .max(4)
-                  .optional(),
-              })
-              .strict(),
-          )
-          .min(1)
-          .max(100),
-        assumptions: z.array(z.string().trim().min(1).max(2_000)).max(100),
-        openQuestions: z.array(z.string().trim().min(1).max(2_000)).max(100),
-      })
-      .strict(),
-  })
-  .strict();
+    acceptanceCriteria: z
+      .array(
+        z.object({
+          id: z.string().trim().min(1).max(120),
+          requirementId: z.string().trim().min(1).max(120),
+          description: z.string().trim().min(1).max(2_000),
+          todoIds: z.array(z.string().trim().min(1).max(120)).max(100).default([]),
+          requiredCheckKinds: z
+            .array(z.enum(["tests", "typecheck", "lint", "build"]))
+            .max(4)
+            .optional(),
+        }),
+      )
+      .min(1)
+      .max(100),
+    assumptions: z.array(z.string().trim().min(1).max(2_000)).max(100),
+    openQuestions: z.array(z.string().trim().min(1).max(2_000)).max(100),
+  }),
+});
 type RevisionOutput = z.infer<typeof revisionOutputSchema>;
 type IsolatedSession = Awaited<ReturnType<typeof createAgentSession>>["session"];
 type FailureReason =
@@ -332,43 +328,163 @@ function revisionPrompt(input: HyperPlanReviewInput, synthesis: SynthesisOutput)
   return Buffer.byteLength(prompt, "utf8") <= MAX_REVISION_INPUT_BYTES ? prompt : "";
 }
 
-function parseRevision(raw: string | undefined): HyperPlanRevision | undefined {
-  if (!raw) return undefined;
+const MAX_FAILURE_LOG_BYTES = 16 * 1024;
+let failureLogDirOverride: string | undefined;
+
+/** Test seam: where the local-only revision failure log is written. */
+export function setHyperPlanFailureLogDir(dir: string | undefined): void {
+  failureLogDirOverride = dir;
+}
+
+async function failureLogDir(): Promise<string | undefined> {
+  if (failureLogDirOverride) return failureLogDirOverride;
   try {
-    if (Buffer.byteLength(raw, "utf8") > MAX_REVISION_OUTPUT_BYTES) return undefined;
-    const revision: RevisionOutput = revisionOutputSchema.parse(JSON.parse(raw));
-    const unique = (ids: string[]): boolean => new Set(ids).size === ids.length;
-    const todoIds = revision.todos.map((todo) => todo.id);
-    const requirementIds = revision.spec.requirements.map((requirement) => requirement.id);
-    const criterionIds = revision.spec.acceptanceCriteria.map((criterion) => criterion.id);
-    if (!unique(todoIds) || !unique(requirementIds) || !unique(criterionIds)) return undefined;
-    const todoIdSet = new Set(todoIds);
-    const requirementIdSet = new Set(requirementIds);
-    const criterionIdSet = new Set(criterionIds);
-    if (
-      revision.todos.some((todo) =>
-        (todo.acceptanceCriterionIds ?? []).some((id) => !criterionIdSet.has(id)),
-      ) ||
-      revision.spec.acceptanceCriteria.some(
-        (criterion) =>
-          !requirementIdSet.has(criterion.requirementId) ||
-          criterion.todoIds.some((id) => !todoIdSet.has(id)),
-      )
-    ) {
-      return undefined;
+    const { app } = await import("electron");
+    return app?.getPath ? app.getPath("logs") : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Keeps the raw model output of the last failed revision on disk so the next report says
+ * which shape broke parsing. Local only and size-capped: model output can carry workspace
+ * code, so it never goes to Sentry, telemetry, or the renderer.
+ */
+async function logRevisionFailureLocally(reason: string, raw: string | undefined): Promise<void> {
+  try {
+    const dir = await failureLogDir();
+    if (!dir) return;
+    mkdirSync(dir, { recursive: true });
+    const body = capUtf8(raw ?? "", MAX_FAILURE_LOG_BYTES);
+    writeFileSync(
+      join(dir, "hyperplan-revision-failure.log"),
+      `${new Date().toISOString()} reason=${reason} bytes=${Buffer.byteLength(raw ?? "", "utf8")}\n${body}\n`,
+      { encoding: "utf8", mode: 0o600 },
+    );
+  } catch {
+    // Diagnostics only; never mask the user-facing failure.
+  }
+}
+
+/**
+ * Pulls the JSON object out of model text: as-is, inside a ```json fence, or the first
+ * balanced {...} after leading prose. Returns undefined when nothing parses.
+ */
+export function extractJsonObject(raw: string): unknown {
+  const attempts: string[] = [raw.trim()];
+  for (const match of raw.matchAll(/```(?:json|JSON)?\s*\n?([\s\S]*?)```/g)) {
+    if (match[1]) attempts.push(match[1].trim());
+  }
+  const balanced = firstBalancedObject(raw);
+  if (balanced) attempts.push(balanced);
+  for (const candidate of attempts) {
+    if (!candidate.startsWith("{")) continue;
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // try the next shape
     }
-    return {
+  }
+  return undefined;
+}
+
+function firstBalancedObject(text: string): string | undefined {
+  for (let start = text.indexOf("{"); start >= 0; start = text.indexOf("{", start + 1)) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < text.length; index += 1) {
+      const character = text[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (character === "\\") escaped = true;
+        else if (character === '"') inString = false;
+        continue;
+      }
+      if (character === '"') inString = true;
+      else if (character === "{") depth += 1;
+      else if (character === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          const candidate = text.slice(start, index + 1);
+          try {
+            JSON.parse(candidate);
+            return candidate;
+          } catch {
+            break;
+          }
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+type ParsedRevision = { revision?: HyperPlanRevision; failure?: string };
+
+function parseRevision(raw: string | undefined): ParsedRevision {
+  if (!raw?.trim()) return { failure: "empty_output" };
+  if (Buffer.byteLength(raw, "utf8") > MAX_REVISION_OUTPUT_BYTES)
+    return { failure: "output_limit" };
+  const json = extractJsonObject(raw);
+  if (json === undefined) return { failure: "no_json_object" };
+  const parsed = revisionOutputSchema.safeParse(json);
+  if (!parsed.success) return { failure: "schema_mismatch" };
+  const revision: RevisionOutput = parsed.data;
+  const unique = (ids: string[]): boolean => new Set(ids).size === ids.length;
+  const todoIds = revision.todos.map((todo) => todo.id);
+  const requirementIds = revision.spec.requirements.map((requirement) => requirement.id);
+  const criterionIds = revision.spec.acceptanceCriteria.map((criterion) => criterion.id);
+  if (!unique(todoIds) || !unique(requirementIds) || !unique(criterionIds)) {
+    return { failure: "duplicate_ids" };
+  }
+  const todoIdSet = new Set(todoIds);
+  const requirementIdSet = new Set(requirementIds);
+  // A criterion tied to a requirement that does not exist is itself a dangling link: drop it,
+  // but tell the user so an acceptance criterion never disappears silently.
+  const droppedCriteria = revision.spec.acceptanceCriteria.filter(
+    (criterion) => !requirementIdSet.has(criterion.requirementId),
+  );
+  const criteria = revision.spec.acceptanceCriteria
+    .filter((criterion) => requirementIdSet.has(criterion.requirementId))
+    .map((criterion) => ({
+      ...criterion,
+      todoIds: [...new Set(criterion.todoIds.filter((id) => todoIdSet.has(id)))],
+    }));
+  if (criteria.length === 0) return { failure: "no_acceptance_criteria" };
+  const criterionIdSet = new Set(criteria.map((criterion) => criterion.id));
+  // Dangling links are dropped; the todo itself always stays.
+  const todos = revision.todos.map(({ id, content, acceptanceCriterionIds }) => {
+    const links = acceptanceCriterionIds
+      ? [...new Set(acceptanceCriterionIds.filter((linked) => criterionIdSet.has(linked)))]
+      : undefined;
+    return { id, content, ...(links ? { acceptanceCriterionIds: links } : {}) };
+  });
+  const droppedWarnings = droppedCriteria.map(
+    (criterion) =>
+      `The acceptance criterion "${capUtf8(criterion.description, 160)}" was removed because it referenced a requirement that does not exist.`,
+  );
+  const uncoveredWarnings = criteria
+    .filter(
+      (criterion) =>
+        criterion.todoIds.length === 0 &&
+        !todos.some((todo) => todo.acceptanceCriterionIds?.includes(criterion.id)),
+    )
+    .map(
+      (criterion) =>
+        `No task covers the acceptance criterion "${capUtf8(criterion.description, 160)}".`,
+    );
+  const warnings = [...droppedWarnings, ...uncoveredWarnings];
+  return {
+    revision: {
       title: revision.title,
       overview: revision.overview,
       content: revision.content,
-      todos: revision.todos.map(({ id, content, acceptanceCriterionIds }) => ({
-        id,
-        content,
-        ...(acceptanceCriterionIds ? { acceptanceCriterionIds } : {}),
-      })),
+      todos,
       spec: {
-        requirements: revision.spec.requirements,
-        acceptanceCriteria: revision.spec.acceptanceCriteria.map(
+        requirements: revision.spec.requirements.map(({ id, text }) => ({ id, text })),
+        acceptanceCriteria: criteria.map(
           ({ id, requirementId, description, todoIds, requiredCheckKinds }) => ({
             id,
             requirementId,
@@ -380,15 +496,55 @@ function parseRevision(raw: string | undefined): HyperPlanRevision | undefined {
         assumptions: revision.spec.assumptions,
         openQuestions: revision.spec.openQuestions,
       },
-    };
-  } catch {
-    return undefined;
+      ...(warnings.length ? { warnings } : {}),
+    },
+  };
+}
+
+/** APIs whose request body accepts a JSON-object output mode. Others use the tolerant parse. */
+function jsonModePayload(api: unknown, payload: unknown): unknown {
+  if (typeof payload !== "object" || payload === null) return undefined;
+  const body = payload as Record<string, unknown>;
+  if (api === "openai-completions") {
+    return { ...body, response_format: { type: "json_object" } };
   }
+  if (api === "openai-responses" || api === "azure-openai-responses") {
+    const text = typeof body.text === "object" && body.text !== null ? body.text : {};
+    return { ...body, text: { ...text, format: { type: "json_object" } } };
+  }
+  if (api === "google-generative-ai") {
+    const config = typeof body.config === "object" && body.config !== null ? body.config : {};
+    return { ...body, config: { ...config, responseMimeType: "application/json" } };
+  }
+  return undefined;
+}
+
+export const __testing = { jsonModePayload, parseRevision };
+
+function jsonModeExtension(api: unknown): Extension | undefined {
+  if (jsonModePayload(api, {}) === undefined) return undefined;
+  return {
+    path: "<inline:hyperplan-json-mode>",
+    resolvedPath: "<inline:hyperplan-json-mode>",
+    sourceInfo: createSyntheticSourceInfo("<inline:hyperplan-json-mode>", { source: "inline" }),
+    handlers: new Map([
+      [
+        "before_provider_request",
+        [(event: { payload?: unknown }) => jsonModePayload(api, event?.payload)],
+      ],
+    ]),
+    tools: new Map(),
+    messageRenderers: new Map(),
+    commands: new Map(),
+    flags: new Map(),
+    shortcuts: new Map(),
+  } as unknown as Extension;
 }
 
 async function createIsolatedSession(
   modelId?: string,
   thinkingLevel?: typeof REVIEW_THINKING_LEVEL,
+  jsonMode = false,
 ): Promise<{
   session: IsolatedSession;
   tempDir: string;
@@ -419,6 +575,11 @@ async function createIsolatedSession(
       if (modelId !== undefined) throw new Error(`Selected model is unavailable: ${modelId}`);
       throw new Error("No model available.");
     }
+    // Structured output where the provider supports it; parseRevision stays tolerant anyway.
+    const jsonExtension = jsonMode
+      ? jsonModeExtension((model as { api?: unknown }).api)
+      : undefined;
+    if (jsonExtension) extensions.extensions = [jsonExtension];
     const { session } = await createAgentSession({
       cwd: tempDir,
       agentDir: tempDir,
@@ -464,6 +625,7 @@ async function runBoundedPrompt(
   maxOutputBytes: number,
   modelId?: string,
   thinkingLevel?: typeof REVIEW_THINKING_LEVEL,
+  jsonMode = false,
 ): Promise<PromptResult> {
   if (!prompt) {
     return {
@@ -554,7 +716,7 @@ async function runBoundedPrompt(
       }
     };
     try {
-      const created = await createIsolatedSession(modelId, thinkingLevel);
+      const created = await createIsolatedSession(modelId, thinkingLevel, jsonMode);
       session = created.session;
       tempDir = created.tempDir;
       sessionCreated = true;
@@ -968,10 +1130,19 @@ export async function runHyperPlanRevision(
       REVISION_TIMEOUT_MS,
       MAX_REVISION_OUTPUT_BYTES,
       modelId,
+      undefined,
+      true,
     );
-    const revision = parseRevision(result.output);
-    if (!revision) throw new Error("HyperPlan revision unavailable: invalid revision output");
-    return revision;
+    if (result.reason) {
+      throw new HyperPlanReviewFailure(result.reason, result.message ?? "Revision failed.");
+    }
+    const parsed = parseRevision(result.output);
+    if (!parsed.revision) {
+      console.warn(`[HyperPlan] stage=revision reason=${parsed.failure ?? "invalid"}`);
+      await logRevisionFailureLocally(parsed.failure ?? "invalid", result.output);
+      throw new Error("HyperPlan revision unavailable: invalid revision output");
+    }
+    return parsed.revision;
   } catch (error) {
     if (error instanceof HyperPlanReviewFailure) {
       throw new HyperPlanReviewFailure(
