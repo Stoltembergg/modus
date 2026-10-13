@@ -10,6 +10,7 @@ import {
   AGENT_AVATAR_SHAPES,
   allocateUniqueGroupAvatarShapes,
 } from "../../shared/contracts";
+import { isGroupsMigrationDone } from "./groups-to-projects";
 
 let database: DatabaseSync | undefined;
 
@@ -579,7 +580,10 @@ export function migrateDatabase(db: DatabaseSync): void {
       created_at text not null
     );
   `);
-  migrateLegacyGroupDecisions(db);
+  // PR 4: once Groups → Projects ran, no legacy group step may run again
+  // (they would re-link agents to groups and recreate the group triggers).
+  const groupsMigrated = isGroupsMigrationDone(db);
+  if (!groupsMigrated) migrateLegacyGroupDecisions(db);
   db.exec(`create index if not exists idx_group_decisions_group_created
     on group_decisions(group_id, created_at);`);
 
@@ -593,14 +597,16 @@ export function migrateDatabase(db: DatabaseSync): void {
   // Membership migrations may temporarily reassign an agent before the N6
   // normalization runs. Remove the final-write guards while migrating, then
   // migrateAgentAvatarShapesN6 restores them after all group links are stable.
-  db.exec(`drop trigger if exists agents_group_avatar_shape_unique_insert;
+  if (!groupsMigrated) {
+    db.exec(`drop trigger if exists agents_group_avatar_shape_unique_insert;
     drop trigger if exists agents_group_avatar_shape_unique_update;
     drop index if exists idx_agents_group_avatar_shape;`);
-  migrateGroupMembersToAgents(db);
-  migrateMembershipByAgent(db);
-  migrateAgentsToOneGroup(db);
-  migrateAgentAvatarsN5(db);
-  migrateAgentAvatarShapesN6(db);
+    migrateGroupMembersToAgents(db);
+    migrateMembershipByAgent(db);
+    migrateAgentsToOneGroup(db);
+    migrateAgentAvatarsN5(db);
+    migrateAgentAvatarShapesN6(db);
+  }
   // A3: an agent's 1:1 chat is a normal 'chat' session in its group's Project,
   // linked by agent_id (at most one per agent, made on first open). Deleting
   // the agent (with its group) only unlinks the row: the caller then runs the
@@ -687,8 +693,10 @@ export function migrateDatabase(db: DatabaseSync): void {
     create index if not exists idx_group_decisions_execution
       on group_decisions(group_id, execution_id);
   `);
-  migrateGroupTaskState(db);
-  migrateGroupIntegrationState(db);
+  if (!groupsMigrated) {
+    migrateGroupTaskState(db);
+    migrateGroupIntegrationState(db);
+  }
 }
 
 /** Preserve existing rowids while making event cursors monotonic after deletion. */
