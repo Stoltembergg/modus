@@ -5,7 +5,6 @@ import {
   IconFolder,
   IconFolderPlus,
   IconGitBranch,
-  IconLayoutSidebar,
 } from "@tabler/icons-react";
 import { AnimatePresence, domMax, LazyMotion, m, useReducedMotion } from "motion/react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -1256,19 +1255,6 @@ export function App() {
                           )}
                         >
                           <div className="app-no-drag flex min-w-0 flex-1 items-center gap-1.5">
-                            {/* Toggle always lives here so collapse/expand never jumps
-                              between the sidebar footer and the main header. */}
-                            <ToolbarButton
-                              label={
-                                responsiveSidebarOpen ? "Collapse sidebar" : "Show left sidebar"
-                              }
-                              onClick={() => setSidebarOpen((open) => !open)}
-                            >
-                              <IconLayoutSidebar
-                                size={TOOLBAR_ICON.size}
-                                stroke={TOOLBAR_ICON.stroke}
-                              />
-                            </ToolbarButton>
                             {primaryNavigation.active === "direct-messages" && !visibleSession ? (
                               <WorkspaceMenu
                                 activeWorkspace={activeWorkspace}
