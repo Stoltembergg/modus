@@ -31,6 +31,7 @@ const PROVIDER_LOGO_ALIASES: Record<string, string> = {
 
 export const PROVIDER_LOGO_COLORS: Record<string, string> = {
   "amazon-bedrock": "#ff9900",
+  modus: "#863ff5",
   anthropic: "#d4a27f",
   cerebras: "#f05a28",
   cloudflare: "#f38020",
