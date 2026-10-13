@@ -68,6 +68,7 @@ export function getSlashQuery(value: string): { start: number; query: string } |
 
 export function useComposerSlash({ value, cwd, actions }: UseComposerSlashInput) {
   const slash = useMemo(() => getSlashQuery(value), [value]);
+  const slashActive = slash !== undefined;
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const loadedForCwd = useRef<string | undefined>(undefined);
@@ -75,18 +76,20 @@ export function useComposerSlash({ value, cwd, actions }: UseComposerSlashInput)
   // Load skills the first time the slash menu opens for a workspace; refresh
   // when the workspace changes so newly added skills appear without a restart.
   useEffect(() => {
-    if (!slash || !cwd) {
+    if (!slashActive || !cwd) {
       return;
     }
     if (loadedForCwd.current === cwd) {
       return;
     }
-    loadedForCwd.current = cwd;
     let cancelled = false;
     void window.modus.skills
       .list(cwd)
       .then((items: SkillInfo[]) => {
         if (!cancelled) {
+          // Mark loaded only once a result lands, so a request cancelled by a
+          // re-render is retried instead of leaving the skill list empty.
+          loadedForCwd.current = cwd;
           setSkills(items);
         }
       })
@@ -98,11 +101,14 @@ export function useComposerSlash({ value, cwd, actions }: UseComposerSlashInput)
     return () => {
       cancelled = true;
     };
-  }, [slash, cwd]);
+  }, [slashActive, cwd]);
 
   const query = slash?.query.toLowerCase() ?? "";
 
   const filteredSkills = useMemo(() => {
+    if (!cwd) {
+      return [];
+    }
     if (!query) {
       return skills;
     }
@@ -110,7 +116,7 @@ export function useComposerSlash({ value, cwd, actions }: UseComposerSlashInput)
       (skill) =>
         skill.name.toLowerCase().includes(query) || skill.description.toLowerCase().includes(query),
     );
-  }, [skills, query]);
+  }, [skills, query, cwd]);
 
   const filteredCommands = useMemo(() => {
     if (!query) {
@@ -157,7 +163,8 @@ export function useComposerSlash({ value, cwd, actions }: UseComposerSlashInput)
     setActiveIndex(0);
   }, []);
 
-  const isOpen = Boolean(slash && cwd) && items.length > 0;
+  // Built-in commands and actions do not need a workspace; only skills do.
+  const isOpen = slashActive && items.length > 0;
 
   return {
     isOpen,
