@@ -455,7 +455,6 @@
   box-sizing: border-box;
   overflow: hidden;
   background-color: var(--surface-sidebar);
-  border-right: 1px solid var(--border-subtle);
 }
 .app-sidebar-slot[data-pinned="false"] .app-animated-sidebar[data-open="true"] {
   /* Hover overlay floats over main: keep it opaque even when glass clears panels. */
