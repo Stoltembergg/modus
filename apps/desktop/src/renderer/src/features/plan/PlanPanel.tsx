@@ -3,7 +3,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FilesChangeEvent, PlanRef } from "../../../../shared/contracts";
 import { EmptyState } from "../../components/ui/Panel";
 import { MarkdownMessage } from "../agent/MarkdownMessage";
-import { SpecAcceptanceCriteria } from "./SpecAcceptanceCriteria";
+import { PlanAcceptanceCriteria } from "./PlanAcceptanceCriteria";
 
 const WORKSPACE_REVISION_RECHECK_MS = 5_000;
 
@@ -176,7 +176,7 @@ export const PlanPanel = memo(function PlanPanel({
           </h1>
           <MarkdownMessage className="modus-plan-markdown" content={plan.content} />
           {plan.spec ? (
-            <SpecAcceptanceCriteria
+            <PlanAcceptanceCriteria
               currentWorkspaceRevisions={currentWorkspaceRevisions}
               spec={plan.spec}
             />

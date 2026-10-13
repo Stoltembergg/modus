@@ -10,7 +10,7 @@ import type {
  * Allowed without elevating permissions:
  * - retrieve_local — bounded Context Planner / CodeGraph hits already indexed
  * - verify — strengthen verifier gate / continue QA (existing Auto QA path)
- * - suggest_plan — advisory Plan/HyperPlan suggestion (already Intent-Gate safe)
+ * - suggest_plan — advisory Plan/PlanBuild suggestion (already Intent-Gate safe)
  * - finish — terminal when verification already satisfied
  * - spawn_readonly_specialist — spawn a builtin read-only child via runSubagent
  *   (explore/librarian/oracle/reviewer/debugger/ui-ux only; ToolRegistry +

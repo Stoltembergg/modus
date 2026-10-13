@@ -9,9 +9,9 @@ import {
 } from "electron";
 import { resolveWindowAppearance } from "../../shared/window-appearance";
 import {
-  invalidateHyperPlanDraftOwner,
-  registerHyperPlanDraftOwner,
-} from "../agent/harness/hyperplan-draft-store";
+  invalidatePlanBuildOwner,
+  registerPlanBuildOwner,
+} from "../agent/harness/plan-build-store";
 import type { AppearanceController } from "../appearance/appearance-controller";
 import { IPC_CHANNELS } from "../ipc/channels";
 import { isTrustedRendererUrl, registerTrustedSender } from "../ipc/trusted-sender";
@@ -105,7 +105,7 @@ export function createMainWindow({
   }
   // Material, colours and the glass-off sequencing live in the appearance controller.
   appearance.attach(window, { nativeGlassAvailable });
-  const ownerEpoch = registerHyperPlanDraftOwner(window.webContents.id);
+  const ownerEpoch = registerPlanBuildOwner(window.webContents.id);
   startupTimeline.mark("main.window-created");
 
   // 把 maximize/unmaximize 状态推送给 renderer，用于切换 max/restore 按钮图标
@@ -144,9 +144,9 @@ export function createMainWindow({
     if (ownerDraftsCleared) return;
     ownerDraftsCleared = true;
     try {
-      invalidateHyperPlanDraftOwner(window.webContents.id, ownerEpoch);
+      invalidatePlanBuildOwner(window.webContents.id, ownerEpoch);
     } catch {
-      console.warn("[modus] HyperPlan owner draft cleanup failed.");
+      console.warn("[modus] Plan build owner cleanup failed.");
     }
   };
   window.once("closed", clearOwnerDrafts);

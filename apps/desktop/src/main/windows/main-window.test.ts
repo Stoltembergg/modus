@@ -59,9 +59,9 @@ vi.mock("electron", () => ({
   shell: { openExternal: vi.fn() },
 }));
 
-vi.mock("../agent/harness/hyperplan-draft-store", () => ({
-  registerHyperPlanDraftOwner: electronState.registerDraftOwner,
-  invalidateHyperPlanDraftOwner: electronState.invalidateDraftOwner,
+vi.mock("../agent/harness/plan-build-store", () => ({
+  registerPlanBuildOwner: electronState.registerDraftOwner,
+  invalidatePlanBuildOwner: electronState.invalidateDraftOwner,
 }));
 
 describe("main window renderer target and redirects", () => {

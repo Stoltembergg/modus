@@ -69,11 +69,11 @@ export function selectExecutionPolicy(input: SelectExecutionPolicyInput): Adapti
   );
   reasonCodes.push(`verification_${verificationLevel}`);
 
-  const suggestHyperPlan =
+  const suggestPlan =
     input.classification.complexity === "complex" ||
     input.classification.risk === "high" ||
     input.impact?.blastRadius === "cross_module";
-  if (suggestHyperPlan) reasonCodes.push("hyperplan_justified");
+  if (suggestPlan) reasonCodes.push("plan_recommended");
 
   let suggestedRole: BuiltinAgentRole | undefined = input.classification.suggestedRole;
   if (
@@ -138,7 +138,7 @@ export function selectExecutionPolicy(input: SelectExecutionPolicyInput): Adapti
   return {
     version: 1,
     verificationLevel,
-    suggestHyperPlan,
+    suggestPlan,
     ...(suggestedRole ? { suggestedRole } : {}),
     maxParallelChildren,
     ...(preferredModelId ? { preferredModelId } : {}),

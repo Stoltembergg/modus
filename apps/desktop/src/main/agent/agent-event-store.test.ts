@@ -399,7 +399,7 @@ describe("getLatestHarnessTaskState", () => {
     const sessionId = `idempotent-${crypto.randomUUID()}`;
     insertSession(sessionId);
     const event = { type: "runtime.error", sessionId, message: "publish once" } as const;
-    const options = { idempotencyKey: "hyperplan-selection-1" };
+    const options = { idempotencyKey: "plan-build-selection-1" };
 
     const firstRowId = recordAgentEvent(event, options);
     const retryRowId = recordAgentEvent(event, options);
@@ -420,9 +420,9 @@ describe("getLatestHarnessTaskState", () => {
     const requestId = "same-request";
     insertSession(sessionId);
 
-    const firstStore = await import("./harness/hyperplan-draft-store");
-    const firstEpoch = firstStore.registerHyperPlanDraftOwner(ownerId);
-    const firstIdentity = firstStore.getHyperPlanOwnerEpochIdentity(firstEpoch);
+    const firstStore = await import("./harness/plan-build-store");
+    const firstEpoch = firstStore.registerPlanBuildOwner(ownerId);
+    const firstIdentity = firstStore.getPlanBuildOwnerEpochIdentity(firstEpoch);
     if (!firstIdentity) throw new Error("First owner epoch has no durable identity.");
     const firstKey = `original:${ownerId}:${firstIdentity}:${requestId}`;
     const original = {
@@ -436,9 +436,9 @@ describe("getLatestHarnessTaskState", () => {
 
     // Reload only the in-memory draft store to model Electron restarting while retaining SQLite.
     await vi.resetModules();
-    const restartedStore = await import("./harness/hyperplan-draft-store");
-    const secondEpoch = restartedStore.registerHyperPlanDraftOwner(ownerId);
-    const secondIdentity = restartedStore.getHyperPlanOwnerEpochIdentity(secondEpoch);
+    const restartedStore = await import("./harness/plan-build-store");
+    const secondEpoch = restartedStore.registerPlanBuildOwner(ownerId);
+    const secondIdentity = restartedStore.getPlanBuildOwnerEpochIdentity(secondEpoch);
     if (!secondIdentity) throw new Error("Restarted owner epoch has no durable identity.");
     const secondKey = `original:${ownerId}:${secondIdentity}:${requestId}`;
     const replacement = {

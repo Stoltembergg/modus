@@ -142,11 +142,6 @@ import {
   defaultToolResultRepeatGuardHook,
 } from "./harness/guards/repeat-guard-hook";
 import { fingerprintToolArgs, ToolInvocationTracker } from "./harness/guards/repeat-tool-guard";
-import {
-  isHyperPlanSessionReserved,
-  ownsHyperPlanStartReservation,
-  releaseHyperPlanRunReservation,
-} from "./harness/hyperplan-draft-store";
 import { evaluateIntentGate } from "./harness/intent-gate";
 import type {
   HarnessContext,
@@ -165,6 +160,11 @@ import { clearRun as clearMcpCitationRun } from "./harness/mcp-citation-registry
 import { decideNext, formatAdaptiveDecisionHint } from "./harness/meta-controller";
 import { HarnessObserver } from "./harness/observability/harness-observer";
 import { defaultObservabilityTurnSettleHook } from "./harness/observability/observability-hooks";
+import {
+  isPlanBuildSessionReserved,
+  ownsPlanBuildStartReservation,
+  releasePlanBuildRunReservation,
+} from "./harness/plan-build-store";
 import {
   bootstrapModusPlugins,
   PluginInstrumentation,
@@ -240,8 +240,8 @@ import type {
   BackgroundWaitResult,
   CreateAgentRuntimeInput,
   EmitAgentEvent,
-  HyperPlanBuildStart,
-  HyperPlanBuildStartInput,
+  PlanBuildStart,
+  PlanBuildStartInput,
   PromptAgentInput,
   PromptTurnResult,
   TurnSettledEvent,
@@ -420,7 +420,7 @@ type RunOutputTracker = {
 const ADAPTIVE_DECISION_MODE: AdaptiveDecisionMode = "active";
 
 type ExclusiveStartHooks = {
-  input: HyperPlanBuildStartInput;
+  input: PlanBuildStartInput;
   onStarted: (runId: string) => void;
 };
 
@@ -1401,7 +1401,7 @@ export class PiSdkRuntime implements AgentRuntime {
     runId: string;
     outputTracker?: RunOutputTracker;
     planId: string | undefined;
-    request: HyperPlanBuildStartInput;
+    request: PlanBuildStartInput;
     preflightReservation: symbol | undefined;
     error: unknown;
     preserveStartedDeliveryForRetry?: boolean;
@@ -1444,7 +1444,7 @@ export class PiSdkRuntime implements AgentRuntime {
           };
       try {
         this.emitToWindow(input.window)(terminal, {
-          idempotencyKey: `hyperplan:${input.request.idempotencyKey}:terminal:${input.runId}`,
+          idempotencyKey: `plan-build:${input.request.idempotencyKey}:terminal:${input.runId}`,
         });
       } catch {
         // The durable event insert may have succeeded before delivery failed.
@@ -1453,7 +1453,7 @@ export class PiSdkRuntime implements AgentRuntime {
         try {
           this.emitToWindow(input.window)(
             { type: "runtime.error", sessionId: input.sessionId, message },
-            { idempotencyKey: `hyperplan:${input.request.idempotencyKey}:runtime-error` },
+            { idempotencyKey: `plan-build:${input.request.idempotencyKey}:runtime-error` },
           );
         } catch {
           // Best effort only; never replace the original run failure.
@@ -1473,7 +1473,7 @@ export class PiSdkRuntime implements AgentRuntime {
           );
         }
         this.releasePromptPreflight(input.sessionId, input.preflightReservation);
-        releaseHyperPlanRunReservation({ sessionId: input.sessionId, runId: input.runId });
+        releasePlanBuildRunReservation({ sessionId: input.sessionId, runId: input.runId });
         if (input.runtimeSession.info.workspaceId) {
           try {
             releaseAgentBrowserControl(input.runtimeSession.info.workspaceId, input.sessionId);
@@ -1499,11 +1499,11 @@ export class PiSdkRuntime implements AgentRuntime {
     }
   }
 
-  /** Synchronous busy guard used before a HyperPlan review or promotion reserves a session. */
-  assertHyperPlanSessionAvailable(sessionId: string): void {
+  /** Synchronous busy guard used before an approved plan build reserves a session. */
+  assertPlanBuildSessionAvailable(sessionId: string): void {
     const runtimeSession = this.sessions.get(sessionId);
     if (
-      isHyperPlanSessionReserved(sessionId) ||
+      isPlanBuildSessionReserved(sessionId) ||
       this.preflightReservations.has(sessionId) ||
       this.runOutputTrackers.has(sessionId) ||
       this.pendingIntentGates.has(sessionId) ||
@@ -1512,28 +1512,18 @@ export class PiSdkRuntime implements AgentRuntime {
       runtimeSession?.session.isStreaming ||
       runtimeSession?.session.isCompacting
     ) {
-      throw new Error("HyperPlan choice is unavailable while this session is busy or reserved.");
+      throw new Error("Plan build approval is unavailable while this session is busy or reserved.");
     }
   }
 
-  startPlanBuild(
-    window: BrowserWindowType,
-    input: HyperPlanBuildStartInput,
-  ): Promise<HyperPlanBuildStart> {
-    return Promise.resolve().then(() => this.startHyperPlanBuild(window, input));
+  startPlanBuild(window: BrowserWindowType, input: PlanBuildStartInput): Promise<PlanBuildStart> {
+    return Promise.resolve().then(() => this.beginPlanBuild(window, input));
   }
 
-  startOriginalPlanBuild(
+  private beginPlanBuild(
     window: BrowserWindowType,
-    input: HyperPlanBuildStartInput,
-  ): Promise<HyperPlanBuildStart> {
-    return Promise.resolve().then(() => this.startHyperPlanBuild(window, input));
-  }
-
-  private startHyperPlanBuild(
-    window: BrowserWindowType,
-    input: HyperPlanBuildStartInput,
-  ): Promise<HyperPlanBuildStart> {
+    input: PlanBuildStartInput,
+  ): Promise<PlanBuildStart> {
     const validate = (): PlanRef => {
       const session = getAgentSession(input.sessionId);
       const plan = readPlanById(plansRoot(), input.planId);
@@ -1546,7 +1536,7 @@ export class PiSdkRuntime implements AgentRuntime {
       )
         throw new Error("The selected plan is missing or its fingerprint changed.");
       if (
-        !ownsHyperPlanStartReservation({
+        !ownsPlanBuildStartReservation({
           ownerId: input.ownerId,
           ...(input.ownerEpoch ? { ownerEpoch: input.ownerEpoch } : {}),
           requestId: input.requestId,
@@ -1554,7 +1544,7 @@ export class PiSdkRuntime implements AgentRuntime {
           ...(input.existingRunId ? { runId: input.existingRunId } : {}),
         })
       )
-        throw new Error("The HyperPlan start reservation is no longer owned by this request.");
+        throw new Error("The PlanBuild start reservation is no longer owned by this request.");
       const currentRun = getActiveAgentRun(input.sessionId);
       const runtimeSession = this.sessions.get(input.sessionId);
       const isRetryRun =
@@ -1569,14 +1559,14 @@ export class PiSdkRuntime implements AgentRuntime {
         (plan.buildStatus === "building" && !isRetryRun) ||
         (getAgentSession(input.sessionId)?.status === "running" && !isRetryRun)
       )
-        throw new Error("The HyperPlan build cannot start while this session is busy.");
+        throw new Error("The PlanBuild build cannot start while this session is busy.");
       return plan;
     };
     const plan = validate();
-    let resolveStarted!: (value: HyperPlanBuildStart) => void;
+    let resolveStarted!: (value: PlanBuildStart) => void;
     let rejectStarted!: (error: unknown) => void;
     let settled = false;
-    const started = new Promise<HyperPlanBuildStart>((resolve, reject) => {
+    const started = new Promise<PlanBuildStart>((resolve, reject) => {
       resolveStarted = resolve;
       rejectStarted = reject;
     });
@@ -1585,7 +1575,8 @@ export class PiSdkRuntime implements AgentRuntime {
       message: buildPlanMessage(plan),
       context: [],
       delivery: "normal",
-      userMessageId: `hyperplan:${input.idempotencyKey}`,
+      userMessageId: `plan-build:${input.idempotencyKey}`,
+      ...(input.model !== undefined ? { model: input.model } : {}),
       mode: "build",
       planId: input.planId,
     };
@@ -1612,7 +1603,7 @@ export class PiSdkRuntime implements AgentRuntime {
       })
       .catch((error: unknown) => {
         if (!settled) rejectStarted(error);
-        else console.error("[modus] HyperPlan build turn failed:", error);
+        else console.error("[modus] PlanBuild build turn failed:", error);
         this.notifyTurnSettled(input.sessionId, "plan-build", probe, true);
       });
     return started;
@@ -1672,7 +1663,7 @@ export class PiSdkRuntime implements AgentRuntime {
       sessionId: string;
       runId: string;
       workspaceId: string;
-      mode: "build" | "plan" | "spec";
+      mode: "build" | "plan";
       classification: HarnessTaskState["classification"];
       boundary: "pre_prompt" | "post_qa" | "post_failure" | "tool_guard";
       changedPaths?: string[];
@@ -2472,7 +2463,7 @@ export class PiSdkRuntime implements AgentRuntime {
         event.type === "run.blocked" ||
         event.type === "run.cancelled"
       )
-        releaseHyperPlanRunReservation({ sessionId: event.sessionId, runId: event.runId });
+        releasePlanBuildRunReservation({ sessionId: event.sessionId, runId: event.runId });
       if (event.type === "run.started") {
         const tracker = this.runOutputTrackers.get(event.sessionId);
         if (tracker?.runId === event.runId) tracker.runStartedRowId = rowId;
@@ -3257,6 +3248,8 @@ export class PiSdkRuntime implements AgentRuntime {
         noteAssistantMessageToolCalls(params.info.id, event.message);
       for (const normalized of normalizePiEvent(event)) {
         if (normalized.type === "tool.delta" || normalized.type === "tool.started") {
+          const mcp = toolRegistry.getEntry(normalized.toolName)?.ui.mcp;
+          if (mcp) normalized.mcp = { ...mcp };
           const hiddenProfiles = toolRegistry.getEntry(normalized.toolName)?.ui
             .hiddenFromTimelineInProfiles;
           if (hiddenProfiles?.includes(runtimeSession?.profile ?? "chat")) {
@@ -3628,8 +3621,8 @@ export class PiSdkRuntime implements AgentRuntime {
     switch (run.status) {
       case "completed": {
         const finalText = runAssistantOutput(sessionId, probe.runId);
-        // A plan turn that ends with a HyperPlan choice pending waits on the user.
-        const outcome = isHyperPlanSessionReserved(sessionId) ? "blocked" : "ok";
+        // A plan turn that ends with a plan build start pending waits on the user.
+        const outcome = isPlanBuildSessionReserved(sessionId) ? "blocked" : "ok";
         return finalText ? { outcome, finalText } : { outcome };
       }
       case "blocked":
@@ -3674,9 +3667,9 @@ export class PiSdkRuntime implements AgentRuntime {
     requireAgentChatWritable(input.sessionId);
     const startInput = exclusiveStart?.input;
     if (
-      isHyperPlanSessionReserved(input.sessionId) &&
+      isPlanBuildSessionReserved(input.sessionId) &&
       (!startInput ||
-        !ownsHyperPlanStartReservation({
+        !ownsPlanBuildStartReservation({
           ownerId: startInput.ownerId,
           ...(startInput.ownerEpoch ? { ownerEpoch: startInput.ownerEpoch } : {}),
           requestId: startInput.requestId,
@@ -3684,7 +3677,7 @@ export class PiSdkRuntime implements AgentRuntime {
           ...(startInput.existingRunId ? { runId: startInput.existingRunId } : {}),
         }))
     ) {
-      throw new Error("A HyperPlan choice is pending for this session.");
+      throw new Error("A PlanBuild build start is pending for this session.");
     }
     const delivery = input.delivery ?? "normal";
     const buildPlan = this.requireOwnedBuildPlan(input);
@@ -3718,7 +3711,7 @@ export class PiSdkRuntime implements AgentRuntime {
               ? event.status.type
               : "operation";
       emit(event, {
-        idempotencyKey: `hyperplan:${startInput.idempotencyKey}:${event.type}:${identity}`,
+        idempotencyKey: `plan-build:${startInput.idempotencyKey}:${event.type}:${identity}`,
       });
     };
     let earlyUserMessageId: string | undefined;
@@ -3800,7 +3793,7 @@ export class PiSdkRuntime implements AgentRuntime {
           throw new Error("The selected plan fingerprint changed while preparing the build.");
         const active = getActiveAgentRun(input.sessionId);
         if (
-          !ownsHyperPlanStartReservation({
+          !ownsPlanBuildStartReservation({
             ownerId: startInput.ownerId,
             ...(startInput.ownerEpoch ? { ownerEpoch: startInput.ownerEpoch } : {}),
             requestId: startInput.requestId,
@@ -3814,7 +3807,7 @@ export class PiSdkRuntime implements AgentRuntime {
           (this.preflightReservations.has(input.sessionId) &&
             this.preflightReservations.get(input.sessionId) !== preflightReservation)
         )
-          throw new Error("The HyperPlan session became busy while preparing the build.");
+          throw new Error("The PlanBuild session became busy while preparing the build.");
       } catch (error) {
         throw failEarlyPrompt(error);
       }
@@ -3883,7 +3876,7 @@ export class PiSdkRuntime implements AgentRuntime {
           currentPlan.sessionId !== input.sessionId ||
           currentPlan.workspaceId !== runtimeSession.info.workspaceId ||
           (currentPlan.buildStatus === "building" && !startInput.existingRunId) ||
-          !ownsHyperPlanStartReservation({
+          !ownsPlanBuildStartReservation({
             ownerId: startInput.ownerId,
             ...(startInput.ownerEpoch ? { ownerEpoch: startInput.ownerEpoch } : {}),
             requestId: startInput.requestId,
@@ -3899,7 +3892,7 @@ export class PiSdkRuntime implements AgentRuntime {
             activeRun?.id !== startInput.existingRunId) ||
           this.pendingIntentGates.has(input.sessionId)
         )
-          throw new Error("The plan or session changed while preparing the HyperPlan build.");
+          throw new Error("The plan or session changed while preparing the PlanBuild build.");
       } catch (error) {
         throw failEarlyPrompt(error);
       }
@@ -3984,7 +3977,7 @@ export class PiSdkRuntime implements AgentRuntime {
       throw failEarlyPrompt(error);
     }
     if (!run || run.sessionId !== input.sessionId) {
-      throw failEarlyPrompt("The HyperPlan run could not be reconciled.");
+      throw failEarlyPrompt("The PlanBuild run could not be reconciled.");
     }
     toolContext.runId = run.id;
     if (probe) probe.runId = run.id;
@@ -4206,7 +4199,7 @@ export class PiSdkRuntime implements AgentRuntime {
             removeRunOutputTrackerIfOwned(this.runOutputTrackers, input.sessionId, outputTracker);
           }
           releasePreflight();
-          releaseHyperPlanRunReservation({ sessionId: input.sessionId, runId: run.id });
+          releasePlanBuildRunReservation({ sessionId: input.sessionId, runId: run.id });
           if (runtimeSession.info.workspaceId) {
             releaseAgentBrowserControl(runtimeSession.info.workspaceId, input.sessionId);
           }
@@ -4902,7 +4895,7 @@ export class PiSdkRuntime implements AgentRuntime {
     requireSessionWritable(sessionId);
     const existing = this.sessions.get(sessionId);
     if (
-      isHyperPlanSessionReserved(sessionId) ||
+      isPlanBuildSessionReserved(sessionId) ||
       this.preflightReservations.has(sessionId) ||
       this.runOutputTrackers.has(sessionId) ||
       this.pendingIntentGates.has(sessionId) ||
@@ -4920,7 +4913,7 @@ export class PiSdkRuntime implements AgentRuntime {
       if (!runtimeSession) throw new Error(`Agent session not found: ${sessionId}`);
       if (
         this.preflightReservations.get(sessionId) !== reservation ||
-        isHyperPlanSessionReserved(sessionId) ||
+        isPlanBuildSessionReserved(sessionId) ||
         getActiveAgentRun(sessionId) ||
         this.runOutputTrackers.has(sessionId) ||
         this.pendingIntentGates.has(sessionId) ||

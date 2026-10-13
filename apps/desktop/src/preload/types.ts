@@ -73,9 +73,6 @@ import type {
   HarnessInsight,
   HarnessInsightsQuery,
   HarnessInsightsResult,
-  HyperPlanRevision,
-  HyperPlanSourceSnapshot,
-  HyperPlanSummary,
   ManagedProcessInfo,
   ManagedProcessOrigin,
   McpServerInfo,
@@ -87,7 +84,7 @@ import type {
   PermissionAction,
   PermissionDecision,
   PersonalizationState,
-  PlanRef,
+  PlanSourceSnapshot,
   PostGroupMessageInput,
   PreviewReadResult,
   ProjectMemoryScope,
@@ -127,7 +124,7 @@ import type {
 import type { StartupMetricInput } from "../shared/startup";
 import type { WindowChromeMode } from "../shared/window-appearance";
 
-export type HyperPlanBuildStart = {
+export type PlanBuildStart = {
   sessionId: string;
   planId: string;
   planFingerprint: string;
@@ -391,35 +388,12 @@ export type ModusApi = {
      * is active or the worktree has uncommitted changes.
      */
     setBranch(input: { sessionId: string; branch: string }): Promise<SessionBranchState>;
-    reviewPlanWithHyperPlan(input: {
-      sessionId: string;
-      planId: string;
-      model?: string;
-    }): Promise<HyperPlanSummary>;
-    applyHyperPlanRevision(input: {
-      sessionId: string;
-      planId: string;
-      planHash: string;
-      revisedContent: string;
-    }): Promise<PlanRef>;
-    createHyperPlanDraft(input: {
-      sessionId: string;
-      planId: string;
-      /** Spec/composer model; HyperPlan prefers this over the global default. */
-      model?: string;
-    }): Promise<{ draftId: string; revision: HyperPlanRevision }>;
-    resolveHyperPlanDraft(input: {
-      draftId: string;
-      choice: "revision" | "original";
-      requestId: string;
-    }): Promise<{ selectionId: string; plan: PlanRef; planFingerprint: string }>;
-    startPlanBuild(input: { selectionId: string; requestId: string }): Promise<HyperPlanBuildStart>;
-    startOriginalPlanBuild(input: {
+    startPlanBuild(input: {
       sessionId: string;
       planId: string;
       requestId: string;
-      sourceSnapshot: HyperPlanSourceSnapshot;
-    }): Promise<HyperPlanBuildStart>;
+      sourceSnapshot: PlanSourceSnapshot;
+    }): Promise<PlanBuildStart>;
     compact(sessionId: string): Promise<void>;
     abort(sessionId: string): Promise<void>;
     /**

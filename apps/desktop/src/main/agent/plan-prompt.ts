@@ -30,9 +30,19 @@ const PLAN_MODE_INSTRUCTION = [
   "- The only things to avoid are FABRICATION and SMUGGLING: never present an invented number/schema/threshold as an established fact, and never let an arbitrary constant silently drive behavior. Test for a bad specific: 'would a similar-but-new case force someone to edit this?' If yes, generalize it or make it data/config. If a choice is genuinely open, make it an explicit Assumption — do not bury it as fact.",
   "- Lay out structure to the depth the task earns: for a from-scratch project, give the file/module layout with each unit's responsibility; for a change in existing code, name the real files/symbols you found. No artificial cap on how many — and no padding either.",
   "",
+  "## Execution-ready depth and self-review",
+  "- For substantial work, describe ordered milestones and dependencies, the productive integration path, impacted files/contracts, failure handling, and a safe rollout and rollback. Explain choices and tradeoffs using facts you researched.",
+  "- Each step must name its deliverable, prerequisites, observable acceptance criteria, and applicable checks. Respect checks the user has forbidden; list those as validation pending, never approved.",
+  "- Before publishing, review the plan for missing integration, data migration, concurrency, permissions, security, and regressions. Resolve contradictions; make unresolved decisions explicit. Scale depth to the task instead of adding boilerplate or arbitrary numbers.",
+  "",
+  "## Structured acceptance and evidence",
+  "- For multi-step implementation, include the optional `spec` field with stable requirement IDs, observable acceptance criteria, assumptions, and open questions. Use structured todos with stable IDs and linked acceptanceCriterionIds; each criterion's todoIds must reference the exact todo IDs.",
+  "- Set all new acceptance criteria to pending. Planning is not proof of implementation or verification. Do not author evidence references or claim that tests passed; only actual host-recorded checks can establish verification.",
+  "- Keep the Markdown complete on its own and keep structured requirements, criteria, and todos consistent with it. Small tasks may use plain string todos without spec metadata.",
+  "",
   "## Output shape (let structure follow the task)",
   "- The plan is Markdown only. Do not emit inline visuals: no fenced `html`/`svg` operable widgets, no `visual_write`, no mermaid-as-substitute for the plan body. Put every implementation-relevant fact in the Markdown itself.",
-  "- When the plan is final, call plan_write with FOUR parts: `title` (short), `overview` (1–3 sentence summary), `todos` (ordered implementation steps as plain strings), and `content` (the Markdown plan body after the title, last). Modus renders `title` separately, so do not repeat it inside `content`. The todos drive execution, so they must mirror the plan, not restate the title.",
+  "- When the plan is final, call plan_write with FOUR parts: `title` (short), `overview` (1–3 sentence summary), `todos` (ordered steps, structured when using spec metadata), and `content` (the Markdown plan body after the title, last). Modus renders `title` separately, so do not repeat it inside `content`. The todos drive execution, so they must mirror the plan, not restate the title.",
   "- CHOOSE headings that fit THIS task — there is no fixed template.",
   "- Whatever the shape, a reader must be able to answer: the outcome being pursued, what changes (grouped however is clearest), how we will know it worked (testable acceptance), and what was assumed or left open. Cover these as the task needs — as content, NOT as mandatory headings.",
   "- Make Markdown easy to review: short sections, short paragraphs, clear bullets, and whitespace between dense blocks. Avoid oversized ASCII art, overwide tables, and decorative structure.",
@@ -43,25 +53,12 @@ const PLAN_MODE_INSTRUCTION = [
   "</plan_mode>",
 ].join("\n");
 
-const SPEC_MODE_INSTRUCTION = [
-  PLAN_MODE_INSTRUCTION.replace("PLAN MODE", "SPEC MODE"),
-  "",
-  "## Structured specification metadata",
-  "- Call plan_write with the existing title, overview, todos, and Markdown content plus the structured `spec` field.",
-  "- In addition to the Markdown plan, include a `spec` object with stable requirement IDs, observable acceptance criteria, evidence references, assumptions, and open questions.",
-  "- Give every todo a stable `id` and link its `acceptanceCriterionIds` to the criteria it implements; each criterion's `todoIds` must use those exact todo IDs.",
-  "- New acceptance criteria must remain `pending`. Never claim a criterion passed based on the request, plan text, or an assumption; record only actual structured evidence references and their existing evidence status.",
-  "- Keep evidence references structured and concise (kind, label, status, and available run/event/revision/path references only); never copy raw output or transcript text.",
-  "- Record unresolved decisions in the concise `assumptions` and `openQuestions` arrays. Do not invent requirement or evidence IDs that conflict with another entry.",
-].join("\n");
-
-/** The planner preamble for `plan` and `spec` turns, or empty for `build`. */
+/** Per-turn read-only planning instruction, or empty for Build. */
 export function planModePreamble(mode: AgentMode | undefined): string {
-  if (mode === "spec") return SPEC_MODE_INSTRUCTION;
   return mode === "plan" ? PLAN_MODE_INSTRUCTION : "";
 }
 
 /** Tool profile a turn runs under, derived from its mode. */
 export function profileForMode(mode: AgentMode | undefined): ToolProfileName {
-  return mode === "plan" || mode === "spec" ? "plan" : "chat";
+  return mode === "plan" ? "plan" : "chat";
 }

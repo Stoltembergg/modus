@@ -262,7 +262,7 @@ import { IPC_CHANNELS } from "./channels";
 import { registerComposioIpcHandlers } from "./composio-ipc";
 import { toGroupIpcError } from "./group-ipc";
 import { registerHarnessInsightsIpcHandlers } from "./harness-insights-ipc";
-import { registerHyperPlanIpcHandlers } from "./hyperplan-ipc";
+import { registerPlanBuildIpcHandlers } from "./plan-build-ipc";
 import { registerProjectMemoryIpcHandlers } from "./project-memory-ipc";
 import { registerProviderLimitsIpcHandlers } from "./provider-limits-ipc";
 import {
@@ -652,7 +652,7 @@ export function registerAppIpc({
     }
   });
 
-  registerHyperPlanIpcHandlers(ipcMain);
+  registerPlanBuildIpcHandlers(ipcMain);
 
   ipcMain.handle(IPC_CHANNELS.agentCompact, async (event, sessionId: string) => {
     assertTrustedSender(event);

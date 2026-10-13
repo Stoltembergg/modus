@@ -29,7 +29,7 @@ const UI_STATE: UpdateRestoreUiState = {
   activeWorkspaceId: "ws-1",
   activeSessionId: "s-1",
   drafts: { "s-1": { text: "half-written prompt", mode: "plan" } },
-  hero: { text: "new idea", mode: "spec" },
+  hero: { text: "new idea", mode: "plan" },
   sidebar: { open: false, width: 280 },
   inspector: { open: true, width: 520, tab: "files" },
   settingsOpen: false,
@@ -145,6 +145,22 @@ describe("restore snapshot take at startup", () => {
     expect(take("1.3.0").state).toEqual(UI_STATE);
     expect(existsSync(restoreSnapshotPath(workDir))).toBe(false);
     expect(take("1.3.0").state).toBeNull();
+  });
+
+  it("restores legacy Spec drafts as Plan without losing their text", () => {
+    writeFile(
+      file({
+        state: {
+          ...UI_STATE,
+          hero: { text: "Old specification", mode: "spec" },
+          drafts: { "s-1": { text: "Pending plan", mode: "spec" } },
+        },
+      }),
+    );
+    expect(take().state).toMatchObject({
+      hero: { text: "Old specification", mode: "plan" },
+      drafts: { "s-1": { text: "Pending plan", mode: "plan" } },
+    });
   });
 
   it("restores on any semver upgrade (numeric, not string, comparison)", () => {

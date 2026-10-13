@@ -29,11 +29,11 @@ export function ChatRunStatus({
   const label = useThrottledValue(live, RUN_STAGE_MIN_MS);
   return (
     <div
-      className="pointer-events-none absolute bottom-full left-0 z-20 mb-1.5 flex max-w-full"
+      className="pointer-events-none absolute bottom-full inset-x-0 z-20 mb-2 flex justify-center px-2"
       data-testid="chat-run-status-slot"
     >
       <div
-        className="pointer-events-auto flex h-7 min-w-0 max-w-full items-center gap-2 rounded-full bg-canvas/90 pr-1 pl-2 text-xs text-fg-muted backdrop-blur-sm"
+        className="pointer-events-auto flex h-7 min-w-0 max-w-full items-center gap-2 rounded-full bg-surface/30 pr-1 pl-2 text-xs text-fg-muted backdrop-blur-md"
         data-testid="chat-run-status"
         role="status"
       >

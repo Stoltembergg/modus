@@ -81,6 +81,16 @@ describe("currentRunStage", () => {
     });
   });
 
+  it("uses the host MCP identity instead of an encoded tool name", () => {
+    const event = {
+      ...start("mcp", "mcp_v1_dangerous_h_opaque"),
+      mcp: { server: "GitHub", tool: "search_code" },
+    } as AgentEvent;
+    const live = stage([runStarted, event]);
+    expect(label(live)).toBe("Using GitHub · search_code");
+    expect(label(live, "pt")).toBe("Usando GitHub · search_code");
+  });
+
   it("goes back to thinking once the tool ends, unless a parallel tool still runs", () => {
     expect(stage([runStarted, start("a", "bash", { command: "ls" }), end("a")])).toEqual({
       kind: "thinking",

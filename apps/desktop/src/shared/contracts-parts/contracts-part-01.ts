@@ -242,7 +242,7 @@ export type HarnessRouteEvent = {
 };
 export type TaskClassificationInput = {
   text: string;
-  mode: "build" | "plan" | "spec";
+  mode: "build" | "plan";
   contextPaths: string[];
   changedPaths: string[];
   hasDestructiveAction?: boolean;
@@ -301,7 +301,7 @@ export type AdaptiveVerificationLevel = "none" | "light" | "standard" | "strict"
 export type AdaptiveExecutionPolicy = {
   version: 1;
   verificationLevel: AdaptiveVerificationLevel;
-  suggestHyperPlan: boolean;
+  suggestPlan: boolean;
   suggestedRole?: BuiltinAgentRole;
   maxParallelChildren: number;
   preferredModelId?: string;
@@ -357,7 +357,7 @@ export type AdaptiveDecisionSnapshot = {
   sessionId: string;
   runId: string;
   workspaceId: string;
-  mode: "build" | "plan" | "spec";
+  mode: "build" | "plan";
   classification: HarnessTaskClassification;
   taskState?: Pick<
     HarnessTaskState,

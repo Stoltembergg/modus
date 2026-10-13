@@ -155,7 +155,7 @@ describe("plan_write", () => {
     expect(readPlan(join(testState.userData, "plans"), context.sessionId)).toBeUndefined();
   });
 
-  it("accepts and persists structured spec metadata only in Spec Mode", async () => {
+  it("accepts and persists structured spec metadata only in Plan Mode", async () => {
     const cwd = "spec-cwd";
     const events: AgentEvent[] = [];
     const context: AgentToolContext = {
@@ -163,7 +163,7 @@ describe("plan_write", () => {
       cwd,
       sessionId: "spec-session",
       profile: "plan",
-      mode: "spec",
+      mode: "plan",
       emit: (event) => events.push(event),
     };
     const params = {
@@ -206,14 +206,14 @@ describe("plan_write", () => {
     expect(events).toEqual([expect.objectContaining({ type: "plan.updated", plan })]);
   });
 
-  it("rejects spec metadata in ordinary Plan Mode", async () => {
+  it("rejects spec metadata in Build Mode", async () => {
     const cwd = "plan-cwd";
     const context: AgentToolContext = {
       workspaceId: "workspace",
       cwd,
       sessionId: "plan-session",
       profile: "plan",
-      mode: "plan",
+      mode: "build",
     };
     const params = {
       title: "Plan Tool",
@@ -230,18 +230,18 @@ describe("plan_write", () => {
           cwd,
         } as Parameters<ReturnType<typeof planTool>["execute"]>[4]),
       ),
-    ).rejects.toThrow("Structured plan metadata is available only in Spec Mode.");
+    ).rejects.toThrow("Structured plan metadata is available only in Plan Mode.");
     expect(readPlan(join(testState.userData, "plans"), "plan-session")).toBeUndefined();
   });
 
-  it("rejects structured todo metadata in ordinary Plan Mode", async () => {
+  it("rejects structured todo metadata in Build Mode", async () => {
     const cwd = "plan-cwd";
     const context: AgentToolContext = {
       workspaceId: "workspace",
       cwd,
       sessionId: "plan-structured-todos",
       profile: "plan",
-      mode: "plan",
+      mode: "build",
     };
     const params = {
       title: "Plan Tool",
@@ -256,7 +256,7 @@ describe("plan_write", () => {
           cwd,
         } as Parameters<ReturnType<typeof planTool>["execute"]>[4]),
       ),
-    ).rejects.toThrow("Structured plan metadata is available only in Spec Mode.");
+    ).rejects.toThrow("Structured plan metadata is available only in Plan Mode.");
     expect(readPlan(join(testState.userData, "plans"), "plan-structured-todos")).toBeUndefined();
   });
 
@@ -306,7 +306,7 @@ describe("plan_write", () => {
       cwd,
       sessionId: `model-evidence-${status}`,
       profile: "plan",
-      mode: "spec",
+      mode: "plan",
     };
     const params = {
       title: "Spec Tool",
@@ -351,7 +351,7 @@ describe("plan_write", () => {
       cwd,
       sessionId: "invalid-spec-session",
       profile: "plan",
-      mode: "spec",
+      mode: "plan",
     };
     const invalidParams = {
       title: "Spec Tool",

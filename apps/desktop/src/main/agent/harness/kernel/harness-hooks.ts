@@ -24,7 +24,7 @@ export type HarnessContext = {
   /** Host-derived Agent Group scope for mailbox and group tool hooks. */
   groupId?: string | undefined;
   cwd?: string | undefined;
-  mode: "build" | "plan" | "spec";
+  mode: "build" | "plan";
   state: Map<string, any>;
   startedAt?: number | undefined;
 };
@@ -45,7 +45,7 @@ export type TurnStartInput = {
   sessionId?: string | undefined;
   context?: ContextItem[] | undefined;
   contextPaths?: string[] | undefined;
-  mode?: "build" | "plan" | "spec" | undefined;
+  mode?: "build" | "plan" | undefined;
   branch?: string | undefined;
 };
 
@@ -161,7 +161,7 @@ export type ModelSelectOutput = {
 /* Phase 5: tools_register */
 export type ToolsRegisterInput = {
   requestedTools?: string[] | undefined;
-  sessionProfile?: "build" | "plan" | "spec" | undefined;
+  sessionProfile?: "build" | "plan" | undefined;
   activeSpillThresholdBytes?: number | undefined;
   permissions?: string[] | undefined;
   availableTools?: string[] | undefined;

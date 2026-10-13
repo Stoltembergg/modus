@@ -13,7 +13,7 @@ import type {
   SkillSelection,
   ThinkingLevel,
 } from "../../shared/contracts";
-import type { HyperPlanDraftOwnerEpoch } from "./harness/hyperplan-draft-store";
+import type { PlanBuildOwnerEpoch } from "./harness/plan-build-store";
 
 export type CreateAgentRuntimeInput = {
   id?: string;
@@ -56,22 +56,23 @@ export type PromptAgentInput = {
   groupTask?: { taskId: string; groupId: string; executionId: string; role: "owner" | "reviewer" };
 };
 
-export type HyperPlanBuildStart = {
+export type PlanBuildStart = {
   sessionId: string;
   planId: string;
   planFingerprint: string;
   runId: string;
 };
 
-export type HyperPlanBuildStartInput = {
+export type PlanBuildStartInput = {
+  /** Host-resolved selection, following the normal user-turn model contract. */
+  model?: string | null;
   ownerId: number;
-  ownerEpoch?: HyperPlanDraftOwnerEpoch;
+  ownerEpoch?: PlanBuildOwnerEpoch;
   requestId: string;
   sessionId: string;
   planId: string;
   planFingerprint: string;
   idempotencyKey: string;
-  selectionId?: string;
   existingRunId?: string;
   onRunCreated: (runId: string) => void;
 };
@@ -82,7 +83,7 @@ export type HyperPlanBuildStartInput = {
  * - `failed`: the run failed (model error, no output, setup failure).
  * - `aborted`: the run was cancelled/stopped (or rolled back).
  * - `blocked`: the turn stopped waiting on the user: the intent gate did not
- *   get its confirmation, or a HyperPlan choice is pending after the turn.
+ *   get its confirmation, or a PlanBuild build start is pending after the turn.
  * A prompt that throws never produces a result; callers treat it as `failed`.
  */
 export type PromptTurnOutcome = "ok" | "failed" | "aborted" | "blocked";
@@ -91,7 +92,7 @@ export type PromptTurnResult = { finalText?: string; outcome: PromptTurnOutcome;
 /** A turn settled on a session, whoever started it (see `onTurnSettled`). */
 export type TurnSettledEvent = {
   sessionId: string;
-  /** `prompt`: any `prompt()` call; `plan-build`: a HyperPlan build started by the user. */
+  /** `prompt`: any `prompt()` call; `plan-build`: a PlanBuild build started by the user. */
   origin: "prompt" | "plan-build";
   result: PromptTurnResult;
 };
@@ -117,14 +118,8 @@ export type AgentRuntime = {
   onQuestionPending(listener: (sessionId: string) => void): () => void;
   /** Observe normalized public/progress events without depending on a renderer. */
   onEvent?(listener: (event: AgentEvent) => void): () => void;
-  startPlanBuild(
-    window: BrowserWindowType,
-    input: HyperPlanBuildStartInput,
-  ): Promise<HyperPlanBuildStart>;
-  startOriginalPlanBuild(
-    window: BrowserWindowType,
-    input: HyperPlanBuildStartInput,
-  ): Promise<HyperPlanBuildStart>;
+  assertPlanBuildSessionAvailable(sessionId: string): void;
+  startPlanBuild(window: BrowserWindowType, input: PlanBuildStartInput): Promise<PlanBuildStart>;
   compact(window: BrowserWindowType, sessionId: string): Promise<void>;
   /** Spawn a child subagent and return immediately. Collect results with waitBackground. */
   runSubagent(

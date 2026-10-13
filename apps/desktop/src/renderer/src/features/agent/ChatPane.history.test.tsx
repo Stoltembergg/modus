@@ -1,12 +1,12 @@
 // @vitest-environment happy-dom
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEventItem,
   AgentEventPage,
   AgentEventPageOptions,
 } from "../../../../shared/agent-events";
-import type { AgentSessionInfo } from "../../../../shared/contracts";
+import type { AgentSessionInfo, PlanRef } from "../../../../shared/contracts";
 import { AgentEventHub } from "./agentEventHub";
 import { ChatPane } from "./ChatPane";
 
@@ -86,10 +86,7 @@ describe("ChatPane paged history", () => {
         agent: {
           listEventPage,
           releaseRuntime: vi.fn(async () => undefined),
-          createHyperPlanDraft: vi.fn(),
-          resolveHyperPlanDraft: vi.fn(),
           startPlanBuild: vi.fn(),
-          startOriginalPlanBuild: vi.fn(),
         },
         diff: { sessionStats: vi.fn(async () => ({})) },
         process: {
@@ -149,5 +146,84 @@ describe("ChatPane paged history", () => {
     );
     await waitFor(() => expect(screen.queryByTestId("chat-load-older-events")).toBeNull());
     view.unmount();
+  });
+  it("keeps the SDK alive when leaving a pane while plan approval is still starting", async () => {
+    const session: AgentSessionInfo = {
+      id: "approval-session",
+      workspaceId: "workspace",
+      title: "Plan",
+      cwd: "/repo",
+      status: "idle",
+      createdAt: "now",
+      updatedAt: "now",
+    };
+    const plan: PlanRef = {
+      id: session.id,
+      sessionId: session.id,
+      workspaceId: session.workspaceId,
+      title: "Plan",
+      overview: "Implement safely",
+      content: "Approved content",
+      blocks: [],
+      todos: [{ id: "step", content: "Implement", status: "pending" }],
+      path: "/plan.md",
+      hash: "hash",
+      buildStatus: "not_built",
+      createdAt: "now",
+      updatedAt: "now",
+    };
+    let finish!: () => void;
+    const startPlanBuild = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const releaseRuntime = vi.fn(async () => undefined);
+    Object.assign(window, {
+      modus: {
+        agent: {
+          startPlanBuild,
+          releaseRuntime,
+          listEventPage: vi.fn(async () => ({
+            events: [
+              {
+                id: "plan",
+                createdAt: "now",
+                event: { type: "plan.updated", sessionId: session.id, plan, eventCursor: 1 },
+              },
+            ],
+            summaryEvents: [],
+            activityEvents: [],
+            snapshotCursor: 1,
+            nextCursor: 1,
+            hasMore: false,
+          })),
+        },
+        diff: { sessionStats: vi.fn(async () => ({})) },
+        process: { list: vi.fn(async () => []), onChanged: vi.fn(() => () => undefined) },
+      },
+    });
+    const view = render(
+      <ChatPane
+        defaultModel=""
+        hub={new AgentEventHub()}
+        models={[]}
+        onModelChange={() => {}}
+        onModelConfigChange={async () => {}}
+        onOpenReview={() => {}}
+        onPlanUpdated={() => {}}
+        onSessionsChanged={() => {}}
+        session={session}
+        workspace={null}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /Yes, implement/ }));
+    await waitFor(() => expect(startPlanBuild).toHaveBeenCalledOnce());
+    view.unmount();
+    await act(async () => {
+      finish();
+    });
+    expect(releaseRuntime).not.toHaveBeenCalled();
   });
 });

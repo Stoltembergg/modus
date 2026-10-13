@@ -29,11 +29,10 @@ import {
   MAX_ATTACHMENT_BASE64_CHARS,
   MAX_GROUP_MEMBERS,
   MAX_GROUP_MESSAGE_BODY,
-  MAX_HYPERPLAN_REVISION_BYTES,
-  MAX_HYPERPLAN_SOURCE_EVIDENCE,
-  MAX_HYPERPLAN_SOURCE_ITEMS,
-  MAX_HYPERPLAN_SOURCE_SNAPSHOT_BYTES,
   MAX_PLAN_CONTENT_BYTES,
+  MAX_PLAN_SOURCE_EVIDENCE,
+  MAX_PLAN_SOURCE_ITEMS,
+  MAX_PLAN_SOURCE_SNAPSHOT_BYTES,
   MAX_PROFILE_ROLES,
   mcpReadOnlyToolAllowlistSchema,
   modelCompatibilitySchema,
@@ -56,15 +55,15 @@ import {
   updateSaveUiStateSchema,
 } from "./schemas-shared";
 
-export const agentStartOriginalPlanBuildSchema = z
+export const agentStartPlanBuildSchema = z
   .object({
     sessionId: nonEmptyString.max(128),
     planId: nonEmptyString.max(128),
     requestId: nonEmptyString.max(128),
     sourceSnapshot: z
       .object({
-        title: z.string().min(1).max(MAX_HYPERPLAN_SOURCE_SNAPSHOT_BYTES),
-        overview: z.string().min(1).max(MAX_HYPERPLAN_SOURCE_SNAPSHOT_BYTES),
+        title: z.string().min(1).max(MAX_PLAN_SOURCE_SNAPSHOT_BYTES),
+        overview: z.string().min(1).max(MAX_PLAN_SOURCE_SNAPSHOT_BYTES),
         content: z
           .string()
           .min(1)
@@ -78,14 +77,12 @@ export const agentStartOriginalPlanBuildSchema = z
             z
               .object({
                 id: sourceSnapshotIdSchema,
-                content: z.string().min(1).max(MAX_HYPERPLAN_SOURCE_SNAPSHOT_BYTES),
-                acceptanceCriterionIds: z
-                  .array(sourceSnapshotIdSchema)
-                  .max(MAX_HYPERPLAN_SOURCE_ITEMS),
+                content: z.string().min(1).max(MAX_PLAN_SOURCE_SNAPSHOT_BYTES),
+                acceptanceCriterionIds: z.array(sourceSnapshotIdSchema).max(MAX_PLAN_SOURCE_ITEMS),
               })
               .strict(),
           )
-          .max(MAX_HYPERPLAN_SOURCE_ITEMS),
+          .max(MAX_PLAN_SOURCE_ITEMS),
         spec: z
           .object({
             requirements: z
@@ -94,7 +91,7 @@ export const agentStartOriginalPlanBuildSchema = z
                   .object({ id: sourceSnapshotIdSchema, text: z.string().min(1).max(2_000) })
                   .strict(),
               )
-              .max(MAX_HYPERPLAN_SOURCE_ITEMS),
+              .max(MAX_PLAN_SOURCE_ITEMS),
             acceptanceCriteria: z
               .array(
                 z
@@ -102,7 +99,7 @@ export const agentStartOriginalPlanBuildSchema = z
                     id: sourceSnapshotIdSchema,
                     requirementId: sourceSnapshotIdSchema,
                     description: z.string().min(1).max(2_000),
-                    todoIds: z.array(sourceSnapshotIdSchema).max(MAX_HYPERPLAN_SOURCE_ITEMS),
+                    todoIds: z.array(sourceSnapshotIdSchema).max(MAX_PLAN_SOURCE_ITEMS),
                     requiredCheckKinds: z
                       .array(z.enum(["tests", "typecheck", "lint", "build"]))
                       .max(4)
@@ -112,7 +109,7 @@ export const agentStartOriginalPlanBuildSchema = z
                   })
                   .strict(),
               )
-              .max(MAX_HYPERPLAN_SOURCE_ITEMS),
+              .max(MAX_PLAN_SOURCE_ITEMS),
             assumptions: z.array(z.string().min(1).max(500)).max(20),
             openQuestions: z.array(z.string().min(1).max(500)).max(20),
             evidence: z
@@ -132,25 +129,26 @@ export const agentStartOriginalPlanBuildSchema = z
                     runId: sourceSnapshotIdSchema.optional(),
                     eventId: sourceSnapshotIdSchema.optional(),
                     revision: sourceSnapshotIdSchema.optional(),
-                    paths: z.array(z.string().max(512)).max(MAX_HYPERPLAN_SOURCE_ITEMS).optional(),
+                    paths: z.array(z.string().max(512)).max(MAX_PLAN_SOURCE_ITEMS).optional(),
                     label: z.string().max(512),
                     criterionId: sourceSnapshotIdSchema,
                   })
                   .strict(),
               )
-              .max(MAX_HYPERPLAN_SOURCE_EVIDENCE),
+              .max(MAX_PLAN_SOURCE_EVIDENCE),
           })
-          .strict(),
+          .strict()
+          .optional(),
       })
       .strict()
       .superRefine((snapshot, ctx) => {
         if (
           new TextEncoder().encode(JSON.stringify(snapshot)).byteLength >
-          MAX_HYPERPLAN_SOURCE_SNAPSHOT_BYTES
+          MAX_PLAN_SOURCE_SNAPSHOT_BYTES
         ) {
           ctx.addIssue({
             code: "custom",
-            message: `Source snapshot must be at most ${MAX_HYPERPLAN_SOURCE_SNAPSHOT_BYTES} UTF-8 bytes.`,
+            message: `Source snapshot must be at most ${MAX_PLAN_SOURCE_SNAPSHOT_BYTES} UTF-8 bytes.`,
           });
         }
       }),

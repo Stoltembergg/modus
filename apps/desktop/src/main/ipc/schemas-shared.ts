@@ -14,15 +14,13 @@ export const nonEmptyString = z.string().trim().min(1);
 
 export const optionalNonEmptyString = nonEmptyString.optional();
 
-export const MAX_HYPERPLAN_REVISION_BYTES = 12 * 1024;
-
 export const MAX_PLAN_CONTENT_BYTES = 64 * 1024;
 
-export const MAX_HYPERPLAN_SOURCE_ITEMS = 100;
+export const MAX_PLAN_SOURCE_ITEMS = 100;
 
-export const MAX_HYPERPLAN_SOURCE_EVIDENCE = 800;
+export const MAX_PLAN_SOURCE_EVIDENCE = 800;
 
-export const MAX_HYPERPLAN_SOURCE_SNAPSHOT_BYTES = 1024 * 1024;
+export const MAX_PLAN_SOURCE_SNAPSHOT_BYTES = 1024 * 1024;
 
 export const sourceSnapshotIdSchema = z.string().min(1).max(128).regex(/\S/);
 
@@ -104,7 +102,9 @@ export const restorePanelSchema = {
 export const restoreDraftSchema = z
   .object({
     text: z.string().max(MAX_RESTORE_DRAFT_CHARS),
-    mode: z.enum(["build", "plan", "spec"]),
+    mode: z
+      .enum(["build", "plan", "spec"])
+      .transform((mode) => (mode === "spec" ? ("plan" as const) : mode)),
   })
   .strict();
 

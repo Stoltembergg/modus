@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  agentApplyHyperPlanRevisionSchema,
   agentEventPageRequestSchema,
   agentPromptSchema,
   agentSetBranchSchema,
-  agentStartOriginalPlanBuildSchema,
+  agentStartPlanBuildSchema,
   browserRecentSchema,
   diffCommitOrPushSchema,
   limitsCodexEnabledSchema,
@@ -15,6 +14,17 @@ import {
 } from "./schemas";
 
 describe("IPC schemas", () => {
+  it("accepts Plan prompts and rejects the retired Spec execution mode", () => {
+    expect(
+      agentPromptSchema.safeParse({ sessionId: "session", message: "Plan this", mode: "plan" })
+        .success,
+    ).toBe(true);
+    expect(
+      agentPromptSchema.safeParse({ sessionId: "session", message: "Plan this", mode: "spec" })
+        .success,
+    ).toBe(false);
+  });
+
   it("accepts bounded event history pages and rejects ambiguous or oversized cursors", () => {
     expect(
       agentEventPageRequestSchema.safeParse({
@@ -82,19 +92,19 @@ describe("IPC schemas", () => {
       requestId: "request-1",
       sourceSnapshot: snapshot,
     };
-    expect(
-      parseIpcInput(agentStartOriginalPlanBuildSchema, input, "agent:start-original-plan-build"),
-    ).toEqual(input);
+    expect(parseIpcInput(agentStartPlanBuildSchema, input, "agent:start-plan-build")).toEqual(
+      input,
+    );
     expect(() =>
       parseIpcInput(
-        agentStartOriginalPlanBuildSchema,
+        agentStartPlanBuildSchema,
         { ...input, sourceSnapshot: { ...snapshot, content: "x".repeat(64 * 1024 + 1) } },
-        "agent:start-original-plan-build",
+        "agent:start-plan-build",
       ),
     ).toThrow("Invalid IPC payload");
     expect(() =>
       parseIpcInput(
-        agentStartOriginalPlanBuildSchema,
+        agentStartPlanBuildSchema,
         {
           ...input,
           sourceSnapshot: {
@@ -106,7 +116,7 @@ describe("IPC schemas", () => {
             })),
           },
         },
-        "agent:start-original-plan-build",
+        "agent:start-plan-build",
       ),
     ).toThrow("Invalid IPC payload");
   });
@@ -157,9 +167,9 @@ describe("IPC schemas", () => {
       },
     };
 
-    expect(
-      parseIpcInput(agentStartOriginalPlanBuildSchema, input, "agent:start-original-plan-build"),
-    ).toEqual(input);
+    expect(parseIpcInput(agentStartPlanBuildSchema, input, "agent:start-plan-build")).toEqual(
+      input,
+    );
   });
 
   it("rejects unsafe source snapshot sizes and whitespace-only or oversized IDs", () => {
@@ -192,9 +202,9 @@ describe("IPC schemas", () => {
     const reject = (sourceSnapshot: typeof input.sourceSnapshot) =>
       expect(() =>
         parseIpcInput(
-          agentStartOriginalPlanBuildSchema,
+          agentStartPlanBuildSchema,
           { ...input, sourceSnapshot },
-          "agent:start-original-plan-build",
+          "agent:start-plan-build",
         ),
       ).toThrow("Invalid IPC payload");
 
@@ -219,36 +229,6 @@ describe("IPC schemas", () => {
         openQuestions: Array.from({ length: 21 }, () => "Question"),
       },
     });
-  });
-
-  it("accepts a bounded strict HyperPlan revision payload", () => {
-    const valid = {
-      sessionId: "session-1",
-      planId: "plan-1",
-      planHash: "hash-1",
-      revisedContent: "# Revised",
-    };
-    expect(
-      parseIpcInput(agentApplyHyperPlanRevisionSchema, valid, "agent:apply-hyperplan-revision"),
-    ).toEqual(valid);
-    const atByteLimit = { ...valid, revisedContent: "x".repeat(12 * 1024) };
-    expect(
-      parseIpcInput(
-        agentApplyHyperPlanRevisionSchema,
-        atByteLimit,
-        "agent:apply-hyperplan-revision",
-      ),
-    ).toEqual(atByteLimit);
-    for (const input of [
-      { ...valid, extra: true },
-      { ...valid, revisedContent: "  " },
-      { ...valid, revisedContent: "x".repeat(12 * 1024 + 1) },
-      { ...valid, revisedContent: "é".repeat(8_000) },
-    ]) {
-      expect(() =>
-        parseIpcInput(agentApplyHyperPlanRevisionSchema, input, "agent:apply-hyperplan-revision"),
-      ).toThrow("Invalid IPC payload");
-    }
   });
 
   const mcpInput = {

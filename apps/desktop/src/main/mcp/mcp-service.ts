@@ -506,7 +506,7 @@ async function refreshServerTools(managed: ManagedServer): Promise<void> {
           ? { danger: "safe" }
           : { danger: "dangerous", action: "mcp.call" },
         ...(readOnlyAllowlisted ? { capabilities: ["read"] } : {}),
-        ui: { verb: managed.config.name },
+        ui: { verb: managed.config.name, mcp: { server: managed.config.name, tool: tool.name } },
       },
       definition,
     });
@@ -756,13 +756,15 @@ export async function registerComposioMcpSession(
 
     const registeredNames: string[] = [];
     try {
-      for (const definition of definitions) {
+      for (const [index, definition] of definitions.entries()) {
+        const sourceTool = selectedTools[index];
+        if (!sourceTool) throw new Error("Missing host MCP tool identity.");
         toolRegistry.registerTool({
           entry: {
             name: definition.name,
             profiles: ["chat"],
             permission: { danger: "dangerous", action: "mcp.call" },
-            ui: { verb: "Composio" },
+            ui: { verb: "Composio", mcp: { server: "Composio", tool: sourceTool.name } },
           },
           definition,
         });

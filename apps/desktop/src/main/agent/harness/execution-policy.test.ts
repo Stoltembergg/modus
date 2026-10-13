@@ -20,12 +20,12 @@ describe("execution-policy", () => {
       preferredModelId: "openai:gpt",
     });
     expect(policy.verificationLevel).toBe("none");
-    expect(policy.suggestHyperPlan).toBe(false);
+    expect(policy.suggestPlan).toBe(false);
     expect(policy.maxParallelChildren).toBe(1);
     expect(policy.preferredModelId).toBe("openai:gpt");
   });
 
-  it("raises verification and HyperPlan for complex/high-blast work", () => {
+  it("raises verification and PlanBuild for complex/high-blast work", () => {
     const policy = selectExecutionPolicy({
       classification: {
         ...base,
@@ -48,7 +48,7 @@ describe("execution-policy", () => {
       maxParallelChildrenCap: 6,
     });
     expect(policy.verificationLevel).toBe("strict");
-    expect(policy.suggestHyperPlan).toBe(true);
+    expect(policy.suggestPlan).toBe(true);
     expect(policy.suggestedRole).toBe("oracle");
     expect(policy.preferredModelId).toBeUndefined();
     expect(policy.reasonCodes).toContain("model_not_in_catalog");

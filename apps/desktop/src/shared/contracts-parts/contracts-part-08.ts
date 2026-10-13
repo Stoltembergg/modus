@@ -443,7 +443,7 @@ export type GroupRuntimeEvent =
       runningSessionIds: string[];
       /** Members woken and waiting for a slot (or for the window/update/streaming gate). */
       queuedSessionIds: string[];
-      /** Members waiting for the user (intent gate open, or a HyperPlan choice pending). */
+      /** Members waiting for the user (intent gate open, or a plan build start pending). */
       waitingSessionIds: string[];
     }
   | { type: "group.chain-ended"; groupId: string; chainId: string; reason: GroupChainEndReason }

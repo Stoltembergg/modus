@@ -16,7 +16,6 @@ import type {
   BrowserEvent,
   ContextItem,
   ContextUsageInfo,
-  HyperPlanRevision,
   ModelInfo,
   ModusModelsStatus,
   PermissionDecision,
@@ -46,7 +45,7 @@ import { contextItemKey } from "../composer/composerTokens";
 import type { MentionEditorPart } from "../composer/MentionEditor";
 import { SessionModelPicker } from "../composer/SessionModelPicker";
 import { SessionBranchPicker } from "../git/SessionBranchPicker";
-import { buildPlanMessage, effectiveBuildStatus, normalizePlan } from "../plan/planState";
+import { effectiveBuildStatus, normalizePlan } from "../plan/planState";
 import { QuestionsCard } from "../plan/QuestionsCard";
 import { ReviewPlanCard } from "../plan/ReviewPlanCard";
 import { ProcessStopNotices } from "../process/ProcessStopNotices";
@@ -120,7 +119,6 @@ export function canSubmitPromptForSession(
   return Boolean(modelId) && (Boolean(workspace) || sessionWorkspaceId === CHATS_WORKSPACE_ID);
 }
 
-type HyperPlanPreview = { draftId: string; revision: HyperPlanRevision };
 type ChatEventHistoryPageState = {
   snapshotCursor?: number;
   beforeCursor?: number;
@@ -132,218 +130,51 @@ const EMPTY_CHAT_EVENT_HISTORY_PAGE: ChatEventHistoryPageState = {
   hasOlder: false,
   loadingOlder: false,
 };
-type HyperPlanChoice = "revision" | "original";
-type HyperPlanAgentApi = Pick<
-  Window["modus"]["agent"],
-  "createHyperPlanDraft" | "resolveHyperPlanDraft" | "startPlanBuild" | "startOriginalPlanBuild"
->;
-
-type HyperPlanOperationError = Error & { stage: "choice" | "start" | "pending" };
-
-/** Keeps idempotency identities and selection tokens private to this renderer instance. */
-export function createHyperPlanOperations(
-  api: HyperPlanAgentApi,
+/** Retains one request identity across duplicate clicks and uncertain IPC delivery. */
+export function createPlanBuildOperations(
+  api: Pick<Window["modus"]["agent"], "startPlanBuild">,
   createRequestId: () => string = () => crypto.randomUUID(),
 ) {
-  const choices = new Map<
+  const operations = new Map<
     string,
-    {
-      choiceRequestId: string;
-      startRequestId: string;
-      selectionId?: string;
-      running: boolean;
-      done: boolean;
-    }
+    { requestId: string; done: boolean; promise?: Promise<void> }
   >();
-  const originals = new Map<
-    string,
-    {
-      requestId: string;
-      sourceSnapshot: HyperPlanSourceSnapshot;
-      running: boolean;
-      done: boolean;
-    }
-  >();
-
   return {
-    review(input: { sessionId: string; planId: string; model?: string }) {
-      return api.createHyperPlanDraft(input);
-    },
-    async choose(preview: HyperPlanPreview, choice: HyperPlanChoice) {
-      const key = `${preview.draftId}:${choice}`;
-      let operation = choices.get(key);
+    async start(plan: PlanRef) {
+      const sourceSnapshot = planSourceProjection(plan);
+      const key = JSON.stringify([plan.sessionId, plan.id, sourceSnapshot]);
+      let operation = operations.get(key);
       if (!operation) {
-        operation = {
-          choiceRequestId: createRequestId(),
-          startRequestId: createRequestId(),
-          running: false,
-          done: false,
-        };
-        choices.set(key, operation);
+        operation = { requestId: createRequestId(), done: false };
+        operations.set(key, operation);
       }
-      if (operation.running) throw operationError("pending");
       if (operation.done) return;
-      operation.running = true;
-      try {
-        if (!operation.selectionId) {
-          try {
-            const selection = await api.resolveHyperPlanDraft({
-              draftId: preview.draftId,
-              choice,
-              requestId: operation.choiceRequestId,
-            });
-            operation.selectionId = selection.selectionId;
-          } catch {
-            throw operationError("choice");
-          }
-        }
-        try {
-          await api.startPlanBuild({
-            selectionId: operation.selectionId,
-            requestId: operation.startRequestId,
-          });
-          operation.done = true;
-        } catch {
-          throw operationError("start");
-        }
-      } finally {
-        operation.running = false;
-      }
-    },
-    async buildOriginal(input: {
-      sessionId: string;
-      planId: string;
-      sourceSnapshot: HyperPlanSourceSnapshot;
-    }) {
-      const key = `${input.sessionId}:${input.planId}`;
-      let operation = originals.get(key);
-      if (!operation) {
-        operation = {
-          requestId: createRequestId(),
-          sourceSnapshot: input.sourceSnapshot,
-          running: false,
-          done: false,
-        };
-        originals.set(key, operation);
-      }
-      if (operation.running) throw operationError("pending");
-      if (operation.done) return;
-      operation.running = true;
-      try {
-        try {
-          await api.startOriginalPlanBuild({
-            sessionId: input.sessionId,
-            planId: input.planId,
-            sourceSnapshot: operation.sourceSnapshot,
-            requestId: operation.requestId,
-          });
-          operation.done = true;
-        } catch {
-          throw operationError("start");
-        }
-      } finally {
-        operation.running = false;
-      }
+      if (operation.promise) return operation.promise;
+      const current = operation;
+      current.promise = Promise.resolve()
+        .then(() =>
+          api.startPlanBuild({
+            sessionId: plan.sessionId,
+            planId: plan.id,
+            sourceSnapshot,
+            requestId: current.requestId,
+          }),
+        )
+        .then(() => {
+          current.done = true;
+        })
+        .finally(() => {
+          delete current.promise;
+        });
+      return current.promise;
     },
     reset() {
-      choices.clear();
-      originals.clear();
+      operations.clear();
     },
   };
 }
 
-function operationError(stage: HyperPlanOperationError["stage"]): HyperPlanOperationError {
-  return Object.assign(new Error("HyperPlan operation failed"), { stage });
-}
-
-const GENERIC_HYPERPLAN_REVIEW_ERROR =
-  "HyperPlan review is unavailable. Try again or build the original plan.";
-
-/**
- * Accept only short, path-free messages from main. Raw IPC noise falls back to the generic copy.
- */
-export function safeHyperPlanReviewReason(error: unknown): string {
-  if (!(error instanceof Error)) return GENERIC_HYPERPLAN_REVIEW_ERROR;
-  const message = error.message.replace(/[\r\n\t]+/g, " ").trim();
-  if (
-    !message ||
-    message.length > 200 ||
-    /[\\/]/.test(message) ||
-    /(?:^|[\s])(?:[A-Za-z]:\\|\/(?:Users|home|tmp|var|etc|private)\b)/.test(message) ||
-    /token|secret|password|api[_-]?key|authorization/i.test(message)
-  ) {
-    return GENERIC_HYPERPLAN_REVIEW_ERROR;
-  }
-  return message;
-}
-
-type HyperPlanSourceSnapshot = ReturnType<typeof hyperPlanSourceProjection>;
-
-type HyperPlanReviewState =
-  | { planId: string; planHash: string; sourceSnapshot: HyperPlanSourceSnapshot; status: "loading" }
-  | {
-      planId: string;
-      planHash: string;
-      sourceSnapshot: HyperPlanSourceSnapshot;
-      status: "ready";
-      preview: HyperPlanPreview;
-    }
-  | {
-      planId: string;
-      planHash: string;
-      sourceSnapshot: HyperPlanSourceSnapshot;
-      status: "review-error";
-      /** Safe, user-facing failure reason from main (no secrets/paths). */
-      reason?: string;
-      originalStart?: "pending" | "error";
-    }
-  | {
-      planId: string;
-      planHash: string;
-      sourceSnapshot: HyperPlanSourceSnapshot;
-      status: "choosing" | "choice-error" | "start-error";
-      preview: HyperPlanPreview;
-      choice: HyperPlanChoice;
-    };
-
-export function reconcileHyperPlanReview(
-  review: HyperPlanReviewState | undefined,
-  latestPlan: PlanRef | undefined,
-): { review: HyperPlanReviewState | undefined; invalidate: boolean } {
-  if (!latestPlan || !review) {
-    return { review, invalidate: false };
-  }
-
-  if (review.planId !== latestPlan.id) return { review: undefined, invalidate: true };
-
-  const latestSource = hyperPlanSourceProjection(latestPlan);
-  if (JSON.stringify(review.sourceSnapshot) === JSON.stringify(latestSource)) {
-    return {
-      review:
-        review.planHash === latestPlan.hash ? review : { ...review, planHash: latestPlan.hash },
-      invalidate: false,
-    };
-  }
-
-  // Accept only the exact source projection written when promoting the
-  // currently selected revision after a possibly-uncertain revision choice.
-  if (
-    (review.status === "choosing" ||
-      review.status === "choice-error" ||
-      review.status === "start-error") &&
-    review.choice === "revision" &&
-    matchesPromotedHyperPlanRevision(latestPlan, review.preview.revision)
-  ) {
-    return {
-      review: { ...review, planHash: latestPlan.hash, sourceSnapshot: latestSource },
-      invalidate: false,
-    };
-  }
-
-  return { review: undefined, invalidate: true };
-}
-
-export function hyperPlanSourceProjection(plan: PlanRef) {
+export function planSourceProjection(plan: PlanRef) {
   return {
     title: plan.title,
     overview: plan.overview,
@@ -353,62 +184,18 @@ export function hyperPlanSourceProjection(plan: PlanRef) {
       content,
       acceptanceCriterionIds: acceptanceCriterionIds ?? [],
     })),
-    spec: plan.spec && {
-      requirements: plan.spec.requirements,
-      acceptanceCriteria: plan.spec.acceptanceCriteria,
-      assumptions: plan.spec.assumptions,
-      openQuestions: plan.spec.openQuestions,
-      evidence: plan.spec.evidence ?? [],
-    },
+    ...(plan.spec
+      ? {
+          spec: {
+            requirements: plan.spec.requirements,
+            acceptanceCriteria: plan.spec.acceptanceCriteria,
+            assumptions: plan.spec.assumptions,
+            openQuestions: plan.spec.openQuestions,
+            evidence: plan.spec.evidence ?? [],
+          },
+        }
+      : {}),
   };
-}
-
-function matchesPromotedHyperPlanRevision(plan: PlanRef, revision: HyperPlanRevision): boolean {
-  if (!plan.spec) return false;
-  if (
-    plan.content !== revision.content.trim() ||
-    plan.todos.some((todo) => todo.status !== "pending") ||
-    plan.spec.acceptanceCriteria.some((criterion) => criterion.status !== "pending") ||
-    plan.spec.evidence === undefined ||
-    plan.spec.evidence.length !== 0
-  )
-    return false;
-
-  const revisionSource = {
-    title: revision.title,
-    overview: revision.overview,
-    content: revision.content.trim(),
-    todos: revision.todos.map(({ id, content, acceptanceCriterionIds }) => ({
-      id,
-      content,
-      acceptanceCriterionIds: acceptanceCriterionIds ?? [],
-    })),
-    spec: {
-      requirements: revision.spec.requirements,
-      acceptanceCriteria: revision.spec.acceptanceCriteria,
-      assumptions: revision.spec.assumptions,
-      openQuestions: revision.spec.openQuestions,
-    },
-  };
-  const planSource = {
-    title: plan.title,
-    overview: plan.overview,
-    content: plan.content,
-    todos: plan.todos.map(({ id, content, acceptanceCriterionIds }) => ({
-      id,
-      content,
-      acceptanceCriterionIds: acceptanceCriterionIds ?? [],
-    })),
-    spec: {
-      requirements: plan.spec.requirements,
-      acceptanceCriteria: plan.spec.acceptanceCriteria.map(
-        ({ status: _status, ...criterion }) => criterion,
-      ),
-      assumptions: plan.spec.assumptions,
-      openQuestions: plan.spec.openQuestions,
-    },
-  };
-  return JSON.stringify(planSource) === JSON.stringify(revisionSource);
 }
 
 type ChatPaneProps = {
@@ -466,6 +253,7 @@ type ChatPaneProps = {
 };
 
 type DesignContextItem = Extract<ContextItem, { type: "design-element" }>;
+
 type DesignAnnotationContextItem = Extract<ContextItem, { type: "design-annotation" }>;
 
 export type ChatComposerDraft = ComposerDraft & {
@@ -788,9 +576,10 @@ export function ChatPane({
   const [aborting, setAborting] = useState(false);
   const [workingStats, setWorkingStats] = useState<WorkingChangeStats | undefined>();
   const [dismissedPlanHash, setDismissedPlanHash] = useState<string | undefined>(undefined);
-  const [hyperPlanReview, setHyperPlanReview] = useState<HyperPlanReviewState>();
-  const hyperPlanRequestId = useRef(0);
-  const hyperPlanOperations = useRef(createHyperPlanOperations(window.modus.agent));
+  const [startingPlan, setStartingPlan] = useState(false);
+
+  const planBuildGeneration = useRef(0);
+  const planBuildOperations = useRef(createPlanBuildOperations(window.modus.agent));
   const [previewSubagentId, setPreviewSubagentId] = useState<string | undefined>();
   const managedProcesses = useManagedProcesses({
     workspaceId: workspace?.id,
@@ -928,7 +717,7 @@ export function ChatPane({
   });
   // Authoritative: keep SDK hot only while a turn is live (DB status or stream).
   const keepRuntimeHotRef = useRef(false);
-  keepRuntimeHotRef.current = isSubagentSessionWorking(session.status) || isRunning;
+  keepRuntimeHotRef.current = isSubagentSessionWorking(session.status) || isRunning || startingPlan;
 
   // Stick-to-bottom follows the bottom only while the session is working; idle
   // viewing/scrolling never snaps back (opencode's createAutoScroll model).
@@ -1102,37 +891,21 @@ export function ChatPane({
     }
   }, [latestPlan, onPlanUpdated]);
 
-  useEffect(() => {
-    const reconciliation = reconcileHyperPlanReview(hyperPlanReview, latestPlan);
-    if (!reconciliation.invalidate) {
-      if (reconciliation.review !== hyperPlanReview) {
-        setHyperPlanReview(reconciliation.review);
-      }
-      return;
+  async function buildPlanLocally(plan: PlanRef): Promise<void> {
+    setPromptError(undefined);
+    const generation = planBuildGeneration.current;
+    setStartingPlan(true);
+    try {
+      await planBuildOperations.current.start(plan);
+      if (generation !== planBuildGeneration.current) return;
+      setComposerMode("build");
+      onSessionsChanged();
+    } catch {
+      if (generation === planBuildGeneration.current)
+        setPromptError("We couldn’t start this plan. Retry to continue.");
+    } finally {
+      if (generation === planBuildGeneration.current) setStartingPlan(false);
     }
-    hyperPlanRequestId.current += 1;
-    hyperPlanOperations.current.reset();
-    setHyperPlanReview(reconciliation.review);
-  }, [latestPlan, hyperPlanReview]);
-
-  useEffect(
-    () => () => {
-      hyperPlanRequestId.current += 1;
-      hyperPlanOperations.current.reset();
-    },
-    [],
-  );
-
-  /**
-   * Build Locally: the user's explicit authorization to execute the approved
-   * plan. Sends a CONCISE build message — the plan title, its to-dos, and a
-   * pointer to the full plan.md — not the whole plan pasted inline. The agent
-   * reads the file for full detail. Passing the plan id binds this turn's run
-   * lifecycle to the plan's build status (building → built/not_built).
-   */
-  function buildPlanLocally(plan: PlanRef): void {
-    setComposerMode("build");
-    submitPrompt(buildPlanMessage(plan), [], "normal", undefined, undefined, "build", plan.id);
   }
 
   /** Refresh the working-tree change summary shown above the composer. */
@@ -1204,9 +977,9 @@ export function ChatPane({
     setPendingPrompt(false);
     setAborting(false);
     setWorkingStats(undefined);
-    hyperPlanRequestId.current += 1;
-    hyperPlanOperations.current.reset();
-    setHyperPlanReview(undefined);
+    planBuildGeneration.current += 1;
+    planBuildOperations.current.reset();
+    setStartingPlan(false);
     refreshStats();
 
     const unsubscribe = hub.subscribe(sessionId, (item) => {
@@ -1261,8 +1034,8 @@ export function ChatPane({
     return () => {
       cancelled = true;
       eventHistoryGenerationRef.current += 1;
-      hyperPlanRequestId.current += 1;
-      hyperPlanOperations.current.reset();
+      planBuildGeneration.current += 1;
+      planBuildOperations.current.reset();
       const el = scrollContainerRef.current;
       if (el) {
         rememberSessionScroll(sessionId, el.scrollTop);
@@ -1295,103 +1068,6 @@ export function ChatPane({
     effectiveBuildStatus(latestPlan, sessionStatus.type !== "idle") === "not_built"
       ? latestPlan
       : undefined;
-  const visibleHyperPlanReview =
-    reviewPlan &&
-    hyperPlanReview?.planId === reviewPlan.id &&
-    hyperPlanReview.planHash === reviewPlan.hash
-      ? hyperPlanReview
-      : undefined;
-
-  async function reviewPlanWithHyperPlan(plan: PlanRef): Promise<void> {
-    if (!plan.spec) return;
-    const requestId = ++hyperPlanRequestId.current;
-    setPromptError(undefined);
-    const sourceSnapshot = hyperPlanSourceProjection(plan);
-    setHyperPlanReview({ planId: plan.id, planHash: plan.hash, sourceSnapshot, status: "loading" });
-    try {
-      const preview = await hyperPlanOperations.current.review({
-        sessionId,
-        planId: plan.id,
-        ...(paneModel ? { model: paneModel } : {}),
-      });
-      if (requestId === hyperPlanRequestId.current) {
-        setHyperPlanReview({
-          planId: plan.id,
-          planHash: plan.hash,
-          sourceSnapshot,
-          status: "ready",
-          preview,
-        });
-      }
-    } catch (error) {
-      if (requestId === hyperPlanRequestId.current) {
-        const reason = safeHyperPlanReviewReason(error);
-        setHyperPlanReview({
-          planId: plan.id,
-          planHash: plan.hash,
-          sourceSnapshot,
-          status: "review-error",
-          reason,
-        });
-        setPromptError(reason);
-      }
-    }
-  }
-
-  async function chooseHyperPlan(choice: HyperPlanChoice): Promise<void> {
-    const review = visibleHyperPlanReview;
-    if (
-      !review ||
-      review.status === "loading" ||
-      review.status === "choosing" ||
-      (review.status === "review-error" && review.originalStart === "pending")
-    )
-      return;
-    const requestId = hyperPlanRequestId.current;
-    setPromptError(undefined);
-    const isOriginalAfterReviewError = review.status === "review-error" && choice === "original";
-    if (isOriginalAfterReviewError) {
-      setHyperPlanReview({ ...review, originalStart: "pending" });
-    } else if ("preview" in review) {
-      setHyperPlanReview({ ...review, status: "choosing", choice });
-    } else {
-      return;
-    }
-    try {
-      if ("preview" in review) {
-        await hyperPlanOperations.current.choose(review.preview, choice);
-      } else if (isOriginalAfterReviewError) {
-        await hyperPlanOperations.current.buildOriginal({
-          sessionId,
-          planId: review.planId,
-          sourceSnapshot: review.sourceSnapshot,
-        });
-      } else {
-        return;
-      }
-      if (requestId === hyperPlanRequestId.current) {
-        setHyperPlanReview(undefined);
-        onSessionsChanged();
-      }
-    } catch (error) {
-      if (requestId !== hyperPlanRequestId.current) return;
-      const stage = (error as Partial<HyperPlanOperationError>).stage;
-      if (stage === "pending") return;
-      setHyperPlanReview((current) => {
-        if (!current || current.planId !== review.planId) return current;
-        return isOriginalAfterReviewError
-          ? { ...current, originalStart: "error" }
-          : "preview" in current
-            ? {
-                ...current,
-                status: stage === "choice" ? "choice-error" : "start-error",
-                choice,
-              }
-            : current;
-      });
-      setPromptError("We couldn’t start that plan. Retry the same choice to continue.");
-    }
-  }
   const pendingPermission = useMemo(
     () => latestPendingPermissionRequest(stateAgentEvents),
     [stateAgentEvents],
@@ -1724,7 +1400,9 @@ export function ChatPane({
               />
             ) : null}
             {autoScroll.showScrollToLatest ? (
-              <div className="pointer-events-none absolute bottom-full left-1/2 z-30 mb-2 -translate-x-1/2">
+              <div
+                className={`pointer-events-none absolute bottom-full left-1/2 z-30 -translate-x-1/2 ${isRunning ? "mb-10" : "mb-2"}`}
+              >
                 <button
                   aria-label="Scroll to latest"
                   className="pointer-events-auto flex size-10 items-center justify-center rounded-full border border-popup-border bg-elevated text-fg-muted shadow-popup outline-none transition-colors duration-100 hover:bg-hover hover:text-fg focus-visible:ring-2 focus-visible:ring-focus-ring/35"
@@ -1756,37 +1434,9 @@ export function ChatPane({
                   composerReplacement
                 ) : reviewPlan ? (
                   <ReviewPlanCard
-                    onBuildLocally={() => buildPlanLocally(reviewPlan)}
-                    onReviewWithHyperPlan={() => void reviewPlanWithHyperPlan(reviewPlan)}
-                    onChoosePlan={(choice) => void chooseHyperPlan(choice)}
+                    onBuildLocally={() => void buildPlanLocally(reviewPlan)}
+                    busy={startingPlan}
                     plan={reviewPlan}
-                    {...(visibleHyperPlanReview
-                      ? {
-                          hyperPlanState:
-                            visibleHyperPlanReview.status === "loading"
-                              ? { status: "loading" as const }
-                              : visibleHyperPlanReview.status === "review-error"
-                                ? {
-                                    status: "review-error" as const,
-                                    ...(visibleHyperPlanReview.reason
-                                      ? { reason: visibleHyperPlanReview.reason }
-                                      : {}),
-                                    ...(visibleHyperPlanReview.originalStart
-                                      ? { originalStart: visibleHyperPlanReview.originalStart }
-                                      : {}),
-                                  }
-                                : visibleHyperPlanReview.status === "ready"
-                                  ? {
-                                      status: "ready" as const,
-                                      preview: visibleHyperPlanReview.preview,
-                                    }
-                                  : {
-                                      status: visibleHyperPlanReview.status,
-                                      preview: visibleHyperPlanReview.preview,
-                                      choice: visibleHyperPlanReview.choice,
-                                    },
-                        }
-                      : {})}
                     onContinuePlanning={() => {
                       setComposerMode("plan");
                       setDismissedPlanHash(reviewPlan.hash);
