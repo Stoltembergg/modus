@@ -120,4 +120,9 @@ describe("Project context chats", () => {
       expect(node.style.filter).not.toMatch(/blur/);
     }
   });
+
+  it("is separated by spacing, not a divider line", () => {
+    renderSidebar();
+    expect(screen.getByTestId("sidebar-project-context").className).not.toMatch(/border/);
+  });
 });

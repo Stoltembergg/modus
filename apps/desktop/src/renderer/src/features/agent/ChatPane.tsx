@@ -1806,6 +1806,7 @@ export function ChatPane({
                             {showTodosRail && pinnedTodos ? (
                               <div data-testid="composer-pinned-todos">
                                 <TodosCard
+                                  bare
                                   todos={pinnedTodos.todos}
                                   updating={pinnedTodos.updating}
                                 />

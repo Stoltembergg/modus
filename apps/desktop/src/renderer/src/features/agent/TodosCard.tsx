@@ -66,7 +66,16 @@ export function detectTodoChanges(previous: TodoItem[], next: TodoItem[]): TodoC
  * Chrome is `.timeline-wire` — transparent fill + slight radius — so the card
  * shares the chat canvas instead of floating as a grey blotch.
  */
-export function TodosCard({ todos, updating }: { todos: TodoItem[]; updating: boolean }) {
+export function TodosCard({
+  todos,
+  updating,
+  bare = false,
+}: {
+  todos: TodoItem[];
+  updating: boolean;
+  /** Inside the Composer glass: no border or divider, spacing only. */
+  bare?: boolean;
+}) {
   const [open, setOpen] = useState(true);
   const reduceMotion = useReducedMotion();
   const previousRef = useRef(todos);
@@ -94,7 +103,8 @@ export function TodosCard({ todos, updating }: { todos: TodoItem[]; updating: bo
 
   return (
     <section
-      className="timeline-wire overflow-hidden"
+      className={bare ? "overflow-hidden" : "timeline-wire overflow-hidden"}
+      data-todos-bare={bare ? "" : undefined}
       data-todos-state={creating ? "creating" : updating ? "updating" : "settled"}
     >
       <button
