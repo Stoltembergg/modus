@@ -162,6 +162,35 @@ describe("ReviewPlanCard", () => {
     expect(markup).not.toContain("Prepare the release safely.");
   });
 
+  it("shows revision warnings, such as an uncovered criterion, before the choice", () => {
+    const warning = 'No task covers the acceptance criterion "Every release artifact is verified".';
+    const markup = renderToStaticMarkup(
+      <ReviewPlanCard
+        onBuildLocally={vi.fn()}
+        onContinuePlanning={vi.fn()}
+        hyperPlanState={{
+          status: "ready",
+          preview: { ...draft, revision: { ...draft.revision, warnings: [warning] } },
+        }}
+        plan={plan}
+        hyperPlanSummary={summary}
+      />,
+    );
+    expect(markup).toContain('data-testid="hyperplan-revision-warnings"');
+    expect(markup).toContain("No task covers the acceptance criterion");
+    expect(
+      renderToStaticMarkup(
+        <ReviewPlanCard
+          onBuildLocally={vi.fn()}
+          onContinuePlanning={vi.fn()}
+          hyperPlanState={{ status: "ready", preview: draft }}
+          plan={plan}
+          hyperPlanSummary={summary}
+        />,
+      ),
+    ).not.toContain("hyperplan-revision-warnings");
+  });
+
   it("shows only the revised plan and dispatches the exact selected choice", async () => {
     const user = userEvent.setup();
     const onChoosePlan = vi.fn();

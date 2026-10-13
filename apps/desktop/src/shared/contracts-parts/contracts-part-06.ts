@@ -284,6 +284,8 @@ export type HyperPlanRevision = {
     assumptions: string[];
     openQuestions: string[];
   };
+  /** Non-fatal issues found while normalizing the model output (e.g. an uncovered criterion). */
+  warnings?: string[];
 };
 
 /** Complete plan source supplied to the isolated review/revision harness. */
