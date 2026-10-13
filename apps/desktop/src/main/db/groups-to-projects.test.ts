@@ -362,3 +362,48 @@ describe("groups → projects migration", () => {
     expect(existsSync(join(backups, files[0] ?? ""))).toBe(true);
   });
 });
+
+describe("pre-existing duplicate profiles", () => {
+  it("dedupes standalone profiles among themselves, including case-only clashes", () => {
+    agent("s1", "Coder", null);
+    agent("s2", "coder", null);
+    agent("s3", "CODER", null);
+    agent("s4", "Coder 2", null);
+    workspace("ws1");
+    group("g1", "Team", "ws1");
+    agent("ga", "coder", "g1", 0);
+    agent("gb", "Writer", "g1", 1, true); // archived: untouched, outside the index
+    agent("s5", "writer", null);
+    member("g1", "mg", "ga", "ws1");
+    const result = migrateGroupsToProjects(db, opts());
+    if (result.status !== "done") throw new Error("not done");
+    const names = Object.fromEntries(
+      (db.prepare("select id, name from agents").all() as Array<{ id: string; name: string }>).map(
+        (r) => [r.id, r.name],
+      ),
+    );
+    expect(names).toMatchObject({
+      s1: "Coder",
+      s2: "coder 3",
+      s3: "CODER 4",
+      s4: "Coder 2",
+      ga: "coder (Team)",
+      gb: "Writer",
+      s5: "writer",
+    });
+    const active = (
+      db.prepare("select lower(name) as n from agents where archived_at is null").all() as Array<{
+        n: string;
+      }>
+    ).map((r) => r.n);
+    expect(new Set(active).size).toBe(active.length);
+    expect(() => agent("x", "CODER (team)", null)).toThrow();
+  });
+
+  it("a database with only standalone duplicates and no groups still migrates", () => {
+    agent("s1", "Coder", null);
+    agent("s2", "coder", null);
+    expect(migrateGroupsToProjects(db, opts()).status).toBe("done");
+    expect(isGroupsMigrationDone(db)).toBe(true);
+  });
+});

@@ -382,13 +382,30 @@ function runInTransaction(
   // b. Agents → profiles (no rebuild): dedupe, ungroup, unique index.
   let renamedProfiles = 0;
   if (tableExists(db, "agents") && hasColumn(db, "agents", "group_id")) {
-    const taken = new Set(
-      (
-        db
-          .prepare("select name from agents where group_id is null and archived_at is null")
-          .all() as Array<{ name: string }>
-      ).map((r) => r.name.toLowerCase()),
-    );
+    // Pre-existing standalone profiles may already clash among themselves
+    // (even case-only: "Coder" / "coder"). Dedupe them first, oldest keeps its
+    // name, so the unique index below can always be created.
+    const taken = new Set<string>();
+    const rename = db.prepare("update agents set name = ?, updated_at = ? where id = ?");
+    const standalone = db
+      .prepare(
+        `select id, name from agents where group_id is null and archived_at is null
+          order by created_at, id`,
+      )
+      .all() as Array<{ id: string; name: string }>;
+    // Pass 1: the oldest holder of each name keeps it. Pass 2: the others get
+    // the first free " 2", " 3"… that no kept name uses.
+    const clashing: Array<{ id: string; name: string }> = [];
+    for (const profile of standalone) {
+      if (taken.has(profile.name.toLowerCase())) clashing.push(profile);
+      else taken.add(profile.name.toLowerCase());
+    }
+    for (const profile of clashing) {
+      const name = nextFreeName(profile.name, taken);
+      rename.run(name, at, profile.id);
+      renamedProfiles += 1;
+      taken.add(name.toLowerCase());
+    }
     const grouped = db
       .prepare(
         `select a.id, a.name, g.name as group_name from agents a
@@ -397,7 +414,6 @@ function runInTransaction(
           order by g.created_at, g.id, a.created_at, a.id`,
       )
       .all() as Array<{ id: string; name: string; group_name: string }>;
-    const rename = db.prepare("update agents set name = ?, updated_at = ? where id = ?");
     for (const agent of grouped) {
       let name = agent.name;
       if (taken.has(name.toLowerCase())) {
@@ -407,9 +423,11 @@ function runInTransaction(
       }
       taken.add(name.toLowerCase());
     }
+    // Archived agents keep their name and are outside the index; restoring one
+    // whose name is taken auto-renames it (agents-store setAgentArchived, PR 3).
     db.exec("update agents set group_id = null where group_id is not null");
     db.exec(`create unique index if not exists idx_agents_profile_name
-      on agents(name) where group_id is null and archived_at is null`);
+      on agents(lower(name)) where group_id is null and archived_at is null`);
   }
   fail("profiles");
 
