@@ -90,10 +90,12 @@ describe("Modus semantic design tokens", () => {
     );
     expect(css).not.toContain(".chat-scroll-top-blur");
     const composerDock = css.match(/\.composer-dock-shell\s*\{([^}]+)\}/)?.[1] ?? "";
-    expect(composerDock).toContain("border: 1px solid var(--border-composer)");
-    expect(composerDock).toContain("border-radius: var(--radius-composer)");
-    expect(composerDock).toContain("background-color: var(--surface-raised)");
-    expect(composerDock).toContain("box-shadow: var(--shadow-composer)");
+    // PromptBar-style composer: one borderless glass field (no lines).
+    expect(composerDock).toBe("");
+    const composerGlass = css.match(/(?:^|\n)\.composer-glass\s*\{([^}]+)\}/)?.[1] ?? "";
+    expect(composerGlass).toContain("border: 0");
+    expect(composerGlass).toContain("border-radius: 16px");
+    expect(composerGlass).toContain("var(--surface-glass-elevated");
   });
 
   it("the dialog surface only reshapes .popup-chrome (radius + shadow), never its own glass", () => {

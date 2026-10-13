@@ -154,6 +154,15 @@ describe("SendStopIcon", () => {
     expect(visible()).toBe("stop");
     expect(container.firstElementChild?.getAttribute("aria-hidden")).toBe("true");
   });
+
+  it("swaps instantly under reduced motion", () => {
+    const { container } = render(<SendStopIcon busy />);
+    const layers = container.querySelectorAll("[data-icon]");
+    expect(layers).toHaveLength(2);
+    for (const layer of layers) {
+      expect(layer.getAttribute("class")).toContain("motion-reduce:transition-none");
+    }
+  });
 });
 
 describe("WorkStatusLine", () => {

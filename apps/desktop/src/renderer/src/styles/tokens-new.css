@@ -198,9 +198,30 @@
   }
 }
 
-/* New look: the animated sidebar's selected link uses the blue accent. */
+/* New look: the selected sidebar link only turns accent; no chip, no frame. */
 :root[data-ui="new"] .app-sidebar-link[data-active="true"] {
-  background-color: var(--accent-soft);
+  background-color: transparent;
   color: var(--accent-text);
-  box-shadow: inset 0 0 0 1px var(--accent-edge);
+  box-shadow: none;
+}
+
+/* New look: icon buttons never get a chip or frame; hover brightens, selected turns accent. */
+:root[data-ui="new"] .toolbar-icon-button,
+:root[data-ui="new"] .app-rail-item,
+:root[data-ui="new"] .app-sidebar-link,
+:root[data-ui="new"] .app-sidebar-icon-button {
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+:root[data-ui="new"] .toolbar-icon-button:hover,
+:root[data-ui="new"] .app-rail-item:hover,
+:root[data-ui="new"] .app-sidebar-link:hover:not(:disabled),
+:root[data-ui="new"] .app-sidebar-icon-button:hover {
+  color: var(--text-primary);
+}
+:root[data-ui="new"] .toolbar-icon-button[data-active="true"],
+:root[data-ui="new"] .toolbar-icon-button[aria-pressed="true"],
+:root[data-ui="new"] .app-rail-item-selected,
+:root[data-ui="new"] .app-sidebar-link[data-active="true"] {
+  color: var(--accent-text);
 }

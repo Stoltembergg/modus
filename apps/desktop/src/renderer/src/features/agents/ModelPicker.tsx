@@ -193,7 +193,7 @@ export function ModelPicker({
             )}
             data-testid="model-picker-popup"
           >
-            <div className="flex shrink-0 items-center gap-2 border-hairline-soft border-b px-3">
+            <div className="flex shrink-0 items-center gap-2 px-3">
               <IconSearch aria-hidden className="shrink-0 text-fg-faint" size={14} />
               <Combobox.Input
                 aria-label="Search models"

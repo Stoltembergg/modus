@@ -53,10 +53,7 @@ const COMPOSER_PLACEHOLDER = "What will you build with Modus?";
 
 /** Shared with read-only user bubbles — single radius/chrome truth for the prompt shell. */
 export const COMPOSER_RADIUS_CLASS = "rounded-composer";
-export const COMPOSER_SHELL_CLASS = cn(
-  "border border-composer-border bg-surface shadow-composer-edge",
-  COMPOSER_RADIUS_CLASS,
-);
+export const COMPOSER_SHELL_CLASS = cn("composer-glass", COMPOSER_RADIUS_CLASS);
 
 export type ComposerProps = {
   model: string;
@@ -557,14 +554,11 @@ export function Composer({
       <div
         className={cn(
           "composer-prompt-shell relative transition-[border-color] duration-150",
-          integrated
-            ? "border-0 bg-transparent shadow-none"
-            : "border border-composer-border bg-surface shadow-composer-edge",
+          integrated ? "border-0 bg-transparent shadow-none" : "composer-glass",
           !integrated && COMPOSER_RADIUS_CLASS,
           !integrated && Boolean(footer) && "z-10",
           // No focus glow: only text focus or drag nudges the border one notch brighter.
-          !isRunning && "focus-within:border-composer-border-strong",
-          dragging && "border-composer-border-strong",
+          dragging && "composer-glass-active",
           submitting && "pointer-events-none opacity-60",
         )}
         {...(!integrated ? { "data-composer-surface": "" } : {})}
@@ -754,7 +748,7 @@ export function Composer({
             {/* One control: arrow → square morph while the agent is running. */}
             <button
               aria-label={isRunning ? "Stop" : "Send"}
-              className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-fg text-canvas transition-colors hover:bg-fg-muted active:scale-[0.94] disabled:bg-chip-strong disabled:text-fg-faint"
+              className="flex size-7 shrink-0 items-center justify-center rounded-[10px] bg-accent text-white shadow-[0_4px_14px_-4px_var(--color-accent)] transition-[background-color,box-shadow,transform] duration-150 hover:brightness-110 active:scale-[0.96] disabled:bg-chip-strong disabled:text-fg-faint disabled:shadow-none motion-reduce:transition-none"
               disabled={isRunning ? !onAbort : !hasContent || !canSubmit || submitting || !model}
               onClick={() => {
                 if (isRunning) onAbort?.();
@@ -800,10 +794,10 @@ function ModePill({
       <button
         aria-label={`Change mode, currently ${label}`}
         className={cn(
-          "inline-flex h-7 items-center gap-1.5 rounded-lg border px-2 transition-colors",
+          "inline-flex h-7 items-center gap-1.5 rounded-[10px] px-2 transition-colors",
           activePlanningMode
-            ? "border-accent/30 bg-accent/10 text-accent hover:bg-accent/15"
-            : "border-hairline text-fg-muted hover:bg-hover hover:text-fg",
+            ? "bg-accent/15 text-accent hover:bg-accent/20"
+            : "bg-chip text-fg-muted hover:bg-hover hover:text-fg",
         )}
         onClick={onCycle}
         title={`${label} mode — click or press Shift+Tab to change mode`}

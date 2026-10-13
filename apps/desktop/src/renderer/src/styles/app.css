@@ -455,7 +455,6 @@
   box-sizing: border-box;
   overflow: hidden;
   background-color: var(--surface-sidebar);
-  border-right: 1px solid var(--border-subtle);
 }
 .app-sidebar-slot[data-pinned="false"] .app-animated-sidebar[data-open="true"] {
   /* Hover overlay floats over main: keep it opaque even when glass clears panels. */
@@ -553,14 +552,7 @@
 .rounded-composer {
   border-radius: var(--radius-composer);
 }
-.composer-dock-shell {
-  border: 1px solid var(--border-composer);
-  border-radius: var(--radius-composer);
-  background-color: var(--surface-raised);
-  box-shadow: var(--shadow-composer);
-}
 .composer-dock-shell[data-dragging] {
-  border-color: var(--state-drop-border);
   background-color: var(--state-drop-surface);
 }
 .group-prompt-bar {
@@ -987,7 +979,7 @@
  * `rounded-lg border-hairline bg-elevated shadow-popup` (线框贴纸感).
  */
 .popup-chrome {
-  border: 1px solid var(--border-overlay);
+  border: 0;
   border-radius: var(--radius-overlay);
   background: var(--surface-glass);
   box-shadow: var(--menu-shadow);
@@ -3090,6 +3082,35 @@ body
   .agent-avatar .agent-avatar-eyes,
   .agent-avatar .agent-avatar-ring {
     animation: none;
+  }
+}
+
+/*
+ * Composer surface: one continuous rounded field, no border or divider, theme glass fill.
+ * Solid fill unless native glass + Transparency "full".
+ */
+.composer-glass {
+  border: 0;
+  border-radius: 16px;
+  background: var(--surface-glass-elevated, var(--color-surface));
+  box-shadow: var(--menu-shadow);
+  transition:
+    box-shadow 160ms ease-out,
+    background-color 160ms ease-out;
+}
+:root[data-native-glass="true"][data-transparency="full"] .composer-glass {
+  -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
+}
+.composer-glass:focus-within,
+.composer-glass-active {
+  box-shadow:
+    var(--menu-shadow),
+    0 0 0 4px color-mix(in srgb, var(--color-accent) 14%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-glass {
+    transition: none;
   }
 }
 
