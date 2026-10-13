@@ -224,7 +224,9 @@ describe("HyperPlan revision -> apply (real harness, draft store and plan store)
       },
     });
     const { preview, plan } = await generateAndApply();
-    expect(preview.revision.warnings).toBeUndefined();
+    expect(preview.revision.warnings).toEqual([
+      'The acceptance criterion "Orphan." was removed because it referenced a requirement that does not exist.',
+    ]);
     expect(plan?.todos.map((todo) => [todo.id, todo.acceptanceCriterionIds])).toEqual([
       ["todo-a", ["ac-1"]],
       ["todo-b", []],
@@ -259,6 +261,30 @@ describe("HyperPlan revision -> apply (real harness, draft store and plan store)
       "ac-1",
       "ac-2",
     ]);
+  });
+
+  it("warns the user when a criterion is dropped for pointing at a missing requirement", async () => {
+    mocks.revisionOutput = JSON.stringify({
+      ...baseRevision,
+      spec: {
+        ...baseRevision.spec,
+        acceptanceCriteria: [
+          ...baseRevision.spec.acceptanceCriteria,
+          {
+            id: "ac-lost",
+            requirementId: "req-missing",
+            description: "Raw output never reaches Sentry.",
+            todoIds: ["todo-a"],
+          },
+        ],
+      },
+    });
+    const { preview, plan } = await generateAndApply();
+    expect(preview.revision.warnings).toEqual([
+      'The acceptance criterion "Raw output never reaches Sentry." was removed because it referenced a requirement that does not exist.',
+    ]);
+    expect(plan?.spec?.acceptanceCriteria.map((criterion) => criterion.id)).toEqual(["ac-1"]);
+    expect(plan?.todos.map((todo) => todo.id)).toEqual(["todo-a", "todo-b"]);
   });
 
   it("asks the provider for JSON output on the revision session", async () => {

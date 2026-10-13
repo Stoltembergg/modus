@@ -441,7 +441,11 @@ function parseRevision(raw: string | undefined): ParsedRevision {
   }
   const todoIdSet = new Set(todoIds);
   const requirementIdSet = new Set(requirementIds);
-  // A criterion tied to a requirement that does not exist is itself a dangling link: drop it.
+  // A criterion tied to a requirement that does not exist is itself a dangling link: drop it,
+  // but tell the user so an acceptance criterion never disappears silently.
+  const droppedCriteria = revision.spec.acceptanceCriteria.filter(
+    (criterion) => !requirementIdSet.has(criterion.requirementId),
+  );
   const criteria = revision.spec.acceptanceCriteria
     .filter((criterion) => requirementIdSet.has(criterion.requirementId))
     .map((criterion) => ({
@@ -457,7 +461,11 @@ function parseRevision(raw: string | undefined): ParsedRevision {
       : undefined;
     return { id, content, ...(links ? { acceptanceCriterionIds: links } : {}) };
   });
-  const warnings = criteria
+  const droppedWarnings = droppedCriteria.map(
+    (criterion) =>
+      `The acceptance criterion "${capUtf8(criterion.description, 160)}" was removed because it referenced a requirement that does not exist.`,
+  );
+  const uncoveredWarnings = criteria
     .filter(
       (criterion) =>
         criterion.todoIds.length === 0 &&
@@ -467,6 +475,7 @@ function parseRevision(raw: string | undefined): ParsedRevision {
       (criterion) =>
         `No task covers the acceptance criterion "${capUtf8(criterion.description, 160)}".`,
     );
+  const warnings = [...droppedWarnings, ...uncoveredWarnings];
   return {
     revision: {
       title: revision.title,

@@ -352,7 +352,7 @@ function HyperPlanChoiceCard({
         </div>
         {preview.revision.warnings?.length ? (
           <ul
-            className="mb-3 space-y-1 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
+            className="mb-3 space-y-1 rounded-lg bg-warning/10 px-3 py-2 text-xs text-warning"
             data-testid="hyperplan-revision-warnings"
           >
             {preview.revision.warnings.map((warning) => (
