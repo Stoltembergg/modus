@@ -63,12 +63,9 @@ import { addContextItemToDraft } from "../features/agent/ChatPane";
 import { HeaderActions } from "../features/agent/SessionHeaderActions";
 import { SessionTitlePopover } from "../features/agent/SessionTitlePopover";
 import { AgentDialog } from "../features/agents/AgentDialog";
-import {
-  Composer,
-  type ComposerDraft,
-  createEmptyComposerDraft,
-} from "../features/composer/Composer";
+import { type ComposerDraft, createEmptyComposerDraft } from "../features/composer/Composer";
 import { contextItemKey } from "../features/composer/composerTokens";
+import { HomeComposer } from "../features/composer/HomeComposer";
 import { BranchSwitcher } from "../features/git/BranchSwitcher";
 import { INSPECTOR_MIN_WIDTH } from "../features/inspector/inspector-layout";
 import { normalizePlan } from "../features/plan/planState";
@@ -176,6 +173,8 @@ export function App() {
   const [heroDraft, setHeroDraft] = useState<ComposerDraft>(createEmptyComposerDraft);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [model, setModel] = useState("");
+  /** Home composer pick for the next chat ("" = app default). */
+  const [heroModel, setHeroModel] = useState("");
   const [modelSettings, setModelSettings] = useState<ModelSettingsState | null>(null);
   const [primaryNavigation, setPrimaryNavigation] = useState(INITIAL_PRIMARY_NAVIGATION);
   const primaryNavigationTouchedRef = useRef(false);
@@ -634,8 +633,12 @@ export function App() {
     await refreshSessions();
   }
 
-  async function createSession(workspace: WorkspaceInfo | null): Promise<AgentSessionInfo | null> {
-    if (!model) {
+  async function createSession(
+    workspace: WorkspaceInfo | null,
+    modelOverride?: string,
+  ): Promise<AgentSessionInfo | null> {
+    const chatModel = modelOverride || model;
+    if (!chatModel) {
       openSettings();
       setSessionCreateError("No model is configured. Connect a provider in Settings first.");
       return null;
@@ -646,7 +649,7 @@ export function App() {
       const session = await window.modus.agent.create({
         workspaceId: target.id,
         cwd: target.rootPath,
-        ...(model ? { model } : {}),
+        ...(chatModel ? { model: chatModel } : {}),
         title: "New chat",
       });
       hubRef.current.prepare(session.id);
@@ -917,10 +920,11 @@ export function App() {
     if (!message.trim()) {
       return;
     }
-    const session = await createSession(activeWorkspace);
+    const session = await createSession(activeWorkspace, heroModel);
     if (!session) {
       return;
     }
+    setHeroModel("");
     const userMessageId = `local-user:${crypto.randomUUID()}`;
     setInitialEventsBySession((current) => ({
       ...current,
@@ -1411,7 +1415,7 @@ export function App() {
                               }}
                             >
                               <div className="relative z-10 w-full max-w-[680px] -translate-y-4">
-                                <Composer
+                                <HomeComposer
                                   canSubmit={canCreateSession}
                                   contextItems={heroContextItems}
                                   cwd={activeWorkspace?.rootPath}
@@ -1424,8 +1428,10 @@ export function App() {
                                       onError={setSessionCreateError}
                                     />
                                   }
+                                  defaultModelId={model}
+                                  heroModel={heroModel}
+                                  onHeroModelChange={setHeroModel}
                                   mode={heroMode}
-                                  model={model}
                                   models={models}
                                   onContextChange={setHeroContextItems}
                                   onModeChange={setHeroMode}
