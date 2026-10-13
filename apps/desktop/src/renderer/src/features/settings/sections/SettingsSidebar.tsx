@@ -30,12 +30,15 @@ const SETTINGS_NAV_ICONS: Record<SettingsSectionId, ReactNode> = {
 
 export function SettingsSidebar({
   activeSection,
+  embedded = false,
   query,
   onBack,
   onQueryChange,
   onSectionChange,
 }: {
   activeSection: SettingsSectionId;
+  /** Rendered inside the app sidebar: fill it, no own column chrome. */
+  embedded?: boolean;
   query: string;
   onBack(): void;
   onQueryChange(query: string): void;
@@ -45,7 +48,15 @@ export function SettingsSidebar({
   const version = useAppVersion();
 
   return (
-    <aside className="app-settings-sidebar flex w-[260px] shrink-0 flex-col bg-panel px-2.5 py-3">
+    <aside
+      className={cn(
+        "flex flex-col",
+        embedded
+          ? "min-h-0 flex-1 px-1 pt-1"
+          : "app-settings-sidebar w-[260px] shrink-0 bg-panel px-2.5 py-3",
+      )}
+      data-settings-nav={embedded ? "embedded" : "standalone"}
+    >
       <button
         className="mb-4 flex h-8 items-center gap-2 rounded-md px-2 text-sm text-fg-muted transition-colors hover:bg-hover hover:text-fg"
         onClick={onBack}
@@ -92,7 +103,7 @@ export function SettingsSidebar({
         )}
       </div>
 
-      <div className="border-hairline-soft border-t px-2 pt-3 text-xs text-fg-faint">
+      <div className="px-2 pt-3 pb-1 text-xs text-fg-faint">
         <div>Modus Desktop</div>
         {version ? <div className="mt-1">v{version}</div> : null}
       </div>
@@ -142,13 +153,14 @@ function SettingsNavItem({
   return (
     <button
       className={cn(
-        "flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-sm transition-colors",
-        active ? "bg-active text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",
+        "flex h-9 w-full items-center gap-2 rounded-lg px-2 aria-[current=page]:font-medium text-left text-sm transition-colors",
+        active ? "text-accent" : "text-fg-muted hover:text-fg",
       )}
+      aria-current={active ? "page" : undefined}
       onClick={onClick}
       type="button"
     >
-      <span className={active ? "text-fg" : "text-fg-subtle"}>{icon}</span>
+      <span className={active ? "text-accent" : "text-fg-subtle"}>{icon}</span>
       <span className="truncate">{children}</span>
     </button>
   );

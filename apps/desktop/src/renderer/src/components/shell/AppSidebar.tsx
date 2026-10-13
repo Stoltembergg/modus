@@ -131,7 +131,7 @@ export function AppSidebar({
             </div>
             <ContextList>{children}</ContextList>
           </div>
-          <div className="border-t border-hairline pt-2">
+          <div className="pt-2">
             <SidebarLink
               active={active === "settings"}
               link={{
@@ -189,7 +189,7 @@ function ContextList({ children }: { children?: ReactNode }) {
   if (!open || !children) return <div className="flex-1" />;
   return (
     <div
-      className="mt-3 flex min-h-0 flex-1 flex-col border-t border-hairline pt-2"
+      className="mt-3 flex min-h-0 flex-1 flex-col pt-2"
       data-shell-layer="context-sidebar"
       data-testid="context-sidebar"
     >

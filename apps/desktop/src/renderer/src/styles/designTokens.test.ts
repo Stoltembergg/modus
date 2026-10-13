@@ -175,8 +175,9 @@ describe("Modus semantic design tokens", () => {
     expect(css).toMatch(/\.menu-bar\s*\{[^}]*height: var\(--space-native-titlebar\)/su);
     expect(css).toMatch(/\.toolbar-row\s*\{[^}]*height: var\(--space-native-titlebar\)/su);
     // One animated sidebar replaced the rail + context panel; it clears the
-    // macOS traffic lights itself outside Settings (which keeps its MenuBar).
-    expect(app).toContain("trafficLightClearance={isMac && !settingsOpen}");
+    // macOS traffic lights itself on every route, Settings included (it now lives in the sidebar).
+    expect(app).toContain("trafficLightClearance={isMac}");
+    expect(app).not.toContain("<MenuBar");
     expect(app).not.toContain("<AppRail");
   });
 
