@@ -11,10 +11,7 @@ export function GeneralSettingsPanel({
 }) {
   return (
     <>
-      <SettingsPageHeader
-        description="Choose when Modus asks before risky agent actions — globally or per project."
-        title="General"
-      />
+      <SettingsPageHeader description="Set approval prompts for agent actions." title="General" />
       <ApprovalModeSettings {...(cwd ? { cwd } : {})} workspaces={workspaces} />
     </>
   );

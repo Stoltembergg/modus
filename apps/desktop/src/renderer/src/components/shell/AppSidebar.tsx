@@ -85,7 +85,7 @@ export function AppSidebar({
       data-testid="app-sidebar"
       style={{ width: appSidebarReservedWidth(pinned) }}
     >
-      <Sidebar locked={pinned} open={hoverOpen} setOpen={setHoverOpen}>
+      <Sidebar locked={pinned || active === "settings"} open={hoverOpen} setOpen={setHoverOpen}>
         <SidebarBody
           aria-label="Primary navigation"
           className={cn(

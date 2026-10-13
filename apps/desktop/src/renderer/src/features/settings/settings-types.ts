@@ -5,7 +5,6 @@ export type SettingsSectionId =
   | "appearance"
   | "personalization"
   | "skills"
-  | "subagents"
   | "mcp"
   | "rules";
 

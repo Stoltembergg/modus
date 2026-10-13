@@ -25,7 +25,6 @@ import { PersonalizationSettingsPanel } from "./sections/personalization";
 import { RulesSettingsPanel } from "./sections/rules";
 import { SettingsSidebar } from "./sections/SettingsSidebar";
 import { SkillsSettingsPanel } from "./sections/skills";
-import { SubagentsSettingsPanel } from "./sections/subagents";
 import type { ModelConfigPatch, SettingsSectionId } from "./settings-types";
 
 export type { HarnessInsightsViewState } from "./sections/harness-insights";
@@ -106,6 +105,7 @@ export function SettingsPanel({
   const [providerKeys, setProviderKeys] = useState<Record<string, string>>({});
   const [activeSection, setActiveSection] = useState<SettingsSectionId>(initialSection);
   const [settingsQuery, setSettingsQuery] = useState("");
+  const contentScrollRef = useRef<HTMLElement>(null);
   // Provider id awaiting risk acknowledgement before OAuth may begin. Anything
   // other than "antigravity" should never land here in practice — it is the
   // caller's job to gate the user path with the same rule.
@@ -121,6 +121,11 @@ export function SettingsPanel({
     (provider) => !connected.some((item) => item.id === provider.id),
   );
   const currentProvider = providers.find((provider) => provider.id === selectedProvider);
+
+  const changeSection = (section: SettingsSectionId): void => {
+    if (contentScrollRef.current) contentScrollRef.current.scrollTop = 0;
+    setActiveSection(section);
+  };
 
   const closeSettings = (): void => {
     if (closeStartedRef.current) {
@@ -258,7 +263,7 @@ export function SettingsPanel({
     try {
       const config = await window.modus.model.customProviderConfig(providerId);
       setCustomInitial(config ?? undefined);
-      setActiveSection("model-provider");
+      changeSection("model-provider");
       setProviderDetailOpen(false);
       setCustomOpen(true);
     } catch (err) {
@@ -521,7 +526,7 @@ export function SettingsPanel({
               embedded
               onBack={closeSettings}
               onQueryChange={setSettingsQuery}
-              onSectionChange={setActiveSection}
+              onSectionChange={changeSection}
               query={settingsQuery}
             />,
             navContainer,
@@ -532,14 +537,17 @@ export function SettingsPanel({
           activeSection={activeSection}
           onBack={closeSettings}
           onQueryChange={setSettingsQuery}
-          onSectionChange={setActiveSection}
+          onSectionChange={changeSection}
           query={settingsQuery}
         />
       ) : null}
 
-      <main className="surface-main scroll-thin min-w-0 flex-1 overflow-y-auto">
+      <main
+        className="surface-main scroll-thin min-h-0 min-w-0 flex-1 overflow-y-auto"
+        ref={contentScrollRef}
+      >
         <ContentTransition
-          className="mx-auto flex w-full max-w-[1080px] flex-col gap-8 px-10 pt-16 pb-12"
+          className="mx-auto flex w-full max-w-[1080px] flex-col gap-6 px-8 pt-8 pb-8"
           transitionKey={activeSection}
         >
           {activeSection === "general" ? (
@@ -551,9 +559,6 @@ export function SettingsPanel({
           {activeSection === "appearance" ? <AppearanceSettingsPanel /> : null}
           {activeSection === "personalization" ? <PersonalizationSettingsPanel /> : null}
           {activeSection === "skills" ? <SkillsSettingsPanel cwd={workspaceCwd} /> : null}
-          {activeSection === "subagents" ? (
-            <SubagentsSettingsPanel cwd={workspaceCwd} workspaces={workspaces} />
-          ) : null}
           {activeSection === "mcp" ? (
             <McpSettingsPanel cwd={workspaceCwd} workspaces={workspaces} />
           ) : null}
@@ -605,14 +610,14 @@ export function SettingsPanel({
                 setDetailLoading(true);
                 setSelectedProvider(provider);
                 setProviderDetailOpen(true);
-                setActiveSection("model-provider");
+                changeSection("model-provider");
                 onRefresh();
               }}
               onCustomOpen={() => {
                 setCustomInitial(undefined);
                 setProviderDetailOpen(false);
                 setCustomOpen(true);
-                setActiveSection("model-provider");
+                changeSection("model-provider");
               }}
               onEditModel={(model, patch) => void editModel(model, patch)}
               onEditProvider={(providerId) => void openCustomEditor(providerId)}

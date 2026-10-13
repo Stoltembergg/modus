@@ -9,7 +9,6 @@ import {
   IconSettings,
   IconUser,
   IconUserCircle,
-  IconUsers,
 } from "@tabler/icons-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { cn } from "../../../lib/cn";
@@ -24,7 +23,6 @@ const SETTINGS_NAV_ICONS: Record<SettingsSectionId, ReactNode> = {
   personalization: <IconUser size={16} stroke={1.7} />,
   mcp: <IconPlugConnected size={16} stroke={1.7} />,
   skills: <IconCube size={16} stroke={1.7} />,
-  subagents: <IconUsers size={16} stroke={1.7} />,
   rules: <IconGavel size={16} stroke={1.7} />,
 };
 
@@ -66,7 +64,7 @@ export function SettingsSidebar({
         Back
       </button>
 
-      <label className="relative mb-5 block">
+      <label className="relative mb-4 block">
         <IconSearch
           className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-fg-faint"
           size={15}
@@ -132,9 +130,9 @@ function useAppVersion(): string | undefined {
 
 function SettingsNavGroup({ children, title }: { children: ReactNode; title: string }) {
   return (
-    <section className="mb-7">
-      <h3 className="mb-2 px-2 text-xs font-normal text-fg-faint">{title}</h3>
-      <div className="space-y-1">{children}</div>
+    <section className="mb-5">
+      <h3 className="mb-1.5 px-2 text-[11px] font-medium text-fg-faint">{title}</h3>
+      <div className="space-y-0.5">{children}</div>
     </section>
   );
 }
@@ -153,7 +151,7 @@ function SettingsNavItem({
   return (
     <button
       className={cn(
-        "flex h-9 w-full items-center gap-2 rounded-lg px-2 aria-[current=page]:font-medium text-left text-sm transition-colors",
+        "flex h-8 w-full items-center gap-2 rounded-lg px-2 aria-[current=page]:font-medium text-left text-sm transition-colors",
         active ? "text-accent" : "text-fg-muted hover:text-fg",
       )}
       aria-current={active ? "page" : undefined}

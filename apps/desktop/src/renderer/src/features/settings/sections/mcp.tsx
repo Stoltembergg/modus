@@ -355,7 +355,7 @@ export function McpSettingsPanel({
             </button>
           </>
         }
-        description="Give the agent extra tools — databases, issue trackers, web search and more — by connecting Model Context Protocol servers. No JSON required."
+        description="Connect external tools and integrations."
         title="MCP"
       />
 

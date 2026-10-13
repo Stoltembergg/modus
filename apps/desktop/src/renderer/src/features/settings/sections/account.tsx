@@ -139,7 +139,7 @@ export function AccountSettingsPanel({
             <ReadOnlyPill>{accountStatusLabel(state)}</ReadOnlyPill>
           ) : null
         }
-        description="Your Modus account. Sign-in happens in the app's main process; passwords and tokens never reach this window."
+        description="Manage your account. Sign-in stays in the main process; credentials stay out of this window."
         title="Account"
       />
 
