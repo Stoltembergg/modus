@@ -58,6 +58,7 @@ export function HomeBackground() {
       <ShapeGrid
         clickCascade={false}
         direction="diagonal"
+        fade={0}
         hoverColor={HOME_GRID_HOVER}
         hoverFillColor={HOME_GRID_HOVER}
         lineColor={lineColor}

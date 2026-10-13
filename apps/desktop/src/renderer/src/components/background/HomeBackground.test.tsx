@@ -27,6 +27,7 @@ describe("HomeBackground", () => {
     const last = gridProps.at(-1);
     expect(last?.lineColor).toBe("rgba(231, 235, 241, 0.06)");
     expect(last?.hoverColor).toBe(HOME_GRID_HOVER);
+    expect(last?.fade).toBe(0);
     expect(HOME_GRID_HOVER).toContain("134, 63, 245");
   });
 
