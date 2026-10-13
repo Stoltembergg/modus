@@ -35,6 +35,13 @@ function StartupCommitReporter() {
 initTheme();
 initAppearanceAttributes();
 
+// The To-dos top-bar toggle is gone (pinned To-dos is always shown); drop its stale preference.
+try {
+  localStorage.removeItem("modus.taskChecklist.visible");
+} catch {
+  // Storage unavailable: nothing to clean up.
+}
+
 // React's DEV build ("Performance Tracks") emits a `performance.measure` per
 // component render. Those entries live forever in the browser's performance
 // buffer — a heavy streaming session accumulates ~1M of them (100MB+ and

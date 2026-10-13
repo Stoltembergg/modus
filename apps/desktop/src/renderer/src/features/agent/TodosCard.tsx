@@ -130,7 +130,7 @@ export function TodosCard({ todos, updating }: { todos: TodoItem[]; updating: bo
         />
       </button>
       <CollapsibleMotion open={open} preset="timeline">
-        <ul className="border-hairline border-t px-3 py-1.5">
+        <ul className="px-3 py-1.5">
           {todos.length === 0 ? (
             <li className="py-1.5 text-fg-faint text-xs" data-todos-empty>
               {creating ? "Waiting for the first items…" : "No to-dos yet."}

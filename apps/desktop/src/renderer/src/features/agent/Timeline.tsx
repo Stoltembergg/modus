@@ -1238,6 +1238,18 @@ export function latestTodosBlock(agentEvents: AgentEventItem[]): TodosBlockItem 
 }
 
 /**
+ * The To-dos pinned above the Composer: only when the agent created a checklist
+ * (todo_write) that has items and is still updating or has unfinished work. It
+ * is always shown then (no global toggle); the card minimizes from its header.
+ */
+export function pinnedTodosForRail(agentEvents: AgentEventItem[]): TodosBlockItem | undefined {
+  const block = latestTodosBlock(agentEvents);
+  if (!block || block.todos.length === 0) return undefined;
+  if (!block.updating && block.todos.every((todo) => todo.status === "completed")) return undefined;
+  return block;
+}
+
+/**
  * Compact "Build this plan" card: the user message for a build action renders
  * as a single line — list glyph, "Build {title}", and to-do count — instead of
  * the raw build instruction text.
