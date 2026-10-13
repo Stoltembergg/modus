@@ -15,13 +15,13 @@ export function ComposerDock({
 
   return (
     <div
-      className="composer-dock-shell surface-raised relative flex flex-col overflow-hidden"
+      className="composer-dock-shell composer-glass relative flex flex-col overflow-hidden"
       data-composer-surface
       data-testid="composer-dock"
       data-ui-surface="raised"
     >
       {hasRails ? (
-        <div className="composer-dock-rails relative z-0 border-b border-hairline-soft px-2 py-1">
+        <div className="composer-dock-rails relative z-0 px-2 pt-1.5 pb-0.5">
           <div className="flex flex-col gap-1">{rails}</div>
         </div>
       ) : null}
