@@ -28,6 +28,7 @@ import type {
   WorkspaceInfo,
 } from "../../../shared/contracts";
 import { shellText } from "../../../shared/shell-text";
+import { HomeBackground } from "../components/background/HomeBackground";
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_TRANSITION, Sidebar } from "../components/Sidebar";
 import type { PrimaryDestination } from "../components/shell/AppRail";
 import { AppShell } from "../components/shell/AppShell";
@@ -1414,6 +1415,7 @@ export function App() {
                                 ease: "easeOut",
                               }}
                             >
+                              <HomeBackground />
                               <div className="relative z-10 w-full max-w-[680px] -translate-y-4">
                                 <HomeComposer
                                   canSubmit={canCreateSession}
