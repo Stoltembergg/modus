@@ -31,9 +31,14 @@ import type {
 } from "../../../shared/contracts";
 import { shellText } from "../../../shared/shell-text";
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_TRANSITION, Sidebar } from "../components/Sidebar";
-import { APP_RAIL_WIDTH, AppRail, type PrimaryDestination } from "../components/shell/AppRail";
+import type { PrimaryDestination } from "../components/shell/AppRail";
 import { AppShell } from "../components/shell/AppShell";
-import { ContextSidebar } from "../components/shell/ContextSidebar";
+import {
+  AppSidebar,
+  appSidebarReservedWidth,
+  readSidebarPinned,
+  writeSidebarPinned,
+} from "../components/shell/AppSidebar";
 import { MainSurface } from "../components/shell/MainSurface";
 import {
   closeSettingsNavigation,
@@ -227,7 +232,12 @@ export function App() {
     primaryNavigationTouchedRef.current = true;
     setPrimaryNavigation((current) => closeSettingsNavigation(current));
   }, []);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Pinned open (300px) vs the 60px hover rail. Default is the rail; the
+  // user's pin choice is remembered across launches.
+  const [sidebarOpen, setSidebarOpen] = useState(readSidebarPinned);
+  useEffect(() => {
+    writeSidebarPinned(sidebarOpen);
+  }, [sidebarOpen]);
   const [sidebarWidth, setSidebarWidth] = useState(300);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [inspectorWidth, setInspectorWidth] = useState(384);
@@ -1138,25 +1148,27 @@ export function App() {
 
   // Each panel may grow only until the OTHER panel + main's reserved floor are
   // accounted for. Until the row is measured, allow the panels' own caps.
-  const sidebarSpace = sidebarOpen ? sidebarWidth : 0;
+  // sidebarOpen = pinned open (300px, in the layout); unpinned = 60px hover rail.
+  // A pinned sidebar that would crush main falls back to the rail.
+  const sidebarFits =
+    layoutWidth === 0 ||
+    layoutWidth >= appSidebarReservedWidth(true) + MAIN_MIN_WIDTH + WORKSPACE_GUTTER * 3;
+  const responsiveSidebarOpen = sidebarOpen && sidebarFits && !settingsOpen;
+  const sidebarSpace = appSidebarReservedWidth(responsiveSidebarOpen);
   const showInspectorForRoute = primaryNavigation.active === "direct-messages" && hasSession;
   const inspectorSpace = showInspectorForRoute && inspectorOpen ? inspectorWidth : 0;
   const workspaceChrome = WORKSPACE_GUTTER * (inspectorSpace > 0 ? 4 : 3);
   const mainSpace = MAIN_MIN_WIDTH + workspaceChrome;
   const inspectorFits =
-    layoutWidth === 0 || layoutWidth >= APP_RAIL_WIDTH + sidebarSpace + inspectorWidth + mainSpace;
-  const sidebarFits =
-    layoutWidth === 0 ||
-    layoutWidth >= APP_RAIL_WIDTH + sidebarWidth + MAIN_MIN_WIDTH + WORKSPACE_GUTTER * 3;
+    layoutWidth === 0 || layoutWidth >= sidebarSpace + inspectorWidth + mainSpace;
   const responsiveInspectorOpen = showInspectorForRoute && inspectorOpen && inspectorFits;
-  const responsiveSidebarOpen = sidebarOpen && sidebarFits;
   const sidebarMaxWidth =
     layoutWidth > 0
-      ? Math.max(SIDEBAR_MIN_WIDTH, layoutWidth - APP_RAIL_WIDTH - inspectorSpace - mainSpace)
+      ? Math.max(SIDEBAR_MIN_WIDTH, layoutWidth - inspectorSpace - mainSpace)
       : Number.POSITIVE_INFINITY;
   const inspectorMaxWidth =
     layoutWidth > 0
-      ? Math.max(INSPECTOR_MIN_WIDTH, layoutWidth - APP_RAIL_WIDTH - sidebarSpace - mainSpace)
+      ? Math.max(INSPECTOR_MIN_WIDTH, layoutWidth - sidebarSpace - mainSpace)
       : Number.POSITIVE_INFINITY;
 
   // When the window (or the other panel) shrinks, pull an over-wide panel back
@@ -1258,13 +1270,89 @@ export function App() {
                         }
                   }
                 >
-                  <AppRail
+                  <AppSidebar
                     active={primaryNavigation.active}
-                    topChromeClearance={!settingsOpen}
+                    canCreateSession={canCreateSession}
                     onNavigate={(destination) =>
                       destination === "settings" ? openSettings() : navigateToPrimary(destination)
                     }
-                  />
+                    onNewMessage={() => openNewChat()}
+                    onNewProfile={() => void openNewProfile()}
+                    onPinnedChange={setSidebarOpen}
+                    pinned={responsiveSidebarOpen}
+                    trafficLightClearance={isMac && !settingsOpen}
+                  >
+                    {settingsOpen ? null : (
+                      <Sidebar
+                        embedded
+                        section={
+                          primaryNavigation.active === "groups" ? "groups" : "direct-messages"
+                        }
+                        activityBySession={activityBySession}
+                        agentSessions={rootSessions}
+                        canCreateSession={canCreateSession}
+                        onArchiveSession={(session) => void archiveSession(session)}
+                        onDeleteSession={(session) => void deleteSession(session)}
+                        onListArchivedSessions={(workspaceId) =>
+                          window.modus.agent.listArchived(workspaceId)
+                        }
+                        onPinProject={(id, pinned) => void pinProject(id, pinned)}
+                        onPinSession={(session, pinned) => void pinSession(session, pinned)}
+                        onRenameSession={(id, title) => void renameSession(id, title)}
+                        onRenameProject={(id, displayName) => void renameProject(id, displayName)}
+                        onArchiveProjectChats={(id) => void archiveProjectChats(id)}
+                        onDeleteProjectChats={(id) => void deleteProjectChats(id)}
+                        onRemoveProject={(id) => void removeProject(id)}
+                        onRestoreSession={(session) => void restoreSession(session)}
+                        onRevealProject={(id) => void revealProject(id)}
+                        onNewSession={() => openNewChat()}
+                        onNewWorkspaceSession={(workspace) => openNewChat(workspace)}
+                        onOpenWorkspace={() => void openWorkspace()}
+                        onOpenSettings={() => openSettings()}
+                        onSelectSession={selectSession}
+                        onWidthChange={setSidebarWidth}
+                        activeSessionId={activeSessionId}
+                        maxWidth={sidebarMaxWidth}
+                        open={responsiveSidebarOpen}
+                        width={sidebarWidth}
+                        workspaces={workspaces}
+                        groups={agentGroups}
+                        groupModels={groupModels}
+                        defaultGroupModelId={model || undefined}
+                        isGroupWorking={isGroupWorking}
+                        isGroupWaiting={isGroupWaiting}
+                        activeGroupId={activeGroup?.id}
+                        onSelectGroup={selectGroup}
+                        activeWorkspaceId={
+                          activeWorkspace?.inbox ? null : (activeWorkspace?.id ?? null)
+                        }
+                        onCreateGroup={createGroup}
+                        newGroupServices={newGroupServices}
+                        onUpdateGroupMembers={updateGroupMembers}
+                        onRenameGroup={(id, name) =>
+                          void runGroupAction(() => window.modus.group.rename({ id, name }))
+                        }
+                        onDeleteGroup={(id) =>
+                          void runGroupAction(() => window.modus.group.remove(id))
+                        }
+                        onRemoveGroupMember={(groupId, sessionId) =>
+                          void runGroupAction(() =>
+                            window.modus.group.removeMember({ groupId, sessionId }),
+                          )
+                        }
+                        onSetGroupLead={(groupId, sessionId) =>
+                          void runGroupAction(() =>
+                            window.modus.group.setLead({ groupId, sessionId }),
+                          )
+                        }
+                        groupMemberStates={groupMemberStates}
+                        onOpenAgentChat={(agentId) => void openAgentChat(agentId)}
+                        onEditAgent={(agentId) => void editAgent(agentId)}
+                        onAddAgent={(groupId) => setAgentDialog({ groupId })}
+                        onNewProfile={() => void openNewProfile()}
+                      />
+                    )}
+                  </AppSidebar>
                   {settingsOpen ? (
                     <Suspense fallback={<ModusLoadingFallback />}>
                       <SettingsPanel
@@ -1279,75 +1367,6 @@ export function App() {
                     </Suspense>
                   ) : (
                     <>
-                      <ContextSidebar>
-                        <Sidebar
-                          section={
-                            primaryNavigation.active === "groups" ? "groups" : "direct-messages"
-                          }
-                          activityBySession={activityBySession}
-                          agentSessions={rootSessions}
-                          canCreateSession={canCreateSession}
-                          onArchiveSession={(session) => void archiveSession(session)}
-                          onDeleteSession={(session) => void deleteSession(session)}
-                          onListArchivedSessions={(workspaceId) =>
-                            window.modus.agent.listArchived(workspaceId)
-                          }
-                          onPinProject={(id, pinned) => void pinProject(id, pinned)}
-                          onPinSession={(session, pinned) => void pinSession(session, pinned)}
-                          onRenameSession={(id, title) => void renameSession(id, title)}
-                          onRenameProject={(id, displayName) => void renameProject(id, displayName)}
-                          onArchiveProjectChats={(id) => void archiveProjectChats(id)}
-                          onDeleteProjectChats={(id) => void deleteProjectChats(id)}
-                          onRemoveProject={(id) => void removeProject(id)}
-                          onRestoreSession={(session) => void restoreSession(session)}
-                          onRevealProject={(id) => void revealProject(id)}
-                          onNewSession={() => openNewChat()}
-                          onNewWorkspaceSession={(workspace) => openNewChat(workspace)}
-                          onOpenWorkspace={() => void openWorkspace()}
-                          onOpenSettings={() => openSettings()}
-                          onSelectSession={selectSession}
-                          onWidthChange={setSidebarWidth}
-                          activeSessionId={activeSessionId}
-                          maxWidth={sidebarMaxWidth}
-                          open={responsiveSidebarOpen}
-                          width={sidebarWidth}
-                          workspaces={workspaces}
-                          groups={agentGroups}
-                          groupModels={groupModels}
-                          defaultGroupModelId={model || undefined}
-                          isGroupWorking={isGroupWorking}
-                          isGroupWaiting={isGroupWaiting}
-                          activeGroupId={activeGroup?.id}
-                          onSelectGroup={selectGroup}
-                          activeWorkspaceId={
-                            activeWorkspace?.inbox ? null : (activeWorkspace?.id ?? null)
-                          }
-                          onCreateGroup={createGroup}
-                          newGroupServices={newGroupServices}
-                          onUpdateGroupMembers={updateGroupMembers}
-                          onRenameGroup={(id, name) =>
-                            void runGroupAction(() => window.modus.group.rename({ id, name }))
-                          }
-                          onDeleteGroup={(id) =>
-                            void runGroupAction(() => window.modus.group.remove(id))
-                          }
-                          onRemoveGroupMember={(groupId, sessionId) =>
-                            void runGroupAction(() =>
-                              window.modus.group.removeMember({ groupId, sessionId }),
-                            )
-                          }
-                          onSetGroupLead={(groupId, sessionId) =>
-                            void runGroupAction(() =>
-                              window.modus.group.setLead({ groupId, sessionId }),
-                            )
-                          }
-                          groupMemberStates={groupMemberStates}
-                          onOpenAgentChat={(agentId) => void openAgentChat(agentId)}
-                          onEditAgent={(agentId) => void editAgent(agentId)}
-                          onAddAgent={(groupId) => setAgentDialog({ groupId })}
-                          onNewProfile={() => void openNewProfile()}
-                        />
-                      </ContextSidebar>
                       {/* Keeps the dialog mounted for its exit spring after onOpenChange(false). */}
                       <AnimatePresence>
                         {agentDialog?.profile ? (
@@ -1412,8 +1431,6 @@ export function App() {
                             "toolbar-row relative z-10 flex shrink-0 items-center pr-3 pl-1",
                             (isMac || windowChrome === "windows-overlay") && "app-drag",
                             windowChrome === "windows-overlay" && "pr-[138px]",
-                            // Traffic lights sit in this row when the left sidebar is closed.
-                            isMac && !responsiveSidebarOpen && "pl-[76px]",
                           )}
                         >
                           <div className="app-no-drag flex min-w-0 flex-1 items-center gap-1.5">
