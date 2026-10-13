@@ -151,6 +151,8 @@ type AgentEventPayload =
       sessionId: string;
       requestId: string;
       decision: PermissionDecision["decision"];
+      /** True when the request timed out instead of being answered. */
+      expired?: boolean;
     }
   | { type: "question.requested"; sessionId: string; request: QuestionRequest }
   | {

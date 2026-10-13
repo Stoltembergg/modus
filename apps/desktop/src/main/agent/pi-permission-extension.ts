@@ -6,6 +6,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { shouldPrompt } from "../../shared/approval";
 import type { AgentEvent } from "../../shared/contracts";
+import { describeToolCall } from "../../shared/permission-summary";
 import { requestPermission } from "../permissions/permission-broker";
 import { findWorkspaceAllowDecision, getApprovalMode } from "../permissions/permission-store";
 import { getActiveAgentRun } from "./agent-run-store";
@@ -80,6 +81,10 @@ export function createModusPermissionExtension(
         return undefined;
       }
 
+      const described = describeToolCall(event.toolName, event.input);
+      // Snapshot of the exact payload the user approves; re-checked below so
+      // the code that executes is byte-identical to the code on the card.
+      const approvedPayload = JSON.stringify(event.input);
       const run = getActiveAgentRun(sessionId);
       const permissionInput: Parameters<typeof requestPermission>[0] = {
         sessionId,
@@ -88,6 +93,8 @@ export function createModusPermissionExtension(
         action,
         target,
         reason: `Blocked dangerous ${event.toolName} tool call before execution.`,
+        summary: described.summary,
+        ...(described.details === undefined ? {} : { details: described.details }),
         emit,
       };
       if (run?.id !== undefined) permissionInput.runId = run.id;
@@ -103,6 +110,13 @@ export function createModusPermissionExtension(
         // The denial itself is already visible via permission.resolved and the
         // failed tool card.
         return { block: true, reason: `Denied by user: ${target}` };
+      }
+      if (
+        JSON.stringify(event.input) !== approvedPayload ||
+        describeToolCall(event.toolName, event.input).details !== described.details
+      ) {
+        repeatGuard?.cancelToolCall(event.toolCallId);
+        return { block: true, reason: "Tool input changed after approval; blocked." };
       }
 
       return undefined;

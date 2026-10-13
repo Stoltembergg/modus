@@ -201,7 +201,7 @@ describe("ActivityTimeline", () => {
     expect(onOpenSubagent).toHaveBeenCalledWith("child-session");
   });
 
-  it("hides to-do cards with the checklist toggle and says so when nothing else is left", async () => {
+  it("never duplicates the to-do list in Activity (it lives above the Composer)", async () => {
     const hub = new AgentEventHub();
     render(<ActivityTimeline cwd="/repo" hub={hub} sessionId="s" />);
     hub.seedHistory("s", [
@@ -215,13 +215,9 @@ describe("ActivityTimeline", () => {
         },
       },
     ]);
-    await waitFor(() => expect(screen.getByTestId("activity-blocks")).toBeTruthy());
-    act(() => setTaskChecklistVisible(false));
-    expect(screen.queryByTestId("activity-blocks")).toBeNull();
-    expect(screen.getByText("The task checklist is hidden.")).toBeTruthy();
-    act(() => setTaskChecklistVisible(true));
-    expect(screen.getByTestId("activity-blocks")).toBeTruthy();
-    localStorage.clear();
-    reloadTaskChecklistPreference();
+    await waitFor(() =>
+      expect(screen.getByTestId("activity-event-count").textContent).toMatch(/1/),
+    );
+    expect(screen.queryByText("Write tests")).toBeNull();
   });
 });

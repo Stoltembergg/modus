@@ -174,7 +174,7 @@ export type CompactionBlockItem = {
   detail?: string;
 };
 
-type TodosBlockItem = {
+export type TodosBlockItem = {
   id: string;
   type: "todos";
   todos: TodoItem[];
@@ -874,29 +874,12 @@ export function buildBlocks(
     }
 
     if (event.type === "harness.decision") {
-      const action = event.decision.action.replace(/_/g, " ");
-      const reasons = event.decision.reasonCodes.slice(0, 3).join(", ");
-      blocks.push({
-        body: reasons
-          ? `${action} · ${event.decision.mode} · ${reasons}`
-          : `${action} · ${event.decision.mode}`,
-        id,
-        title: "adaptive decision",
-        type: "notice",
-      });
+      // Internal routing telemetry (action · mode · reason codes) — never user-facing.
       continue;
     }
 
     if (event.type === "harness.failure") {
-      const attempt = event.attempt;
-      const hypothesis = attempt.hypothesisCode ? ` · ${attempt.hypothesisCode}` : "";
-      blocks.push({
-        body: `${attempt.strategyCode}${hypothesis} · ${attempt.status} · ${attempt.reasonCode}`,
-        id,
-        title: "strategy attempt",
-        type: "notice",
-        isError: attempt.status === "failed" || attempt.status === "discarded",
-      });
+      // Internal strategy bookkeeping (strategy · status · reason codes) — not user-facing.
       continue;
     }
 
@@ -1230,9 +1213,22 @@ export function buildVisibleTimelineBlocks(
   agentEvents: AgentEventItem[],
   completeRunSources?: RunSourcesSnapshot,
 ): TimelineBlock[] {
-  return visibleTimelineBlocks(
-    groupTurnWork(attachTurnActions(buildBlocks(agentEvents, completeRunSources))),
+  // To-dos live in the pinned panel above the Composer, never in the transcript
+  // or Activity — see latestTodosBlock().
+  const blocks = buildBlocks(agentEvents, completeRunSources).filter(
+    (block) => block.type !== "todos",
   );
+  return visibleTimelineBlocks(groupTurnWork(attachTurnActions(blocks)));
+}
+
+/** Latest to-do snapshot for the panel pinned above the Composer. */
+export function latestTodosBlock(agentEvents: AgentEventItem[]): TodosBlockItem | undefined {
+  const blocks = buildBlocks(agentEvents);
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index];
+    if (block?.type === "todos") return block;
+  }
+  return undefined;
 }
 
 /**

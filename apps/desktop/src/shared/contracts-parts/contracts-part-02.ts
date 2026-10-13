@@ -93,6 +93,12 @@ export type PermissionRequest = {
   target: string;
   reason: string;
   severity?: "medium" | "high" | "danger";
+  /** App-generated sentence from tool name + arguments (never model text). */
+  summary?: string;
+  /** Exact payload that will execute, shown behind "Show details". */
+  details?: string;
+  /** Epoch ms after which the main process auto-denies the request. */
+  expiresAt?: number;
 };
 
 /* ── Interactive questions (ask_user, Cursor-style) ────────────────────── */

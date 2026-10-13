@@ -66,3 +66,50 @@ describe("ApprovalPanel (adapter)", () => {
     expect(screen.getAllByText("shell.execute")).toHaveLength(2);
   });
 });
+
+describe("ApprovalPanel expiry and app-generated summary", () => {
+  const code = "document.querySelector('#go')?.click();\n  return  `ok`; // \u00e9";
+  const cdpRequest: PermissionRequest = {
+    id: "p2",
+    sessionId: "s1",
+    action: "browser.control",
+    target: "{}",
+    reason: "agent text that must not drive the card",
+    summary: "Run JavaScript in tab tab-2",
+    details: code,
+    expiresAt: 10_000,
+  };
+
+  it("shows the expired state and disables Submit once expiresAt passes", async () => {
+    const onDecide = vi.fn();
+    render(<ApprovalPanel now={() => 20_000} onDecide={onDecide} request={cdpRequest} />);
+    expect(screen.getByText("Expired")).toBeTruthy();
+    const submit = screen.getByRole("button", { name: /Submit/ }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    await act(async () => {
+      fireEvent.click(submit);
+    });
+    expect(onDecide).not.toHaveBeenCalled();
+  });
+
+  it("flips to expired when the main process reports the request inactive", async () => {
+    const onDecide = vi
+      .fn()
+      .mockRejectedValue(new Error("Permission request is no longer active."));
+    render(<ApprovalPanel now={() => 0} onDecide={onDecide} request={cdpRequest} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Submit/ }));
+    });
+    expect(screen.getByText("Expired")).toBeTruthy();
+    expect(screen.queryByText(/no longer active/)).toBeNull();
+  });
+
+  it("shows the app summary and the exact code behind Show details", () => {
+    render(<ApprovalPanel now={() => 0} onDecide={vi.fn()} request={cdpRequest} />);
+    expect(screen.getByText("Run JavaScript in tab tab-2")).toBeTruthy();
+    expect(screen.queryByText(/agent text/)).toBeNull();
+    expect(screen.queryByTestId("approval-details")).toBeNull();
+    fireEvent.click(screen.getByTestId("approval-details-toggle"));
+    expect(screen.getByTestId("approval-details").textContent).toBe(code);
+  });
+});

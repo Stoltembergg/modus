@@ -446,6 +446,10 @@ export type QuestionCardApprovalProps = {
   reason?: string;
   /** The draft / target being approved, shown in a code block. */
   target?: string;
+  /** Exact payload (e.g. code) that will run, behind a "Show details" toggle. */
+  details?: string;
+  /** Message shown in place of the actions once the card expired. */
+  expiredMessage?: string;
   choices: ApprovalChoice[];
   defaultChoice: string;
   /** Choice sent by the Deny button and Escape. */
@@ -465,6 +469,8 @@ function ApprovalMode({
   badge,
   reason,
   target,
+  details,
+  expiredMessage,
   choices,
   defaultChoice,
   denyChoice,
@@ -479,6 +485,7 @@ function ApprovalMode({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [note, setNote] = useState("");
+  const [showDetails, setShowDetails] = useState(false);
   const panelRef = useRef<HTMLElement | null>(null);
   const reduceMotion = useReducedMotion();
   const locked = status !== "pending" || submitting;
@@ -554,6 +561,34 @@ function ApprovalMode({
           <div className="mt-2.5 min-w-0 rounded-md border border-hairline-soft bg-code-bg px-3 py-2 font-mono text-xs text-fg wrap-break-word">
             {target}
           </div>
+        ) : null}
+
+        {details ? (
+          <div className="mt-2">
+            <button
+              aria-expanded={showDetails}
+              className="text-xs text-fg-faint transition-colors hover:text-fg-subtle"
+              data-testid="approval-details-toggle"
+              onClick={() => setShowDetails((value) => !value)}
+              type="button"
+            >
+              {showDetails ? "Hide details" : "Show details"}
+            </button>
+            {showDetails ? (
+              <pre
+                className="mt-1.5 max-h-64 min-w-0 overflow-auto whitespace-pre-wrap rounded-md bg-code-bg px-3 py-2 font-mono text-xs text-fg"
+                data-testid="approval-details"
+              >
+                {details}
+              </pre>
+            ) : null}
+          </div>
+        ) : null}
+
+        {status === "expired" && expiredMessage ? (
+          <p className="mt-2.5 text-xs text-fg-subtle" role="status">
+            {expiredMessage}
+          </p>
         ) : null}
 
         <div className="mt-2.5 flex flex-col gap-1">

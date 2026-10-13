@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { PermissionDecision, PermissionRequest } from "../../../../shared/contracts";
 import { type ApprovalChoice, QuestionCard } from "../../components/question/QuestionCard";
 
@@ -6,6 +7,8 @@ type ApprovalDecision = PermissionDecision["decision"];
 type ApprovalPanelProps = {
   request: PermissionRequest;
   onDecide(request: PermissionRequest, decision: ApprovalDecision): Promise<void> | void;
+  /** Injectable clock for tests. */
+  now?: () => number;
 };
 
 type ApprovalOption = ApprovalChoice & { id: ApprovalDecision };
@@ -31,13 +34,37 @@ const APPROVAL_OPTIONS: ApprovalOption[] = [
   },
 ];
 
+export const APPROVAL_EXPIRED_MESSAGE =
+  "This request expired and was denied automatically. The agent can ask again.";
+
+function isInactiveError(caught: unknown): boolean {
+  const message = caught instanceof Error ? caught.message : String(caught);
+  return /no longer active/i.test(message);
+}
+
 /**
  * Permission request card — thin adapter over the unified Question Tool card in
- * approval mode. Keys 1–3 pick an option, Enter submits it, Escape / Deny send
- * "deny"; a rejected onDecide re-enables the card and shows the error.
+ * approval mode. The visible sentence is app-generated (`request.summary`);
+ * the exact payload sits behind "Show details". Once the request expires the
+ * card locks instead of letting Submit hit an inactive request.
  */
-export function ApprovalPanel({ onDecide, request }: ApprovalPanelProps) {
-  const target = request.target.trim() || request.action;
+export function ApprovalPanel({ onDecide, request, now = Date.now }: ApprovalPanelProps) {
+  const [expired, setExpired] = useState(
+    () => request.expiresAt !== undefined && now() >= request.expiresAt,
+  );
+
+  useEffect(() => {
+    if (expired || request.expiresAt === undefined) return;
+    const remaining = request.expiresAt - now();
+    if (remaining <= 0) {
+      setExpired(true);
+      return;
+    }
+    const timer = setTimeout(() => setExpired(true), remaining);
+    return () => clearTimeout(timer);
+  }, [expired, request.expiresAt, now]);
+
+  const target = request.summary ? undefined : request.target.trim() || request.action;
   return (
     <QuestionCard
       approveLabel="Submit"
@@ -45,14 +72,30 @@ export function ApprovalPanel({ onDecide, request }: ApprovalPanelProps) {
       choices={APPROVAL_OPTIONS}
       defaultChoice="allow-once"
       denyChoice="deny"
+      expiredMessage={APPROVAL_EXPIRED_MESSAGE}
       mode="approval"
-      onDecide={(choiceId) => {
+      onDecide={async (choiceId) => {
         const option = APPROVAL_OPTIONS.find((item) => item.id === choiceId);
-        return option ? onDecide(request, option.id) : undefined;
+        if (!option) return;
+        if (request.expiresAt !== undefined && now() >= request.expiresAt) {
+          setExpired(true);
+          return;
+        }
+        try {
+          await onDecide(request, option.id);
+        } catch (caught) {
+          if (isInactiveError(caught)) {
+            setExpired(true);
+            return;
+          }
+          throw caught;
+        }
       }}
-      reason={request.reason}
-      target={target}
+      status={expired ? "expired" : "pending"}
       title={approvalTitle(request.action)}
+      reason={request.summary ?? request.reason}
+      {...(target ? { target } : {})}
+      {...(request.details ? { details: request.details } : {})}
     />
   );
 }
