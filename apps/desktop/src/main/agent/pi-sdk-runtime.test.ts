@@ -195,7 +195,7 @@ const todoToolRuntime = await import("./tools/todo-tools");
 const permissionExtension = await import("./pi-permission-extension");
 const permissionStore = await import("../permissions/permission-store");
 const permissionBroker = await import("../permissions/permission-broker");
-const hyperPlanDraftStore = await import("./harness/hyperplan-draft-store");
+const planBuildStore = await import("./harness/plan-build-store");
 const { setFeatureFlagOverrides, resetFeatureFlagOverrides } = await import(
   "./harness/feature-flags"
 );
@@ -1812,8 +1812,8 @@ describe("PiSdkRuntime", () => {
   it.each([
     "selected",
     "original",
-  ] as const)("starts a fresh %s HyperPlan build without clarifying an ambiguous plan title", async (api) => {
-    const sessionId = `hyperplan-intent-${api}-${crypto.randomUUID()}`;
+  ] as const)("starts a fresh %s PlanBuild build without clarifying an ambiguous plan title", async (api) => {
+    const sessionId = `plan-build-intent-${api}-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
     const plan = writePlan(join(userData, "plans"), {
@@ -1840,7 +1840,7 @@ describe("PiSdkRuntime", () => {
       planId: plan.id,
       planFingerprint: fingerprintPlanSource(plan),
     } as const;
-    const started = await hyperPlanDraftStore.runHyperPlanStartOperation({
+    const started = await planBuildStore.runPlanBuildStartOperation({
       ...operation,
       start: (stored, onRunCreated) => {
         const startInput = {
@@ -1851,7 +1851,7 @@ describe("PiSdkRuntime", () => {
         };
         return api === "selected"
           ? runtime.startPlanBuild(window, startInput)
-          : runtime.startOriginalPlanBuild(window, startInput);
+          : runtime.startPlanBuild(window, startInput);
       },
     });
 
@@ -1875,7 +1875,7 @@ describe("PiSdkRuntime", () => {
 
   it("rejects an old epoch before it can start through a replacement reservation", async () => {
     const ownerId = 501;
-    const sessionId = `hyperplan-aba-${crypto.randomUUID()}`;
+    const sessionId = `plan-build-aba-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
     const plan = writePlan(join(userData, "plans"), {
@@ -1888,9 +1888,9 @@ describe("PiSdkRuntime", () => {
       spec: { requirements: [], acceptanceCriteria: [], assumptions: [], openQuestions: [] },
     });
     const runtime = new PiSdkRuntime();
-    const oldEpoch = hyperPlanDraftStore.registerHyperPlanDraftOwner(ownerId);
+    const oldEpoch = planBuildStore.registerPlanBuildOwner(ownerId);
     const fingerprint = fingerprintPlanSource(plan);
-    const oldAttempt = hyperPlanDraftStore.runHyperPlanStartOperation({
+    const oldAttempt = planBuildStore.runPlanBuildStartOperation({
       ownerId,
       ownerEpoch: oldEpoch,
       requestId: "same-request",
@@ -1899,7 +1899,7 @@ describe("PiSdkRuntime", () => {
       planId: plan.id,
       planFingerprint: fingerprint,
       start: (operation, onRunCreated) =>
-        runtime.startOriginalPlanBuild(createWindowStub(), {
+        runtime.startPlanBuild(createWindowStub(), {
           ownerId,
           ownerEpoch: oldEpoch,
           requestId: "same-request",
@@ -1911,16 +1911,16 @@ describe("PiSdkRuntime", () => {
           onRunCreated,
         }),
     });
-    expect(hyperPlanDraftStore.invalidateHyperPlanDraftOwner(ownerId, oldEpoch)).toBe(true);
+    expect(planBuildStore.invalidatePlanBuildOwner(ownerId, oldEpoch)).toBe(true);
 
-    const newEpoch = hyperPlanDraftStore.registerHyperPlanDraftOwner(ownerId);
+    const newEpoch = planBuildStore.registerPlanBuildOwner(ownerId);
     let finishNew!: (result: {
       sessionId: string;
       planId: string;
       planFingerprint: string;
       runId: string;
     }) => void;
-    const newAttempt = hyperPlanDraftStore.runHyperPlanStartOperation({
+    const newAttempt = planBuildStore.runPlanBuildStartOperation({
       ownerId,
       ownerEpoch: newEpoch,
       requestId: "same-request",
@@ -1936,7 +1936,7 @@ describe("PiSdkRuntime", () => {
     await expect(oldAttempt).rejects.toThrow(/reservation/i);
     expect(getActiveAgentRun(sessionId)).toBeUndefined();
     expect(
-      hyperPlanDraftStore.ownsHyperPlanStartReservation({
+      planBuildStore.ownsPlanBuildStartReservation({
         ownerId,
         ownerEpoch: newEpoch,
         requestId: "same-request",
@@ -1944,20 +1944,20 @@ describe("PiSdkRuntime", () => {
       }),
     ).toBe(true);
     expect(
-      hyperPlanDraftStore.ownsHyperPlanStartReservation({
+      planBuildStore.ownsPlanBuildStartReservation({
         ownerId,
         ownerEpoch: oldEpoch,
         requestId: "same-request",
         sessionId,
       }),
     ).toBe(false);
-    expect(hyperPlanDraftStore.invalidateHyperPlanDraftOwner(ownerId, newEpoch)).toBe(true);
+    expect(planBuildStore.invalidatePlanBuildOwner(ownerId, newEpoch)).toBe(true);
     finishNew({ sessionId, planId: plan.id, planFingerprint: fingerprint, runId: "never-created" });
     await expect(newAttempt).resolves.toMatchObject({ runId: "never-created" });
   });
 
-  it("rejects a HyperPlan start when the selected plan fingerprint is stale", async () => {
-    const sessionId = `hyperplan-stale-start-${crypto.randomUUID()}`;
+  it("rejects a PlanBuild start when the selected plan fingerprint is stale", async () => {
+    const sessionId = `plan-build-stale-start-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
     const runtime = new PiSdkRuntime() as InstanceType<typeof PiSdkRuntime> & {
@@ -1983,8 +1983,8 @@ describe("PiSdkRuntime", () => {
     expect(getActiveAgentRun(sessionId)).toBeUndefined();
   });
 
-  it("starts one fresh HyperPlan run and replays the same run.started after send failure", async () => {
-    const sessionId = `hyperplan-start-replay-${crypto.randomUUID()}`;
+  it("starts one fresh PlanBuild run and replays the same run.started after send failure", async () => {
+    const sessionId = `plan-build-start-replay-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
     const plansRoot = join(userData, "plans");
@@ -2048,12 +2048,12 @@ describe("PiSdkRuntime", () => {
       planFingerprint: fingerprintPlanSource(plan),
     };
     const invoke = (existingRunId?: string) =>
-      hyperPlanDraftStore.runHyperPlanStartOperation({
+      planBuildStore.runPlanBuildStartOperation({
         ...operation,
         start: (stored, onRunCreated) =>
-          runtime.startOriginalPlanBuild(window, {
+          runtime.startPlanBuild(window, {
             ...operation,
-            idempotencyKey: "stable-hyperplan-event",
+            idempotencyKey: "stable-plan-build-event",
             ...((existingRunId ?? stored.runId)
               ? { existingRunId: existingRunId ?? stored.runId }
               : {}),
@@ -2063,16 +2063,16 @@ describe("PiSdkRuntime", () => {
 
     const firstStart = invoke();
     await createSessionCalled;
-    expect(hyperPlanDraftStore.isHyperPlanSessionReserved(sessionId)).toBe(true);
+    expect(planBuildStore.isPlanBuildSessionReserved(sessionId)).toBe(true);
     await expect(
       runtime.prompt(window, {
         sessionId,
         message: "Must not become a follow-up.",
         context: [],
       }),
-    ).rejects.toThrow(/HyperPlan choice is pending/i);
+    ).rejects.toThrow(/PlanBuild build start is pending/i);
     expect(() =>
-      hyperPlanDraftStore.runHyperPlanStartOperation({
+      planBuildStore.runPlanBuildStartOperation({
         ...operation,
         requestId: "competing-start-request",
         start: async () => ({
@@ -2091,8 +2091,8 @@ describe("PiSdkRuntime", () => {
     expect(persistedBeforeReplay).toBeDefined();
     const started = await invoke();
     expect(started).toMatchObject({ sessionId, planId: plan.id });
-    expect(getAgentRun(started.runId)?.userMessageId).toBe("hyperplan:stable-hyperplan-event");
-    expect(hyperPlanDraftStore.isHyperPlanSessionReserved(sessionId)).toBe(true);
+    expect(getAgentRun(started.runId)?.userMessageId).toBe("plan-build:stable-plan-build-event");
+    expect(planBuildStore.isPlanBuildSessionReserved(sessionId)).toBe(true);
     expect(getActiveAgentRun(sessionId)?.id).toBe(started.runId);
     expect(
       send.mock.calls.some(
@@ -2104,7 +2104,7 @@ describe("PiSdkRuntime", () => {
     await piPromptCalled;
     resolvePiPrompt();
     await vi.waitFor(() =>
-      expect(hyperPlanDraftStore.isHyperPlanSessionReserved(sessionId)).toBe(false),
+      expect(planBuildStore.isPlanBuildSessionReserved(sessionId)).toBe(false),
     );
     const rows = getDatabase()
       .prepare(
@@ -2130,7 +2130,7 @@ describe("PiSdkRuntime", () => {
   });
 
   it("releases pre-run reservations and deduplicates a persisted message.started on retry", async () => {
-    const sessionId = `hyperplan-message-retry-${crypto.randomUUID()}`;
+    const sessionId = `plan-build-message-retry-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
     const plan = writePlan(join(userData, "plans"), {
@@ -2161,10 +2161,10 @@ describe("PiSdkRuntime", () => {
       planFingerprint: fingerprintPlanSource(plan),
     };
     const invoke = () =>
-      hyperPlanDraftStore.runHyperPlanStartOperation({
+      planBuildStore.runPlanBuildStartOperation({
         ...operation,
         start: (_stored, onRunCreated) =>
-          runtime.startOriginalPlanBuild(window, {
+          runtime.startPlanBuild(window, {
             ...operation,
             idempotencyKey: "message-retry-operation",
             onRunCreated,
@@ -2177,7 +2177,7 @@ describe("PiSdkRuntime", () => {
         runtime as unknown as { preflightReservations: Map<string, symbol> }
       ).preflightReservations.has(sessionId),
     ).toBe(false);
-    expect(hyperPlanDraftStore.isHyperPlanSessionReserved(sessionId)).toBe(false);
+    expect(planBuildStore.isPlanBuildSessionReserved(sessionId)).toBe(false);
     const before = getDatabase()
       .prepare("select id from agent_events where session_id = ? and type = 'message.started'")
       .all(sessionId) as Array<{ id: string }>;
@@ -2193,7 +2193,7 @@ describe("PiSdkRuntime", () => {
   });
 
   it("settles the same run when a post-acknowledgement busy send throws", async () => {
-    const sessionId = `hyperplan-post-start-failure-${crypto.randomUUID()}`;
+    const sessionId = `plan-build-post-start-failure-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
     const plan = writePlan(join(userData, "plans"), {
@@ -2224,10 +2224,10 @@ describe("PiSdkRuntime", () => {
       planFingerprint: fingerprintPlanSource(plan),
     };
     const invoke = () =>
-      hyperPlanDraftStore.runHyperPlanStartOperation({
+      planBuildStore.runPlanBuildStartOperation({
         ...operation,
         start: (stored, onRunCreated) =>
-          runtime.startOriginalPlanBuild(window, {
+          runtime.startPlanBuild(window, {
             ...operation,
             idempotencyKey: "post-start-failure-operation",
             ...(stored.runId ? { existingRunId: stored.runId } : {}),
@@ -2250,7 +2250,7 @@ describe("PiSdkRuntime", () => {
         runtime as unknown as { preflightReservations: Map<string, symbol> }
       ).preflightReservations.has(sessionId),
     ).toBe(false);
-    expect(hyperPlanDraftStore.isHyperPlanSessionReserved(sessionId)).toBe(false);
+    expect(planBuildStore.isPlanBuildSessionReserved(sessionId)).toBe(false);
     expect((await invoke()).runId).toBe(started.runId);
     expect((await runtime.listRuns(sessionId)).map((run) => run.id)).toEqual([started.runId]);
     expect(
@@ -2260,8 +2260,8 @@ describe("PiSdkRuntime", () => {
     ).toHaveLength(1);
   });
 
-  it("settles a created HyperPlan run when reading its spec fails before run.started", async () => {
-    const sessionId = `hyperplan-spec-read-failure-${crypto.randomUUID()}`;
+  it("settles a created PlanBuild run when reading its spec fails before run.started", async () => {
+    const sessionId = `plan-build-spec-read-failure-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
     const plan = writePlan(join(userData, "plans"), {
@@ -2298,10 +2298,10 @@ describe("PiSdkRuntime", () => {
     };
 
     await expect(
-      hyperPlanDraftStore.runHyperPlanStartOperation({
+      planBuildStore.runPlanBuildStartOperation({
         ...operation,
         start: (_stored, onRunCreated) =>
-          runtime.startOriginalPlanBuild(createWindowStub(), {
+          runtime.startPlanBuild(createWindowStub(), {
             ...operation,
             idempotencyKey: "spec-read-failure-operation",
             onRunCreated,
@@ -2326,7 +2326,7 @@ describe("PiSdkRuntime", () => {
         runtime as unknown as { preflightReservations: Map<string, symbol> }
       ).preflightReservations.has(sessionId),
     ).toBe(false);
-    expect(hyperPlanDraftStore.isHyperPlanSessionReserved(sessionId)).toBe(false);
+    expect(planBuildStore.isPlanBuildSessionReserved(sessionId)).toBe(false);
     expect((await runtime.listRuns(sessionId)).map((run) => run.id)).toEqual([createdRunId]);
     expect(
       getDatabase()
@@ -2424,8 +2424,8 @@ describe("PiSdkRuntime", () => {
     expect(getActiveAgentRun(sessionId)).toBeUndefined();
   });
 
-  it("settles a replayed HyperPlan run when setup fails before this attempt emits run.started", async () => {
-    const sessionId = `hyperplan-replay-setup-failure-${crypto.randomUUID()}`;
+  it("settles a replayed PlanBuild run when setup fails before this attempt emits run.started", async () => {
+    const sessionId = `plan-build-replay-setup-failure-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
     const plan = writePlan(join(userData, "plans"), {
@@ -2465,10 +2465,10 @@ describe("PiSdkRuntime", () => {
       planFingerprint: fingerprintPlanSource(plan),
     };
     const invoke = () =>
-      hyperPlanDraftStore.runHyperPlanStartOperation({
+      planBuildStore.runPlanBuildStartOperation({
         ...operation,
         start: (stored, onRunCreated) =>
-          runtime.startOriginalPlanBuild(window, {
+          runtime.startPlanBuild(window, {
             ...operation,
             idempotencyKey: "replay-setup-failure",
             ...(stored.runId ? { existingRunId: stored.runId } : {}),
@@ -2483,7 +2483,7 @@ describe("PiSdkRuntime", () => {
 
     expect((await runtime.listRuns(sessionId)).map(({ id }) => id)).toEqual([originalRunId]);
     expect(getAgentRun(originalRunId ?? "")?.status).toBe("failed");
-    expect(hyperPlanDraftStore.isHyperPlanSessionReserved(sessionId)).toBe(false);
+    expect(planBuildStore.isPlanBuildSessionReserved(sessionId)).toBe(false);
     expect(getActiveAgentRun(sessionId)).toBeUndefined();
     expect(
       (runtime as unknown as { runOutputTrackers: Map<string, unknown> }).runOutputTrackers.has(
@@ -2507,8 +2507,8 @@ describe("PiSdkRuntime", () => {
     ).toHaveLength(1);
   });
 
-  it("settles and releases a HyperPlan run when building status delivery fails", async () => {
-    const sessionId = `hyperplan-building-send-failure-${crypto.randomUUID()}`;
+  it("settles and releases a PlanBuild run when building status delivery fails", async () => {
+    const sessionId = `plan-build-building-send-failure-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
     const plan = writePlan(join(userData, "plans"), {
@@ -2537,10 +2537,10 @@ describe("PiSdkRuntime", () => {
       planId: plan.id,
       planFingerprint: fingerprintPlanSource(plan),
     };
-    const started = await hyperPlanDraftStore.runHyperPlanStartOperation({
+    const started = await planBuildStore.runPlanBuildStartOperation({
       ...operation,
       start: (_stored, onRunCreated) =>
-        runtime.startOriginalPlanBuild(window, {
+        runtime.startPlanBuild(window, {
           ...operation,
           idempotencyKey: "building-send-failure",
           onRunCreated,
@@ -2561,7 +2561,7 @@ describe("PiSdkRuntime", () => {
         runtime as unknown as { preflightReservations: Map<string, symbol> }
       ).preflightReservations.has(sessionId),
     ).toBe(false);
-    expect(hyperPlanDraftStore.isHyperPlanSessionReserved(sessionId)).toBe(false);
+    expect(planBuildStore.isPlanBuildSessionReserved(sessionId)).toBe(false);
     expect((await runtime.listRuns(sessionId)).map((run) => run.id)).toEqual([started.runId]);
     const events = send.mock.calls.map(([, event]) => event as AgentEvent);
     const terminalIndex = events.findIndex((event) => event.type === "run.failed");
@@ -2576,8 +2576,8 @@ describe("PiSdkRuntime", () => {
 
   it.each([
     1, 2,
-  ])("cleans up preflight and HyperPlan reservations when executePrompt plan read %i throws", async (readPoint) => {
-    const sessionId = `hyperplan-preflight-read-${readPoint}-${crypto.randomUUID()}`;
+  ])("cleans up preflight and PlanBuild reservations when executePrompt plan read %i throws", async (readPoint) => {
+    const sessionId = `plan-build-preflight-read-${readPoint}-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
     const plan = writePlan(join(userData, "plans"), {
@@ -2616,10 +2616,10 @@ describe("PiSdkRuntime", () => {
       planFingerprint: fingerprintPlanSource(plan),
     };
     const invoke = () =>
-      hyperPlanDraftStore.runHyperPlanStartOperation({
+      planBuildStore.runPlanBuildStartOperation({
         ...operation,
         start: (_stored, onRunCreated) =>
-          runtime.startOriginalPlanBuild(createWindowStub(), {
+          runtime.startPlanBuild(createWindowStub(), {
             ...operation,
             idempotencyKey: `preflight-read-${readPoint}`,
             onRunCreated,
@@ -2635,7 +2635,7 @@ describe("PiSdkRuntime", () => {
         runtime as unknown as { preflightReservations: Map<string, symbol> }
       ).preflightReservations.has(sessionId),
     ).toBe(false);
-    expect(hyperPlanDraftStore.isHyperPlanSessionReserved(sessionId)).toBe(false);
+    expect(planBuildStore.isPlanBuildSessionReserved(sessionId)).toBe(false);
 
     readSpy.mockRestore();
     const retry = await invoke();
@@ -2644,7 +2644,7 @@ describe("PiSdkRuntime", () => {
   });
 
   it("releases only its preflight reservation when run creation fails and allows retry", async () => {
-    const sessionId = `hyperplan-run-create-failure-${crypto.randomUUID()}`;
+    const sessionId = `plan-build-run-create-failure-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
     const plan = writePlan(join(userData, "plans"), {
@@ -2670,10 +2670,10 @@ describe("PiSdkRuntime", () => {
       throw new Error("run database unavailable");
     });
     const invoke = () =>
-      hyperPlanDraftStore.runHyperPlanStartOperation({
+      planBuildStore.runPlanBuildStartOperation({
         ...operation,
         start: (_stored, onRunCreated) =>
-          runtime.startOriginalPlanBuild(createWindowStub(), {
+          runtime.startPlanBuild(createWindowStub(), {
             ...operation,
             idempotencyKey: "run-create-failure",
             onRunCreated,
@@ -2688,7 +2688,7 @@ describe("PiSdkRuntime", () => {
         runtime as unknown as { preflightReservations: Map<string, symbol> }
       ).preflightReservations.has(sessionId),
     ).toBe(false);
-    expect(hyperPlanDraftStore.isHyperPlanSessionReserved(sessionId)).toBe(false);
+    expect(planBuildStore.isPlanBuildSessionReserved(sessionId)).toBe(false);
     createSpy.mockRestore();
     const retry = await invoke();
     expect(getAgentRun(retry.runId)).toMatchObject({ id: retry.runId, sessionId });
@@ -2701,8 +2701,8 @@ describe("PiSdkRuntime", () => {
     );
   });
 
-  it("rejects a HyperPlan build start when an authoritative run is already active", async () => {
-    const sessionId = `hyperplan-busy-start-${crypto.randomUUID()}`;
+  it("rejects a PlanBuild build start when an authoritative run is already active", async () => {
+    const sessionId = `plan-build-busy-start-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
     const plan = writePlan(join(userData, "plans"), {
@@ -2722,7 +2722,7 @@ describe("PiSdkRuntime", () => {
     const activeRun = createAgentRun({ sessionId, prompt: "Existing work" });
     const runtime = new PiSdkRuntime();
     await expect(
-      hyperPlanDraftStore.runHyperPlanStartOperation({
+      planBuildStore.runPlanBuildStartOperation({
         ownerId: 43,
         requestId: "busy-start",
         kind: "original",
@@ -2730,7 +2730,7 @@ describe("PiSdkRuntime", () => {
         planId: plan.id,
         planFingerprint: fingerprintPlanSource(plan),
         start: (_operation, onRunCreated) =>
-          runtime.startOriginalPlanBuild(createWindowStub(), {
+          runtime.startPlanBuild(createWindowStub(), {
             ownerId: 43,
             requestId: "busy-start",
             sessionId,
@@ -2742,11 +2742,11 @@ describe("PiSdkRuntime", () => {
       }),
     ).rejects.toThrow(/busy/i);
     expect(getActiveAgentRun(sessionId)?.id).toBe(activeRun.id);
-    expect(hyperPlanDraftStore.isHyperPlanSessionReserved(sessionId)).toBe(false);
+    expect(planBuildStore.isPlanBuildSessionReserved(sessionId)).toBe(false);
   });
 
   it("publishes a promoted plan through the persisted runtime event path", () => {
-    const sessionId = `hyperplan-event-${crypto.randomUUID()}`;
+    const sessionId = `plan-build-event-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
     const window = createWindowStub();
@@ -2782,7 +2782,7 @@ describe("PiSdkRuntime", () => {
   });
 
   it("persists at most one plan update across a failed delivery and keyed retry", () => {
-    const sessionId = `hyperplan-delivery-retry-${crypto.randomUUID()}`;
+    const sessionId = `plan-build-delivery-retry-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
     const window = createWindowStub();
@@ -2827,12 +2827,12 @@ describe("PiSdkRuntime", () => {
     });
   });
 
-  it("rejects generic prompts while a HyperPlan selection reserves the session", async () => {
-    const sessionId = `hyperplan-reserved-${crypto.randomUUID()}`;
+  it("rejects generic prompts while a PlanBuild selection reserves the session", async () => {
+    const sessionId = `plan-build-reserved-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
     const window = createWindowStub();
-    expect(hyperPlanDraftStore.reserveHyperPlanSession({ sessionId, ownerId: 4 })).toBe(true);
+    expect(planBuildStore.reservePlanBuildSession({ sessionId, ownerId: 4 })).toBe(true);
 
     await expect(
       new PiSdkRuntime().prompt(window, {
@@ -2840,18 +2840,18 @@ describe("PiSdkRuntime", () => {
         message: "Continue with another task.",
         context: [],
       }),
-    ).rejects.toThrow(/HyperPlan choice/i);
+    ).rejects.toThrow(/PlanBuild build start/i);
     expect(window.webContents.send).not.toHaveBeenCalled();
-    hyperPlanDraftStore.releaseHyperPlanSession({ sessionId, ownerId: 4 });
+    planBuildStore.releasePlanBuildSession({ sessionId, ownerId: 4 });
   });
 
-  it("rejects HyperPlan operations while an authoritative run is active", () => {
-    const sessionId = `hyperplan-busy-${crypto.randomUUID()}`;
+  it("rejects PlanBuild operations while an authoritative run is active", () => {
+    const sessionId = `plan-build-busy-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
     const run = createAgentRun({ sessionId, prompt: "Active work" });
 
-    expect(() => new PiSdkRuntime().assertHyperPlanSessionAvailable(sessionId)).toThrow(/busy/i);
+    expect(() => new PiSdkRuntime().assertPlanBuildSessionAvailable(sessionId)).toThrow(/busy/i);
 
     updateAgentRunStatus(run.id, "failed");
   });
@@ -2986,6 +2986,53 @@ describe("PiSdkRuntime", () => {
       expect(activeToolNamesForSession(info, "chat")).not.toContain(registeredName);
     } finally {
       toolRegistry.unregisterTool(registeredName);
+    }
+  });
+
+  it("attaches host-owned MCP identity to live and durable tool events", async () => {
+    const sessionId = `mcp-display-${crypto.randomUUID()}`;
+    const toolName = "mcp_v1_dangerous_h_display_fixture";
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    toolRegistry.registerTool({
+      entry: {
+        name: toolName,
+        profiles: ["chat"],
+        permission: { danger: "dangerous", action: "mcp.call" },
+        ui: { verb: "GitHub", mcp: { server: "GitHub", tool: "search_code" } },
+      },
+      definition: { name: toolName } as never,
+    });
+    const window = createWindowStub();
+    mocks.createAgentSession.mockResolvedValueOnce({
+      session: createMockPiSession({
+        prompt: vi.fn(async () => {
+          mocks.emitPiEvent({
+            type: "tool_execution_start",
+            toolCallId: "mcp-call",
+            toolName,
+            args: { server: "spoofed", tool: "spoofed" },
+          });
+        }),
+      }),
+    });
+    try {
+      await new PiSdkRuntime().prompt(window, {
+        sessionId,
+        context: [],
+        message: "Inspect MCP metadata",
+      });
+      expect(
+        vi
+          .mocked(window.webContents.send)
+          .mock.calls.some(
+            ([, event]) =>
+              event?.type === "tool.started" &&
+              event.mcp?.server === "GitHub" &&
+              event.mcp?.tool === "search_code",
+          ),
+      ).toBe(true);
+    } finally {
+      toolRegistry.unregisterTool(toolName);
     }
   });
 
@@ -5676,8 +5723,8 @@ describe("PiSdkRuntime", () => {
     expect(compact).not.toHaveBeenCalled();
   });
 
-  it("rejects compaction synchronously while a HyperPlan start reservation is held", async () => {
-    const sessionId = `compact-hyperplan-reserved-${crypto.randomUUID()}`;
+  it("rejects compaction synchronously while a PlanBuild start reservation is held", async () => {
+    const sessionId = `compact-plan-build-reserved-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
     const runtime = new PiSdkRuntime();
@@ -5686,7 +5733,7 @@ describe("PiSdkRuntime", () => {
       session: createMockPiSession({ isIdle: true, compact: compactPi }),
     }));
     let releaseOperation!: () => void;
-    const heldStart = hyperPlanDraftStore.runHyperPlanStartOperation({
+    const heldStart = planBuildStore.runPlanBuildStartOperation({
       ownerId: 61,
       requestId: "held-start-for-compact",
       kind: "original",
@@ -5748,7 +5795,7 @@ describe("PiSdkRuntime", () => {
       runtime.prompt(window, { sessionId, message: "racing prompt", context: [] }),
     ).rejects.toThrow(/intent-gate|compaction|preflight|busy/i);
     await expect(
-      hyperPlanDraftStore.runHyperPlanStartOperation({
+      planBuildStore.runPlanBuildStartOperation({
         ownerId: 62,
         requestId: "start-during-compact",
         kind: "original",
@@ -5756,7 +5803,7 @@ describe("PiSdkRuntime", () => {
         planId: plan.id,
         planFingerprint: fingerprintPlanSource(plan),
         start: (_operation, onRunCreated) =>
-          runtime.startOriginalPlanBuild(window, {
+          runtime.startPlanBuild(window, {
             ownerId: 62,
             requestId: "start-during-compact",
             sessionId,
@@ -6000,7 +6047,7 @@ describe("PiSdkRuntime", () => {
     expect(activeTools).not.toContain("visual_write");
   });
 
-  it("wires Spec Mode through the read-only Plan profile and tool context", async () => {
+  it("wires Plan Mode through the read-only Plan profile and tool context", async () => {
     const sessionId = `session-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"), "New chat");
@@ -6026,13 +6073,13 @@ describe("PiSdkRuntime", () => {
       context: [],
       delivery: "normal",
       message: "Specify the feature",
-      mode: "spec",
+      mode: "plan",
       sessionId,
     });
 
-    expect(observedMode).toBe("spec");
+    expect(observedMode).toBe("plan");
     expect(observedProfile).toBe("plan");
-    expect(observedPrompt).toContain("SPEC MODE");
+    expect(observedPrompt).toContain("PLAN MODE");
     expect(session.setActiveToolsByName).toHaveBeenCalledWith(
       expect.arrayContaining(["plan_write"]),
     );

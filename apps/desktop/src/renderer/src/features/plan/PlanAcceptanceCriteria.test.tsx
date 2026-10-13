@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { PlanSpec } from "../../../../shared/contracts";
-import { criterionEvidenceStatus, SpecAcceptanceCriteria } from "./SpecAcceptanceCriteria";
+import { criterionEvidenceStatus, PlanAcceptanceCriteria } from "./PlanAcceptanceCriteria";
 
 const spec: PlanSpec = {
   requirements: [{ id: "req-auth", text: "Keep access controlled" }],
@@ -85,10 +85,10 @@ describe("criterionEvidenceStatus", () => {
   });
 });
 
-describe("SpecAcceptanceCriteria", () => {
+describe("PlanAcceptanceCriteria", () => {
   it("shows required checks and bounded linked evidence", () => {
     const markup = renderToStaticMarkup(
-      <SpecAcceptanceCriteria
+      <PlanAcceptanceCriteria
         currentWorkspaceRevisions={new Map([["run-42", "rev-7"]])}
         spec={spec}
       />,
@@ -111,7 +111,7 @@ describe("SpecAcceptanceCriteria", () => {
 
   it("does not present passed without evidence as complete", () => {
     const withoutEvidence = { ...spec, evidence: [] };
-    const markup = renderToStaticMarkup(<SpecAcceptanceCriteria spec={withoutEvidence} />);
+    const markup = renderToStaticMarkup(<PlanAcceptanceCriteria spec={withoutEvidence} />);
 
     expect(markup).toContain("Not verified");
     expect(markup).not.toContain(">Passed<");
@@ -124,7 +124,7 @@ describe("SpecAcceptanceCriteria", () => {
         .filter((item) => item.runId === "run-42" && item.label === "Tests")
         .map(({ runId: _runId, ...item }) => item),
     };
-    const markup = renderToStaticMarkup(<SpecAcceptanceCriteria spec={withoutRunReference} />);
+    const markup = renderToStaticMarkup(<PlanAcceptanceCriteria spec={withoutRunReference} />);
 
     expect(markup).toContain("Not verified");
     expect(markup).toContain("Earlier evidence (1)");
@@ -137,7 +137,7 @@ describe("SpecAcceptanceCriteria", () => {
       evidence: spec.evidence.filter((item) => item.runId !== "run-42" || item.label === "Tests"),
     };
     const markup = renderToStaticMarkup(
-      <SpecAcceptanceCriteria spec={latestRunMissingTypecheck} />,
+      <PlanAcceptanceCriteria spec={latestRunMissingTypecheck} />,
     );
 
     expect(markup).toContain("Not verified");
@@ -146,7 +146,7 @@ describe("SpecAcceptanceCriteria", () => {
 
   it("does not let old failed evidence override a later passing run status", () => {
     const markup = renderToStaticMarkup(
-      <SpecAcceptanceCriteria
+      <PlanAcceptanceCriteria
         currentWorkspaceRevisions={new Map([["run-42", "rev-7"]])}
         spec={spec}
       />,
@@ -166,7 +166,7 @@ describe("SpecAcceptanceCriteria", () => {
       ),
     };
     const markup = renderToStaticMarkup(
-      <SpecAcceptanceCriteria
+      <PlanAcceptanceCriteria
         currentWorkspaceRevisions={new Map([["run-42", "rev-7"]])}
         spec={latestRunFailed}
       />,

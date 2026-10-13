@@ -26,7 +26,7 @@ function decision(
     policy: {
       version: 1,
       verificationLevel: "light",
-      suggestHyperPlan: false,
+      suggestPlan: false,
       maxParallelChildren: 1,
       reasonCodes: [],
     },

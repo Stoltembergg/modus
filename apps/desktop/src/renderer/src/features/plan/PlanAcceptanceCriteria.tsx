@@ -145,7 +145,7 @@ function EvidenceList({ evidence }: { evidence: PlanEvidenceRef[] }) {
   );
 }
 
-export function SpecAcceptanceCriteria({
+export function PlanAcceptanceCriteria({
   spec,
   currentWorkspaceRevisions = new Map(),
 }: {

@@ -39,7 +39,7 @@ import type {
 } from "../../shared/group-work-state";
 import { getHarnessQAEventByRowId } from "../agent/agent-event-store";
 import { getAgentSession } from "../agent/agent-store";
-import { isHyperPlanSessionReserved } from "../agent/harness/hyperplan-draft-store";
+import { isPlanBuildSessionReserved } from "../agent/harness/plan-build-store";
 import { profileForMode } from "../agent/plan-prompt";
 import type { PromptTurnResult, TurnSettledEvent } from "../agent/runtime";
 import { getDatabase } from "../db/database";
@@ -182,7 +182,7 @@ export class GroupRuntime {
   private readonly running = new Map<string, Wake>();
   /** Group turns waiting at the intent gate: still pending, but no slot and no chain. */
   private readonly gated = new Map<string, Wake>();
-  /** Members whose group turn ended with a HyperPlan choice pending. */
+  /** Members whose group turn ended with a plan build start pending. */
   private readonly awaitingUser = new Map<string, string>();
   private seq = 0;
   private lastStamp = 0;
@@ -646,7 +646,7 @@ export class GroupRuntime {
 
   /**
    * Any settled turn on any session (from `PiSdkRuntime.onTurnSettled`). Only
-   * a successful HyperPlan build (`plan-build`, outcome `ok`) on a member whose
+   * a successful PlanBuild build (`plan-build`, outcome `ok`) on a member whose
    * group turn ended with a plan choice pending unblocks it; a failed or
    * aborted turn does not.
    */
@@ -2682,7 +2682,7 @@ export class GroupRuntime {
   private applyTurnResult(chain: ChainState, wake: Wake, result: PromptTurnResult): void {
     // Public text never dispatches work. Task tools carry explicit recipient IDs.
     if (result.outcome === "blocked") {
-      if (isHyperPlanSessionReserved(wake.sessionId)) {
+      if (isPlanBuildSessionReserved(wake.sessionId)) {
         this.awaitingUser.set(wake.sessionId, chain.chainId);
         this.endChain(chain, "blocked");
       } else {
@@ -2792,7 +2792,7 @@ export class GroupRuntime {
           .map((wake) => wake.sessionId),
       ),
     ];
-    // Waiting for the user: a turn at the intent gate, or a HyperPlan choice pending.
+    // Waiting for the user: a turn at the intent gate, or a plan build start pending.
     const waiting = new Set(
       [...this.gated.values()]
         .filter((wake) => wake.groupId === groupId)

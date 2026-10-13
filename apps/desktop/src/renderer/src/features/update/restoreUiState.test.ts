@@ -79,13 +79,13 @@ describe("snapshotUiState hero", () => {
       activeSessionId: undefined,
       composerDraftBySession: {},
       heroDraft: { value: "an idea\nsecond line" },
-      heroMode: "spec",
+      heroMode: "plan",
       sessionIds: new Set(),
       sidebar: { open: true, width: 300 },
       inspector: { open: false, width: 384, tab: "changes" },
       settingsOpen: false,
     });
-    expect(snapshot.hero).toEqual({ text: "an idea\nsecond line", mode: "spec" });
+    expect(snapshot.hero).toEqual({ text: "an idea\nsecond line", mode: "plan" });
   });
 });
 
@@ -234,13 +234,13 @@ describe("planUiRestore", () => {
       drafts: {
         "s-1": { text: "one", mode: "build" as const },
         "s-gone": { text: "lost", mode: "plan" as const },
-        "s-2": { text: "two", mode: "spec" as const },
+        "s-2": { text: "two", mode: "plan" as const },
       },
     };
     const plan = planUiRestore(state, known);
     expect(plan.drafts).toEqual({
       "s-1": { text: "one", mode: "build" },
-      "s-2": { text: "two", mode: "spec" },
+      "s-2": { text: "two", mode: "plan" },
     });
     expect(plan.navigation).not.toBeNull();
   });
@@ -290,14 +290,14 @@ describe("mergeRestoredDrafts", () => {
         typed: { text: "old", mode: "plan" },
         blank: { text: "restored", mode: "plan" },
         image: { text: "old", mode: "plan" },
-        fresh: { text: "new", mode: "spec" },
+        fresh: { text: "new", mode: "plan" },
       },
       toDraft,
     );
     expect(merged.typed).toBe(current.typed);
     expect(merged.image).toBe(current.image);
     expect(merged.blank).toEqual(toDraft({ text: "restored", mode: "plan" }));
-    expect(merged.fresh).toEqual(toDraft({ text: "new", mode: "spec" }));
+    expect(merged.fresh).toEqual(toDraft({ text: "new", mode: "plan" }));
   });
 
   it("returns the same object when nothing applies", () => {

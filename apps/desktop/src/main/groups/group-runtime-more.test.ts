@@ -135,7 +135,7 @@ class FakeAgentRuntime {
     this.questionListeners.add(listener);
     return () => this.questionListeners.delete(listener);
   }
-  /** A turn settled that the group did not start (e.g. a HyperPlan build). */
+  /** A turn settled that the group did not start (e.g. a PlanBuild build). */
   settle(event: TurnSettledEvent): void {
     for (const listener of this.settledListeners) listener(event);
   }
@@ -209,9 +209,9 @@ describe("dispose", () => {
     const { group, alpha, beta } = squad();
     const { runtime, groups, events } = setup();
     const user = groups.postUserMessage({ groupId: group.id, body: "@Alpha @Beta go" });
-    // Alpha ends with a HyperPlan choice pending; Beta's group turn keeps running.
-    const { reserveHyperPlanSession } = await import("../agent/harness/hyperplan-draft-store");
-    expect(reserveHyperPlanSession({ sessionId: alpha, ownerId: 1 })).toBe(true);
+    // Alpha ends with a PlanBuild choice pending; Beta's group turn keeps running.
+    const { reservePlanBuildSession } = await import("../agent/harness/plan-build-store");
+    expect(reservePlanBuildSession({ sessionId: alpha, ownerId: 1 })).toBe(true);
     runtime.take(alpha).resolve({ outcome: "blocked" });
     await flush();
     expect(groups.isAwaitingUser(alpha)).toBe(true);
@@ -421,8 +421,8 @@ describe("task tool wakes", () => {
     const { group, alpha, beta, gamma } = squad();
     const { runtime, groups } = setup();
     const user = groups.postUserMessage({ groupId: group.id, body: "@Alpha @Beta go" });
-    const { reserveHyperPlanSession } = await import("../agent/harness/hyperplan-draft-store");
-    expect(reserveHyperPlanSession({ sessionId: beta, ownerId: 1 })).toBe(true);
+    const { reservePlanBuildSession } = await import("../agent/harness/plan-build-store");
+    expect(reservePlanBuildSession({ sessionId: beta, ownerId: 1 })).toBe(true);
     runtime.take(beta).resolve({ outcome: "blocked" });
     await flush();
     const status = groups.handleTaskWake(review(group.id, alpha, gamma));
@@ -471,8 +471,8 @@ describe("chain cleanup", () => {
 
     // An ended chain with a running turn stays until that turn settles.
     const second = groups.postUserMessage({ groupId: group.id, body: "@Alpha @Beta go" });
-    const { reserveHyperPlanSession } = await import("../agent/harness/hyperplan-draft-store");
-    expect(reserveHyperPlanSession({ sessionId: alpha, ownerId: 1 })).toBe(true);
+    const { reservePlanBuildSession } = await import("../agent/harness/plan-build-store");
+    expect(reservePlanBuildSession({ sessionId: alpha, ownerId: 1 })).toBe(true);
     runtime.take(alpha).resolve({ outcome: "blocked" });
     await flush();
     expect(groups.liveChainIds()).toEqual([second.id]);
@@ -928,9 +928,9 @@ describe("member states", () => {
       runningSessionIds: [beta],
       waitingSessionIds: [alpha],
     });
-    // Beta ends with a HyperPlan choice pending: waiting for you too.
-    const { reserveHyperPlanSession } = await import("../agent/harness/hyperplan-draft-store");
-    expect(reserveHyperPlanSession({ sessionId: beta, ownerId: 1 })).toBe(true);
+    // Beta ends with a PlanBuild choice pending: waiting for you too.
+    const { reservePlanBuildSession } = await import("../agent/harness/plan-build-store");
+    expect(reservePlanBuildSession({ sessionId: beta, ownerId: 1 })).toBe(true);
     runtime.take(beta).resolve({ outcome: "blocked" });
     await flush();
     expect(groups.memberStates()).toEqual([

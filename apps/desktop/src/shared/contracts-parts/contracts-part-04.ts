@@ -78,7 +78,7 @@ export type ApprovalModeState = {
  * read-only planning harness (research + write a single plan.md via plan_write;
  * no edit/write/bash). Carried per-prompt so the user can toggle it freely.
  */
-export type AgentMode = "build" | "plan" | "spec";
+export type AgentMode = "build" | "plan";
 
 /** Branch / remote / sync state for the git review panel header + commit dialog. */
 export type GitStatusSummary = {

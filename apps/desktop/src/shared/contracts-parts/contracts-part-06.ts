@@ -253,27 +253,8 @@ export type PlanSpec = {
   openQuestions: string[];
 };
 
-export type HyperPlanCriticId = "architecture" | "risk" | "simplicity" | "failure";
-
-export type HyperPlanCriticResult = {
-  critic: HyperPlanCriticId;
-  status: "completed" | "unavailable";
-  findings: string[];
-  references: string[];
-};
-
-export type HyperPlanSummary = {
-  critiques: HyperPlanCriticResult[];
-  revisedContent: string;
-  agreements: string[];
-  disagreements: string[];
-  risks: string[];
-  openQuestions: string[];
-  references: string[];
-};
-
-/** A validated, non-persisted full-plan proposal produced by HyperPlan. */
-export type HyperPlanRevision = {
+/** A validated, non-persisted plan revision used for transactional plan updates. */
+export type PlanRevision = {
   title: string;
   overview: string;
   content: string;
@@ -288,15 +269,10 @@ export type HyperPlanRevision = {
   warnings?: string[];
 };
 
-/** Complete plan source supplied to the isolated review/revision harness. */
-export type HyperPlanReviewInput = Pick<PlanRef, "title" | "overview" | "content" | "todos"> & {
-  spec: PlanSpec;
-};
-
-/** Exact source projection captured by the renderer before starting a fallback build. */
-export type HyperPlanSourceSnapshot = Pick<PlanRef, "title" | "overview" | "content"> & {
+/** Exact source projection captured by the renderer before approving a build. */
+export type PlanSourceSnapshot = Pick<PlanRef, "title" | "overview" | "content"> & {
   todos: Array<Pick<PlanTodo, "id" | "content" | "acceptanceCriterionIds">>;
-  spec: Pick<
+  spec?: Pick<
     PlanSpec,
     "requirements" | "acceptanceCriteria" | "assumptions" | "openQuestions" | "evidence"
   >;
@@ -330,7 +306,7 @@ export type PlanRef = {
   content: string;
   /** Structured task list used by the approval/build flow. */
   todos: PlanTodo[];
-  /** Optional structured requirements and evidence authored in Spec Mode. */
+  /** Optional structured requirements and evidence authored in Plan Mode. */
   spec?: PlanSpec;
   /** Build lifecycle state (see PlanBuildStatus). */
   buildStatus: PlanBuildStatus;

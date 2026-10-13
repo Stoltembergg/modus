@@ -15,7 +15,7 @@ import {
   setAgentSessionArchived,
 } from "./agent-store";
 import { deleteSessionCheckpoints } from "./checkpoint-service";
-import { clearHyperPlanDraftsForSession } from "./harness/hyperplan-draft-store";
+import { clearPlanBuildStateForSession } from "./harness/plan-build-store";
 import { getAgentRuntime } from "./runtime-registry";
 
 /** Best-effort explicit-close/archive sweep; running and blocked runs are not completion signals. */
@@ -57,9 +57,9 @@ export async function deleteAgentSessionTree(sessionId: string): Promise<void> {
   denyPendingQuestionRequestsForSession(sessionId);
   deleteSessionPlan(join(app.getPath("userData"), "plans"), sessionId);
   try {
-    clearHyperPlanDraftsForSession(sessionId);
+    clearPlanBuildStateForSession(sessionId);
   } catch {
-    console.warn("[modus] HyperPlan session draft cleanup failed.");
+    console.warn("[modus] Plan build session cleanup failed.");
   }
   deleteAgentSession(sessionId);
 }

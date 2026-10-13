@@ -13,13 +13,13 @@ import fs, {
 } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type {
-  HyperPlanRevision,
-  HyperPlanSourceSnapshot,
   PlanAcceptanceCriterion,
   PlanBlock,
   PlanBuildStatus,
   PlanEvidenceRef,
   PlanRef,
+  PlanRevision,
+  PlanSourceSnapshot,
   PlanSpec,
   PlanTodo,
 } from "../../shared/contracts";
@@ -27,7 +27,7 @@ import type {
 const PLAN_FILE = "plan.md";
 const META_FILE = "plan.json";
 const TRANSACTION_FILE = ".plan-transaction.json";
-const REVISION_IN_DOUBT_FILE = "hyperplan-revision-in-doubt";
+const REVISION_IN_DOUBT_FILE = "plan-build-revision-in-doubt";
 const MAX_STABLE_ID_LENGTH = 128;
 const MAX_ACCEPTANCE_CRITERIA = 100;
 const MAX_REQUIRED_CHECK_KINDS = 4;
@@ -190,9 +190,7 @@ function stableSerialize(value: unknown): string {
 
 /** Fingerprint every authoritative source field, independent of object key order. */
 export function fingerprintPlanSource(
-  plan:
-    | Pick<PlanRef, "title" | "overview" | "content" | "todos" | "spec">
-    | HyperPlanSourceSnapshot,
+  plan: Pick<PlanRef, "title" | "overview" | "content" | "todos" | "spec"> | PlanSourceSnapshot,
 ): string {
   const source = {
     title: plan.title,
@@ -512,7 +510,7 @@ export function writePlan(
   const spec: PlanSpec | undefined = input.spec ? { ...input.spec, evidence: [] } : undefined;
   if (spec) validateSpec(spec, todos);
   else if (todos.some((todo) => todo.acceptanceCriterionIds?.length)) {
-    throw new Error("Todo acceptance-criterion links require Spec Mode metadata.");
+    throw new Error("Todo acceptance-criterion links require structured plan metadata.");
   }
   writeFileSync(path, content, "utf8");
 
@@ -538,13 +536,13 @@ export function writePlan(
 }
 
 /**
- * Atomically promote a validated HyperPlan revision, rolling back interrupted writes on read.
+ * Atomically promote a validated PlanBuild revision, rolling back interrupted writes on read.
  * Revalidation assumes synchronous, single-process writers; it detects in-operation changes but
  * does not provide locking or protection against concurrent external-process writers.
  */
 export function promotePlanRevision(
   rootDir: string,
-  input: { planId: string; expectedFingerprint: string; revision: HyperPlanRevision },
+  input: { planId: string; expectedFingerprint: string; revision: PlanRevision },
 ): PlanRef {
   const current = readPlanById(rootDir, input.planId);
   if (!current) throw new Error(`Plan ${input.planId} was not found.`);

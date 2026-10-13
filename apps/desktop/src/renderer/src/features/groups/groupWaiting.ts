@@ -6,7 +6,7 @@ import { isLegacyWaitingForYouBody } from "../../../../shared/group-room-locale"
  *
  * 1. Structured: the turn card itself is `status: "awaiting_user"` (the
  *    `GroupMessageStatus` the runtime has set since 90b751e, when a member's
- *    turn waits on the user: intent gate open or a HyperPlan choice pending).
+ *    turn waits on the user: intent gate open or a plan build start pending).
  * 2. Legacy fallback: rows written before that only carry the English status
  *    body "Waiting for you" (`kind: "status"`, no `status`). Those are still
  *    detected by text, so old transcripts keep their amber / stale styling.

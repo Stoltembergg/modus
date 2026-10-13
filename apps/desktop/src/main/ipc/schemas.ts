@@ -15,11 +15,10 @@ import {
 
 const nonEmptyString = z.string().trim().min(1);
 const optionalNonEmptyString = nonEmptyString.optional();
-const MAX_HYPERPLAN_REVISION_BYTES = 12 * 1024;
 const MAX_PLAN_CONTENT_BYTES = 64 * 1024;
-const MAX_HYPERPLAN_SOURCE_ITEMS = 100;
-const MAX_HYPERPLAN_SOURCE_EVIDENCE = 800;
-const MAX_HYPERPLAN_SOURCE_SNAPSHOT_BYTES = 1024 * 1024;
+const MAX_PLAN_SOURCE_ITEMS = 100;
+const MAX_PLAN_SOURCE_EVIDENCE = 800;
+const MAX_PLAN_SOURCE_SNAPSHOT_BYTES = 1024 * 1024;
 const sourceSnapshotIdSchema = z.string().min(1).max(128).regex(/\S/);
 const thinkingLevelSchema = z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const jsonObjectSchema = z.record(z.string(), z.unknown());
@@ -104,7 +103,7 @@ export const agentPromptSchema = z.object({
   userMessageId: optionalNonEmptyString,
   attachments: z.array(promptImageAttachmentSchema).max(6).optional(),
   skills: z.array(skillSelectionSchema).max(10).optional(),
-  mode: z.enum(["build", "plan", "spec"]).optional(),
+  mode: z.enum(["build", "plan"]).optional(),
   model: optionalNonEmptyString,
   thinkingLevel: thinkingLevelSchema.optional(),
   thinkingVariant: optionalNonEmptyString,
@@ -161,64 +160,15 @@ export const agentSetBranchSchema = z
   })
   .strict();
 
-export const agentReviewPlanWithHyperPlanSchema = z
-  .object({
-    sessionId: nonEmptyString.max(128),
-    planId: nonEmptyString.max(128),
-    model: optionalNonEmptyString,
-  })
-  .strict();
-
-export const agentApplyHyperPlanRevisionSchema = z
-  .object({
-    sessionId: nonEmptyString.max(128),
-    planId: nonEmptyString.max(128),
-    planHash: nonEmptyString.max(128),
-    revisedContent: z
-      .string()
-      .trim()
-      .min(1)
-      .max(MAX_HYPERPLAN_REVISION_BYTES)
-      .refine(
-        (content) => new TextEncoder().encode(content).byteLength <= MAX_HYPERPLAN_REVISION_BYTES,
-        `Revision content must be at most ${MAX_HYPERPLAN_REVISION_BYTES} UTF-8 bytes.`,
-      ),
-  })
-  .strict();
-
-export const agentCreateHyperPlanDraftSchema = z
-  .object({
-    sessionId: nonEmptyString.max(128),
-    planId: nonEmptyString.max(128),
-    /** Spec/composer model id; HyperPlan prefers this over the global default. */
-    model: optionalNonEmptyString,
-  })
-  .strict();
-
-export const agentResolveHyperPlanDraftChoiceSchema = z
-  .object({
-    draftId: nonEmptyString.max(128),
-    choice: z.enum(["revision", "original"]),
-    requestId: nonEmptyString.max(128),
-  })
-  .strict();
-
 export const agentStartPlanBuildSchema = z
-  .object({
-    selectionId: nonEmptyString.max(128),
-    requestId: nonEmptyString.max(128),
-  })
-  .strict();
-
-export const agentStartOriginalPlanBuildSchema = z
   .object({
     sessionId: nonEmptyString.max(128),
     planId: nonEmptyString.max(128),
     requestId: nonEmptyString.max(128),
     sourceSnapshot: z
       .object({
-        title: z.string().min(1).max(MAX_HYPERPLAN_SOURCE_SNAPSHOT_BYTES),
-        overview: z.string().min(1).max(MAX_HYPERPLAN_SOURCE_SNAPSHOT_BYTES),
+        title: z.string().min(1).max(MAX_PLAN_SOURCE_SNAPSHOT_BYTES),
+        overview: z.string().min(1).max(MAX_PLAN_SOURCE_SNAPSHOT_BYTES),
         content: z
           .string()
           .min(1)
@@ -232,14 +182,12 @@ export const agentStartOriginalPlanBuildSchema = z
             z
               .object({
                 id: sourceSnapshotIdSchema,
-                content: z.string().min(1).max(MAX_HYPERPLAN_SOURCE_SNAPSHOT_BYTES),
-                acceptanceCriterionIds: z
-                  .array(sourceSnapshotIdSchema)
-                  .max(MAX_HYPERPLAN_SOURCE_ITEMS),
+                content: z.string().min(1).max(MAX_PLAN_SOURCE_SNAPSHOT_BYTES),
+                acceptanceCriterionIds: z.array(sourceSnapshotIdSchema).max(MAX_PLAN_SOURCE_ITEMS),
               })
               .strict(),
           )
-          .max(MAX_HYPERPLAN_SOURCE_ITEMS),
+          .max(MAX_PLAN_SOURCE_ITEMS),
         spec: z
           .object({
             requirements: z
@@ -248,7 +196,7 @@ export const agentStartOriginalPlanBuildSchema = z
                   .object({ id: sourceSnapshotIdSchema, text: z.string().min(1).max(2_000) })
                   .strict(),
               )
-              .max(MAX_HYPERPLAN_SOURCE_ITEMS),
+              .max(MAX_PLAN_SOURCE_ITEMS),
             acceptanceCriteria: z
               .array(
                 z
@@ -256,7 +204,7 @@ export const agentStartOriginalPlanBuildSchema = z
                     id: sourceSnapshotIdSchema,
                     requirementId: sourceSnapshotIdSchema,
                     description: z.string().min(1).max(2_000),
-                    todoIds: z.array(sourceSnapshotIdSchema).max(MAX_HYPERPLAN_SOURCE_ITEMS),
+                    todoIds: z.array(sourceSnapshotIdSchema).max(MAX_PLAN_SOURCE_ITEMS),
                     requiredCheckKinds: z
                       .array(z.enum(["tests", "typecheck", "lint", "build"]))
                       .max(4)
@@ -266,7 +214,7 @@ export const agentStartOriginalPlanBuildSchema = z
                   })
                   .strict(),
               )
-              .max(MAX_HYPERPLAN_SOURCE_ITEMS),
+              .max(MAX_PLAN_SOURCE_ITEMS),
             assumptions: z.array(z.string().min(1).max(500)).max(20),
             openQuestions: z.array(z.string().min(1).max(500)).max(20),
             evidence: z
@@ -286,25 +234,26 @@ export const agentStartOriginalPlanBuildSchema = z
                     runId: sourceSnapshotIdSchema.optional(),
                     eventId: sourceSnapshotIdSchema.optional(),
                     revision: sourceSnapshotIdSchema.optional(),
-                    paths: z.array(z.string().max(512)).max(MAX_HYPERPLAN_SOURCE_ITEMS).optional(),
+                    paths: z.array(z.string().max(512)).max(MAX_PLAN_SOURCE_ITEMS).optional(),
                     label: z.string().max(512),
                     criterionId: sourceSnapshotIdSchema,
                   })
                   .strict(),
               )
-              .max(MAX_HYPERPLAN_SOURCE_EVIDENCE),
+              .max(MAX_PLAN_SOURCE_EVIDENCE),
           })
-          .strict(),
+          .strict()
+          .optional(),
       })
       .strict()
       .superRefine((snapshot, ctx) => {
         if (
           new TextEncoder().encode(JSON.stringify(snapshot)).byteLength >
-          MAX_HYPERPLAN_SOURCE_SNAPSHOT_BYTES
+          MAX_PLAN_SOURCE_SNAPSHOT_BYTES
         ) {
           ctx.addIssue({
             code: "custom",
-            message: `Source snapshot must be at most ${MAX_HYPERPLAN_SOURCE_SNAPSHOT_BYTES} UTF-8 bytes.`,
+            message: `Source snapshot must be at most ${MAX_PLAN_SOURCE_SNAPSHOT_BYTES} UTF-8 bytes.`,
           });
         }
       }),
@@ -753,7 +702,9 @@ const restorePanelSchema = { open: z.boolean(), width: z.number().finite().min(0
 const restoreDraftSchema = z
   .object({
     text: z.string().max(MAX_RESTORE_DRAFT_CHARS),
-    mode: z.enum(["build", "plan", "spec"]),
+    mode: z
+      .enum(["build", "plan", "spec"])
+      .transform((mode) => (mode === "spec" ? ("plan" as const) : mode)),
   })
   .strict();
 

@@ -266,7 +266,7 @@ describe("buildBlocks", () => {
           policy: {
             version: 1,
             verificationLevel: "standard",
-            suggestHyperPlan: false,
+            suggestPlan: false,
             maxParallelChildren: 1,
             reasonCodes: [],
           },

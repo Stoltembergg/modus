@@ -28,7 +28,7 @@ vi.mock("node:fs", async (importOriginal) => {
       return actual.renameSync(...args);
     },
     writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
-      if (fsFailures.markerWriteFails && String(args[0]).endsWith("hyperplan-revision-in-doubt")) {
+      if (fsFailures.markerWriteFails && String(args[0]).endsWith("plan-build-revision-in-doubt")) {
         throw new Error("marker write failed");
       }
       return actual.writeFileSync(...args);
@@ -301,7 +301,7 @@ describe("session plan persistence", () => {
 
   it("refuses revisions while the in-doubt marker exists", () => {
     const plan = write();
-    writeFileSync(join(root, plan.id, "hyperplan-revision-in-doubt"), "manual repair required");
+    writeFileSync(join(root, plan.id, "plan-build-revision-in-doubt"), "manual repair required");
 
     expect(() => updatePlanContentById(root, plan.id, plan.hash, "# Revised")).toThrow(
       /indeterminate|in-doubt/i,
@@ -311,7 +311,7 @@ describe("session plan persistence", () => {
 
   it("allows revisions after manual repair and marker removal", () => {
     const plan = write();
-    const markerPath = join(root, plan.id, "hyperplan-revision-in-doubt");
+    const markerPath = join(root, plan.id, "plan-build-revision-in-doubt");
     fsFailures.renameFailCalls = [2, 3];
 
     expect(() => updatePlanContentById(root, plan.id, plan.hash, "# Revised")).toThrow(
@@ -342,7 +342,7 @@ describe("session plan persistence", () => {
     );
     expect(readFileSync(plan.path, "utf8")).toBe(plan.content);
     expect(readFileSync(metadataPath)).toEqual(originalMetadata);
-    expect(existsSync(join(root, plan.id, "hyperplan-revision-in-doubt"))).toBe(false);
+    expect(existsSync(join(root, plan.id, "plan-build-revision-in-doubt"))).toBe(false);
   });
 
   it.each([
@@ -357,7 +357,7 @@ describe("session plan persistence", () => {
         throw new Error("event failed");
       }),
     ).toThrow(/indeterminate/i);
-    expect(existsSync(join(root, plan.id, "hyperplan-revision-in-doubt"))).toBe(true);
+    expect(existsSync(join(root, plan.id, "plan-build-revision-in-doubt"))).toBe(true);
     expect(() => updatePlanContentById(root, plan.id, plan.hash, "# Second revision")).toThrow(
       /indeterminate|in-doubt/i,
     );
@@ -373,7 +373,7 @@ describe("session plan persistence", () => {
         throw new Error("event failed");
       }),
     ).toThrow(/indeterminate/i);
-    expect(existsSync(join(root, plan.id, "hyperplan-revision-in-doubt"))).toBe(false);
+    expect(existsSync(join(root, plan.id, "plan-build-revision-in-doubt"))).toBe(false);
     expect(() => updatePlanContentById(root, plan.id, plan.hash, "# Second revision")).toThrow(
       /indeterminate|in-doubt/i,
     );
@@ -950,7 +950,7 @@ describe("build status transitions", () => {
   });
 });
 
-describe("HyperPlan revision promotion", () => {
+describe("PlanBuild revision promotion", () => {
   const revision = {
     title: "Revised",
     overview: "A safer plan.",

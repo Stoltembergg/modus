@@ -12,6 +12,7 @@ export type RunStage =
   | { kind: "writing" }
   | { kind: "runningCommand"; command: string }
   | { kind: "runningTool"; tool: string }
+  | { kind: "usingMcp"; server: string; tool: string }
   | { kind: "editing"; file: string }
   | { kind: "reading"; file: string }
   | { kind: "searching" }
@@ -88,7 +89,10 @@ export function currentRunStage(events: ReadonlyArray<{ event: AgentEvent }>): R
         break;
       case "tool.started":
       case "tool.delta":
-        if (!ended.has(event.toolCallId)) return toolStage(event.toolName, event.args);
+        if (!ended.has(event.toolCallId))
+          return event.mcp
+            ? { kind: "usingMcp", server: clip(event.mcp.server), tool: clip(event.mcp.tool) }
+            : toolStage(event.toolName, event.args);
         break;
       case "subagent.started":
         return settle({ kind: "spawningSubagent" });
@@ -111,6 +115,8 @@ export function runStageText(stage: RunStage): { key: ShellTextKey; vars?: Shell
   switch (stage.kind) {
     case "runningCommand":
       return { key: "shell.run.runningCommand", vars: { command: stage.command } };
+    case "usingMcp":
+      return { key: "shell.run.usingMcp", vars: { server: stage.server, tool: stage.tool } };
     case "runningTool":
       return { key: "shell.run.runningTool", vars: { tool: stage.tool } };
     case "editing":

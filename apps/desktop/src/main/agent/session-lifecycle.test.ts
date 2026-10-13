@@ -43,13 +43,13 @@ vi.mock("./checkpoint-service", () => ({
 vi.mock("./runtime-registry", () => ({
   getAgentRuntime: () => ({ dispose: lifecycleState.dispose }),
 }));
-vi.mock("./harness/hyperplan-draft-store", () => ({
-  clearHyperPlanDraftsForSession: lifecycleState.clearDraftsForSession,
+vi.mock("./harness/plan-build-store", () => ({
+  clearPlanBuildStateForSession: lifecycleState.clearDraftsForSession,
 }));
 
 const { deleteAgentSessionTree } = await import("./session-lifecycle");
 
-describe("session lifecycle HyperPlan cleanup", () => {
+describe("session lifecycle PlanBuild cleanup", () => {
   beforeEach(() => {
     lifecycleState.calls.length = 0;
     lifecycleState.session = undefined;

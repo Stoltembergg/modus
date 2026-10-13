@@ -100,7 +100,6 @@ export type ComposerProps = {
 
 export function cycleComposerMode(mode: AgentMode): AgentMode {
   if (mode === "build") return "plan";
-  if (mode === "plan") return "spec";
   return "build";
 }
 
@@ -421,7 +420,7 @@ export function Composer({
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
-    // Shift+Tab rotates Build, Plan, and Spec modes.
+    // Shift+Tab rotates Build and Plan modes.
     if (event.key === "Tab" && event.shiftKey && !slash.isOpen && !isOpen) {
       event.preventDefault();
       setMode(cycleComposerMode(mode));
@@ -787,7 +786,7 @@ function ModePill({
   onCycle: () => void;
   onExit: () => void;
 }) {
-  const label = mode === "spec" ? "Spec" : mode === "plan" ? "Plan" : "Build";
+  const label = mode === "plan" ? "Plan" : "Build";
   const activePlanningMode = mode !== "build";
   return (
     <div className="app-no-drag inline-flex h-7 shrink-0 items-center gap-0.5">

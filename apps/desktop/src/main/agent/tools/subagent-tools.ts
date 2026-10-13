@@ -27,11 +27,8 @@ export type TaskRoute = {
   classification: ReturnType<typeof classifyHarnessTask>;
 };
 
-export function resolveTaskMode(
-  profile: ToolProfileName | "spec",
-): TaskClassificationInput["mode"] {
+export function resolveTaskMode(profile: ToolProfileName): TaskClassificationInput["mode"] {
   if (profile === "plan") return "plan";
-  if (profile === "spec") return "spec";
   return "build";
 }
 

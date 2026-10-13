@@ -69,6 +69,8 @@ export type ToolSummaryMeta = {
 };
 
 export type ToolUiMeta = {
+  /** Display identity supplied by the host when registering an MCP tool. */
+  mcp?: { server: string; tool: string };
   /** Leading row icon. Absent ⇒ the row leads with its verb label, no icon. */
   iconName?: ToolIconName;
   verb: string;

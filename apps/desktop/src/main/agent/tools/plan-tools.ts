@@ -68,7 +68,7 @@ const planParams = Type.Object(
         minItems: 1,
         maxItems: 100,
         description:
-          "Ordered implementation steps. Use plain strings for Plan Mode; in Spec Mode use objects " +
+          "Ordered implementation steps. Use strings for small plans or objects for structured plans " +
           "with stable ids and acceptanceCriterionIds. These drive execution, so each step must be " +
           "a self-contained unit of work.",
       },
@@ -163,8 +163,8 @@ const planTool: ToolDefinition = defineTool({
       throw new Error("No active Modus workspace for this plan.");
     }
     const hasStructuredTodos = params.todos.some((todo) => typeof todo !== "string");
-    if ((params.spec || hasStructuredTodos) && context.mode !== "spec") {
-      throw new Error("Structured plan metadata is available only in Spec Mode.");
+    if ((params.spec || hasStructuredTodos) && context.mode !== "plan") {
+      throw new Error("Structured plan metadata is available only in Plan Mode.");
     }
     const plan = writePlan(plansRoot(), {
       workspaceId: context.workspaceId,

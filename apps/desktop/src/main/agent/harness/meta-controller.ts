@@ -432,7 +432,7 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
     };
   }
 
-  // Gap 1: explicit read-only research roles beat HyperPlan suggestion in active mode.
+  // Gap 1: explicit read-only research roles beat PlanBuild suggestion in active mode.
   if (mode === "active" && uncertain && complex) {
     if (snapshot.classification.suggestedRole === "librarian") {
       return {
@@ -456,15 +456,11 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
     }
   }
 
-  if (
-    policy.suggestHyperPlan &&
-    snapshot.mode !== "plan" &&
-    snapshot.taskState?.phase !== "planning"
-  ) {
+  if (policy.suggestPlan && snapshot.mode !== "plan" && snapshot.taskState?.phase !== "planning") {
     return {
       ...base,
       action: "suggest_plan",
-      reasonCodes: ["hyperplan_or_complex_scope", ...policy.reasonCodes.slice(0, 4)],
+      reasonCodes: ["complex_scope", ...policy.reasonCodes.slice(0, 4)],
       confidence: snapshot.classification.confidence === "high" ? "medium" : "low",
       expectedUncertaintyReduction: 9,
     };
@@ -524,7 +520,7 @@ export function formatAdaptiveDecisionHint(decision: AdaptiveDecision): string |
   switch (decision.action) {
     case "suggest_plan":
       hint =
-        "Adaptive policy: complex/high-blast scope detected. Consider Plan Mode or HyperPlan review; continue only if the user already chose otherwise.";
+        "Adaptive policy: complex/high-blast scope detected. Consider Plan Mode; continue only if the user already chose otherwise.";
       break;
     case "suggest_oracle":
       hint =

@@ -70,7 +70,7 @@ export const GROUP_MAX_CONCURRENT_TURNS = 2;
 
 /** Status texts posted into the room (English, like the rest of the app's statuses). */
 export const GROUP_STATUS_TEXT = {
-  /** A member's turn waits on the user: the intent gate opened, or a HyperPlan choice is pending. */
+  /** A member's turn waits on the user: the intent gate opened, or a PlanBuild build start is pending. */
   waitingForYou: "Waiting for you",
   failed: "Turn failed",
   aborted: "Turn stopped",
@@ -105,7 +105,7 @@ export type GroupAgentRuntime = {
   /** Stops a session's running turn (it settles as `aborted`). */
   abort(sessionId: string): Promise<void>;
   isSessionStreaming(sessionId: string): boolean;
-  /** Every settled turn (unblocks a HyperPlan-blocked member). */
+  /** Every settled turn (unblocks a PlanBuild-blocked member). */
   onTurnSettled(listener: (event: TurnSettledEvent) => void): () => void;
   /** The intent gate opened on a session (a group turn there frees its slot). */
   onQuestionPending(listener: (sessionId: string) => void): () => void;

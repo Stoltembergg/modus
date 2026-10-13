@@ -51,7 +51,6 @@ describe("resolveTaskRoute", () => {
   it("uses only the owning tool profile to determine mode", () => {
     expect(resolveTaskMode("chat")).toBe("build");
     expect(resolveTaskMode("plan")).toBe("plan");
-    expect(resolveTaskMode("spec")).toBe("spec");
   });
 
   it("does not dispatch merely by resolving a route", () => {

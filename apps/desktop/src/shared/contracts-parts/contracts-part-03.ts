@@ -111,6 +111,8 @@ type AgentEventPayload =
   | { type: "thinking.completed"; sessionId: string; messageId: string }
   | {
       type: "tool.started";
+      /** MCP identity resolved by the host registry, never model arguments. */
+      mcp?: { server: string; tool: string };
       sessionId: string;
       runId?: string;
       toolCallId: string;
@@ -127,6 +129,7 @@ type AgentEventPayload =
        * `tool.started`; the durable `tool.started` supersedes it on completion.
        */
       type: "tool.delta";
+      mcp?: { server: string; tool: string };
       sessionId: string;
       toolCallId: string;
       toolName: string;

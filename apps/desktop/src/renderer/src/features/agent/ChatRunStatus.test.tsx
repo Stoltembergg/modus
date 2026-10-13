@@ -17,6 +17,8 @@ describe("ChatRunStatus", () => {
     const slot = screen.getByTestId("chat-run-status-slot");
     expect(slot.className).toMatch(/\babsolute\b/);
     expect(slot.className).toMatch(/\bbottom-full\b/);
+    expect(slot.className).toContain("justify-center");
+    expect(screen.getByTestId("chat-run-status").className).toContain("bg-surface/30");
     expect(screen.getByTestId("chat-run-status").className).not.toMatch(/\bborder\b/);
     expect(screen.getByTestId("chat-run-status-label").className).toMatch(/\btruncate\b/);
   });
