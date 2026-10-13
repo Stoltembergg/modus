@@ -1,9 +1,11 @@
+import { join } from "node:path";
 import {
   app,
   BrowserWindow,
   type BrowserWindow as BrowserWindowType,
   dialog,
   nativeTheme,
+  shell,
 } from "electron";
 import { resolveWindowAppearance } from "../shared/window-appearance";
 import {
@@ -29,8 +31,13 @@ import {
   initializeComposioService,
   shutdownComposioService,
 } from "./composio/composio-service-instance";
-import { getDatabase } from "./db/database";
-import { openDatabaseAtStartup } from "./db/database-startup";
+import { databasePath, getDatabase, isGroupsMigrationPendingOnDisk } from "./db/database";
+import {
+  GROUPS_MIGRATION_ERROR_TITLE,
+  groupsMigrationErrorMessage,
+  openDatabaseAtStartup,
+} from "./db/database-startup";
+import { showMigrationSplash } from "./db/migration-splash";
 import {
   createDeepLinkRouter,
   findDeepLinkInArgv,
@@ -161,17 +168,40 @@ if (!app.requestSingleInstanceLock()) {
 
   app
     .whenReady()
-    .then(() => {
+    .then(async () => {
       startupTimeline.mark("main.electron-ready");
+      // Groups → Projects (PR 4): if the one-time migration is pending, paint a
+      // splash first, because the migration runs synchronously inside getDatabase().
+      const splash = isGroupsMigrationPendingOnDisk(databasePath())
+        ? await showMigrationSplash().catch(() => null)
+        : null;
       // The first DB open happens here, before any window (and so any IPC call)
-      // exists: a file from a newer Modus gets a clear error box, then quit.
-      if (
-        !openDatabaseAtStartup({
-          open: getDatabase,
-          showErrorBox: (title, content) => dialog.showErrorBox(title, content),
-          quit: () => app.exit(1),
-        })
-      ) {
+      // exists: a file from a newer Modus gets a clear error box, then quit; a
+      // failed groups migration gets the Try again / Show backup / Quit screen.
+      const opened = openDatabaseAtStartup({
+        open: (options) => getDatabase(options),
+        showErrorBox: (title, content) => dialog.showErrorBox(title, content),
+        quit: () => app.exit(1),
+        showMigrationError: (error) => {
+          const choice = dialog.showMessageBoxSync({
+            type: "error",
+            title: GROUPS_MIGRATION_ERROR_TITLE,
+            message: GROUPS_MIGRATION_ERROR_TITLE,
+            detail: groupsMigrationErrorMessage(error),
+            buttons: ["Try again", "Show backup", "Quit"],
+            defaultId: 0,
+            cancelId: 2,
+            noLink: true,
+          });
+          return choice === 0 ? "retry" : choice === 1 ? "backup" : "quit";
+        },
+        showBackup: (path) => {
+          if (path) shell.showItemInFolder(path);
+          else void shell.openPath(join(app.getPath("userData"), "backups"));
+        },
+      });
+      if (!opened) {
+        splash?.destroy();
         return;
       }
       installApplicationMenu();
@@ -186,6 +216,14 @@ if (!app.requestSingleInstanceLock()) {
       // B4b: the Modus provider follows the account session (registered only when signed in).
       startModusProvider(notifyModelCatalogChanged);
       openMainWindow();
+      if (splash) {
+        const close = () => {
+          if (!splash.isDestroyed()) splash.destroy();
+        };
+        if (mainWindow) mainWindow.once("ready-to-show", close);
+        else close();
+        setTimeout(close, 15_000);
+      }
       // Restore the profile after the first renderer exists; do not block agent startup on Composio.
       void initializeComposioService().catch(() => undefined);
       // Restore the Supabase session (encrypted refresh token) without blocking the window.

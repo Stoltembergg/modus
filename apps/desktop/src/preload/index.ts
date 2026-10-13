@@ -144,6 +144,10 @@ const api: ModusApi = {
       return () => ipcRenderer.removeListener("group:event", listener);
     },
   },
+  groupsMigration: {
+    notice: () => ipcRenderer.invoke("app:groups-migration-notice"),
+    dismissNotice: () => ipcRenderer.invoke("app:groups-migration-notice-dismiss"),
+  },
   agents: {
     list: () => ipcRenderer.invoke("agents:list"),
     create: (input) => ipcRenderer.invoke("agents:create", input),
@@ -151,6 +155,8 @@ const api: ModusApi = {
     setArchived: (input) => ipcRenderer.invoke("agents:archive", input),
     remove: (id) => ipcRenderer.invoke("agents:delete", { id }),
     openChat: (id) => ipcRenderer.invoke("agents:open-chat", { id }),
+    migratedTranscript: (sessionId) =>
+      ipcRenderer.invoke("agent:migrated-group-transcript", sessionId),
     generateProfile: (input) => ipcRenderer.invoke("agents:generate-profile", input),
   },
   file: {

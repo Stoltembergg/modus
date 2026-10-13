@@ -64,6 +64,7 @@ import type {
   GroupRuntimeEvent,
   GroupSuggestion,
   GroupSuggestionResolution,
+  GroupsMigrationNotice,
   GroupTask,
   GroupTaskDetails,
   GroupTaskTransitionEvent,
@@ -313,6 +314,10 @@ export type ModusApi = {
     onEvent(callback: (event: GroupRuntimeEvent) => void): () => void;
   };
   /** Agents (agents model): each belongs to one group, names unique in it. */
+  groupsMigration: {
+    notice(): Promise<GroupsMigrationNotice>;
+    dismissNotice(): Promise<void>;
+  };
   agents: {
     /** Every agent, archived included, by name. */
     list(): Promise<AgentInfo[]>;
@@ -333,6 +338,8 @@ export type ModusApi = {
      * Project, created on first open; rejects `group-project-required`.
      */
     openChat(id: string): Promise<AgentSessionInfo>;
+    /** Markdown transcript of a migrated group room chat (null for other sessions). */
+    migratedTranscript(sessionId: string): Promise<string | null>;
     /**
      * One LLM call for a custom agent's `{ role, instructions }` (A3). Never
      * rejects on a model failure: `generated: false` is the Generalist fallback.

@@ -254,11 +254,14 @@ describe("downgrade guard", () => {
     newer.close();
 
     const known = new DatabaseSync(":memory:");
+    known.exec(`PRAGMA user_version = ${KNOWN_DATABASE_VERSION}`);
     expect(() => assertDatabaseVersionSupported(known)).not.toThrow();
     migrateDatabase(known);
     const version = known.prepare("PRAGMA user_version").get() as { user_version: number };
     expect(Number(version.user_version)).toBe(KNOWN_DATABASE_VERSION);
     known.close();
+    // PR 4: version 1 (written by the groups → projects migration) is known.
+    expect(KNOWN_DATABASE_VERSION).toBe(1);
     await rm(dir, { recursive: true, force: true });
   });
 

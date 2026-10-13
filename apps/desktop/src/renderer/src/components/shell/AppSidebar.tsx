@@ -1,5 +1,4 @@
 import {
-  IconCircles,
   IconEdit,
   IconMessageCircle,
   IconPin,
@@ -33,7 +32,7 @@ export type AppSidebarProps = {
   onNewProfile?: (() => void) | undefined;
   /** macOS: leave room for the traffic lights above the logo. */
   trafficLightClearance?: boolean;
-  /** Contextual list (projects, chats, groups) shown while expanded. */
+  /** Contextual list (projects and chats) shown while expanded. */
   children?: ReactNode;
 };
 
@@ -118,14 +117,6 @@ export function AppSidebar({
                   label: t("shell.projects"),
                   icon: <IconMessageCircle size={ICON.rail} stroke={ICON_STROKE.rail} />,
                   onClick: () => onNavigate("direct-messages"),
-                }}
-              />
-              <SidebarLink
-                active={active === "groups"}
-                link={{
-                  label: t("shell.groups"),
-                  icon: <IconCircles size={ICON.rail} stroke={ICON_STROKE.rail} />,
-                  onClick: () => onNavigate("groups"),
                 }}
               />
               {onNewProfile && active === "direct-messages" ? (

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { app } from "electron";
@@ -10,7 +10,15 @@ import {
   AGENT_AVATAR_SHAPES,
   allocateUniqueGroupAvatarShapes,
 } from "../../shared/contracts";
-import { isGroupsMigrationDone } from "./groups-to-projects";
+import {
+  backupBeforeGroupsMigration,
+  GROUPS_MIGRATION_MAX_ATTEMPTS,
+  type GroupsMigrationResult,
+  groupsMigrationAttempts,
+  isGroupsMigrationDone,
+  isGroupsMigrationPending,
+  migrateGroupsToProjects,
+} from "./groups-to-projects";
 
 let database: DatabaseSync | undefined;
 
@@ -1382,7 +1390,7 @@ function migrateLegacyGroupDecisions(db: DatabaseSync): void {
  * groups → projects migration (PR 4) will set 1; a build that knows only 0
  * must refuse such a file instead of re-running its legacy group steps on it.
  */
-export const KNOWN_DATABASE_VERSION = 0;
+export const KNOWN_DATABASE_VERSION = 1;
 
 export class DatabaseTooNewError extends Error {
   constructor(
@@ -1403,12 +1411,70 @@ export function assertDatabaseVersionSupported(db: DatabaseSync, dbPath = ""): v
   if (version > KNOWN_DATABASE_VERSION) throw new DatabaseTooNewError(version, dbPath);
 }
 
-export function getDatabase(): DatabaseSync {
+/** Groups → Projects failed (rolled back, groups intact). The startup screen offers Try again / Show backup. */
+export class GroupsMigrationError extends Error {
+  constructor(
+    message: string,
+    readonly attempts: number,
+    readonly backup: string | null,
+    readonly autoRetryStopped: boolean,
+  ) {
+    super(message);
+    this.name = "GroupsMigrationError";
+  }
+}
+
+let lastGroupsMigration: GroupsMigrationResult | undefined;
+
+/** The result of the migration run in this process, if one ran (for the notice / Markdown files). */
+export function getLastGroupsMigration(): GroupsMigrationResult | undefined {
+  return lastGroupsMigration;
+}
+
+export function databasePath(): string {
+  return join(app.getPath("userData"), "modus.sqlite");
+}
+
+/** Read-only probe used before the first open (splash decision). Never writes. */
+export function isGroupsMigrationPendingOnDisk(dbPath = databasePath()): boolean {
+  let db: DatabaseSync | undefined;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    return isGroupsMigrationPending(db);
+  } catch {
+    return false;
+  } finally {
+    db?.close();
+  }
+}
+
+/** Markdown copies of the migrated rooms, best effort, after the commit. */
+export function writeMigratedGroupMarkdown(
+  result: GroupsMigrationResult | undefined,
+  userData: string,
+): string[] {
+  if (!result || result.status !== "done") return [];
+  const dir = join(userData, "migrated-groups");
+  const written: string[] = [];
+  try {
+    mkdirSync(dir, { recursive: true });
+    for (const t of result.transcripts) {
+      const file = join(dir, `${t.groupId.replace(/[^A-Za-z0-9_-]/g, "_")}.md`);
+      writeFileSync(file, t.bodyMd, "utf8");
+      written.push(file);
+    }
+  } catch {
+    // Best effort: the transcript is in the database either way.
+  }
+  return written;
+}
+
+export function getDatabase(options: { forceGroupsMigration?: boolean } = {}): DatabaseSync {
   if (database) {
     return database;
   }
 
-  const dbPath = join(app.getPath("userData"), "modus.sqlite");
+  const dbPath = databasePath();
   mkdirSync(dirname(dbPath), { recursive: true });
 
   const db = new DatabaseSync(dbPath);
@@ -1420,8 +1486,71 @@ export function getDatabase(): DatabaseSync {
   }
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA foreign_keys = ON");
+  try {
+    openAndMigrate(db, dbPath, options.forceGroupsMigration === true);
+  } catch (error) {
+    db.close();
+    throw error;
+  }
   database = db;
-  migrateDatabase(db);
-
   return database;
+}
+
+/**
+ * Plan §2.4 order: probe → backup (before any write) → migrateDatabase (legacy
+ * group steps still run while the marker is not done) → groups → projects.
+ */
+export function openAndMigrate(db: DatabaseSync, dbPath: string, force: boolean): void {
+  const userData = dirname(dbPath);
+  const pending = isGroupsMigrationPending(db);
+  if (pending) {
+    const attempts = groupsMigrationAttempts(db);
+    if (attempts >= GROUPS_MIGRATION_MAX_ATTEMPTS && !force) {
+      throw new GroupsMigrationError(
+        "Moving your groups to Projects failed 3 times; automatic retries are paused.",
+        attempts,
+        null,
+        true,
+      );
+    }
+    let backup: string;
+    try {
+      backup = backupBeforeGroupsMigration(
+        db,
+        join(userData, "backups"),
+        (path) => new DatabaseSync(path, { readOnly: true }),
+      );
+    } catch (error) {
+      throw new GroupsMigrationError(
+        `Could not back up your data before moving groups: ${error instanceof Error ? error.message : String(error)}`,
+        attempts,
+        null,
+        false,
+      );
+    }
+    migrateDatabase(db);
+    try {
+      lastGroupsMigration = migrateGroupsToProjects(db, {
+        backup,
+        inboxRootPath: join(userData, "inbox-chats"),
+      });
+    } catch (error) {
+      throw new GroupsMigrationError(
+        error instanceof Error ? error.message : String(error),
+        groupsMigrationAttempts(db),
+        backup,
+        groupsMigrationAttempts(db) >= GROUPS_MIGRATION_MAX_ATTEMPTS,
+      );
+    }
+    mkdirSync(join(userData, "inbox-chats"), { recursive: true });
+    writeMigratedGroupMarkdown(lastGroupsMigration, userData);
+    return;
+  }
+  migrateDatabase(db);
+  if (!isGroupsMigrationDone(db)) {
+    // Fresh or group-free database: record done (zero counts) so the legacy steps stay off.
+    lastGroupsMigration = migrateGroupsToProjects(db, {
+      inboxRootPath: join(userData, "inbox-chats"),
+    });
+  }
 }

@@ -20,7 +20,7 @@ describe("App shell", () => {
             <div>Room content</div>
           </MainSurface>
         }
-        rail={<AppRail active="groups" onNavigate={vi.fn()} />}
+        rail={<AppRail active="direct-messages" onNavigate={vi.fn()} />}
         sidebar={<ContextSidebar>Group list</ContextSidebar>}
       />,
     );
@@ -66,7 +66,7 @@ describe("App shell", () => {
     expect(directMessages.getAttribute("aria-current")).toBe("page");
     expect(within(navigation).queryByText("Projects")).toBeNull();
     expect(within(navigation).queryByText("Groups")).toBeNull();
-    expect(within(navigation).getByRole("button", { name: "Groups" })).toBeTruthy();
+    expect(within(navigation).queryByRole("button", { name: "Groups" })).toBeNull();
     expect(within(navigation).queryByRole("button", { name: "Connections" })).toBeNull();
     const brand = within(navigation).getByTestId("app-rail-brand");
     const mascot = within(brand).getByRole("img", { name: "Modus" });
@@ -82,7 +82,7 @@ describe("App shell", () => {
   it("keeps rail destinations in fixed slots with larger vector icons across navigation", () => {
     const onNavigate = vi.fn<(destination: PrimaryDestination) => void>();
     const { rerender } = render(
-      <AppRail active="groups" topChromeClearance onNavigate={onNavigate} />,
+      <AppRail active="direct-messages" topChromeClearance onNavigate={onNavigate} />,
     );
 
     const metrics = () => {
@@ -98,7 +98,6 @@ describe("App shell", () => {
 
     const initialMetrics = metrics();
     expect(initialMetrics).toEqual([
-      { label: "Groups", iconSize: "20", slotClass: true },
       { label: "Projects", iconSize: "20", slotClass: true },
       { label: "Settings", iconSize: "20", slotClass: true },
     ]);
@@ -109,14 +108,14 @@ describe("App shell", () => {
 
   it("reserves top chrome space above the rail when its row starts at the window top", () => {
     const { rerender } = render(
-      <AppRail active="groups" topChromeClearance onNavigate={vi.fn()} />,
+      <AppRail active="direct-messages" topChromeClearance onNavigate={vi.fn()} />,
     );
 
     const rail = screen.getByRole("navigation", { name: "Primary navigation" });
     expect(rail.getAttribute("data-top-chrome-clearance")).toBe("true");
     expect(rail.classList.contains("app-rail-top-chrome-clearance")).toBe(true);
 
-    rerender(<AppRail active="groups" onNavigate={vi.fn()} />);
+    rerender(<AppRail active="direct-messages" onNavigate={vi.fn()} />);
     expect(
       screen
         .getByRole("navigation", { name: "Primary navigation" })

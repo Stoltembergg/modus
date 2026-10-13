@@ -56,19 +56,20 @@ describe("AppSidebar", () => {
     expect(screen.getByTestId("context-sidebar")).toBeTruthy();
     fireEvent.mouseLeave(nav);
     expect(screen.queryByTestId("context-sidebar")).toBeNull();
-    fireEvent.focus(screen.getByRole("button", { name: "Groups" }));
+    fireEvent.focus(screen.getByRole("button", { name: "Projects" }));
     expect(screen.getByTestId("context-sidebar")).toBeTruthy();
   });
 
   it("keeps all destinations and actions as links", () => {
     const h = renderSidebar({ pinned: true });
     fireEvent.click(screen.getByRole("button", { name: "New message" }));
-    fireEvent.click(screen.getByRole("button", { name: "Groups" }));
+    expect(screen.queryByRole("button", { name: "Groups" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Projects" }));
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     fireEvent.click(screen.getByRole("button", { name: "New profile" }));
     expect(h.onNewMessage).toHaveBeenCalledOnce();
     expect(h.onNewProfile).toHaveBeenCalledOnce();
-    expect(h.onNavigate.mock.calls).toEqual([["groups"], ["settings"]]);
+    expect(h.onNavigate.mock.calls).toEqual([["direct-messages"], ["settings"]]);
     expect(screen.getByRole("button", { name: "Projects" }).getAttribute("aria-current")).toBe(
       "page",
     );

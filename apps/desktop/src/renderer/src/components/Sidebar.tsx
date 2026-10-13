@@ -25,29 +25,22 @@ import {
   useRef,
   useState,
 } from "react";
-import type {
-  AgentGroupWithMembers,
-  AgentSessionInfo,
-  CreateAgentGroupInput,
-  WorkspaceInfo,
-} from "../../../shared/contracts";
+import type { AgentSessionInfo, WorkspaceInfo } from "../../../shared/contracts";
 import type { SessionActivity } from "../features/agent/agentEventHub";
 import { SessionStatusDot } from "../features/agent/SessionStatusDot";
-import type { GroupDialogModel, GroupMembersChange } from "../features/groups/CreateGroupDialog";
-import {
-  isListedChat,
-  projectGroupNames,
-  removeProjectGroupsWarning,
-} from "../features/groups/groupSidebarModel";
-import type { NewGroupServices } from "../features/groups/NewGroupModal";
-import type { GroupMemberStatesById } from "../features/groups/useWorkingGroups";
 import { cn } from "../lib/cn";
 import { beginResizeGesture, endResizeGesture } from "../lib/resizeGesture";
 import { useShellText } from "../lib/shellText";
 import { ICON, ICON_STROKE } from "../lib/uiDensity";
 import { useScrollFade } from "../lib/useScrollFade";
-import { SidebarGroups } from "./SidebarGroups";
 import { CollapsibleMotion } from "./ui/CollapsibleMotion";
+
+/** Former hidden group room sessions are never listed (all are converted by the PR 4 migration). */
+function isListedChat(session: AgentSessionInfo): boolean {
+  return session.kind !== "group_member";
+}
+
+const NO_NAMES: readonly string[] = [];
 
 export const SIDEBAR_MIN_WIDTH = 240;
 const SIDEBAR_MAX_WIDTH = 480;
@@ -75,7 +68,7 @@ const LIST_MOTION = { duration: 0.16, ease: "easeOut" } as const;
 
 type SidebarProps = {
   /** The primary rail destination whose list belongs in this context panel. */
-  section?: "groups" | "direct-messages";
+  section?: "direct-messages";
   workspaces: WorkspaceInfo[];
   agentSessions: AgentSessionInfo[];
   activeSessionId?: string | undefined;
@@ -104,49 +97,14 @@ type SidebarProps = {
   onOpenSettings(): void;
   onWidthChange(width: number): void;
   canCreateSession: boolean;
-  /** Agent Groups (with members). Member chats show only under their group. */
-  groups?: readonly AgentGroupWithMembers[];
-  /** Models for new agents in the group dialogs. */
-  groupModels?: readonly GroupDialogModel[];
-  defaultGroupModelId?: string | undefined;
-  /** Project preselected in the create-group dialog (usually the active one). */
-  activeWorkspaceId?: string | null;
-  /** Group-row activity dot selector; defaults to an always-false stub until PR 3. */
-  isGroupWorking?: (group: AgentGroupWithMembers) => boolean;
-  /** Group-row amber "waiting for you" dot (wins over working). */
-  isGroupWaiting?: (group: AgentGroupWithMembers) => boolean;
-  /** The group whose room is open in the main panel. */
-  activeGroupId?: string | undefined;
-  /** Open a group's room (clicking the group name). */
-  onSelectGroup?(group: AgentGroupWithMembers): void;
-  onCreateGroup?(input: CreateAgentGroupInput): Promise<void>;
-  /** The create-group modal's app services (A4). */
-  newGroupServices?: NewGroupServices | undefined;
-  onRenameGroup?(groupId: string, name: string): void;
-  /** "Manage members" (atomic); rejects so the dialog can show the error. */
-  onUpdateGroupMembers?(groupId: string, change: GroupMembersChange): Promise<void>;
-  onDeleteGroup?(groupId: string): void;
-  onRemoveGroupMember?(groupId: string, sessionId: string): void;
-  onSetGroupLead?(groupId: string, sessionId: string | null): void;
-  /** Room member states (the agents' avatars show working / waiting). */
-  groupMemberStates?: GroupMemberStatesById | undefined;
-  /** Open an agent's 1:1 chat (A3, created on first open). */
-  onOpenAgentChat?(agentId: string): void;
-  /** Edit an agent (the agent dialog). */
-  onEditAgent?(agentId: string): void;
-  /** Add a custom agent to a group (the agent dialog). */
-  onAddAgent?(groupId: string): void;
   /** "New profile" button next to/near New group. */
   onNewProfile?(): void;
   /** Render only the scrolling list, for the animated app sidebar (no panel, no resize). */
   embedded?: boolean;
 };
 
-const NO_GROUPS: readonly AgentGroupWithMembers[] = [];
-const NO_MODELS: readonly GroupDialogModel[] = [];
-
 export function Sidebar({
-  section = "groups",
+  section = "direct-messages",
   workspaces,
   agentSessions,
   activeSessionId,
@@ -172,25 +130,6 @@ export function Sidebar({
   onWidthChange,
   canCreateSession,
   onRenameSession,
-  groups = NO_GROUPS,
-  groupModels = NO_MODELS,
-  defaultGroupModelId,
-  activeWorkspaceId = null,
-  isGroupWorking,
-  isGroupWaiting,
-  activeGroupId,
-  onSelectGroup,
-  onCreateGroup,
-  newGroupServices,
-  onRenameGroup,
-  onUpdateGroupMembers,
-  onDeleteGroup,
-  onRemoveGroupMember,
-  onSetGroupLead,
-  groupMemberStates,
-  onOpenAgentChat,
-  onEditAgent,
-  onAddAgent,
   onNewProfile,
   embedded = false,
 }: SidebarProps) {
@@ -198,7 +137,6 @@ export function Sidebar({
   const [projectsExpanded, setProjectsExpanded] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [pinnedExpanded, setPinnedExpanded] = useState(true);
-  const [groupsExpanded, setGroupsExpanded] = useState(true);
   // Hidden group room sessions (kind "group_member") are never listed as chats.
   const ungroupedSessions = useMemo(() => agentSessions.filter(isListedChat), [agentSessions]);
   const sessionsByWorkspace = groupSessionsByWorkspace(
@@ -335,47 +273,6 @@ export function Sidebar({
         </>
       )}
 
-      {section === "groups" && onCreateGroup ? (
-        <>
-          <SectionHeader
-            expanded={groupsExpanded}
-            onToggle={() => setGroupsExpanded((expanded) => !expanded)}
-          >
-            Groups
-          </SectionHeader>
-          <CollapsibleMotion open={groupsExpanded} preset="default">
-            <SidebarGroups
-              activeSessionId={activeSessionId}
-              activityBySession={activityBySession}
-              defaultWorkspaceId={activeWorkspaceId}
-              groups={groups}
-              onCreateGroup={onCreateGroup}
-              newGroupServices={newGroupServices}
-              onDeleteGroup={(id) => onDeleteGroup?.(id)}
-              onRemoveMember={(groupId, sessionId) => onRemoveGroupMember?.(groupId, sessionId)}
-              onRenameGroup={(id, name) => onRenameGroup?.(id, name)}
-              onSelectSession={onSelectSession}
-              onSetLead={(groupId, sessionId) => onSetGroupLead?.(groupId, sessionId)}
-              onUpdateMembers={async (groupId, change) => {
-                await onUpdateGroupMembers?.(groupId, change);
-              }}
-              sessions={agentSessions}
-              workspaces={workspaces}
-              models={groupModels}
-              defaultModelId={defaultGroupModelId}
-              {...(isGroupWorking ? { isGroupWorking } : {})}
-              {...(isGroupWaiting ? { isGroupWaiting } : {})}
-              {...(onSelectGroup ? { onSelectGroup, activeGroupId } : {})}
-              memberStates={groupMemberStates}
-              onAddAgent={onAddAgent}
-              onEditAgent={onEditAgent}
-              onOpenAgentChat={onOpenAgentChat}
-              {...(onNewProfile ? { onNewProfile } : {})}
-            />
-          </CollapsibleMotion>
-        </>
-      ) : null}
-
       {section === "direct-messages" ? (
         <>
           <AnimatePresence initial={false}>
@@ -462,7 +359,7 @@ export function Sidebar({
                     onArchiveChats={() => onArchiveProjectChats(workspace.id)}
                     onDeleteChats={() => onDeleteProjectChats(workspace.id)}
                     onRemove={() => onRemoveProject(workspace.id)}
-                    groupNames={projectGroupNames(groups, workspace.id)}
+                    groupNames={NO_NAMES}
                   />
                 </m.div>
               ))}
@@ -1250,7 +1147,7 @@ function ProjectActions({
                 onRemove();
               }}
             >
-              {confirmRemove ? removeProjectGroupsWarning(groupNames) : "Remove"}
+              {confirmRemove ? `Remove project with ${groupNames.join(", ")}?` : "Remove"}
             </ProjectMenuItem>
           </Menu.Popup>
         </Menu.Positioner>

@@ -46,3 +46,75 @@ describe("openDatabaseAtStartup", () => {
     expect(deps.showErrorBox).not.toHaveBeenCalled();
   });
 });
+
+describe("openDatabaseAtStartup: groups migration failure", async () => {
+  const { GroupsMigrationError } = await import("./database");
+  const failure = () => new GroupsMigrationError("verify failed", 3, "/data/backups/b.db", true);
+
+  it("shows the migration-error screen; Try again forces a re-run and boot continues", () => {
+    let calls = 0;
+    const open = vi.fn(() => {
+      calls += 1;
+      if (calls === 1) throw failure();
+    });
+    const showMigrationError = vi.fn(() => "retry" as const);
+    const deps = { open, showErrorBox: vi.fn(), quit: vi.fn(), showMigrationError };
+    expect(openDatabaseAtStartup(deps)).toBe(true);
+    expect(open).toHaveBeenNthCalledWith(2, { forceGroupsMigration: true });
+    expect(deps.quit).not.toHaveBeenCalled();
+  });
+
+  it("Show backup reveals the backup and asks again; Quit exits", () => {
+    const choices = ["backup", "quit"] as const;
+    let i = 0;
+    const deps = {
+      open: vi.fn(() => {
+        throw failure();
+      }),
+      showErrorBox: vi.fn(),
+      quit: vi.fn(),
+      showMigrationError: vi.fn(() => choices[i++] ?? "quit"),
+      showBackup: vi.fn(),
+    };
+    expect(openDatabaseAtStartup(deps)).toBe(false);
+    expect(deps.showBackup).toHaveBeenCalledWith("/data/backups/b.db");
+    expect(deps.quit).toHaveBeenCalledTimes(1);
+  });
+
+  it("Show backup never calls open again nor spends an attempt", () => {
+    const choices = ["backup", "backup", "backup", "quit"] as const;
+    let i = 0;
+    const err = failure();
+    const deps = {
+      open: vi.fn(() => {
+        throw err;
+      }),
+      showErrorBox: vi.fn(),
+      quit: vi.fn(),
+      showMigrationError: vi.fn((_e: unknown) => choices[i++] ?? "quit"),
+      showBackup: vi.fn(),
+    };
+    expect(openDatabaseAtStartup(deps)).toBe(false);
+    expect(deps.open).toHaveBeenCalledTimes(1);
+    expect(deps.showBackup).toHaveBeenCalledTimes(3);
+    expect(deps.showMigrationError).toHaveBeenCalledTimes(4);
+    for (const call of deps.showMigrationError.mock.calls) expect(call[0]).toBe(err);
+    expect(err.attempts).toBe(3);
+  });
+
+  it("without a screen, falls back to an error box that says nothing was lost", async () => {
+    const { GROUPS_MIGRATION_ERROR_TITLE } = await import("./database-startup");
+    const deps = {
+      open: vi.fn(() => {
+        throw failure();
+      }),
+      showErrorBox: vi.fn(),
+      quit: vi.fn(),
+    };
+    expect(openDatabaseAtStartup(deps)).toBe(false);
+    expect(deps.showErrorBox).toHaveBeenCalledWith(
+      GROUPS_MIGRATION_ERROR_TITLE,
+      expect.stringMatching(/Nothing was lost[\s\S]*b\.db[\s\S]*paused after 3/),
+    );
+  });
+});
