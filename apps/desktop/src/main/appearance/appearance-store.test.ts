@@ -25,13 +25,13 @@ describe("appearance store (userData JSON)", () => {
     expect(createAppearanceStore(dir).read()).toEqual({
       theme: "dark",
       transparency: "sidebar",
-      look: "classic",
+      look: "new",
     });
     writeFileSync(join(dir, APPEARANCE_FILE_NAME), "not json");
     expect(createAppearanceStore(dir).read()).toEqual({
       theme: "dark",
       transparency: "sidebar",
-      look: "classic",
+      look: "new",
     });
   });
 
@@ -41,12 +41,12 @@ describe("appearance store (userData JSON)", () => {
     expect(createAppearanceStore(dir).read()).toEqual({
       theme: "light",
       transparency: "sidebar",
-      look: "classic",
+      look: "new",
     });
     expect(onDisk(dir)).toEqual({
       theme: "light",
       transparency: "sidebar",
-      look: "classic",
+      look: "new",
     });
   });
 
@@ -54,18 +54,18 @@ describe("appearance store (userData JSON)", () => {
     expect(migrateAppearancePreferences({ theme: "dark-plus", transparency: "on" })).toEqual({
       theme: "dark-plus",
       transparency: "sidebar",
-      look: "classic",
+      look: "new",
     });
     expect(migrateAppearancePreferences({ theme: "neon", transparency: "full" })).toEqual({
       theme: "dark",
       transparency: "full",
-      look: "classic",
+      look: "new",
     });
     for (const raw of [null, 42, "x", [], {}]) {
       expect(migrateAppearancePreferences(raw)).toEqual({
         theme: "dark",
         transparency: "sidebar",
-        look: "classic",
+        look: "new",
       });
     }
   });
@@ -83,23 +83,23 @@ describe("appearance store (userData JSON)", () => {
     ).toEqual({
       theme: "light",
       transparency: "full",
-      look: "classic",
+      look: "new",
     });
     expect(migrateAppearancePreferences({ theme: "light", transparency: "full" })).toEqual({
       theme: "light",
       transparency: "full",
-      look: "classic",
+      look: "new",
     });
   });
 
   it("round-trips preferences and leaves an already valid file untouched", () => {
     const dir = tempDir();
-    createAppearanceStore(dir).write({ theme: "light", transparency: "off", look: "classic" });
+    createAppearanceStore(dir).write({ theme: "light", transparency: "off", look: "new" });
     const before = readFileSync(join(dir, APPEARANCE_FILE_NAME), "utf8");
     expect(createAppearanceStore(dir).read()).toEqual({
       theme: "light",
       transparency: "off",
-      look: "classic",
+      look: "new",
     });
     expect(readFileSync(join(dir, APPEARANCE_FILE_NAME), "utf8")).toBe(before);
   });

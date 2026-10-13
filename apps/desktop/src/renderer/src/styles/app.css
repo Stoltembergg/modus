@@ -71,7 +71,7 @@
   --color-icon-muted: #a6a6a3;
 
   /* 单一品牌电压：Cursor Orange，仅用于主操作（发送）等极少处 */
-  --color-accent: #f54e00;
+  --color-accent: #863ff5;
   --color-accent-hover: #ff5e12;
   --color-accent-active: #d04200;
 
@@ -742,7 +742,7 @@
  *   - chrome panels use neutral #f8f8f8 and lean on hairlines for depth;
  *   - hairlines / hover / active become black-alpha so they read on white;
  *   - text tiers are WCAG-checked dark-on-light (fg≈12:1, muted≈9:1, subtle≈5:1);
- *   - brand accent (orange) and focus purple are preserved across both themes.
+ *   - brand accent (logo purple) and focus purple are preserved across both themes.
  * Only the semantic CSS variables change; every component keeps its classes.
  */
 :root[data-theme="light"] {
@@ -805,8 +805,8 @@
   /* Toolbar chrome — one step quieter than body icons (Cursor-like). */
   --color-icon-muted: #8a8a87;
 
-  /* Brand accent (send): orange fill works on both themes */
-  --color-accent: #f54e00;
+  /* Brand accent (send): Modus logo purple on both themes */
+  --color-accent: #863ff5;
   --color-accent-hover: #ff5e12;
   --color-accent-active: #d04200;
   --color-on-accent: #ffffff;
@@ -917,7 +917,7 @@
   --color-icon: #cccccc;
   --color-icon-muted: #bfbfbf;
 
-  --color-accent: #f54e00;
+  --color-accent: #863ff5;
   --color-accent-hover: #ff5e12;
   --color-accent-active: #d04200;
   --color-on-accent: #ffffff;

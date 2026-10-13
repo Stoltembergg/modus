@@ -2,9 +2,9 @@ import { readFileSync } from "node:fs";
 import { optimize } from "@tailwindcss/node";
 import { describe, expect, it } from "vitest";
 import {
+  NEW_LOOK_SOLID_WINDOW_BACKGROUND,
+  NEW_LOOK_WINDOW_SYMBOL_COLOR,
   resolveAppearance,
-  SOLID_WINDOW_BACKGROUND,
-  WINDOW_SYMBOL_COLOR,
 } from "../../../shared/appearance";
 import { resolveWindowAppearance } from "../../../shared/window-appearance";
 
@@ -497,13 +497,19 @@ describe("glass in production (D2)", () => {
     expect(checked).toBeGreaterThanOrEqual(2);
   });
 
-  it("(i) native window colours mirror the palette tokens", () => {
-    for (const theme of THEMES) {
-      const hex = (rgb: Rgb) => `#${rgb.map((c) => c.toString(16).padStart(2, "0")).join("")}`;
-      expect(SOLID_WINDOW_BACKGROUND[theme], `${theme} canvas`).toBe(
-        hex(color(theme, "--color-canvas")),
-      );
-      expect(WINDOW_SYMBOL_COLOR[theme], `${theme} fg`).toBe(hex(color(theme, "--color-fg")));
-    }
+  it("(i) native window colours mirror the new-look palette tokens", () => {
+    const tokens = readFileSync(new URL("./tokens-new.css", import.meta.url), "utf8");
+    const body = (selector: string) => {
+      const start = tokens.indexOf(`${selector} {`);
+      return tokens.slice(start, tokens.indexOf("}", start));
+    };
+    const pick = (b: string, name: string) =>
+      b.match(new RegExp(`${name}:\\s*(#[0-9a-f]{6})`, "i"))?.[1]?.toLowerCase();
+    const dark = body(':root[data-ui="new"]');
+    const light = body(':root[data-ui="new"][data-theme="light"]');
+    expect(NEW_LOOK_SOLID_WINDOW_BACKGROUND.dark).toBe(pick(dark, "--color-canvas"));
+    expect(NEW_LOOK_WINDOW_SYMBOL_COLOR.dark).toBe(pick(dark, "--color-fg"));
+    expect(NEW_LOOK_SOLID_WINDOW_BACKGROUND.light).toBe(pick(light, "--color-canvas"));
+    expect(NEW_LOOK_WINDOW_SYMBOL_COLOR.light).toBe(pick(light, "--color-fg"));
   });
 });

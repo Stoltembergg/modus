@@ -20,7 +20,7 @@ export type TransparencyPreference = "full" | "sidebar" | "off";
  * default; "new" swaps the design tokens (styles/tokens-new.css) through
  * <html data-ui>. Presentation only: nothing outside styling reads it.
  */
-export type LookPreference = "classic" | "new";
+export type LookPreference = "new";
 export type AppearancePreferences = {
   theme: ThemePreference;
   /** Stored Transparency. Applied as-is only once chosen (see effectiveTransparency). */
@@ -43,16 +43,15 @@ export type EffectiveTheme = Exclude<ThemePreference, "system">;
 export const DEFAULT_APPEARANCE_PREFERENCES: AppearancePreferences = {
   theme: "dark",
   transparency: "sidebar",
-  look: "classic",
+  look: "new",
 };
 
 /** Transparency each look uses until the user picks one (the new concept is glass end to end). */
 export const NEW_LOOK_DEFAULT_TRANSPARENCY: TransparencyPreference = "full";
 
 export function defaultTransparencyFor(look: LookPreference): TransparencyPreference {
-  return look === "new"
-    ? NEW_LOOK_DEFAULT_TRANSPARENCY
-    : DEFAULT_APPEARANCE_PREFERENCES.transparency;
+  void look;
+  return NEW_LOOK_DEFAULT_TRANSPARENCY;
 }
 
 /**
@@ -85,7 +84,7 @@ export function applyAppearanceInput(
   return {
     theme: input.theme ?? preferences.theme,
     transparency: input.transparency ?? preferences.transparency,
-    look: input.look ?? preferences.look,
+    look: "new",
     ...(chosen ? { transparencyChosen: true as const } : {}),
   };
 }
@@ -112,13 +111,6 @@ export type AppearanceState = AppearancePreferences & {
   os: OsAppearance;
 };
 
-/** Solid window colour per palette (mirrors --color-canvas in app.css). */
-export const SOLID_WINDOW_BACKGROUND: Record<EffectiveTheme, string> = {
-  dark: "#131314",
-  "dark-plus": "#1e1e1e",
-  light: "#ffffff",
-};
-
 /** Solid window colour in the new look (mirrors --color-canvas in tokens-new.css). */
 export const NEW_LOOK_SOLID_WINDOW_BACKGROUND: Record<
   Exclude<EffectiveTheme, "dark-plus">,
@@ -138,26 +130,13 @@ export const NEW_LOOK_WINDOW_SYMBOL_COLOR: Record<Exclude<EffectiveTheme, "dark-
 export function solidWindowBackground(
   state: Pick<AppearanceState, "effectiveTheme" | "look">,
 ): string {
-  if (state.look === "new") {
-    return NEW_LOOK_SOLID_WINDOW_BACKGROUND[state.effectiveTheme === "light" ? "light" : "dark"];
-  }
-  return SOLID_WINDOW_BACKGROUND[state.effectiveTheme];
+  return NEW_LOOK_SOLID_WINDOW_BACKGROUND[state.effectiveTheme === "light" ? "light" : "dark"];
 }
 
 /** Window-control glyph colour for a resolved appearance (look-aware). */
 export function windowSymbolColor(state: Pick<AppearanceState, "effectiveTheme" | "look">): string {
-  if (state.look === "new") {
-    return NEW_LOOK_WINDOW_SYMBOL_COLOR[state.effectiveTheme === "light" ? "light" : "dark"];
-  }
-  return WINDOW_SYMBOL_COLOR[state.effectiveTheme];
+  return NEW_LOOK_WINDOW_SYMBOL_COLOR[state.effectiveTheme === "light" ? "light" : "dark"];
 }
-
-/** Window-control glyph colour per palette (mirrors --color-fg in app.css). */
-export const WINDOW_SYMBOL_COLOR: Record<EffectiveTheme, string> = {
-  dark: "#d8d8d7",
-  "dark-plus": "#cccccc",
-  light: "#222222",
-};
 
 /** nativeTheme.themeSource that keeps OS materials and prefers-color-scheme on the app palette. */
 export function themeSourceFor(theme: ThemePreference): "system" | "light" | "dark" {
@@ -168,11 +147,12 @@ export function themeSourceFor(theme: ThemePreference): "system" | "light" | "da
 export function effectiveThemeFor(
   theme: ThemePreference,
   osDark: boolean,
-  look: LookPreference = "classic",
+  look: LookPreference = "new",
 ): EffectiveTheme {
   if (theme === "system") return osDark ? "dark" : "light";
-  // Eye-care Dark is classic-only; the new look shows its dark palette instead.
-  if (theme === "dark-plus" && look === "new") return "dark";
+  void look;
+  // Eye-care Dark belonged to the removed classic look; it shows the dark palette.
+  if (theme === "dark-plus") return "dark";
   return theme;
 }
 
@@ -200,7 +180,8 @@ export function resolveAppearance({
   os: OsAppearance;
 }): AppearanceState {
   const { transparencyChosen: _chosen, ...stored } = preferences;
-  const look = stored.look ?? DEFAULT_APPEARANCE_PREFERENCES.look;
+  // The classic look is gone: every stored value (including a legacy "classic") reads as new.
+  const look: LookPreference = "new";
   // The state carries the Transparency that applies, so Settings shows it.
   const transparency = effectiveTransparency({ ...preferences, look });
   const effectiveTheme = effectiveThemeFor(stored.theme, os.dark, look);

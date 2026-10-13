@@ -27,7 +27,7 @@ function readStored(): ThemeMode {
 }
 
 let current: ThemeMode = readStored();
-let look: LookPreference = "classic";
+let look: LookPreference = "new";
 let systemColorScheme: MediaQueryList | null = null;
 let systemColorSchemeListenerAttached = false;
 const listeners = new Set<() => void>();

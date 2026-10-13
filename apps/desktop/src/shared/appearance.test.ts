@@ -8,10 +8,8 @@ import {
   NEW_LOOK_WINDOW_SYMBOL_COLOR,
   type OsAppearance,
   resolveAppearance,
-  SOLID_WINDOW_BACKGROUND,
   solidWindowBackground,
   themeSourceFor,
-  WINDOW_SYMBOL_COLOR,
   windowSymbolColor,
 } from "./appearance";
 import { resolveWindowAppearance } from "./window-appearance";
@@ -24,7 +22,7 @@ const OS: OsAppearance = { dark: true, reducedTransparency: false, highContrast:
 const prefs = (p: Partial<AppearancePreferences> = {}): AppearancePreferences => ({
   theme: "dark",
   transparency: "sidebar",
-  look: "classic",
+  look: "new",
   ...p,
 });
 
@@ -33,16 +31,24 @@ describe("resolveAppearance (D2 state matrix)", () => {
     for (const theme of ["dark", "dark-plus", "light"] as const) {
       for (const transparency of ["sidebar", "full"] as const) {
         expect(
-          resolveAppearance({ window: MAC, preferences: prefs({ theme, transparency }), os: OS }),
+          resolveAppearance({
+            window: MAC,
+            preferences: prefs({ theme, transparency, transparencyChosen: true }),
+            os: OS,
+          }),
         ).toMatchObject({
           glass: true,
           glassMode: transparency,
           material: "vibrancy",
           blockedBy: null,
-          effectiveTheme: theme,
+          effectiveTheme: theme === "dark-plus" ? "dark" : theme,
         });
         expect(
-          resolveAppearance({ window: WIN11, preferences: prefs({ theme, transparency }), os: OS }),
+          resolveAppearance({
+            window: WIN11,
+            preferences: prefs({ theme, transparency, transparencyChosen: true }),
+            os: OS,
+          }),
         ).toMatchObject({ glass: true, glassMode: transparency, material: "mica" });
       }
     }
@@ -97,106 +103,48 @@ describe("resolveAppearance (D2 state matrix)", () => {
     expect(themeSourceFor("dark-plus")).toBe("dark");
   });
 
-  it("never rewrites Transparency when the look changes", () => {
-    const classic = { theme: "dark", transparency: "sidebar", look: "classic" } as const;
-    const toNew = applyAppearanceInput(classic, { look: "new" });
-    expect(toNew).toEqual({ theme: "dark", transparency: "sidebar", look: "new" });
-    expect(effectiveTransparency(toNew)).toBe("full");
-    // Round trip classic -> new -> classic restores the original exactly.
-    const back = applyAppearanceInput(toNew, { look: "classic" });
-    expect(back).toEqual(classic);
-    expect(effectiveTransparency(back)).toBe("sidebar");
-    // Theme-only input keeps look and Transparency.
-    expect(applyAppearanceInput(toNew, { theme: "light" })).toEqual({
-      theme: "light",
+  it("migrates a stored classic look to new without rewriting Transparency", () => {
+    const legacy = {
+      theme: "dark",
       transparency: "sidebar",
-      look: "new",
-    });
+      look: "classic",
+    } as unknown as Parameters<typeof applyAppearanceInput>[0];
+    const next = applyAppearanceInput(legacy, { theme: "light" });
+    expect(next).toEqual({ theme: "light", transparency: "sidebar", look: "new" });
+    // Unchosen Sidebar was the classic default: the new look applies Full.
+    expect(effectiveTransparency(next)).toBe("full");
+    const state = resolveAppearance({ window: MAC, preferences: legacy, os: OS });
+    expect(state.look).toBe("new");
+    expect(state.glassMode).toBe("full");
   });
 
-  it("respects an explicit Transparency in both looks", () => {
-    const classic = { theme: "dark", transparency: "sidebar", look: "classic" } as const;
-    // Explicit Sidebar is kept under New.
-    const pickedSidebar = applyAppearanceInput(classic, { transparency: "sidebar" });
-    expect(pickedSidebar).toEqual({ ...classic, transparencyChosen: true });
-    const underNew = applyAppearanceInput(pickedSidebar, { look: "new" });
-    expect(effectiveTransparency(underNew)).toBe("sidebar");
-    // Picking Sidebar while already on New is kept too.
-    const onNew = applyAppearanceInput(classic, { look: "new" });
-    expect(effectiveTransparency(applyAppearanceInput(onNew, { transparency: "sidebar" }))).toBe(
-      "sidebar",
-    );
-    // An explicit Full on New survives going back to Classic.
-    const pickedFull = applyAppearanceInput(onNew, { transparency: "full" });
-    expect(effectiveTransparency(applyAppearanceInput(pickedFull, { look: "classic" }))).toBe(
-      "full",
-    );
-    // Legacy files without the flag: anything but the classic default was a choice.
+  it("keeps an explicit Transparency", () => {
+    const base = { theme: "dark", transparency: "sidebar", look: "new" } as const;
+    const picked = applyAppearanceInput(base, { transparency: "sidebar" });
+    expect(picked).toEqual({ ...base, transparencyChosen: true });
+    expect(effectiveTransparency(picked)).toBe("sidebar");
     expect(effectiveTransparency({ transparency: "off", look: "new" })).toBe("off");
-    expect(effectiveTransparency({ transparency: "full", look: "classic" })).toBe("full");
+    expect(effectiveTransparency({ transparency: "full", look: "new" })).toBe("full");
   });
 
-  it("resolves effective theme according to look", () => {
-    expect(effectiveThemeFor("dark-plus", true, "new")).toBe("dark");
-    expect(effectiveThemeFor("dark-plus", false, "new")).toBe("dark");
-    expect(effectiveThemeFor("dark-plus", true, "classic")).toBe("dark-plus");
-    expect(effectiveThemeFor("dark-plus", false, "classic")).toBe("dark-plus");
+  it("shows a stored Eye-care Dark as Dark", () => {
+    expect(effectiveThemeFor("dark-plus", true)).toBe("dark");
+    expect(effectiveThemeFor("dark-plus", false)).toBe("dark");
+    const state = resolveAppearance({
+      window: MAC,
+      preferences: prefs({ theme: "dark-plus" }),
+      os: OS,
+    });
+    expect(state.effectiveTheme).toBe("dark");
   });
 
-  it("carries look through resolveAppearance", () => {
-    const classicState = resolveAppearance({
-      window: MAC,
-      preferences: prefs({ look: "classic" }),
-      os: OS,
-    });
-    expect(classicState.look).toBe("classic");
-
-    const newState = resolveAppearance({
-      window: MAC,
-      preferences: prefs({ look: "new" }),
-      os: OS,
-    });
-    expect(newState.look).toBe("new");
-
-    const darkPlusNew = resolveAppearance({
-      window: MAC,
-      preferences: prefs({ theme: "dark-plus", look: "new" }),
-      os: OS,
-    });
-    expect(darkPlusNew.effectiveTheme).toBe("dark");
-    expect(darkPlusNew.look).toBe("new");
-  });
-
-  it("computes solidWindowBackground and windowSymbolColor for classic and new looks", () => {
-    // classic
-    expect(solidWindowBackground({ look: "classic", effectiveTheme: "dark" })).toBe(
-      SOLID_WINDOW_BACKGROUND.dark,
-    );
-    expect(solidWindowBackground({ look: "classic", effectiveTheme: "dark-plus" })).toBe(
-      SOLID_WINDOW_BACKGROUND["dark-plus"],
-    );
-    expect(solidWindowBackground({ look: "classic", effectiveTheme: "light" })).toBe(
-      SOLID_WINDOW_BACKGROUND.light,
-    );
-
-    expect(windowSymbolColor({ look: "classic", effectiveTheme: "dark" })).toBe(
-      WINDOW_SYMBOL_COLOR.dark,
-    );
-    expect(windowSymbolColor({ look: "classic", effectiveTheme: "dark-plus" })).toBe(
-      WINDOW_SYMBOL_COLOR["dark-plus"],
-    );
-    expect(windowSymbolColor({ look: "classic", effectiveTheme: "light" })).toBe(
-      WINDOW_SYMBOL_COLOR.light,
-    );
-
-    // new
+  it("uses the new-look window colours", () => {
     expect(solidWindowBackground({ look: "new", effectiveTheme: "dark" })).toBe(
       NEW_LOOK_SOLID_WINDOW_BACKGROUND.dark,
     );
     expect(solidWindowBackground({ look: "new", effectiveTheme: "light" })).toBe(
       NEW_LOOK_SOLID_WINDOW_BACKGROUND.light,
     );
-
     expect(windowSymbolColor({ look: "new", effectiveTheme: "dark" })).toBe(
       NEW_LOOK_WINDOW_SYMBOL_COLOR.dark,
     );
