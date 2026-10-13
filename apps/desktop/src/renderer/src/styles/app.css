@@ -450,6 +450,85 @@
   background-color: var(--color-active);
   color: var(--text-primary);
 }
+/* Animated app sidebar (components/ui/sidebar.tsx): one column, 60px rail <-> 300px. */
+.app-animated-sidebar {
+  box-sizing: border-box;
+  overflow: hidden;
+  background-color: var(--surface-sidebar);
+  border-right: 1px solid var(--border-subtle);
+}
+.app-sidebar-slot[data-pinned="false"] .app-animated-sidebar[data-open="true"] {
+  /* Hover overlay floats over main: keep it opaque even when glass clears panels. */
+  background-color: var(--color-panel);
+  box-shadow: 8px 0 24px -12px rgb(0 0 0 / 0.35);
+}
+.app-sidebar-link {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--type-body);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-ui) var(--ease-ui),
+    color var(--motion-ui) var(--ease-ui);
+}
+.app-sidebar-link:hover:not(:disabled) {
+  background-color: var(--color-hover);
+  color: var(--text-primary);
+}
+.app-sidebar-link:focus-visible,
+.app-sidebar-icon-button:focus-visible {
+  outline: 2px solid var(--color-focus-ring-soft);
+  outline-offset: 1px;
+}
+.app-sidebar-link:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.app-sidebar-link[data-active="true"] {
+  background-color: var(--color-active);
+  color: var(--text-primary);
+}
+.app-sidebar-link-icon {
+  display: grid;
+  width: 20px;
+  flex-shrink: 0;
+  place-items: center;
+}
+.app-sidebar-link-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: transform var(--motion-ui) var(--ease-ui);
+}
+.app-sidebar-link:hover .app-sidebar-link-label {
+  transform: translateX(2px);
+}
+.app-sidebar-icon-button {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.app-sidebar-icon-button:hover {
+  background-color: var(--color-hover);
+  color: var(--text-primary);
+}
 .menu-bar {
   height: var(--space-native-titlebar);
 }
