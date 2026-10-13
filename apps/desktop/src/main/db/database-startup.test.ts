@@ -91,7 +91,7 @@ describe("openDatabaseAtStartup: groups migration failure", async () => {
       }),
       showErrorBox: vi.fn(),
       quit: vi.fn(),
-      showMigrationError: vi.fn(() => choices[i++] ?? "quit"),
+      showMigrationError: vi.fn((_e: unknown) => choices[i++] ?? "quit"),
       showBackup: vi.fn(),
     };
     expect(openDatabaseAtStartup(deps)).toBe(false);
