@@ -14,8 +14,8 @@ export function SettingsPageHeader({
 }) {
   return (
     <header
+      data-strip="clear"
       className="sticky-glass-strip sticky top-0 z-10 -mx-10 -mt-16 flex items-end justify-between gap-5 px-10 pt-16 pb-8"
-      data-strip="canvas"
     >
       <div className="min-w-0">
         <h2 className="text-lg font-normal text-fg">{title}</h2>

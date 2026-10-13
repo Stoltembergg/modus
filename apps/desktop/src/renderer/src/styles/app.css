@@ -1176,6 +1176,14 @@ body {
         -webkit-backdrop-filter: var(--glass-filter);
         backdrop-filter: var(--glass-filter);
       }
+      /* Settings page title sits straight on the glass panel: no tint and no frost,
+         so it never reads as a box over the translucent page. */
+      :root[data-native-glass="true"][data-transparency="full"]
+        .sticky-glass-strip[data-strip="clear"] {
+        background-color: transparent;
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
     }
   }
 }
