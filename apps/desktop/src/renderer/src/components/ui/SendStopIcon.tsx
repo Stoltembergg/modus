@@ -63,6 +63,7 @@ export function SendStopIcon({ busy, className }: SendStopIconProps) {
   return (
     <span aria-hidden="true" className={cn("relative inline-grid", className)}>
       <svg
+        aria-hidden="true"
         className="block size-full origin-center"
         data-icon={busy ? "stop" : "send"}
         data-visible="true"

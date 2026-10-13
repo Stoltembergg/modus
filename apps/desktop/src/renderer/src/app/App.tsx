@@ -48,7 +48,6 @@ import { TopBar } from "../components/shell/TopBar";
 import { ImageViewerProvider } from "../components/ui/ImageViewer";
 import { ModusLoadingFallback } from "../components/ui/ModusLoadingMark";
 import { NativeSurfaceProvider } from "../components/ui/nativeSurface";
-import { TOOLBAR_ICON, ToolbarButton } from "../components/ui/ToolbarButton";
 import { TooltipProvider } from "../components/ui/Tooltip";
 import {
   AgentEventHub,
