@@ -27,6 +27,29 @@ afterEach(() => {
 });
 
 describe("permission-broker", () => {
+  it("expires: stamps expiresAt, auto-denies with expired flag, rejects late decisions", async () => {
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const pending = requestPermission({
+      sessionId: "session-exp",
+      action: "browser.control",
+      target: "{}",
+      reason: "dangerous",
+      summary: "Run JavaScript in tab t1",
+      details: "1+1",
+      timeoutMs: 1_000,
+      emit: (event) => events.push(event),
+    });
+    const requested = events.find((event) => event.type === "permission.requested");
+    if (requested?.type !== "permission.requested") throw new Error("missing request");
+    expect(requested.request.expiresAt).toBe(Date.now() + 1_000);
+    expect(requested.request.summary).toBe("Run JavaScript in tab t1");
+    vi.advanceTimersByTime(1_001);
+    await expect(pending).resolves.toMatchObject({ decision: "deny" });
+    expect(events.at(-1)).toMatchObject({ type: "permission.resolved", expired: true });
+    expect(resolvePermissionRequest(requested.request.id, "allow-once")).toBeUndefined();
+  });
+
   it("resolves a pending request", async () => {
     const events: AgentEvent[] = [];
     const pending = requestPermission({

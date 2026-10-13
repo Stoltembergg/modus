@@ -1,5 +1,5 @@
 import type { ToolCallEvent } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { createModusPermissionExtension } from "./pi-permission-extension";
 
 const permissionMocks = vi.hoisted(() => ({
@@ -103,5 +103,58 @@ describe("Modus permission extension", () => {
 
     expect(permissionMocks.findWorkspaceAllowDecision).not.toHaveBeenCalled();
     expect(permissionMocks.requestPermission).toHaveBeenCalledOnce();
+  });
+});
+
+describe("browser_cdp approval payload", () => {
+  beforeAll(async () => {
+    const { registerBrowserTools } = await import("./tools/browser-tools");
+    registerBrowserTools();
+  });
+  function handlerFor() {
+    let toolCallHandler: ((event: ToolCallEvent) => Promise<unknown>) | undefined;
+    createModusPermissionExtension("cdp-session", () => {})({
+      on(event: string, handler: unknown) {
+        if (event === "tool_call") toolCallHandler = handler as typeof toolCallHandler;
+      },
+    } as never);
+    return toolCallHandler as (event: ToolCallEvent) => Promise<unknown>;
+  }
+  const expression = "(() => {\n\tconst a = `x\u00e9`;\r\n  return document.title + a; })()";
+
+  it("approves exactly the code that executes, with an app-written summary", async () => {
+    permissionMocks.findWorkspaceAllowDecision.mockReset().mockReturnValue(undefined);
+    permissionMocks.requestPermission.mockReset().mockResolvedValue({ decision: "allow-once" });
+    const input = { method: "Runtime.evaluate", params: { expression }, viewId: "tab-2" };
+    const result = await handlerFor()({
+      type: "tool_call",
+      toolCallId: "cdp-1",
+      toolName: "browser_cdp",
+      input,
+    } as unknown as ToolCallEvent);
+    expect(result).toBeUndefined();
+    const sent = (permissionMocks.requestPermission.mock.calls[0] as unknown[])[0] as {
+      summary: string;
+      details: string;
+    };
+    expect(sent.summary).toBe("Run JavaScript in tab tab-2");
+    // Byte-identical: approved details === expression handed to CDP.
+    expect(Buffer.from(sent.details).equals(Buffer.from(input.params.expression))).toBe(true);
+  });
+
+  it("blocks the call if the code changes while the card is open", async () => {
+    permissionMocks.findWorkspaceAllowDecision.mockReset().mockReturnValue(undefined);
+    const input = { method: "Runtime.evaluate", params: { expression }, viewId: "tab-2" };
+    permissionMocks.requestPermission.mockReset().mockImplementation(async () => {
+      input.params.expression = "fetch('https://evil')";
+      return { decision: "allow-once" };
+    });
+    const result = await handlerFor()({
+      type: "tool_call",
+      toolCallId: "cdp-2",
+      toolName: "browser_cdp",
+      input,
+    } as unknown as ToolCallEvent);
+    expect(result).toMatchObject({ block: true });
   });
 });

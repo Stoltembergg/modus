@@ -22,6 +22,7 @@ function resolvedResult(
   context: PermissionContext,
   decision: PermissionDecision["decision"],
   targetSuffix = "",
+  expired = false,
 ): PermissionResult {
   // A request without a host-verified workspace can be approved for this call,
   // but must never create a durable workspace grant.
@@ -44,10 +45,13 @@ function resolvedResult(
       sessionId: context.request.sessionId,
       requestId: context.request.id,
       decision: effectiveDecision,
+      ...(expired ? { expired: true } : {}),
     });
   }
   return result;
 }
+
+export const PERMISSION_TIMEOUT_MS = 120_000;
 
 export async function requestPermission(input: {
   sessionId: string;
@@ -57,8 +61,12 @@ export async function requestPermission(input: {
   action: PermissionAction;
   target: string;
   reason: string;
+  summary?: string;
+  details?: string;
+  timeoutMs?: number;
   emit(event: AgentEvent): void;
 }): Promise<PermissionResult> {
+  const timeoutMs = input.timeoutMs ?? PERMISSION_TIMEOUT_MS;
   const request: PermissionRequest = {
     id: randomUUID(),
     sessionId: input.sessionId,
@@ -66,7 +74,10 @@ export async function requestPermission(input: {
     target: input.target,
     reason: input.reason,
     severity: "danger",
+    expiresAt: Date.now() + timeoutMs,
   };
+  if (input.summary !== undefined) request.summary = input.summary;
+  if (input.details !== undefined) request.details = input.details;
   if (input.runId !== undefined) request.runId = input.runId;
 
   input.emit({ type: "permission.requested", sessionId: input.sessionId, request });
@@ -82,8 +93,8 @@ export async function requestPermission(input: {
         ...(input.toolName === undefined ? {} : { toolName: input.toolName }),
       },
     },
-    timeoutMs: 120_000,
-    onTimeout: (context) => resolvedResult(context, "deny"),
+    timeoutMs,
+    onTimeout: (context) => resolvedResult(context, "deny", "", true),
   });
 }
 

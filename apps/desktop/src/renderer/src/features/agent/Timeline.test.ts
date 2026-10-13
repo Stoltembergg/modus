@@ -247,7 +247,7 @@ describe("buildBlocks", () => {
     );
   });
 
-  it("renders adaptive decision and failure notices", () => {
+  it("hides internal adaptive decision and strategy events from users", () => {
     const blocks = buildBlocks([
       item("d1", {
         type: "harness.decision",
@@ -289,12 +289,8 @@ describe("buildBlocks", () => {
         },
       }),
     ]);
-    expect(blocks).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: "notice", title: "adaptive decision" }),
-        expect.objectContaining({ type: "notice", title: "strategy attempt", isError: true }),
-      ]),
-    );
+    expect(blocks).toEqual([]);
+    expect(JSON.stringify(blocks)).not.toMatch(/adaptive decision|evidence_required|qa_failed/);
   });
 
   it("renders an optimistic user prompt immediately", () => {
