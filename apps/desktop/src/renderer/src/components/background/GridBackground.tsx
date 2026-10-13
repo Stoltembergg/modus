@@ -18,6 +18,24 @@ export type GridBackgroundProps = {
 
 const HOVER_DECAY = 0.06;
 
+/**
+ * One frame of the hover trail: the cell under the pointer (if any) is set to
+ * full intensity; every other lit cell decays and is dropped at zero.
+ */
+export function stepLitCells(
+  lit: Map<string, number>,
+  current: string | null,
+  decay = HOVER_DECAY,
+) {
+  for (const [key, value] of lit) {
+    if (key === current) continue;
+    const next = value - decay;
+    if (next <= 0) lit.delete(key);
+    else lit.set(key, next);
+  }
+  if (current) lit.set(current, 1);
+}
+
 export function GridBackground({
   lineColor,
   hoverColor,
@@ -58,20 +76,16 @@ export function GridBackground({
       ctx.clearRect(0, 0, width, height);
       const shift = offset % size;
 
-      if (pointer) {
-        const col = Math.floor((pointer.x + shift) / size);
-        const row = Math.floor((pointer.y + shift) / size);
-        lit.set(`${col}:${row}`, 1);
-      }
+      const current = pointer
+        ? `${Math.floor((pointer.x + shift) / size)}:${Math.floor((pointer.y + shift) / size)}`
+        : null;
       ctx.fillStyle = hover;
       for (const [key, value] of lit) {
         const [col = 0, row = 0] = key.split(":").map(Number);
         ctx.globalAlpha = value;
         ctx.fillRect(col * size - shift, row * size - shift, size, size);
-        const next = value - HOVER_DECAY;
-        if (next <= 0) lit.delete(key);
-        else if (!pointer || value < 1) lit.set(key, next);
       }
+      stepLitCells(lit, current);
       ctx.globalAlpha = 1;
 
       ctx.strokeStyle = line;
@@ -90,23 +104,29 @@ export function GridBackground({
 
     const tick = () => {
       frame = 0;
-      offset += live.current.speed;
+      if (!still && !paused) offset += live.current.speed;
       draw();
       schedule();
     };
+    // Still (reduced motion or paused) the grid does not drift, but the loop
+    // keeps running while hover cells are fading so the trail still clears.
+    const moving = () => !still && !paused;
+    const fading = () => lit.size > 1 || (lit.size === 1 && !pointer);
     const schedule = () => {
-      if (!frame && !still && !paused && visible) frame = requestAnimationFrame(tick);
+      if (!frame && visible && (moving() || fading())) frame = requestAnimationFrame(tick);
     };
 
     const onMove = (event: PointerEvent) => {
       const rect = canvas.getBoundingClientRect();
       pointer = { x: event.clientX - rect.left, y: event.clientY - rect.top };
-      if (still || paused) draw();
+      if (!moving()) {
+        draw();
+        schedule();
+      }
     };
     const onLeave = () => {
       pointer = null;
-      // The last lit cell starts fading from here.
-      for (const [key, value] of lit) lit.set(key, Math.min(value, 0.99));
+      schedule();
     };
 
     resize();
