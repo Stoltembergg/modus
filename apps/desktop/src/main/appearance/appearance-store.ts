@@ -39,7 +39,8 @@ export function migrateAppearancePreferences(raw: unknown): AppearancePreference
     transparency: transparency.success
       ? transparency.data
       : DEFAULT_APPEARANCE_PREFERENCES.transparency,
-    look: look.success ? look.data : DEFAULT_APPEARANCE_PREFERENCES.look,
+    // "classic" was removed: a stored classic migrates to the new look on read.
+    look: look.success ? "new" : DEFAULT_APPEARANCE_PREFERENCES.look,
     ...(record.transparencyChosen === true ? { transparencyChosen: true as const } : {}),
   };
 }

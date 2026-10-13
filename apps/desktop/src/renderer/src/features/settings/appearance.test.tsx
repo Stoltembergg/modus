@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppearanceState } from "../../../../shared/appearance";
@@ -15,7 +15,7 @@ function stubAppearance(overrides: Partial<AppearanceState> = {}) {
   const initial: AppearanceState = {
     theme: "dark",
     transparency: "sidebar",
-    look: "classic",
+    look: "new",
     effectiveTheme: "dark",
     glassMode: "sidebar",
     glass: true,
@@ -46,28 +46,20 @@ describe("Appearance settings", () => {
     expect(markup).toContain(">Dark</button>");
   });
 
-  it("renders Look row with Classic and New options, and clicking New calls appearance.set", () => {
-    const { set } = stubAppearance({ look: "classic" });
+  it("has no Look switch and no Eye-care Dark option", () => {
+    stubAppearance();
     render(<AppearanceSettingsPanel />);
-
-    const classicButton = screen.getByRole("button", { name: /Classic/i });
-    const newButton = screen.getByRole("button", { name: /New/i });
-
-    expect(classicButton).toBeDefined();
-    expect(newButton).toBeDefined();
-
-    fireEvent.click(newButton);
-    expect(set).toHaveBeenCalledWith({ look: "new" });
+    expect(screen.queryByText("Look")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Classic/i })).toBeNull();
+    expect(screen.queryByText("Eye-care Dark")).toBeNull();
   });
 
-  it("presents Eye-care Dark with classic look and removes it with new look", () => {
-    stubAppearance({ look: "classic" });
-    const { unmount } = render(<AppearanceSettingsPanel />);
-    expect(screen.queryByText("Eye-care Dark")).not.toBeNull();
-    unmount();
-
-    stubAppearance({ look: "new" });
+  it("shows a stored Eye-care Dark as Dark", () => {
+    stubAppearance({ theme: "dark-plus" });
+    vi.stubGlobal("localStorage", { getItem: () => "dark-plus", setItem: () => {} });
     render(<AppearanceSettingsPanel />);
-    expect(screen.queryByText("Eye-care Dark")).toBeNull();
+    expect(screen.getByRole("button", { name: /^Dark$/ }).getAttribute("aria-pressed")).not.toBe(
+      "false",
+    );
   });
 });

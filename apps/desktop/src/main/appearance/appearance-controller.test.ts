@@ -87,15 +87,15 @@ function setup({
 describe("appearance controller", () => {
   it("syncs nativeTheme.themeSource from the stored theme before any window exists", () => {
     expect(
-      setup({ stored: { theme: "dark-plus", transparency: "sidebar", look: "classic" } })
-        .nativeTheme.themeSource,
+      setup({ stored: { theme: "dark-plus", transparency: "sidebar", look: "new" } }).nativeTheme
+        .themeSource,
     ).toBe("dark");
     expect(
-      setup({ stored: { theme: "light", transparency: "sidebar", look: "classic" } }).nativeTheme
+      setup({ stored: { theme: "light", transparency: "sidebar", look: "new" } }).nativeTheme
         .themeSource,
     ).toBe("light");
     expect(
-      setup({ stored: { theme: "system", transparency: "sidebar", look: "classic" } }).nativeTheme
+      setup({ stored: { theme: "system", transparency: "sidebar", look: "new" } }).nativeTheme
         .themeSource,
     ).toBe("system");
   });
@@ -106,9 +106,9 @@ describe("appearance controller", () => {
     expect(arg.startsWith(APPEARANCE_ARGUMENT_PREFIX)).toBe(true);
     expect(JSON.parse(arg.slice(APPEARANCE_ARGUMENT_PREFIX.length))).toMatchObject({
       theme: "dark",
-      transparency: "sidebar",
-      look: "classic",
-      glassMode: "sidebar",
+      transparency: "full",
+      look: "new",
+      glassMode: "full",
       glass: true,
       material: "vibrancy",
     });
@@ -116,18 +116,18 @@ describe("appearance controller", () => {
 
   it("keeps vibrancy for the light theme and paints the light canvas when Off", () => {
     const { controller } = setup({
-      stored: { theme: "light", transparency: "sidebar", look: "classic" },
+      stored: { theme: "light", transparency: "sidebar", look: "new" },
     });
     const { window, raw } = fakeWindow();
     controller.attach(window, { nativeGlassAvailable: true });
     expect(raw.setVibrancy).toHaveBeenLastCalledWith("sidebar");
     expect(raw.setBackgroundColor).toHaveBeenLastCalledWith("#00000000");
 
-    const off = setup({ stored: { theme: "light", transparency: "off", look: "classic" } });
+    const off = setup({ stored: { theme: "light", transparency: "off", look: "new" } });
     const solid = fakeWindow();
     off.controller.attach(solid.window, { nativeGlassAvailable: true });
     expect(solid.raw.setVibrancy).toHaveBeenLastCalledWith(null);
-    expect(solid.raw.setBackgroundColor).toHaveBeenLastCalledWith("#ffffff");
+    expect(solid.raw.setBackgroundColor).toHaveBeenLastCalledWith("#f6f8fb");
   });
 
   it("persists Off, paints solid CSS first and only then makes the window opaque", () => {
@@ -143,12 +143,12 @@ describe("appearance controller", () => {
     expect(store.write).toHaveBeenCalledWith({
       theme: "dark",
       transparency: "off",
-      look: "classic",
+      look: "new",
       transparencyChosen: true,
     });
     expect(calls).toEqual(["send:false"]);
     for (const callback of scheduled) callback();
-    expect(calls).toEqual(["send:false", "vibrancy:null", "bg:#131314"]);
+    expect(calls).toEqual(["send:false", "vibrancy:null", "bg:#0f1520"]);
 
     calls.length = 0;
     controller.set({ transparency: "sidebar" });
@@ -161,57 +161,33 @@ describe("appearance controller", () => {
     controller.attach(window, { nativeGlassAvailable: true });
     calls.length = 0;
 
-    expect(controller.set({ transparency: "full" })).toMatchObject({
+    expect(controller.set({ transparency: "sidebar" })).toMatchObject({
       glass: true,
-      glassMode: "full",
+      glassMode: "sidebar",
       material: "vibrancy",
     });
     expect(calls).toEqual(["vibrancy:sidebar", "bg:#00000000", "send:true"]);
     expect(scheduled).toHaveLength(0);
   });
 
-  it("switches to new look from defaults, applies Full without storing it, and uses new-look colour when solid", () => {
-    const { controller, scheduled, store } = setup();
-    const { window, raw, calls } = fakeWindow();
+  it("opens a stored classic look as new, with Full glass and new-look solid colour", () => {
+    const legacy = { theme: "dark", transparency: "sidebar", look: "classic" } as never;
+    const { controller, scheduled } = setup({ stored: legacy });
+    const { window, raw } = fakeWindow();
     controller.attach(window, { nativeGlassAvailable: true });
-    calls.length = 0;
-
-    const next = controller.set({ look: "new" });
-    expect(next).toMatchObject({
+    expect(controller.getState()).toMatchObject({
       look: "new",
       glassMode: "full",
       transparency: "full",
     });
-    // Only the look is stored: Full is the new look's default, resolved on read.
-    expect(store.write).toHaveBeenLastCalledWith({
-      theme: "dark",
-      transparency: "sidebar",
-      look: "new",
-    });
-    expect(controller.set({ look: "classic" })).toMatchObject({
-      look: "classic",
-      transparency: "sidebar",
-      glassMode: "sidebar",
-    });
-    controller.set({ look: "new" });
-
-    // Turning off transparency to verify solid background with new look
-    calls.length = 0;
     controller.set({ transparency: "off" });
     for (const callback of scheduled) callback();
     expect(raw.setBackgroundColor).toHaveBeenLastCalledWith("#0f1520");
-
-    // Also on a solid host
-    const solidHost = setup();
-    const solidWin = fakeWindow();
-    solidHost.controller.attach(solidWin.window, { nativeGlassAvailable: false });
-    solidHost.controller.set({ look: "new" });
-    expect(solidWin.raw.setBackgroundColor).toHaveBeenLastCalledWith("#0f1520");
   });
 
   it("follows the OS through nativeTheme `updated` and window focus", () => {
     const { controller, nativeTheme } = setup({
-      stored: { theme: "system", transparency: "sidebar", look: "classic" },
+      stored: { theme: "system", transparency: "sidebar", look: "new" },
     });
     const { window, raw, handlers } = fakeWindow();
     controller.attach(window, { nativeGlassAvailable: true });
@@ -247,7 +223,7 @@ describe("appearance controller", () => {
     const ok = fakeWindow();
     controller.attach(ok.window, { nativeGlassAvailable: true });
     expect(ok.raw.setBackgroundMaterial).toHaveBeenCalledWith("mica");
-    expect(ok.raw.setTitleBarOverlay).toHaveBeenCalledWith({ symbolColor: "#d8d8d7", height: 36 });
+    expect(ok.raw.setTitleBarOverlay).toHaveBeenCalledWith({ symbolColor: "#e7ebf1", height: 36 });
 
     const failing = setup({ platform: "win32", version: "10.0.22631" });
     const broken = fakeWindow();
@@ -256,7 +232,7 @@ describe("appearance controller", () => {
     });
     failing.controller.attach(broken.window, { nativeGlassAvailable: true });
     expect(failing.controller.getState()).toMatchObject({ glass: false, blockedBy: "platform" });
-    expect(broken.raw.setBackgroundColor).toHaveBeenLastCalledWith("#131314");
+    expect(broken.raw.setBackgroundColor).toHaveBeenLastCalledWith("#0f1520");
   });
 
   it("treats a window created without native glass as a solid host", () => {

@@ -15,7 +15,7 @@
         if (theme === "system") {
           theme = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
         }
-        const look = window.modus?.app?.appearance?.initial?.look === "new" ? "new" : "classic";
+        const look = "new";
         document.documentElement.dataset.ui = look;
         if (look === "new" && theme === "dark-plus") theme = "dark";
         document.documentElement.dataset.theme = theme;

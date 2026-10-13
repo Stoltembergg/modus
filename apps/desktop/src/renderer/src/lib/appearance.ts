@@ -35,7 +35,8 @@ export function applyTransparencyAttribute(state: Pick<AppearanceState, "glassMo
 
 /** Reflect the look onto <html data-ui> (classic | new) and let the theme drop Eye-care Dark in the new look. */
 export function applyLookAttribute(state: Pick<AppearanceState, "look">): void {
-  const look = state.look === "new" ? "new" : "classic";
+  void state;
+  const look = "new";
   document.documentElement.dataset.ui = look;
   setThemeLook(look);
 }
@@ -45,7 +46,7 @@ export function initAppearanceAttributes(): void {
   const api = appearanceApi();
   if (!api) {
     if (!document.documentElement.dataset.ui) {
-      document.documentElement.dataset.ui = "classic";
+      document.documentElement.dataset.ui = "new";
     }
     return;
   }
@@ -60,11 +61,5 @@ export function initAppearanceAttributes(): void {
 export function setTransparency(transparency: TransparencyPreference): void {
   void appearanceApi()
     ?.set({ transparency })
-    .catch(() => undefined);
-}
-
-export function setLook(look: LookPreference): void {
-  void appearanceApi()
-    ?.set({ look })
     .catch(() => undefined);
 }

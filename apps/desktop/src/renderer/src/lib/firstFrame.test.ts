@@ -35,7 +35,7 @@ describe("index.html first frame (D2)", () => {
     for (const theme of ["dark", "dark-plus", "light"]) {
       for (const mode of ["full", "sidebar", "off"] as const) {
         expect(runFirstFrame(appWith(mode), theme)).toMatchObject({
-          theme,
+          theme: theme === "dark-plus" ? "dark" : theme,
           nativeGlass: String(mode !== "off"),
           transparency: mode,
         });
@@ -58,28 +58,8 @@ describe("index.html first frame (D2)", () => {
     expect(runFirstFrame(undefined)).toMatchObject({ nativeGlass: "false", transparency: "off" });
   });
 
-  it("sets dataset.ui 'new' and maps stored 'dark-plus' to 'dark' when initial.look is 'new'; no look -> dataset.ui 'classic' and dark-plus stays dark-plus", () => {
-    const appWithLook = (look?: "new" | "classic") => ({
-      app: {
-        nativeGlass: true,
-        isNativeGlassAvailable: () => true,
-        appearance: { initial: { glassMode: "sidebar", glass: true, ...(look ? { look } : {}) } },
-      },
-    });
-
-    expect(runFirstFrame(appWithLook("new"), "dark-plus")).toMatchObject({
-      ui: "new",
-      theme: "dark",
-    });
-
-    expect(runFirstFrame(appWithLook(undefined), "dark-plus")).toMatchObject({
-      ui: "classic",
-      theme: "dark-plus",
-    });
-  });
-
-  it("treats an invalid or non-string look as classic and keeps the stored theme", () => {
-    for (const look of ["next", "NEW", "", 1, null, { value: "new" }]) {
+  it("always paints the new look and shows a stored Eye-care Dark as Dark, whatever look main sent", () => {
+    for (const look of ["new", "classic", undefined, "next", 1, null]) {
       const modus = {
         app: {
           nativeGlass: true,
@@ -88,10 +68,11 @@ describe("index.html first frame (D2)", () => {
         },
       };
       expect(runFirstFrame(modus, "dark-plus"), JSON.stringify(look)).toMatchObject({
-        ui: "classic",
-        theme: "dark-plus",
+        ui: "new",
+        theme: "dark",
         transparency: "sidebar",
       });
     }
+    expect(runFirstFrame(undefined, "light")).toMatchObject({ ui: "new", theme: "light" });
   });
 });

@@ -1,20 +1,14 @@
 import {
   IconBlur,
   IconDeviceDesktop,
-  IconLayoutDashboard,
   IconLayoutSidebar,
   IconMoon,
   IconMoonStars,
-  IconSparkles,
   IconSquare,
   IconSun,
 } from "@tabler/icons-react";
-import type {
-  AppearanceState,
-  LookPreference,
-  TransparencyPreference,
-} from "../../../../../shared/appearance";
-import { setLook, setTransparency, useAppearanceState } from "../../../lib/appearance";
+import type { AppearanceState, TransparencyPreference } from "../../../../../shared/appearance";
+import { setTransparency, useAppearanceState } from "../../../lib/appearance";
 import { cn } from "../../../lib/cn";
 import { type ThemeMode, useTheme } from "../../../lib/theme";
 import {
@@ -28,11 +22,9 @@ import {
 export function AppearanceSettingsPanel() {
   const [theme, setTheme] = useTheme();
   const appearance = useAppearanceState();
-  const isNewLook = appearance?.look === "new";
-  const themeOptions = isNewLook
-    ? THEME_OPTIONS.filter((option) => option.value !== "dark-plus")
-    : THEME_OPTIONS;
-  const themeValue = isNewLook && theme === "dark-plus" ? "dark" : theme;
+  // Eye-care Dark belonged to the removed classic look; a stored one shows as Dark.
+  const themeOptions = THEME_OPTIONS.filter((option) => option.value !== "dark-plus");
+  const themeValue = theme === "dark-plus" ? "dark" : theme;
 
   return (
     <>
@@ -45,19 +37,6 @@ export function AppearanceSettingsPanel() {
           <SettingsRow
             control={
               <Segmented
-                disabled={!appearance}
-                label="look"
-                onChange={setLook}
-                options={LOOK_OPTIONS}
-                value={appearance?.look ?? "classic"}
-              />
-            }
-            description="Switch between the classic and new design."
-            title="Look"
-          />
-          <SettingsRow
-            control={
-              <Segmented
                 label="theme"
                 onChange={(next) => {
                   // Under New a stored Eye-care Dark shows as Dark: re-picking it must not erase it.
@@ -67,11 +46,7 @@ export function AppearanceSettingsPanel() {
                 value={themeValue}
               />
             }
-            description={
-              isNewLook
-                ? "Follow your system appearance or choose light or dark."
-                : "Follow your system appearance or choose a light, dark, or eye-care palette."
-            }
+            description={"Follow your system appearance or choose light or dark."}
             title="Color scheme"
           />
           <SettingsRow
@@ -114,11 +89,6 @@ export function transparencyDescription(appearance: AppearanceState | null): str
 }
 
 type SegmentOption<T extends string> = { value: T; label: string; icon: typeof IconSun };
-
-const LOOK_OPTIONS: ReadonlyArray<SegmentOption<LookPreference>> = [
-  { value: "classic", label: "Classic", icon: IconLayoutDashboard },
-  { value: "new", label: "New", icon: IconSparkles },
-];
 
 const THEME_OPTIONS: ReadonlyArray<SegmentOption<ThemeMode>> = [
   { value: "system", label: "System", icon: IconDeviceDesktop },
