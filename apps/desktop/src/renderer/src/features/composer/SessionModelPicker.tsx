@@ -174,3 +174,51 @@ export function SessionModelPicker({
     </>
   );
 }
+
+type HeroModelPickerProps = {
+  /** The model picked for the next chat; "" = follow the app default. */
+  value: string;
+  defaultModelId: string;
+  models: ModelInfo[];
+  onValueChange(modelId: string): void;
+};
+
+/**
+ * Home composer model chip: there is no chat yet, so the pick is held by the host and
+ * used when the first message creates the chat. The app default in Settings is never
+ * touched. With no default configured this is the only way to make the home composer
+ * sendable.
+ */
+export function HeroModelPicker({
+  value,
+  defaultModelId,
+  models,
+  onValueChange,
+}: HeroModelPickerProps) {
+  const t = useShellText();
+  const pickable = useMemo(() => pickableModels(models), [models]);
+  const defaultUsable = Boolean(defaultModelId) && isPickableModel(models, defaultModelId);
+  const defaultName = models.find((model) => model.id === defaultModelId)?.name ?? defaultModelId;
+  const triggerText = value
+    ? undefined
+    : defaultUsable
+      ? t("shell.modelDefault", { name: defaultName })
+      : t("shell.pickModel");
+  return (
+    <span className="inline-flex min-w-0">
+      <ModelPicker
+        label={t("shell.model")}
+        models={pickable}
+        onValueChange={(next) => {
+          if (next) onValueChange(next);
+        }}
+        placeholder={t("shell.pickModel")}
+        savedModelId={value || undefined}
+        tone={value || defaultUsable ? "neutral" : "warning"}
+        {...(triggerText ? { triggerText } : {})}
+        value={value || defaultModelId}
+        variant="chip"
+      />
+    </span>
+  );
+}

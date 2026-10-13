@@ -58,7 +58,7 @@ export const COMPOSER_SHELL_CLASS = cn(
   COMPOSER_RADIUS_CLASS,
 );
 
-type ComposerProps = {
+export type ComposerProps = {
   model: string;
   models: ModelInfo[];
   contextItems: ContextItem[];
@@ -775,7 +775,9 @@ export function Composer({
           </div>
         </ComposerToolbarTierContext.Provider>
         {footer ? (
-          <div className="relative z-10 border-t border-hairline-soft px-3 py-1.5">{footer}</div>
+          <div className="relative z-10 px-3 py-1.5" data-testid="composer-footer">
+            {footer}
+          </div>
         ) : null}
       </div>
     </div>

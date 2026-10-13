@@ -3,7 +3,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelInfo } from "../../../../shared/contracts";
-import { SessionModelPicker } from "./SessionModelPicker";
+import { HeroModelPicker, SessionModelPicker } from "./SessionModelPicker";
 
 function model(id: string, name: string, extra: Partial<ModelInfo> = {}): ModelInfo {
   return {
@@ -150,5 +150,36 @@ describe("SessionModelPicker", () => {
       expect(props.onError).toHaveBeenCalledWith("Can't change the model while a run is active."),
     );
     expect(props.onChanged).not.toHaveBeenCalled();
+  });
+});
+
+describe("HeroModelPicker (home composer)", () => {
+  it("with no default asks to pick, and a pick goes to the host only", async () => {
+    const user = userEvent.setup();
+    const onValueChange = vi.fn();
+    render(
+      <HeroModelPicker defaultModelId="" models={MODELS} onValueChange={onValueChange} value="" />,
+    );
+    const button = trigger();
+    expect(button.textContent).toMatch(/Pick a model/);
+    await user.click(button);
+    const listbox = await screen.findByRole("listbox");
+    expect(within(listbox).queryByRole("option", { name: "Locked Pro" })).toBeNull();
+    await user.click(within(listbox).getByRole("option", { name: "Claude Sonnet" }));
+    expect(onValueChange).toHaveBeenCalledWith("anthropic/sonnet");
+    expect(setModel).not.toHaveBeenCalled();
+    expect(setDefault).not.toHaveBeenCalled();
+  });
+
+  it("shows the app default when nothing is picked", () => {
+    render(
+      <HeroModelPicker
+        defaultModelId="openai/gpt-5"
+        models={MODELS}
+        onValueChange={vi.fn()}
+        value=""
+      />,
+    );
+    expect(trigger().textContent).toMatch(/Default \(GPT-5\)/);
   });
 });
