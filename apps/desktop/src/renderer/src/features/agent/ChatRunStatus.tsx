@@ -33,7 +33,7 @@ export function ChatRunStatus({
       data-testid="chat-run-status-slot"
     >
       <div
-        className="pointer-events-auto flex h-7 min-w-0 max-w-full items-center gap-2 rounded-full bg-surface/30 pr-1 pl-2 text-xs text-fg-muted backdrop-blur-md"
+        className="pointer-events-auto flex h-7 min-w-0 max-w-full items-center gap-2 chat-run-status pr-1 pl-2 text-xs text-fg-muted"
         data-testid="chat-run-status"
         role="status"
       >

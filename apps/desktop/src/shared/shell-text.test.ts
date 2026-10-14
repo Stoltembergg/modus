@@ -12,9 +12,9 @@ describe("shell text", () => {
     expect(shellText("shell.projects")).toBe("Projects");
     expect(shellText("shell.noProject", "pt-BR")).toBe("Sem projeto");
     expect(shellText("shell.projects", "zh-CN")).toBe("项目");
-    expect(shellText("shell.newProfile")).toBe("New profile");
-    expect(shellText("shell.newProfile", "pt-BR")).toBe("Novo perfil");
-    expect(shellText("shell.newProfile", "zh-CN")).toBe("新建档案");
+    expect(shellText("shell.newProfile")).toBe("New Agent");
+    expect(shellText("shell.newProfile", "pt-BR")).toBe("Novo agente");
+    expect(shellText("shell.newProfile", "zh-CN")).toBe("新建智能体");
     expect(shellText("shell.editProfile")).toBe("Edit profile");
     expect(shellText("shell.editProfile", "pt-BR")).toBe("Editar perfil");
     expect(shellText("shell.editProfile", "zh-CN")).toBe("编辑档案");

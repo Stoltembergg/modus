@@ -60,6 +60,7 @@ describe("GroupMessageRow Prompt Kit", () => {
     const surface = container.querySelector('[data-prompt-kit="message"]');
     expect(surface).toBeTruthy();
     expect(surface?.className.split(/\s+/u)).toContain("bg-card");
+    expect(surface?.className.split(/\s+/u)).toContain("chat-message-surface");
     expect(
       surface?.className.split(/\s+/u).some((className) => className.startsWith("border")),
     ).toBe(false);

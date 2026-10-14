@@ -218,21 +218,57 @@ describe("appearance controller", () => {
     expect(raw.webContents.send).not.toHaveBeenCalled();
   });
 
-  it("uses Mica on Windows 11, tints the caption buttons and falls back to solid when DWM declines", () => {
+  it("uses Acrylic on Windows 11, tints the caption buttons and falls back to solid when DWM declines", () => {
     const { controller } = setup({ platform: "win32", version: "10.0.22631" });
     const ok = fakeWindow();
     controller.attach(ok.window, { nativeGlassAvailable: true });
-    expect(ok.raw.setBackgroundMaterial).toHaveBeenCalledWith("mica");
-    expect(ok.raw.setTitleBarOverlay).toHaveBeenCalledWith({ symbolColor: "#e7ebf1", height: 36 });
+    expect(ok.raw.setBackgroundMaterial).toHaveBeenCalledWith("acrylic");
+    expect(ok.raw.setTitleBarOverlay).toHaveBeenCalledWith({
+      color: "#00000000",
+      symbolColor: "#e7ebf1",
+      height: 36,
+    });
 
     const failing = setup({ platform: "win32", version: "10.0.22631" });
     const broken = fakeWindow();
     broken.raw.setBackgroundMaterial.mockImplementation((material: unknown) => {
-      if (material === "mica") throw new Error("DWM declined");
+      if (material === "acrylic") throw new Error("DWM declined");
     });
     failing.controller.attach(broken.window, { nativeGlassAvailable: true });
     expect(failing.controller.getState()).toMatchObject({ glass: false, blockedBy: "platform" });
     expect(broken.raw.setBackgroundColor).toHaveBeenLastCalledWith("#0f1520");
+    expect(broken.raw.setTitleBarOverlay).toHaveBeenLastCalledWith({
+      color: "#0f1520",
+      symbolColor: "#e7ebf1",
+      height: 36,
+    });
+  });
+
+  it("updates Windows caption backgrounds and symbols when theme/transparency change", () => {
+    const { controller, scheduled } = setup({ platform: "win32", version: "10.0.22631" });
+    const { window, raw } = fakeWindow();
+    controller.attach(window, { nativeGlassAvailable: true });
+    controller.set({ theme: "light" });
+    expect(raw.setTitleBarOverlay).toHaveBeenLastCalledWith({
+      color: "#00000000",
+      symbolColor: "#161c27",
+      height: 36,
+    });
+    controller.set({ transparency: "off" });
+    for (const callback of scheduled) callback();
+    expect(raw.setBackgroundMaterial).toHaveBeenLastCalledWith("none");
+    expect(raw.setTitleBarOverlay).toHaveBeenLastCalledWith({
+      color: "#f6f8fb",
+      symbolColor: "#161c27",
+      height: 36,
+    });
+    controller.set({ transparency: "sidebar" });
+    expect(raw.setBackgroundMaterial).toHaveBeenLastCalledWith("acrylic");
+    expect(raw.setTitleBarOverlay).toHaveBeenLastCalledWith({
+      color: "#00000000",
+      symbolColor: "#161c27",
+      height: 36,
+    });
   });
 
   it("treats a window created without native glass as a solid host", () => {

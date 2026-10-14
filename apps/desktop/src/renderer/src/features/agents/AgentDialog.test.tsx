@@ -1089,7 +1089,7 @@ describe("AgentDialog profile mode", () => {
   it("profile mode create calls onCreate with no groupId", async () => {
     const user = userEvent.setup();
     const { dialog, create } = renderProfileDialog();
-    expect(within(dialog).getByText("New profile")).toBeTruthy();
+    expect(within(dialog).getByText("New Agent")).toBeTruthy();
     await user.type(field(dialog, "Name"), "Solo");
     await user.type(field(dialog, "Custom role"), "Scribe");
     await user.click(within(dialog).getByRole("button", { name: "Create" }));

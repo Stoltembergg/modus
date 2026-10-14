@@ -1,4 +1,4 @@
-import { IconMenu2, IconX } from "@tabler/icons-react";
+import { IconChevronRight, IconMenu2, IconX } from "@tabler/icons-react";
 import { AnimatePresence, m, useReducedMotion } from "motion/react";
 import {
   type ComponentProps,
@@ -6,8 +6,10 @@ import {
   type Dispatch,
   type ReactNode,
   type SetStateAction,
+  useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from "react";
 import { cn } from "../../lib/cn";
@@ -111,12 +113,60 @@ export function SidebarBody({ mobileLabel, ...props }: BodyProps) {
 
 /** A menu/popover opened from inside keeps the rail open until it closes. */
 function hasOpenPopup(root: HTMLElement): boolean {
-  return root.querySelector('[aria-expanded="true"], [data-popup-open]') !== null;
+  return root.querySelector('[aria-haspopup][aria-expanded="true"], [data-popup-open]') !== null;
 }
 
-export function DesktopSidebar({ className, children, ...props }: ComponentProps<typeof m.div>) {
+export function DesktopSidebar({
+  className,
+  children,
+  ref,
+  ...props
+}: ComponentProps<typeof m.div>) {
   const { open, setOpen, animate, locked } = useSidebar();
   const reduceMotion = useReducedMotion();
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const attachRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      rootRef.current = node;
+      if (typeof ref === "function") return ref(node);
+      if (ref) ref.current = node;
+    },
+    [ref],
+  );
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    let pointerInside = false;
+    const enter = () => {
+      pointerInside = true;
+      setOpen(true);
+    };
+    const closeOutside = (event: MouseEvent | FocusEvent) => {
+      const next = event.relatedTarget;
+      if (next instanceof Node && root.contains(next)) return;
+      if (!hasOpenPopup(root)) setOpen(false);
+    };
+    const leave = (event: MouseEvent) => {
+      pointerInside = false;
+      closeOutside(event);
+    };
+    const focus = () => setOpen(true);
+    const blur = (event: FocusEvent) => {
+      if (!pointerInside) closeOutside(event);
+    };
+    // Settings navigation is portaled here from another React tree. Native
+    // events follow DOM containment, so entering it is not mistaken for leaving.
+    root.addEventListener("mouseenter", enter);
+    root.addEventListener("mouseleave", leave);
+    root.addEventListener("focusin", focus);
+    root.addEventListener("focusout", blur);
+    return () => {
+      root.removeEventListener("mouseenter", enter);
+      root.removeEventListener("mouseleave", leave);
+      root.removeEventListener("focusin", focus);
+      root.removeEventListener("focusout", blur);
+    };
+  }, [setOpen]);
   const width = animate && !locked && !open ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_EXPANDED_WIDTH;
   return (
     <m.div
@@ -124,17 +174,7 @@ export function DesktopSidebar({ className, children, ...props }: ComponentProps
       className={cn("app-animated-sidebar flex h-full shrink-0 flex-col", className)}
       data-open={open ? "true" : "false"}
       initial={false}
-      onBlur={(event) => {
-        const next = event.relatedTarget as Node | null;
-        if (next && !event.currentTarget.contains(next) && !hasOpenPopup(event.currentTarget)) {
-          setOpen(false);
-        }
-      }}
-      onFocus={() => setOpen(true)}
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={(event) => {
-        if (!hasOpenPopup(event.currentTarget)) setOpen(false);
-      }}
+      ref={attachRef}
       transition={reduceMotion ? { duration: 0 } : WIDTH_TRANSITION}
       {...props}
     >
@@ -198,11 +238,13 @@ export function SidebarLink({
   link,
   active = false,
   disabled = false,
+  expanded,
   className,
 }: {
   link: SidebarLinkItem;
   active?: boolean;
   disabled?: boolean;
+  expanded?: boolean | undefined;
   className?: string;
 }) {
   const { open, animate, locked } = useSidebar();
@@ -210,6 +252,7 @@ export function SidebarLink({
   return (
     <button
       aria-current={active ? "page" : undefined}
+      aria-expanded={expanded}
       aria-label={link.label}
       className={cn("app-sidebar-link group/sidebar", className)}
       data-active={active ? "true" : undefined}
@@ -231,6 +274,13 @@ export function SidebarLink({
       >
         {link.label}
       </m.span>
+      {expanded !== undefined && showLabel ? (
+        <IconChevronRight
+          aria-hidden
+          className={cn("ml-auto shrink-0 transition-transform", expanded && "rotate-90")}
+          size={14}
+        />
+      ) : null}
     </button>
   );
 }

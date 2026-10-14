@@ -65,7 +65,7 @@ function renderSidebar() {
 }
 
 async function openProjectMenu(user: ReturnType<typeof userEvent.setup>): Promise<HTMLElement> {
-  await user.click(screen.getByRole("button", { name: "Project context" }));
+  await user.click(screen.getByRole("button", { name: "Projects" }));
   await user.click(screen.getByRole("button", { name: "Project actions" }));
   return screen.findByRole("menu");
 }
@@ -109,8 +109,8 @@ describe("Project context chats", () => {
   it("render without a scroll-reveal blur", async () => {
     const user = userEvent.setup();
     renderSidebar();
-    await user.click(screen.getByRole("button", { name: "Project context" }));
-    const section = screen.getByTestId("sidebar-project-context");
+    await user.click(screen.getByRole("button", { name: "Projects" }));
+    const section = screen.getByTestId("sidebar-projects");
     const title = await within(section).findByText("Chat s-1");
     for (
       let node: HTMLElement | null = title;
@@ -123,6 +123,6 @@ describe("Project context chats", () => {
 
   it("is separated by spacing, not a divider line", () => {
     renderSidebar();
-    expect(screen.getByTestId("sidebar-project-context").className).not.toMatch(/border/);
+    expect(screen.getByTestId("sidebar-projects").className).not.toMatch(/border/);
   });
 });

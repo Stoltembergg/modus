@@ -24,22 +24,53 @@ const SCENE = `
 <div id="root"><div class="app-shell"><div class="app-layout-row surface-app">
   <nav class="app-rail"><button class="app-rail-item" type="button">A</button></nav>
   <aside class="app-context-sidebar bg-panel"><div class="app-context-sidebar-body bg-panel"></div></aside>
-  <main class="surface-main rounded-b-lg border border-hairline-strong border-t-0">
+  <main class="surface-main rounded-b-lg border border-hairline-strong border-t-0" style="width:600px">
     <div class="surface-raised"></div>
     <div class="popup-chrome"></div>
     <div class="pdf-page-chrome"></div>
     <div class="dialog-scrim"></div>
+    <div class="composer-glass"></div>
+    <div class="message-card-slot"><div class="chat-message-bubble chat-message-surface" data-message-role="user" data-message-card>Oi</div></div>
+    <div class="chat-message-bubble chat-message-surface" data-message-role="assistant" data-assistant-card>Reply</div>
+    <div class="chat-message-bubble chat-message-surface" data-message-role="assistant" data-technical-card><pre><code>+kept line</code></pre></div>
+    <div class="chat-message-surface bg-card"></div>
+    <div class="chat-run-status"></div>
   </main>
 </div></div></div>`;
-const CANDIDATES = ["bg-panel", "rounded-b-lg", "border", "border-hairline-strong", "border-t-0"];
+const CANDIDATES = [
+  "bg-panel",
+  "rounded-b-lg",
+  "border",
+  "border-hairline-strong",
+  "border-t-0",
+  "bg-canvas",
+  "bg-card",
+];
 const PANELS = [".app-rail", ".app-context-sidebar", ".surface-main"];
 const CHROME_PARTS = [".app-rail", ".app-context-sidebar"];
 const OVERLAYS = [".surface-raised", ".popup-chrome", ".pdf-page-chrome"];
+const CHAT_SURFACES = [
+  ".composer-glass",
+  "[data-message-card]",
+  "[data-assistant-card]",
+  "[data-technical-card]",
+  ".chat-message-surface",
+];
 const THEMES = ["dark", "dark-plus", "light"] as const;
 const OS = ["reduced-transparency", "more-contrast", "forced-colors"] as const;
 type Os = (typeof OS)[number] | undefined;
 
-type Probe = { alpha: number; effective: number; backdrop: string };
+type Probe = {
+  alpha: number;
+  effective: number;
+  backdrop: string;
+  width: number;
+  left: number;
+  right: number;
+  innerWidth: number;
+  innerLeft: number;
+  innerRight: number;
+};
 type Edge = { alpha: number; width: number };
 type Measured = Record<string, Probe> & {
   edges: { railDivider: Edge; mainLeft: Edge; mainRight: Edge; mainBottom: Edge };
@@ -64,7 +95,16 @@ const MEASURE = `(${(selectors: string[]) => {
       through *= 1 - alphaOf(getComputedStyle(node).backgroundColor);
     }
     const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    const insetLeft = parseFloat(style.borderLeftWidth) + parseFloat(style.paddingLeft);
+    const insetRight = parseFloat(style.borderRightWidth) + parseFloat(style.paddingRight);
     out[selector] = {
+      width: rect.width,
+      left: rect.left,
+      right: rect.right,
+      innerWidth: rect.width - insetLeft - insetRight,
+      innerLeft: rect.left + insetLeft,
+      innerRight: rect.right - insetRight,
       alpha: alphaOf(style.backgroundColor),
       effective: 1 - through,
       // Chrome aliases -webkit-backdrop-filter to this; glassTokens (e) checks
@@ -103,7 +143,7 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
   let browser: ReturnType<typeof spawn> | undefined;
   let socket: WebSocket | undefined;
   let nextId = 0;
-  type Response = { result?: { result?: { value?: string } } };
+  type Response = { result?: { errorText?: string; result?: { value?: string } } };
   const pending = new Map<number, (value: Response) => void>();
   const send = (method: string, params: object = {}) =>
     new Promise<Response>((resolve) => {
@@ -135,7 +175,14 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
       transparency,
     })});`;
     const response = await send("Runtime.evaluate", {
-      expression: `${root} ${MEASURE}(${JSON.stringify([...PANELS, ...OVERLAYS, ".app-shell", "html"])})`,
+      expression: `(async () => {
+        ${root}
+        // Measure the settled palette, including the Composer's existing transition.
+        getComputedStyle(document.querySelector('.composer-glass')).backgroundColor;
+        await Promise.allSettled(document.getAnimations().map(animation => animation.finished));
+        return ${MEASURE}(${JSON.stringify([...PANELS, ...OVERLAYS, ...CHAT_SURFACES, ".chat-run-status", ".app-shell", "html"])});
+      })()`,
+      awaitPromise: true,
       returnByValue: true,
     });
     return JSON.parse(response.result?.result?.value ?? "{}") as Measured;
@@ -204,8 +251,24 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
     await send("Page.enable");
     // Headless pages are never focused; focus-visible needs a focused page.
     await send("Emulation.setFocusEmulationEnabled", { enabled: true });
-    await send("Page.navigate", { url: pathToFileURL(page).href });
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    const url = pathToFileURL(page).href;
+    const navigation = await send("Page.navigate", { url });
+    if (navigation.result?.errorText) {
+      throw new Error(`Glass fixture navigation failed: ${navigation.result.errorText}`);
+    }
+    let loaded = false;
+    for (let tries = 0; tries < 100; tries += 1) {
+      const ready = await send("Runtime.evaluate", {
+        expression: `JSON.stringify(location.href === ${JSON.stringify(url)} && document.readyState === "complete" && document.querySelector('.surface-main') !== null)`,
+        returnByValue: true,
+      });
+      if (ready.result?.result?.value === "true") {
+        loaded = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    if (!loaded) throw new Error("Glass fixture did not finish loading before measurement");
   }, 30_000);
 
   afterAll(async () => {
@@ -239,7 +302,7 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
       }
       expect(m[".surface-main"]?.effective, `${theme} main`).toBe(1);
       expect(m[".surface-main"]?.backdrop, `${theme} main blur`).toBe("none");
-      for (const part of OVERLAYS) {
+      for (const part of [...OVERLAYS, ...CHAT_SURFACES]) {
         expect(m[part]?.effective, `${theme} ${part}`).toBe(1);
         expect(m[part]?.backdrop, `${theme} ${part}`).toBe("none");
       }
@@ -273,12 +336,40 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
     }
   });
 
+  it("Full: chat surfaces are only slightly denser than the app; Thinking adds no layer", async () => {
+    for (const theme of THEMES) {
+      const m = await measure(theme, true, "full");
+      for (const part of CHAT_SURFACES) {
+        expect(m[part]?.alpha, `${theme} ${part} tint`).toBeCloseTo(0.18, 2);
+        expect(m[part]?.effective, `${theme} ${part} composite`).toBeCloseTo(0.82, 2);
+      }
+      expect(m[".chat-run-status"]?.alpha).toBe(0);
+      expect(m[".chat-run-status"]?.effective).toBe(m[".surface-main"]?.effective);
+      expect(m[".chat-run-status"]?.backdrop).toBe("none");
+    }
+  });
+
+  it("short cards fit their text and align by author; technical output takes the full column", async () => {
+    for (const theme of THEMES) {
+      const m = await measure(theme, true, "full");
+      const main = m[".surface-main"] as Probe;
+      const user = m["[data-message-card]"] as Probe;
+      const assistant = m["[data-assistant-card]"] as Probe;
+      const technical = m["[data-technical-card]"] as Probe;
+      expect(user.width).toBeLessThan(main.innerWidth * 0.5);
+      expect(user.right).toBeCloseTo(main.innerRight, 0);
+      expect(assistant.width).toBeLessThan(main.innerWidth * 0.5);
+      expect(assistant.left).toBeCloseTo(main.innerLeft, 0);
+      expect(technical.width).toBeCloseTo(main.innerWidth, 0);
+    }
+  });
+
   it("Off (also what main resolves OS accessibility to): opaque, today's dividers, no CSS blur", async () => {
     for (const theme of THEMES) {
       for (const transparency of ["off", "full", "sidebar"] as const) {
         // data-native-glass="false" is what main sends for Off and for any OS block.
         const m = await measure(theme, false, transparency);
-        for (const part of [...PANELS, ...OVERLAYS]) {
+        for (const part of [...PANELS, ...OVERLAYS, ...CHAT_SURFACES]) {
           expect(m[part]?.effective, `${theme} ${transparency} ${part}`).toBe(1);
           expect(m[part]?.backdrop, `${theme} ${transparency} ${part}`).toBe("none");
         }
@@ -295,7 +386,7 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
         for (const os of OS) {
           const m = await measure(theme, true, transparency, os);
           const at = `${theme} ${transparency} ${os}`;
-          for (const part of [...PANELS, ...OVERLAYS]) {
+          for (const part of [...PANELS, ...OVERLAYS, ...CHAT_SURFACES]) {
             expect(m[part]?.effective, `${at} ${part}`).toBe(1);
             expect(m[part]?.backdrop, `${at} ${part}`).toBe("none");
           }

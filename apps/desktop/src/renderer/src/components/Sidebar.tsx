@@ -26,9 +26,12 @@ import {
   useRef,
   useState,
 } from "react";
-import type { AgentSessionInfo, WorkspaceInfo } from "../../../shared/contracts";
+import { createPortal } from "react-dom";
+import { agentAvatarForId } from "../../../shared/agent-templates";
+import type { AgentInfo, AgentSessionInfo, WorkspaceInfo } from "../../../shared/contracts";
 import type { SessionActivity } from "../features/agent/agentEventHub";
 import { SessionStatusDot } from "../features/agent/SessionStatusDot";
+import { AgentAvatar } from "../features/agents/AgentAvatar";
 import { cn } from "../lib/cn";
 import { beginResizeGesture, endResizeGesture } from "../lib/resizeGesture";
 import { useShellText } from "../lib/shellText";
@@ -42,6 +45,7 @@ function isListedChat(session: AgentSessionInfo): boolean {
 }
 
 const NO_NAMES: readonly string[] = [];
+const NO_AGENTS: readonly AgentInfo[] = [];
 
 export const SIDEBAR_MIN_WIDTH = 240;
 const SIDEBAR_MAX_WIDTH = 480;
@@ -72,6 +76,10 @@ type SidebarProps = {
   section?: "direct-messages";
   workspaces: WorkspaceInfo[];
   agentSessions: AgentSessionInfo[];
+  agents?: readonly AgentInfo[];
+  projectsExpanded?: boolean;
+  /** Optional target for pinned items above the Projects control. */
+  pinnedContainer?: HTMLElement | null;
   activeSessionId?: string | undefined;
   /** Live run/needs-input/unread state per session for the status dots. */
   activityBySession: Record<string, SessionActivity>;
@@ -110,6 +118,9 @@ export function Sidebar({
   section = "direct-messages",
   workspaces,
   agentSessions,
+  agents = NO_AGENTS,
+  projectsExpanded: controlledProjectsExpanded,
+  pinnedContainer,
   activeSessionId,
   activityBySession,
   open,
@@ -138,16 +149,28 @@ export function Sidebar({
   embedded = false,
 }: SidebarProps) {
   const t = useShellText();
-  const [projectsExpanded, setProjectsExpanded] = useState(false);
+  const [localProjectsExpanded, setProjectsExpanded] = useState(false);
+  const projectsExpanded = controlledProjectsExpanded ?? localProjectsExpanded;
+  const agentsById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents]);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [pinnedExpanded, setPinnedExpanded] = useState(true);
   // Hidden group room sessions (kind "group_member") are never listed as chats.
-  const ungroupedSessions = useMemo(() => agentSessions.filter(isListedChat), [agentSessions]);
+  const ungroupedSessions = useMemo(
+    () =>
+      agentSessions.filter(
+        (session) => isListedChat(session) && !session.parentSessionId && !session.archivedAt,
+      ),
+    [agentSessions],
+  );
+  const workspaceIds = useMemo(
+    () => new Set(workspaces.map((workspace) => workspace.id)),
+    [workspaces],
+  );
   const sessionsByWorkspace = groupSessionsByWorkspace(
     // Agent (profile) chats are listed in their project like any chat.
     ungroupedSessions.filter((session) => !session.pinnedAt),
   );
-  // Pinned direct messages stay together; the rest of the list stays flat.
+  // Pinned sessions have one location. Other sessions belong to their project.
   const pinnedSessions = useMemo(
     () =>
       ungroupedSessions.filter(
@@ -155,12 +178,12 @@ export function Sidebar({
       ),
     [ungroupedSessions],
   );
-  const directMessageSessions = useMemo(
+  const unavailableProjectSessions = useMemo(
     () =>
       ungroupedSessions.filter(
-        (session) => !session.parentSessionId && !session.archivedAt && !session.pinnedAt,
+        (session) => !session.pinnedAt && !workspaceIds.has(session.workspaceId),
       ),
-    [ungroupedSessions],
+    [ungroupedSessions, workspaceIds],
   );
   const { ref: scrollFadeRef, fadeTop, fadeBottom } = useScrollFade();
 
@@ -223,6 +246,61 @@ export function Sidebar({
     onWidthChange(finalWidth);
   };
 
+  const pinnedList = (
+    <>
+      {section === "direct-messages" && pinnedSessions.length > 0 && (
+        <>
+          <SectionHeader
+            expanded={pinnedExpanded}
+            onToggle={() => setPinnedExpanded((expanded) => !expanded)}
+          >
+            <span className="inline-flex items-center gap-1.5">
+              <IconPin aria-hidden size={14} stroke={SB_STROKE} />
+              Pinned
+            </span>
+          </SectionHeader>
+
+          <CollapsibleMotion open={pinnedExpanded} preset="default">
+            <div data-testid="sidebar-pinned">
+              {pinnedSessions.map((session) => (
+                <SessionRow
+                  agent={session.agentId ? agentsById.get(session.agentId) : undefined}
+                  agentId={session.agentId}
+                  key={session.id}
+                  activity={activityBySession[session.id]}
+                  isActive={activeSessionId === session.id}
+                  pinned={true}
+                  onSelect={() => onSelectSession(session)}
+                  onPin={(event) => {
+                    event.stopPropagation();
+                    onPinSession(session, false);
+                  }}
+                  onEditProfile={
+                    session.agentId && onEditAgentProfile
+                      ? () => onEditAgentProfile(session.agentId as string)
+                      : undefined
+                  }
+                  onRename={(title) => onRenameSession?.(session.id, title)}
+                  onArchive={(event) => {
+                    event.stopPropagation();
+                    onArchiveSession(session);
+                  }}
+                  onDelete={(event) => {
+                    event.stopPropagation();
+                    onDeleteSession(session);
+                  }}
+                  title={session.title}
+                  updatedAt={session.updatedAt}
+                />
+              ))}
+            </div>
+          </CollapsibleMotion>
+          <div className="mt-1" />
+        </>
+      )}
+    </>
+  );
+
   const list = (
     <div
       className={cn(
@@ -233,103 +311,22 @@ export function Sidebar({
       {...(fadeBottom ? { "data-fade-bottom": "" } : {})}
       ref={scrollFadeRef}
     >
-      {/* 📌 Pinned section — global, above Projects and Chats */}
-      {section === "direct-messages" && pinnedSessions.length > 0 && (
-        <>
-          <SectionHeader
-            expanded={pinnedExpanded}
-            onToggle={() => setPinnedExpanded((expanded) => !expanded)}
-          >
-            📌 Pinned
-          </SectionHeader>
-
-          <CollapsibleMotion open={pinnedExpanded} preset="default">
-            <div data-testid="sidebar-pinned">
-              <AnimatePresence initial={false}>
-                {pinnedSessions.map((session) => (
-                  <SessionRow
-                    key={session.id}
-                    activity={activityBySession[session.id]}
-                    isActive={activeSessionId === session.id}
-                    pinned={true}
-                    onSelect={() => onSelectSession(session)}
-                    onPin={(event) => {
-                      event.stopPropagation();
-                      onPinSession(session, false);
-                    }}
-                    onEditProfile={
-                      session.agentId && onEditAgentProfile
-                        ? () => onEditAgentProfile(session.agentId as string)
-                        : undefined
-                    }
-                    onRename={(title) => onRenameSession?.(session.id, title)}
-                    onArchive={(event) => {
-                      event.stopPropagation();
-                      onArchiveSession(session);
-                    }}
-                    onDelete={(event) => {
-                      event.stopPropagation();
-                      onDeleteSession(session);
-                    }}
-                    title={session.title}
-                    updatedAt={session.updatedAt}
-                  />
-                ))}
-              </AnimatePresence>
-            </div>
-          </CollapsibleMotion>
-          <div className="mt-1" />
-        </>
-      )}
+      {pinnedContainer === undefined
+        ? pinnedList
+        : pinnedContainer
+          ? createPortal(pinnedList, pinnedContainer)
+          : null}
 
       {section === "direct-messages" ? (
-        <>
-          <AnimatePresence initial={false}>
-            {directMessageSessions.length === 0 ? (
-              <p className="px-2 py-1 text-2xs text-fg-faint">{t("shell.chatsEmpty")}</p>
-            ) : (
-              directMessageSessions.map((session) => (
-                <SessionRow
-                  key={session.id}
-                  activity={activityBySession[session.id]}
-                  isActive={activeSessionId === session.id}
-                  onArchive={(event) => {
-                    event.stopPropagation();
-                    onArchiveSession(session);
-                  }}
-                  onDelete={(event) => {
-                    event.stopPropagation();
-                    onDeleteSession(session);
-                  }}
-                  onPin={(event) => {
-                    event.stopPropagation();
-                    onPinSession(session, !session.pinnedAt);
-                  }}
-                  onEditProfile={
-                    session.agentId && onEditAgentProfile
-                      ? () => onEditAgentProfile(session.agentId as string)
-                      : undefined
-                  }
-                  onRename={(title) => onRenameSession?.(session.id, title)}
-                  onSelect={() => onSelectSession(session)}
-                  pinned={Boolean(session.pinnedAt)}
-                  title={session.title}
-                  updatedAt={session.updatedAt}
-                />
-              ))
-            )}
-          </AnimatePresence>
-        </>
-      ) : null}
-
-      {section === "direct-messages" ? (
-        <div className="mt-5" data-testid="sidebar-project-context">
-          <SectionHeader
-            expanded={projectsExpanded}
-            onToggle={() => setProjectsExpanded((expanded) => !expanded)}
-          >
-            Project context
-          </SectionHeader>
+        <div data-testid="sidebar-projects">
+          {!embedded ? (
+            <SectionHeader
+              expanded={projectsExpanded}
+              onToggle={() => setProjectsExpanded((expanded) => !expanded)}
+            >
+              {t("shell.projects")}
+            </SectionHeader>
+          ) : null}
 
           <CollapsibleMotion open={projectsExpanded} preset="default">
             <AnimatePresence initial={false}>
@@ -347,6 +344,7 @@ export function Sidebar({
                 >
                   <WorkspaceItem
                     activityBySession={activityBySession}
+                    agentsById={agentsById}
                     onArchiveSession={onArchiveSession}
                     onDeleteSession={onDeleteSession}
                     onListArchivedSessions={onListArchivedSessions}
@@ -379,16 +377,49 @@ export function Sidebar({
                 </m.div>
               ))}
             </AnimatePresence>
-            <div className="mt-1">
-              <NavRow
-                icon={<IconFolderPlus size={SB_ICON} stroke={SB_STROKE} />}
-                muted
-                onClick={onOpenWorkspace}
-              >
-                Open workspace
-              </NavRow>
-            </div>
+            {unavailableProjectSessions.length > 0
+              ? unavailableProjectSessions.map((session) => (
+                  <SessionRow
+                    agent={session.agentId ? agentsById.get(session.agentId) : undefined}
+                    agentId={session.agentId}
+                    key={session.id}
+                    activity={activityBySession[session.id]}
+                    isActive={activeSessionId === session.id}
+                    onArchive={(event) => {
+                      event.stopPropagation();
+                      onArchiveSession(session);
+                    }}
+                    onDelete={(event) => {
+                      event.stopPropagation();
+                      onDeleteSession(session);
+                    }}
+                    onPin={(event) => {
+                      event.stopPropagation();
+                      onPinSession(session, !session.pinnedAt);
+                    }}
+                    onEditProfile={
+                      session.agentId && onEditAgentProfile
+                        ? () => onEditAgentProfile(session.agentId as string)
+                        : undefined
+                    }
+                    onRename={(title) => onRenameSession?.(session.id, title)}
+                    onSelect={() => onSelectSession(session)}
+                    pinned={Boolean(session.pinnedAt)}
+                    title={session.title}
+                    updatedAt={session.updatedAt}
+                  />
+                ))
+              : null}
           </CollapsibleMotion>
+          <div className="mt-1">
+            <NavRow
+              icon={<IconFolderPlus size={SB_ICON} stroke={SB_STROKE} />}
+              muted
+              onClick={onOpenWorkspace}
+            >
+              Open workspace
+            </NavRow>
+          </div>
         </div>
       ) : null}
     </div>
@@ -456,6 +487,7 @@ function WorkspaceItem({
   workspace,
   activeSessionId,
   activityBySession,
+  agentsById,
   sessions,
   onSelectSession,
   onNewSession,
@@ -480,6 +512,7 @@ function WorkspaceItem({
   workspace: WorkspaceInfo;
   activeSessionId?: string | undefined;
   activityBySession: Record<string, SessionActivity>;
+  agentsById: ReadonlyMap<string, AgentInfo>;
   sessions: AgentSessionInfo[];
   onSelectSession(session: AgentSessionInfo): void;
   onNewSession(): void;
@@ -558,45 +591,45 @@ function WorkspaceItem({
       >
         {workspace.displayName}
       </ProjectRow>
-      <CollapsibleMotion open={expanded} preset="default">
-        <AnimatePresence initial={false}>
-          {visibleSessions.map((session) => (
-            <m.div
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -4 }}
-              initial={{ opacity: 0, y: 4 }}
-              key={session.id}
-              transition={LIST_MOTION}
-            >
-              <SessionRow
-                activity={activityBySession[session.id]}
-                isActive={activeSessionId === session.id}
-                onArchive={(event) => {
-                  event.stopPropagation();
-                  onArchiveSession(session);
-                }}
-                onDelete={(event) => {
-                  event.stopPropagation();
-                  onDeleteSession(session);
-                }}
-                onPin={(event) => {
-                  event.stopPropagation();
-                  onPinSession(session, !session.pinnedAt);
-                }}
-                onEditProfile={
-                  session.agentId && onEditAgentProfile
-                    ? () => onEditAgentProfile(session.agentId as string)
-                    : undefined
-                }
-                onRename={(title) => onRenameSession(session.id, title)}
-                onSelect={() => onSelectSession(session)}
-                pinned={Boolean(session.pinnedAt)}
-                title={session.title}
-                updatedAt={session.updatedAt}
-              />
-            </m.div>
-          ))}
-        </AnimatePresence>
+      <CollapsibleMotion className={SB_NEST} open={expanded} preset="default">
+        {visibleSessions.map((session) => (
+          <m.div
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            initial={{ opacity: 0, y: 4 }}
+            key={session.id}
+            transition={LIST_MOTION}
+          >
+            <SessionRow
+              agent={session.agentId ? agentsById.get(session.agentId) : undefined}
+              agentId={session.agentId}
+              activity={activityBySession[session.id]}
+              isActive={activeSessionId === session.id}
+              onArchive={(event) => {
+                event.stopPropagation();
+                onArchiveSession(session);
+              }}
+              onDelete={(event) => {
+                event.stopPropagation();
+                onDeleteSession(session);
+              }}
+              onPin={(event) => {
+                event.stopPropagation();
+                onPinSession(session, !session.pinnedAt);
+              }}
+              onEditProfile={
+                session.agentId && onEditAgentProfile
+                  ? () => onEditAgentProfile(session.agentId as string)
+                  : undefined
+              }
+              onRename={(title) => onRenameSession(session.id, title)}
+              onSelect={() => onSelectSession(session)}
+              pinned={Boolean(session.pinnedAt)}
+              title={session.title}
+              updatedAt={session.updatedAt}
+            />
+          </m.div>
+        ))}
         {canToggleSessions ? (
           <button
             className={cn(SB_SESSION, "text-fg-faint hover:text-fg-subtle")}
@@ -639,6 +672,8 @@ function WorkspaceItem({
 
 function SessionRow({
   title,
+  agent,
+  agentId,
   updatedAt,
   isActive,
   pinned,
@@ -651,6 +686,8 @@ function SessionRow({
   onDelete,
 }: {
   title: string;
+  agent?: AgentInfo | undefined;
+  agentId?: string | undefined;
   updatedAt: string;
   isActive: boolean;
   pinned: boolean;
@@ -699,12 +736,13 @@ function SessionRow({
     setNewTitle(displayTitle);
   };
 
+  const avatar = agentId ? (agent ?? agentAvatarForId(agentId)) : undefined;
   return (
     <m.div
       className={cn(
         SB_SESSION,
         "group",
-        isActive ? "row-selected" : "text-fg-subtle hover:bg-hover hover:text-fg-muted",
+        isActive ? "text-fg-subtle" : "text-fg-subtle hover:bg-hover hover:text-fg-muted",
       )}
       layout
       onBlurCapture={(event) => {
@@ -715,8 +753,32 @@ function SessionRow({
       onMouseLeave={() => setConfirmDelete(false)}
       transition={LIST_MOTION}
     >
-      <span className={SB_RAIL}>
-        <SessionStatusDot activity={activity} />
+      <span className={cn(SB_RAIL, "relative")}>
+        {avatar && agentId ? (
+          <>
+            <AgentAvatar
+              face={avatar.avatarFace}
+              color={avatar.avatarColor}
+              shape={avatar.avatarShape}
+              seed={agentId}
+              size={20}
+              state={
+                agent?.archivedAt
+                  ? "archived"
+                  : activity?.needsInput
+                    ? "waiting"
+                    : activity?.running
+                      ? "working"
+                      : "idle"
+              }
+            />
+            {activity?.failed || activity?.unread ? (
+              <SessionStatusDot activity={activity} className="absolute -right-0.5 -bottom-0.5" />
+            ) : null}
+          </>
+        ) : (
+          <SessionStatusDot activity={activity} />
+        )}
       </span>
       {isRenaming ? (
         <input
@@ -741,17 +803,25 @@ function SessionRow({
         />
       ) : (
         <button
+          aria-current={isActive ? "page" : undefined}
           className="flex min-w-0 flex-1 items-center pr-1 text-left"
           onClick={onSelect}
           title="Open"
           type="button"
         >
-          <span className="min-w-0 flex-1 truncate-fade">{displayTitle}</span>
+          <span className={cn("min-w-0 flex-1 truncate-fade", isActive && "text-accent")}>
+            {displayTitle}
+          </span>
         </button>
       )}
       <span className="ml-0.5 hidden shrink-0 items-center group-hover:flex group-focus-within:flex">
         <span className={SB_SESSION_META}>{formatRelativeTime(updatedAt)}</span>
-        <IconButton label={pinned ? "Unpin chat" : "Pin chat"} onClick={onPin}>
+        <IconButton
+          label={
+            agentId ? (pinned ? "Unpin Agent" : "Pin Agent") : pinned ? "Unpin chat" : "Pin chat"
+          }
+          onClick={onPin}
+        >
           {pinned ? (
             <IconPinnedOff size={SB_ACTION} stroke={SB_ACTION_STROKE} />
           ) : (
@@ -1246,7 +1316,7 @@ function SectionHeader({
   expanded,
   onToggle,
 }: {
-  children: string;
+  children: ReactNode;
   expanded: boolean;
   onToggle(): void;
 }) {

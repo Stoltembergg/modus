@@ -1479,7 +1479,7 @@ export function Timeline({
 
               return (
                 <RevealOnMount animate={freshKeys.has(key)} key={key}>
-                  <div className="w-full px-8">
+                  <div className={block.type === "message" ? "w-full min-w-0" : "w-full px-8"}>
                     {block.type === "work-fold" ? (
                       <WorkFold
                         items={block.items}

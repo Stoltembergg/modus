@@ -1,5 +1,6 @@
 import type { SecurityState } from "../../../preload/types";
 import type {
+  AgentInfo,
   AgentSessionInfo,
   ModelSettingsState,
   WorkspaceInfo,
@@ -15,6 +16,9 @@ export type InitialAppDataSource = {
   agent: {
     list(): Promise<AgentSessionInfo[]>;
   };
+  agents: {
+    list(): Promise<AgentInfo[]>;
+  };
   model: {
     settings(): Promise<ModelSettingsState>;
   };
@@ -24,6 +28,7 @@ export type InitialAppHydration = {
   securityState: Promise<SecurityState>;
   workspaces: Promise<WorkspaceInfo[]>;
   sessions: Promise<AgentSessionInfo[]>;
+  profiles: Promise<AgentInfo[]>;
   modelSettings: Promise<ModelSettingsState>;
   settled: Promise<void>;
 };
@@ -33,13 +38,15 @@ export function beginInitialAppHydration(api: InitialAppDataSource): InitialAppH
   const securityState = api.app.securityState();
   const workspaces = api.workspace.list();
   const sessions = api.agent.list();
+  const profiles = api.agents.list();
   const modelSettings = api.model.settings();
-  const pending = [securityState, workspaces, sessions, modelSettings];
+  const pending = [securityState, workspaces, sessions, profiles, modelSettings];
 
   return {
     securityState,
     workspaces,
     sessions,
+    profiles,
     modelSettings,
     settled: Promise.allSettled(pending).then(() => undefined),
   };

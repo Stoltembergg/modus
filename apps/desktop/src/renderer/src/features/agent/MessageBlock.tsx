@@ -24,7 +24,6 @@ import { cn } from "../../lib/cn";
 import { useClipFade } from "../../lib/useClipFade";
 import {
   COMPOSER_RADIUS_CLASS,
-  COMPOSER_SHELL_CLASS,
   Composer,
   type ComposerDraft,
   createEmptyComposerDraft,
@@ -103,7 +102,7 @@ export const MessageBlock = memo(function MessageBlock({
   const [editing, setEditing] = useState(false);
   // Pause measurement while the edit composer owns the slot — remounting the
   // clip surface must re-run the observer (active flip), not reuse a stale one.
-  const { boxRef, contentRef, clipped } = useClipFade(!editing);
+  const { boxRef, contentRef, clipped } = useClipFade(!editing && compactClip);
 
   if (messageRole === "user") {
     const hasAttachments = Boolean(attachments?.length);
@@ -115,10 +114,8 @@ export const MessageBlock = memo(function MessageBlock({
 
     const canEdit = Boolean(editable && onEditResend && model && models.length > 0);
     const showEditor = Boolean(editing && canEdit && onEditResend);
-    // Sticky slot is always mounted: editing only swaps slot content. Unmounting
-    // sticky and returning a normal-flow editor made the editor appear at the
-    // bubble's real document position (often off-screen) while the sticky
-    // viewport copy vanished.
+    // Compact previews keep their sticky slot while editing. Main-chat cards
+    // stay in normal flow so an unabridged long prompt cannot cover its response.
     const bubbleBody = (
       <>
         <PromptAttachmentRow {...(attachments ? { attachments } : {})} />
@@ -146,10 +143,8 @@ export const MessageBlock = memo(function MessageBlock({
     return (
       <div
         className={cn(
-          "sticky top-0 z-10 block w-full min-w-0",
-          COMPOSER_RADIUS_CLASS,
-          // Preview sheet is elevated; main chat is canvas.
-          compactClip ? "bg-elevated" : "bg-canvas",
+          "message-card-slot block w-full min-w-0",
+          compactClip && cn("sticky top-0 z-10 bg-elevated", COMPOSER_RADIUS_CLASS),
         )}
       >
         {showEditor && onEditResend ? (
@@ -174,10 +169,10 @@ export const MessageBlock = memo(function MessageBlock({
           <div
             aria-label={canEdit ? "Edit message" : undefined}
             className={cn(
-              "block w-full min-w-0 px-4 py-3 text-left text-sm text-fg leading-relaxed transition-colors hover:border-composer-border-strong",
-              COMPOSER_SHELL_CLASS,
+              "chat-message-bubble chat-message-surface text-left text-sm text-fg leading-relaxed",
               canEdit && "cursor-pointer",
             )}
+            data-message-role="user"
             onClick={canEdit ? () => setEditing(true) : undefined}
             onKeyDown={
               canEdit
@@ -192,13 +187,12 @@ export const MessageBlock = memo(function MessageBlock({
             role={canEdit ? "button" : undefined}
             tabIndex={canEdit ? 0 : undefined}
           >
-            {/* 3.5 lines at leading-relaxed (1.625em × 3.5 = 5.6875em): 3
-                clear lines + a half-line peek for the bottom dissolve.
-                Mask MUST live on this clipped viewport — on the tall inner
-                content the gradient is sized to the full text height, so
-                the visible window stays opaque. */}
+            {/* Only compact previews clip: the main chat retains every line. */}
             <div
-              className={cn("max-h-[5.6875em] overflow-hidden", clipped && "clip-fade")}
+              className={cn(
+                compactClip && "max-h-[5.6875em] overflow-hidden",
+                compactClip && clipped && "clip-fade",
+              )}
               ref={boxRef}
             >
               <div className="space-y-2" ref={contentRef}>
@@ -211,8 +205,13 @@ export const MessageBlock = memo(function MessageBlock({
     );
   }
 
+  if (!content && (streaming || (!sources?.length && !sourceStatus))) return null;
+
   return (
-    <div className="min-w-0 max-w-full text-xs leading-relaxed">
+    <div
+      className="chat-message-bubble chat-message-surface text-xs leading-relaxed"
+      data-message-role="assistant"
+    >
       {content ? (
         <MarkdownMessage
           content={content}

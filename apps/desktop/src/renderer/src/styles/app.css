@@ -227,6 +227,7 @@
   --surface-sidebar: color-mix(in srgb, var(--color-panel) 94%, transparent);
   --surface-main: var(--color-canvas);
   --surface-raised: var(--color-elevated);
+  --surface-chat: var(--color-elevated);
   /* Solid on unsupported hosts; native translucency is applied by the scoped
      data-native-glass rules below. */
   --surface-glass: var(--surface-raised);
@@ -294,6 +295,7 @@
      Text contrast on these tiers is pinned by styles/glassTokens.test.ts. */
   --glass-alpha-chrome: 78%; /* window tint: rail + sidebar, and main in Full */
   --glass-alpha-overlay: 82%; /* raised/glass surfaces, popups, pdf + mermaid chrome */
+  --glass-alpha-chat: 18%; /* over the 78% window tint: about 82% effective */
   --glass-alpha-strip: 78%; /* sticky title strips over scrolling content: frost + enough tint to keep the label legible */
   --glass-blur: 18px;
   --glass-saturate: 1.12;
@@ -3093,6 +3095,44 @@ body
   }
 }
 
+/* Message cards share chat translucency; short turns do not fill the column. */
+.chat-message-surface {
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-composer);
+}
+.chat-message-bubble {
+  width: fit-content;
+  min-width: 0;
+  max-width: 100%;
+  padding: 12px 16px;
+  border: 0;
+  background: var(--surface-chat);
+  overflow-wrap: anywhere;
+}
+.chat-message-bubble[data-message-role="user"] {
+  max-width: 85%;
+  margin-inline-start: auto;
+}
+/* Technical output keeps the full column; existing code/table scrollers remain. */
+.chat-message-surface:has(
+  pre,
+  table,
+  [data-streamdown="code-block"],
+  [data-streamdown="table-wrapper"]
+) {
+  width: 100%;
+  max-width: 100%;
+}
+.chat-message-bubble:focus-visible {
+  outline: 2px solid var(--color-focus-ring-soft);
+  outline-offset: 2px;
+}
+@media (max-width: 640px) {
+  .chat-message-bubble[data-message-role="user"] {
+    max-width: 94%;
+  }
+}
+
 /*
  * Composer surface: one continuous rounded field, no border or divider, theme glass fill.
  * Solid fill unless native glass + Transparency "full".
@@ -3100,13 +3140,24 @@ body
 .composer-glass {
   border: 0;
   border-radius: 16px;
-  background: var(--surface-glass-elevated, var(--color-surface));
+  background: var(--surface-chat);
   box-shadow: var(--menu-shadow);
   transition:
     box-shadow 160ms ease-out,
     background-color 160ms ease-out;
 }
-:root[data-native-glass="true"][data-transparency="full"] .composer-glass {
+:root[data-native-glass="true"][data-transparency="full"] {
+  --surface-chat: color-mix(in srgb, var(--color-elevated) var(--glass-alpha-chat), transparent);
+}
+/* The sticky user-message wrapper must not hide the material behind its card. */
+:root[data-native-glass="true"][data-transparency="full"] .message-card-slot {
+  background-color: transparent;
+}
+:root[data-native-glass="true"][data-transparency="full"] .chat-message-surface {
+  background-color: var(--surface-chat);
+}
+:root[data-native-glass="true"][data-transparency="full"] .composer-glass,
+:root[data-native-glass="true"][data-transparency="full"] .chat-message-surface {
   -webkit-backdrop-filter: var(--glass-filter);
   backdrop-filter: var(--glass-filter);
 }
@@ -3134,6 +3185,7 @@ body
   :root {
     --glass-alpha-chrome: 100%;
     --glass-alpha-overlay: 100%;
+    --glass-alpha-chat: 100%;
     --glass-filter: none;
     --glass-scrim-filter: none;
   }
@@ -3149,6 +3201,7 @@ body
   :root {
     --glass-alpha-chrome: 100%;
     --glass-alpha-overlay: 100%;
+    --glass-alpha-chat: 100%;
     --glass-filter: none;
     --glass-scrim-filter: none;
   }

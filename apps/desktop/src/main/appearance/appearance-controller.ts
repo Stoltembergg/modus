@@ -90,7 +90,7 @@ export function createAppearanceController({
     }
     if (host.glass === "native" && host.chrome === "windows-overlay") {
       try {
-        window.setBackgroundMaterial(glass ? "mica" : "none");
+        window.setBackgroundMaterial(glass ? "acrylic" : "none");
       } catch {
         try {
           window.setBackgroundMaterial("none");
@@ -103,6 +103,7 @@ export function createAppearanceController({
     }
     if (host.chrome === "windows-overlay") {
       window.setTitleBarOverlay({
+        color: glass ? TRANSPARENT : solidWindowBackground(state),
         symbolColor: windowSymbolColor(state),
         height: TITLE_BAR_HEIGHT,
       });

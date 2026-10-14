@@ -49,7 +49,7 @@ describe("resolveAppearance (D2 state matrix)", () => {
             preferences: prefs({ theme, transparency, transparencyChosen: true }),
             os: OS,
           }),
-        ).toMatchObject({ glass: true, glassMode: transparency, material: "mica" });
+        ).toMatchObject({ glass: true, glassMode: transparency, material: "acrylic" });
       }
     }
   });
@@ -86,7 +86,7 @@ describe("resolveAppearance (D2 state matrix)", () => {
     }
   });
 
-  it("is always solid without a native material (Win10, Linux, declined Mica)", () => {
+  it("is always solid without a native material (Win10, Linux, declined Acrylic)", () => {
     for (const window of [WIN10, LINUX, { ...WIN11, glass: "solid" as const }]) {
       expect(resolveAppearance({ window, preferences: prefs(), os: OS })).toMatchObject({
         glass: false,

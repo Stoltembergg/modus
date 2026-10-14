@@ -270,11 +270,24 @@ export async function measureScenarios(
       const file = join(site, `glass-probe-${index}.html`);
       writeFileSync(file, pageFor(indexHtml, scenario));
       if (pinMedia) await send("Emulation.setEmulatedMedia", { features: mediaFor(scenario.os) });
-      await send("Page.navigate", { url: pathToFileURL(file).href });
+      const url = pathToFileURL(file).href;
+      const navigation = await send("Page.navigate", { url });
+      if (navigation.result?.errorText) {
+        throw new Error(`Glass fixture navigation failed: ${navigation.result.errorText}`);
+      }
+      let loaded = false;
       for (let tries = 0; tries < 100; tries += 1) {
-        if ((await evaluate('document.readyState === "complete"')) === true) break;
+        if (
+          (await evaluate(
+            `location.href === ${JSON.stringify(url)} && document.readyState === "complete" && document.querySelector('[data-probe="main"]') !== null`,
+          )) === true
+        ) {
+          loaded = true;
+          break;
+        }
         await new Promise((ok) => setTimeout(ok, 50));
       }
+      if (!loaded) throw new Error("Glass fixture did not finish loading before measurement");
       results.push({ scenario, measured: JSON.parse(await evaluate(MEASURE)) });
     }
     void send("Browser.close");

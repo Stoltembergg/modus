@@ -6,7 +6,7 @@ import type { WindowAppearance } from "./window-appearance";
  * The user picks a theme and a Transparency mode; the OS contributes its
  * appearance and accessibility settings. Modes, identical in every theme
  * (dark, dark-plus and light):
- * - "sidebar" (default): the window material (macOS vibrancy / Win11 Mica)
+ * - "sidebar" (default): the window material (macOS vibrancy / Win11 Acrylic)
  *   shows only through the left chrome (rail + context sidebar);
  * - "full": canvas and overlays are translucent too;
  * - "off": every surface is solid and the window material is off.
@@ -97,7 +97,7 @@ export type OsAppearance = {
   highContrast: boolean;
 };
 
-export type GlassMaterial = "vibrancy" | "mica" | "none";
+export type GlassMaterial = "vibrancy" | "mica" | "acrylic" | "none";
 export type GlassBlockReason = "platform" | "user" | "os-reduced-transparency" | "os-high-contrast";
 
 export type AppearanceState = AppearancePreferences & {
@@ -187,7 +187,11 @@ export function resolveAppearance({
   const effectiveTheme = effectiveThemeFor(stored.theme, os.dark, look);
   const blockedBy = glassBlockReason(window.glass === "native", { transparency }, os);
   const glass = blockedBy === null;
-  const material: GlassMaterial = !glass ? "none" : window.chrome === "macos" ? "vibrancy" : "mica";
+  const material: GlassMaterial = !glass
+    ? "none"
+    : window.chrome === "macos"
+      ? "vibrancy"
+      : "acrylic";
   const glassMode = glass ? transparency : "off";
   return {
     ...stored,
