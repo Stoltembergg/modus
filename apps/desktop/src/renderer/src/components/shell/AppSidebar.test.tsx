@@ -1,8 +1,11 @@
 // @vitest-environment happy-dom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { domMax, LazyMotion } from "motion/react";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
+import { createPortal } from "react-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { SettingsSidebar } from "../../features/settings/sections/SettingsSidebar";
+import type { SettingsSectionId } from "../../features/settings/settings-types";
 import {
   AppSidebar,
   appSidebarReservedWidth,
@@ -10,6 +13,9 @@ import {
   SIDEBAR_PINNED_KEY,
   writeSidebarPinned,
 } from "./AppSidebar";
+
+// Sidebar interactions do not depend on the mascot's asynchronous animation loop.
+vi.mock("../ui/ModusBot", () => ({ ModusBot: () => <span aria-hidden="true" /> }));
 
 afterEach(() => {
   cleanup();
@@ -34,6 +40,80 @@ function renderSidebar(props: Partial<Parameters<typeof AppSidebar>[0]> = {}, li
 }
 
 describe("AppSidebar", () => {
+  function SettingsNavigation() {
+    const [slot, setSlot] = useState<HTMLDivElement | null>(null);
+    const [section, setSection] = useState<SettingsSectionId>("general");
+    return (
+      <LazyMotion features={domMax} strict>
+        <AppSidebar
+          active="settings"
+          canCreateSession
+          onNavigate={() => {}}
+          onNewMessage={() => {}}
+          onPinnedChange={() => {}}
+          pinned={false}
+        >
+          <div ref={setSlot} />
+        </AppSidebar>
+        <main>
+          <button type="button">Settings content</button>
+          {slot
+            ? createPortal(
+                <SettingsSidebar
+                  activeSection={section}
+                  embedded
+                  onBack={() => {}}
+                  onQueryChange={() => {}}
+                  onSectionChange={setSection}
+                  query=""
+                />,
+                slot,
+              )
+            : null}
+        </main>
+      </LazyMotion>
+    );
+  }
+
+  it("keeps portal Settings navigation open when the pointer moves into its items", () => {
+    render(<SettingsNavigation />);
+    const nav = screen.getByRole("navigation");
+    fireEvent.mouseEnter(nav);
+    const settings = screen.getByRole("button", { name: "Settings" });
+    const account = screen.getByRole("button", { name: "Account" });
+    fireEvent.mouseOut(settings, { relatedTarget: account });
+    fireEvent.mouseOver(account, { relatedTarget: settings });
+
+    expect(screen.getByRole("button", { name: "Account" })).toBe(account);
+    fireEvent.click(account);
+    expect(account.getAttribute("aria-current")).toBe("page");
+    fireEvent.focus(account);
+    fireEvent.blur(account, {
+      relatedTarget: screen.getByRole("button", { name: "Settings content" }),
+    });
+    expect(screen.getByRole("button", { name: "Account" })).toBe(account);
+    fireEvent.click(screen.getByRole("button", { name: "Appearance" }));
+    expect(screen.getByRole("button", { name: "Appearance" }).getAttribute("aria-current")).toBe(
+      "page",
+    );
+
+    fireEvent.mouseLeave(nav, {
+      relatedTarget: screen.getByRole("button", { name: "Settings content" }),
+    });
+    expect(screen.queryByRole("button", { name: "Account" })).toBeNull();
+  });
+
+  it("closes after keyboard focus leaves portal Settings navigation", () => {
+    render(<SettingsNavigation />);
+    fireEvent.focus(screen.getByRole("button", { name: "Settings" }));
+    const account = screen.getByRole("button", { name: "Account" });
+    fireEvent.focus(account);
+    fireEvent.blur(account, {
+      relatedTarget: screen.getByRole("button", { name: "Settings content" }),
+    });
+    expect(screen.queryByRole("button", { name: "Account" })).toBeNull();
+  });
+
   it("is one sidebar: no separate icon rail next to the context list", () => {
     renderSidebar({ pinned: true });
     expect(screen.getAllByRole("navigation")).toHaveLength(1);
