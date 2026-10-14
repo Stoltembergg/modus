@@ -24,13 +24,15 @@ const SCENE = `
 <div id="root"><div class="app-shell"><div class="app-layout-row surface-app">
   <nav class="app-rail"><button class="app-rail-item" type="button">A</button></nav>
   <aside class="app-context-sidebar bg-panel"><div class="app-context-sidebar-body bg-panel"></div></aside>
-  <main class="surface-main rounded-b-lg border border-hairline-strong border-t-0">
+  <main class="surface-main rounded-b-lg border border-hairline-strong border-t-0" style="width:600px">
     <div class="surface-raised"></div>
     <div class="popup-chrome"></div>
     <div class="pdf-page-chrome"></div>
     <div class="dialog-scrim"></div>
     <div class="composer-glass"></div>
-    <div class="message-card-slot bg-canvas"><div class="composer-glass" data-message-card></div></div>
+    <div class="message-card-slot"><div class="chat-message-bubble chat-message-surface" data-message-role="user" data-message-card>Oi</div></div>
+    <div class="chat-message-bubble chat-message-surface" data-message-role="assistant" data-assistant-card>Reply</div>
+    <div class="chat-message-bubble chat-message-surface" data-message-role="assistant" data-technical-card><pre><code>+kept line</code></pre></div>
     <div class="chat-message-surface bg-card"></div>
     <div class="chat-run-status"></div>
   </main>
@@ -47,12 +49,28 @@ const CANDIDATES = [
 const PANELS = [".app-rail", ".app-context-sidebar", ".surface-main"];
 const CHROME_PARTS = [".app-rail", ".app-context-sidebar"];
 const OVERLAYS = [".surface-raised", ".popup-chrome", ".pdf-page-chrome"];
-const CHAT_SURFACES = [".composer-glass", "[data-message-card]", ".chat-message-surface"];
+const CHAT_SURFACES = [
+  ".composer-glass",
+  "[data-message-card]",
+  "[data-assistant-card]",
+  "[data-technical-card]",
+  ".chat-message-surface",
+];
 const THEMES = ["dark", "dark-plus", "light"] as const;
 const OS = ["reduced-transparency", "more-contrast", "forced-colors"] as const;
 type Os = (typeof OS)[number] | undefined;
 
-type Probe = { alpha: number; effective: number; backdrop: string };
+type Probe = {
+  alpha: number;
+  effective: number;
+  backdrop: string;
+  width: number;
+  left: number;
+  right: number;
+  innerWidth: number;
+  innerLeft: number;
+  innerRight: number;
+};
 type Edge = { alpha: number; width: number };
 type Measured = Record<string, Probe> & {
   edges: { railDivider: Edge; mainLeft: Edge; mainRight: Edge; mainBottom: Edge };
@@ -77,7 +95,16 @@ const MEASURE = `(${(selectors: string[]) => {
       through *= 1 - alphaOf(getComputedStyle(node).backgroundColor);
     }
     const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    const insetLeft = parseFloat(style.borderLeftWidth) + parseFloat(style.paddingLeft);
+    const insetRight = parseFloat(style.borderRightWidth) + parseFloat(style.paddingRight);
     out[selector] = {
+      width: rect.width,
+      left: rect.left,
+      right: rect.right,
+      innerWidth: rect.width - insetLeft - insetRight,
+      innerLeft: rect.left + insetLeft,
+      innerRight: rect.right - insetRight,
       alpha: alphaOf(style.backgroundColor),
       effective: 1 - through,
       // Chrome aliases -webkit-backdrop-filter to this; glassTokens (e) checks
@@ -319,6 +346,21 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
       expect(m[".chat-run-status"]?.alpha).toBe(0);
       expect(m[".chat-run-status"]?.effective).toBe(m[".surface-main"]?.effective);
       expect(m[".chat-run-status"]?.backdrop).toBe("none");
+    }
+  });
+
+  it("short cards fit their text and align by author; technical output takes the full column", async () => {
+    for (const theme of THEMES) {
+      const m = await measure(theme, true, "full");
+      const main = m[".surface-main"] as Probe;
+      const user = m["[data-message-card]"] as Probe;
+      const assistant = m["[data-assistant-card]"] as Probe;
+      const technical = m["[data-technical-card]"] as Probe;
+      expect(user.width).toBeLessThan(main.innerWidth * 0.5);
+      expect(user.right).toBeCloseTo(main.innerRight, 0);
+      expect(assistant.width).toBeLessThan(main.innerWidth * 0.5);
+      expect(assistant.left).toBeCloseTo(main.innerLeft, 0);
+      expect(technical.width).toBeCloseTo(main.innerWidth, 0);
     }
   });
 
