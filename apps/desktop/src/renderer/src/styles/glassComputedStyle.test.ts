@@ -103,7 +103,7 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
   let browser: ReturnType<typeof spawn> | undefined;
   let socket: WebSocket | undefined;
   let nextId = 0;
-  type Response = { result?: { result?: { value?: string } } };
+  type Response = { result?: { errorText?: string; result?: { value?: string } } };
   const pending = new Map<number, (value: Response) => void>();
   const send = (method: string, params: object = {}) =>
     new Promise<Response>((resolve) => {
@@ -204,8 +204,24 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
     await send("Page.enable");
     // Headless pages are never focused; focus-visible needs a focused page.
     await send("Emulation.setFocusEmulationEnabled", { enabled: true });
-    await send("Page.navigate", { url: pathToFileURL(page).href });
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    const url = pathToFileURL(page).href;
+    const navigation = await send("Page.navigate", { url });
+    if (navigation.result?.errorText) {
+      throw new Error(`Glass fixture navigation failed: ${navigation.result.errorText}`);
+    }
+    let loaded = false;
+    for (let tries = 0; tries < 100; tries += 1) {
+      const ready = await send("Runtime.evaluate", {
+        expression: `JSON.stringify(location.href === ${JSON.stringify(url)} && document.readyState === "complete" && document.querySelector('.surface-main') !== null)`,
+        returnByValue: true,
+      });
+      if (ready.result?.result?.value === "true") {
+        loaded = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    if (!loaded) throw new Error("Glass fixture did not finish loading before measurement");
   }, 30_000);
 
   afterAll(async () => {
