@@ -1,10 +1,7 @@
 // @vitest-environment happy-dom
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  AGENT_AVATAR_COLORS,
-  AGENT_AVATAR_SHAPES,
-} from "../../../../shared/contracts";
+import { AGENT_AVATAR_COLORS, AGENT_AVATAR_SHAPES } from "../../../../shared/contracts";
 import { AgentAvatar } from "./AgentAvatar";
 import {
   AGENT_AVATAR_ARCHIVED_FILL,
