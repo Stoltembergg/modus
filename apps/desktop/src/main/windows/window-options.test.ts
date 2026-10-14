@@ -32,7 +32,32 @@ describe("windowChromeOptionsFor", () => {
       thickFrame: true,
       titleBarStyle: "hidden",
       titleBarOverlay: { height: 36 },
-      transparent: true,
+      transparent: false,
+      roundedCorners: true,
+      backgroundMaterial: "acrylic",
+    });
+  });
+
+  it("sets visible caption colors before first paint in each Windows theme", () => {
+    const host = resolveWindowAppearance("win32", "10.0.22621");
+    expect(
+      windowChromeOptionsFor(host, { glass: true, effectiveTheme: "dark", look: "new" }),
+    ).toMatchObject({
+      titleBarOverlay: { color: "#00000000", symbolColor: "#e7ebf1", height: 36 },
+    });
+    expect(
+      windowChromeOptionsFor(host, { glass: true, effectiveTheme: "light", look: "new" }),
+    ).toMatchObject({
+      titleBarOverlay: { color: "#00000000", symbolColor: "#161c27", height: 36 },
+    });
+    expect(
+      windowChromeOptionsFor(host, { glass: false, effectiveTheme: "light", look: "new" }),
+    ).toMatchObject({
+      backgroundColor: "#f6f8fb",
+      backgroundMaterial: "none",
+      titleBarOverlay: { color: "#f6f8fb", symbolColor: "#161c27", height: 36 },
+      transparent: false,
+      roundedCorners: true,
     });
   });
 
@@ -44,7 +69,7 @@ describe("windowChromeOptionsFor", () => {
     });
   });
 
-  it("retains Windows native controls when Mica falls back to solid surfaces", () => {
+  it("retains Windows native controls and corners when Acrylic falls back to solid surfaces", () => {
     expect(
       windowChromeOptionsFor({
         chrome: "windows-overlay",
@@ -55,7 +80,9 @@ describe("windowChromeOptionsFor", () => {
       thickFrame: true,
       titleBarStyle: "hidden",
       titleBarOverlay: { height: 36 },
-      backgroundColor: "#131314",
+      backgroundColor: "#0f1520",
+      backgroundMaterial: "none",
+      roundedCorners: true,
       transparent: false,
     });
   });

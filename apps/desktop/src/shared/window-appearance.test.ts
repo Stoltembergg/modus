@@ -9,7 +9,7 @@ describe("resolveWindowAppearance", () => {
     });
   });
 
-  it("uses native Windows controls with Mica where Windows 11 22H2 is supported", () => {
+  it("uses native Windows controls with Acrylic where Windows 11 22H2 is supported", () => {
     expect(resolveWindowAppearance("win32", "10.0.22621")).toEqual({
       chrome: "windows-overlay",
       glass: "native",

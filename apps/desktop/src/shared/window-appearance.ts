@@ -6,7 +6,7 @@ export type WindowAppearance = {
   glass: WindowGlassMode;
 };
 
-const WINDOWS_MICA_MINIMUM_BUILD = 22_621;
+const WINDOWS_BACKDROP_MINIMUM_BUILD = 22_621;
 
 function windowsBuild(systemVersion: string): number | undefined {
   const match = /^(\d+)\.(\d+)\.(\d+)/u.exec(systemVersion.trim());
@@ -25,7 +25,10 @@ function windowsBuild(systemVersion: string): number | undefined {
 export function resolveWindowAppearance(platform: string, systemVersion: string): WindowAppearance {
   if (platform === "darwin") return { chrome: "macos", glass: "native" };
 
-  if (platform === "win32" && (windowsBuild(systemVersion) ?? 0) >= WINDOWS_MICA_MINIMUM_BUILD) {
+  if (
+    platform === "win32" &&
+    (windowsBuild(systemVersion) ?? 0) >= WINDOWS_BACKDROP_MINIMUM_BUILD
+  ) {
     return { chrome: "windows-overlay", glass: "native" };
   }
 

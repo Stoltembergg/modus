@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AppearanceState } from "../../shared/appearance";
 
 const electronState = vi.hoisted(() => ({
   app: { isPackaged: false },
@@ -16,6 +17,20 @@ const electronState = vi.hoisted(() => ({
   appearance: {
     attach: vi.fn(),
     rendererArgument: vi.fn(() => "--modus-appearance={}"),
+    getState: vi.fn(
+      (): AppearanceState =>
+        ({
+          theme: "dark",
+          transparency: "full",
+          look: "new",
+          effectiveTheme: "dark",
+          glassMode: "full",
+          glass: true,
+          material: "acrylic",
+          blockedBy: null,
+          os: { dark: true, reducedTransparency: false, highContrast: false },
+        }) as const,
+    ),
   },
 }));
 
@@ -65,6 +80,8 @@ vi.mock("../agent/harness/plan-build-store", () => ({
 }));
 
 describe("main window renderer target and redirects", () => {
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+  const originalSystemVersion = Object.getOwnPropertyDescriptor(process, "getSystemVersion");
   const originalRendererUrl = process.env.ELECTRON_RENDERER_URL;
   const originalResourcesPath = (process as NodeJS.Process & { resourcesPath?: string })
     .resourcesPath;
@@ -86,6 +103,10 @@ describe("main window renderer target and redirects", () => {
   });
 
   afterEach(() => {
+    if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
+    if (originalSystemVersion)
+      Object.defineProperty(process, "getSystemVersion", originalSystemVersion);
+    else Reflect.deleteProperty(process, "getSystemVersion");
     if (originalRendererUrl === undefined) delete process.env.ELECTRON_RENDERER_URL;
     else process.env.ELECTRON_RENDERER_URL = originalRendererUrl;
     Object.defineProperty(process, "resourcesPath", {
@@ -117,6 +138,29 @@ describe("main window renderer target and redirects", () => {
     });
     expect(electronState.lastOptions).toMatchObject({
       webPreferences: { additionalArguments: ["--modus-appearance={}"], sandbox: true },
+    });
+  });
+
+  it("constructs the Windows window with the user's light palette, native material and rounded frame", async () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+    Object.defineProperty(process, "getSystemVersion", {
+      configurable: true,
+      value: () => "10.0.22631",
+    });
+    electronState.appearance.getState.mockReturnValueOnce({
+      ...electronState.appearance.getState(),
+      theme: "light",
+      effectiveTheme: "light",
+    });
+    await createWindow();
+    expect(electronState.lastOptions).toMatchObject({
+      transparent: false,
+      thickFrame: true,
+      roundedCorners: true,
+      backgroundMaterial: "acrylic",
+      titleBarStyle: "hidden",
+      titleBarOverlay: { color: "#00000000", symbolColor: "#161c27", height: 36 },
+      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
     });
   });
 

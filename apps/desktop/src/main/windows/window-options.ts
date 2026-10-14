@@ -1,13 +1,21 @@
 import type { BrowserWindowConstructorOptions } from "electron";
+import {
+  type AppearanceState,
+  solidWindowBackground,
+  windowSymbolColor,
+} from "../../shared/appearance";
 import type { WindowAppearance } from "../../shared/window-appearance";
 
 export function windowChromeOptionsFor(
   appearance: WindowAppearance,
+  state?: Pick<AppearanceState, "glass" | "effectiveTheme" | "look">,
 ): Pick<
   BrowserWindowConstructorOptions,
   | "backgroundColor"
+  | "backgroundMaterial"
   | "frame"
   | "thickFrame"
+  | "roundedCorners"
   | "titleBarOverlay"
   | "titleBarStyle"
   | "trafficLightPosition"
@@ -28,13 +36,23 @@ export function windowChromeOptionsFor(
   }
 
   if (appearance.chrome === "windows-overlay") {
+    const palette = state ?? { effectiveTheme: "dark", look: "new" };
+    const glass = appearance.glass === "native" && state?.glass !== false;
     return {
-      backgroundColor: appearance.glass === "native" ? "#00000000" : "#131314",
+      backgroundColor: glass ? "#00000000" : solidWindowBackground(palette),
+      backgroundMaterial: glass ? "acrylic" : "none",
       frame: false,
       thickFrame: true,
+      roundedCorners: true,
       titleBarStyle: "hidden",
-      titleBarOverlay: { height: 36 },
-      transparent: appearance.glass === "native",
+      titleBarOverlay: {
+        color: glass ? "#00000000" : solidWindowBackground(palette),
+        symbolColor: windowSymbolColor(palette),
+        height: 36,
+      },
+      // Electron disables WS_THICKFRAME and rounded corners for layered
+      // transparent windows. DWM supplies translucency for this ordinary HWND.
+      transparent: false,
     };
   }
 

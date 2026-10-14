@@ -64,7 +64,7 @@ export function createMainWindow({
   appearance,
 }: {
   startupTimeline: StartupTimeline;
-  appearance: Pick<AppearanceController, "attach" | "rendererArgument">;
+  appearance: Pick<AppearanceController, "attach" | "rendererArgument" | "getState">;
 }): BrowserWindowType {
   const preloadPath = fileURLToPath(new URL("../preload/index.cjs", import.meta.url));
   const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
@@ -84,7 +84,7 @@ export function createMainWindow({
       title: "Modus",
       ...(host.chrome === "macos" ? {} : { icon: appIconPath }),
       show: true,
-      ...windowChromeOptionsFor({ ...host, glass }),
+      ...windowChromeOptionsFor({ ...host, glass }, appearance.getState()),
       webPreferences: {
         preload: preloadPath,
         contextIsolation: true,
