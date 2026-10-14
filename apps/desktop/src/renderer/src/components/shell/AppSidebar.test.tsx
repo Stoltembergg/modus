@@ -60,6 +60,20 @@ describe("AppSidebar", () => {
     expect(screen.getByTestId("context-sidebar")).toBeTruthy();
   });
 
+  it("keeps Settings hover-expanded only while the pointer is over an unpinned sidebar", () => {
+    renderSidebar({ active: "settings", pinned: false });
+    const nav = screen.getByRole("navigation");
+    const sidebar = document.querySelector(".app-animated-sidebar");
+
+    expect(sidebar?.getAttribute("data-open")).toBe("false");
+    fireEvent.mouseEnter(nav);
+    expect(screen.getByTestId("context-sidebar")).toBeTruthy();
+    fireEvent.mouseLeave(nav);
+
+    expect(screen.queryByTestId("context-sidebar")).toBeNull();
+    expect(sidebar?.getAttribute("data-open")).toBe("false");
+  });
+
   it("keeps all destinations and actions as links", () => {
     const h = renderSidebar({ pinned: true });
     fireEvent.click(screen.getByRole("button", { name: "New message" }));

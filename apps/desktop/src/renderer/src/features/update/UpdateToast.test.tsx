@@ -1,6 +1,7 @@
-import { isValidElement, type ReactElement, type ReactNode } from "react";
+// @vitest-environment happy-dom
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UpdateState } from "../../../../shared/contracts";
 import {
   BREATHE_CLASSES,
@@ -11,14 +12,6 @@ import {
   UpdateToastView,
 } from "./UpdateToast";
 import { type UpdateToastActionId, updateToastContent } from "./updateToastContent";
-
-type ButtonProps = {
-  children?: ReactNode;
-  onClick?: () => void;
-  "aria-label"?: string;
-  className?: string;
-  "data-update-action"?: string;
-};
 
 function fakeApi(initial: UpdateState = { status: "idle" }) {
   const listeners = new Set<(state: UpdateState) => void>();
@@ -46,39 +39,50 @@ function fakeApi(initial: UpdateState = { status: "idle" }) {
   return { api, push, unsubscribe, listeners };
 }
 
-/** The view has no hooks: call it and walk the element tree to reach the buttons. */
-function buttons(node: ReactNode): ReactElement<ButtonProps>[] {
-  if (Array.isArray(node)) return node.flatMap(buttons);
-  if (!isValidElement<ButtonProps>(node)) return [];
-  const own = node.type === "button" ? [node] : [];
-  return [...own, ...buttons(node.props.children)];
-}
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
-function textOf(node: ReactNode): string {
-  if (typeof node === "string" || typeof node === "number") return String(node);
-  if (Array.isArray(node)) return node.map(textOf).join("");
-  if (isValidElement<{ children?: ReactNode }>(node)) return textOf(node.props.children);
-  return "";
+function mockFuseAnimation() {
+  const animation = {
+    finished: Promise.resolve(),
+    onfinish: null,
+    pause: vi.fn(),
+    play: vi.fn(),
+    cancel: vi.fn(),
+    playState: "running",
+  } as unknown as Animation;
+  vi.spyOn(HTMLElement.prototype, "animate").mockReturnValue(animation);
 }
 
 function renderView(state: UpdateState) {
+  vi.useFakeTimers();
+  mockFuseAnimation();
   const { api } = fakeApi();
   const tree = UpdateToastView({
     state,
     onAction: (id) => runUpdateAction(api, id),
     onDismiss: () => runUpdateAction(api, "dismiss"),
   });
-  const found = buttons(tree);
+  const view = render(tree);
+  const markup = renderToStaticMarkup(tree);
   return {
     api,
-    markup: renderToStaticMarkup(tree),
-    labels: found.map((button) => button.props["aria-label"] ?? textOf(button.props.children)),
+    markup,
+    labels: Array.from(view.container.querySelectorAll("button")).map(
+      (button) => button.getAttribute("aria-label") ?? button.textContent ?? "",
+    ),
     click: (label: string) => {
-      const button = found.find(
-        (b) => (b.props["aria-label"] ?? textOf(b.props.children)) === label,
+      const button = Array.from(view.container.querySelectorAll("button")).find(
+        (item) => (item.getAttribute("aria-label") ?? item.textContent ?? "") === label,
       );
-      if (!button?.props.onClick) throw new Error(`no button ${label}`);
-      button.props.onClick();
+      if (!button) throw new Error(`no button ${label}`);
+      act(() => {
+        fireEvent.click(button);
+        vi.advanceTimersByTime(540);
+      });
     },
   };
 }
@@ -107,7 +111,7 @@ describe("update toast", () => {
   it("offers Install for an in-place update, and dismiss", () => {
     const view = renderView({ status: "available", version: "1.2.0", action: "install" });
     expect(view.markup).toContain("New version 1.2.0 available");
-    expect(view.labels).toEqual(["Dismiss update", "Install"]);
+    expect(view.labels).toEqual(["Install", "Dismiss update"]);
     view.click("Install");
     expectOnlyCalled(view.api, "install");
   });
@@ -115,7 +119,7 @@ describe("update toast", () => {
   it("offers Download (release page) when the update cannot install in place", () => {
     const view = renderView({ status: "available", version: "1.2.0", action: "download-page" });
     expect(view.markup).toContain("New version 1.2.0 available");
-    expect(view.labels).toEqual(["Dismiss update", "Download"]);
+    expect(view.labels).toEqual(["Download", "Dismiss update"]);
     view.click("Download");
     expectOnlyCalled(view.api, "openReleasePage");
   });
@@ -164,7 +168,7 @@ describe("update toast", () => {
       action: "install",
     });
     expect(view.markup).toContain("Couldn&#x27;t update to 1.2.0");
-    expect(view.labels).toEqual(["Dismiss update", "Try again"]);
+    expect(view.labels).toEqual(["Try again", "Dismiss update"]);
     view.click("Try again");
     expectOnlyCalled(view.api, "retry");
   });
@@ -176,7 +180,7 @@ describe("update toast", () => {
     const view = renderView({ status: "failed", version: "1.2.0", ...failure });
     expect(view.markup).toContain("Couldn&#x27;t update to 1.2.0");
     expect(view.markup).toContain("Download it from the release page.");
-    expect(view.labels).toEqual(["Dismiss update", "Download"]);
+    expect(view.labels).toEqual(["Download", "Dismiss update"]);
     view.click("Download");
     expectOnlyCalled(view.api, "openReleasePage");
   });
@@ -283,17 +287,25 @@ describe("update state subscription", () => {
 });
 
 describe("breathing primary button", () => {
-  const renderButtons = (state: UpdateState) =>
-    buttons(UpdateToastView({ state, onAction: () => undefined, onDismiss: () => undefined }));
+  const renderButtons = (state: UpdateState) => {
+    mockFuseAnimation();
+    const view = render(
+      <UpdateToastView state={state} onAction={() => undefined} onDismiss={() => undefined} />,
+    );
+    return {
+      buttons: Array.from(view.container.querySelectorAll("button")),
+      container: view.container,
+    };
+  };
 
   it.each([
     { status: "available", version: "1.2.0", action: "install" },
     { status: "available", version: "1.2.0", action: "download-page" },
   ] as const)("breathes on the offer's primary button only ($action)", (state) => {
-    const found = renderButtons(state);
-    const primary = found.filter((b) => b.props["data-update-action"]);
+    const { buttons: found } = renderButtons(state);
+    const primary = found.filter((button) => button.hasAttribute("data-update-action"));
     expect(primary).toHaveLength(1);
-    const classes = primary[0]?.props.className?.split(" ") ?? [];
+    const classes = primary[0]?.className.split(" ") ?? [];
     expect(classes).toEqual(expect.arrayContaining(BREATHE_CLASSES.split(" ")));
     expect(classes).toContain("after:animate-update-breathe");
     // Stops on hover and focus; never runs with reduced motion.
@@ -302,9 +314,9 @@ describe("breathing primary button", () => {
     expect(classes).toContain("focus-visible:after:animate-none");
     expect(classes).toContain("motion-reduce:after:animate-none");
     // Not on the other controls (dismiss).
-    const others = found.filter((b) => !b.props["data-update-action"]);
-    expect(others.map((b) => b.props["aria-label"])).toEqual(["Dismiss update"]);
-    for (const other of others) expect(other.props.className).not.toContain("update-breathe");
+    const others = found.filter((button) => !button.hasAttribute("data-update-action"));
+    expect(others.map((button) => button.getAttribute("aria-label"))).toEqual(["Dismiss update"]);
+    for (const other of others) expect(other.className).not.toContain("update-breathe");
   });
 
   it.each([
@@ -317,10 +329,10 @@ describe("breathing primary button", () => {
     { status: "failed", version: "1.2.0", retryable: false, action: "install" },
     { status: "failed", version: "1.2.0", retryable: true, action: "install", appliesOnQuit: true },
   ] as const)("never breathes while $status", (state) => {
-    for (const button of renderButtons(state)) {
-      expect(button.props.className).not.toContain("update-breathe");
+    const { buttons: found, container } = renderButtons(state);
+    for (const button of found) {
+      expect(button.className).not.toContain("update-breathe");
     }
-    const tree = UpdateToastView({ state, onAction: () => undefined, onDismiss: () => undefined });
-    expect(renderToStaticMarkup(tree)).not.toContain("update-breathe");
+    expect(container.innerHTML).not.toContain("update-breathe");
   });
 });
