@@ -22,6 +22,31 @@ function deferred<T>(): Deferred<T> {
 }
 
 describe("beginInitialAppHydration", () => {
+  it("does not couple sessions and models to an unavailable avatar profile read", async () => {
+    const source: InitialAppDataSource = {
+      app: {
+        securityState: async () => ({
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: true,
+          senderValidation: true,
+        }),
+      },
+      workspace: { list: async () => [] },
+      agent: { list: async () => [] },
+      agents: {
+        list: async () => {
+          throw new Error("Profiles unavailable");
+        },
+      },
+      model: { settings: async () => ({ providers: [], models: [] }) },
+    };
+    const hydration = beginInitialAppHydration(source);
+    await expect(hydration.profiles).rejects.toThrow("Profiles unavailable");
+    await expect(hydration.sessions).resolves.toEqual([]);
+    await expect(hydration.modelSettings).resolves.toEqual({ providers: [], models: [] });
+    await hydration.settled;
+  });
   it("starts every independent read once and settles after every result completes", async () => {
     const securityState = deferred<SecurityState>();
     const workspaces = deferred<[]>();
@@ -31,6 +56,7 @@ describe("beginInitialAppHydration", () => {
       app: { securityState: vi.fn(() => securityState.promise) },
       workspace: { list: vi.fn(() => workspaces.promise) },
       agent: { list: vi.fn(() => sessions.promise) },
+      agents: { list: vi.fn(async () => []) },
       model: { settings: vi.fn(() => modelSettings.promise) },
     } satisfies InitialAppDataSource;
 
@@ -43,6 +69,7 @@ describe("beginInitialAppHydration", () => {
     expect(source.app.securityState).toHaveBeenCalledOnce();
     expect(source.workspace.list).toHaveBeenCalledOnce();
     expect(source.agent.list).toHaveBeenCalledOnce();
+    expect(source.agents.list).toHaveBeenCalledOnce();
     expect(source.model.settings).toHaveBeenCalledOnce();
 
     securityState.resolve({

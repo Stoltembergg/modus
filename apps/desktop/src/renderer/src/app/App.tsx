@@ -130,6 +130,9 @@ export function App() {
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceInfo | null>(null);
   const [agentSessions, setAgentSessions] = useState<AgentSessionInfo[]>([]);
+  const [sidebarAgents, setSidebarAgents] = useState<AgentInfo[]>([]);
+  const [projectsExpanded, setProjectsExpanded] = useState(true);
+  const [sidebarPinnedSlot, setSidebarPinnedSlot] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
     const applyNativeGlass = (available: boolean): void => {
       setNativeGlass(available);
@@ -384,6 +387,17 @@ export function App() {
         if (active) {
           logInitialHydrationError("agent sessions", error);
         }
+      });
+    void hydration.profiles
+      .then((agents) => {
+        if (active) {
+          setSidebarAgents((current) =>
+            Array.from(new Map([...agents, ...current].map((agent) => [agent.id, agent])).values()),
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        if (active) logInitialHydrationError("agent profiles", error);
       });
     void hydration.modelSettings
       .then((settings) => {
@@ -868,6 +882,7 @@ export function App() {
   async function openEditProfile(agentId: string): Promise<void> {
     try {
       const allAgents = await window.modus.agents.list();
+      setSidebarAgents(allAgents);
       const agent = allAgents.find((item: AgentInfo) => item.id === agentId);
       if (!agent) return;
       const takenNames = allAgents
@@ -882,6 +897,7 @@ export function App() {
   async function openNewProfile(): Promise<void> {
     try {
       const allAgents = await window.modus.agents.list();
+      setSidebarAgents(allAgents);
       const takenNames = allAgents
         .filter((item: AgentInfo) => !item.groupId && !item.archivedAt)
         .map((item: AgentInfo) => item.name);
@@ -1147,14 +1163,29 @@ export function App() {
                 >
                   <AppSidebar
                     active={primaryNavigation.active}
-                    canCreateSession={canCreateSession}
-                    onNavigate={(destination) =>
-                      destination === "settings" ? openSettings() : navigateToPrimary(destination)
+                    beforeProjects={
+                      !settingsOpen ? (
+                        <div
+                          className="scroll-thin max-h-[35vh] shrink-0 overflow-y-auto"
+                          data-sidebar-pinned-slot=""
+                          ref={setSidebarPinnedSlot}
+                        />
+                      ) : null
                     }
+                    canCreateSession={canCreateSession}
+                    onNavigate={(destination) => {
+                      if (destination === "settings") openSettings();
+                      else {
+                        setProjectsExpanded(true);
+                        navigateToPrimary(destination);
+                      }
+                    }}
                     onNewMessage={() => openNewChat()}
                     onNewProfile={() => void openNewProfile()}
                     onPinnedChange={setSidebarOpen}
+                    onToggleProjects={() => setProjectsExpanded((expanded) => !expanded)}
                     pinned={responsiveSidebarOpen}
+                    projectsExpanded={projectsExpanded}
                     trafficLightClearance={isMac}
                   >
                     {settingsOpen ? (
@@ -1165,7 +1196,10 @@ export function App() {
                       />
                     ) : (
                       <Sidebar
+                        agents={sidebarAgents}
                         embedded
+                        pinnedContainer={sidebarPinnedSlot}
+                        projectsExpanded={projectsExpanded}
                         section="direct-messages"
                         activityBySession={activityBySession}
                         agentSessions={rootSessions}
@@ -1238,6 +1272,7 @@ export function App() {
                             onCreate={async (input) => {
                               // A new profile opens its first chat (default Project, else No project).
                               const created = await window.modus.agents.create(input);
+                              setSidebarAgents((current) => [...current, created]);
                               await refreshSessions();
                               await openAgentChat(created.id);
                             }}
@@ -1246,7 +1281,10 @@ export function App() {
                               if (!open) setAgentDialog(null);
                             }}
                             onUpdate={async (input) => {
-                              await window.modus.agents.update(input);
+                              const updated = await window.modus.agents.update(input);
+                              setSidebarAgents((current) =>
+                                current.map((agent) => (agent.id === updated.id ? updated : agent)),
+                              );
                               await refreshSessions();
                             }}
                             open

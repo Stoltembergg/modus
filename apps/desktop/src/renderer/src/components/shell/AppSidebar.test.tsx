@@ -160,7 +160,7 @@ describe("AppSidebar", () => {
     expect(screen.queryByRole("button", { name: "Groups" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Projects" }));
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
-    fireEvent.click(screen.getByRole("button", { name: "New profile" }));
+    fireEvent.click(screen.getByRole("button", { name: "New Agent" }));
     expect(h.onNewMessage).toHaveBeenCalledOnce();
     expect(h.onNewProfile).toHaveBeenCalledOnce();
     expect(h.onNavigate.mock.calls).toEqual([["direct-messages"], ["settings"]]);

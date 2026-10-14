@@ -1,4 +1,4 @@
-import { IconMenu2, IconX } from "@tabler/icons-react";
+import { IconChevronRight, IconMenu2, IconX } from "@tabler/icons-react";
 import { AnimatePresence, m, useReducedMotion } from "motion/react";
 import {
   type ComponentProps,
@@ -113,7 +113,7 @@ export function SidebarBody({ mobileLabel, ...props }: BodyProps) {
 
 /** A menu/popover opened from inside keeps the rail open until it closes. */
 function hasOpenPopup(root: HTMLElement): boolean {
-  return root.querySelector('[aria-expanded="true"], [data-popup-open]') !== null;
+  return root.querySelector('[aria-haspopup][aria-expanded="true"], [data-popup-open]') !== null;
 }
 
 export function DesktopSidebar({
@@ -238,11 +238,13 @@ export function SidebarLink({
   link,
   active = false,
   disabled = false,
+  expanded,
   className,
 }: {
   link: SidebarLinkItem;
   active?: boolean;
   disabled?: boolean;
+  expanded?: boolean | undefined;
   className?: string;
 }) {
   const { open, animate, locked } = useSidebar();
@@ -250,6 +252,7 @@ export function SidebarLink({
   return (
     <button
       aria-current={active ? "page" : undefined}
+      aria-expanded={expanded}
       aria-label={link.label}
       className={cn("app-sidebar-link group/sidebar", className)}
       data-active={active ? "true" : undefined}
@@ -271,6 +274,13 @@ export function SidebarLink({
       >
         {link.label}
       </m.span>
+      {expanded !== undefined && showLabel ? (
+        <IconChevronRight
+          aria-hidden
+          className={cn("ml-auto shrink-0 transition-transform", expanded && "rotate-90")}
+          size={14}
+        />
+      ) : null}
     </button>
   );
 }

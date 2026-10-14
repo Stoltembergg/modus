@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentSessionInfo, WorkspaceInfo } from "../../../shared/contracts";
@@ -59,6 +59,7 @@ function renderSidebar(onEditAgentProfile?: (agentId: string) => void) {
       workspaces={[WORKSPACE]}
     />,
   );
+  fireEvent.click(screen.getByRole("button", { name: "Projects" }));
   return { noop };
 }
 

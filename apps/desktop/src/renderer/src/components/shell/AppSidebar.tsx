@@ -30,6 +30,10 @@ export type AppSidebarProps = {
   onNewMessage(): void;
   canCreateSession: boolean;
   onNewProfile?: (() => void) | undefined;
+  projectsExpanded?: boolean | undefined;
+  onToggleProjects?: (() => void) | undefined;
+  /** Host slot for the pinned session list, before the Projects disclosure. */
+  beforeProjects?: ReactNode;
   /** macOS: leave room for the traffic lights above the logo. */
   trafficLightClearance?: boolean;
   /** Contextual list (projects and chats) shown while expanded. */
@@ -72,6 +76,9 @@ export function AppSidebar({
   onNewMessage,
   canCreateSession,
   onNewProfile,
+  projectsExpanded,
+  onToggleProjects,
+  beforeProjects,
   trafficLightClearance = false,
   children,
 }: AppSidebarProps) {
@@ -111,14 +118,6 @@ export function AppSidebar({
                   onClick: onNewMessage,
                 }}
               />
-              <SidebarLink
-                active={active === "direct-messages"}
-                link={{
-                  label: t("shell.projects"),
-                  icon: <IconMessageCircle size={ICON.rail} stroke={ICON_STROKE.rail} />,
-                  onClick: () => onNavigate("direct-messages"),
-                }}
-              />
               {onNewProfile && active === "direct-messages" ? (
                 <SidebarLink
                   link={{
@@ -128,6 +127,21 @@ export function AppSidebar({
                   }}
                 />
               ) : null}
+            </div>
+            {pinned || hoverOpen ? beforeProjects : null}
+            <div className="mt-0.5">
+              <SidebarLink
+                active={active === "direct-messages"}
+                expanded={active === "direct-messages" ? projectsExpanded : undefined}
+                link={{
+                  label: t("shell.projects"),
+                  icon: <IconMessageCircle size={ICON.rail} stroke={ICON_STROKE.rail} />,
+                  onClick: () => {
+                    if (active === "direct-messages" && onToggleProjects) onToggleProjects();
+                    else onNavigate("direct-messages");
+                  },
+                }}
+              />
             </div>
             <ContextList>{children}</ContextList>
           </div>
