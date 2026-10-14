@@ -742,7 +742,7 @@ function SessionRow({
       className={cn(
         SB_SESSION,
         "group",
-        isActive ? "row-selected" : "text-fg-subtle hover:bg-hover hover:text-fg-muted",
+        isActive ? "text-fg-subtle" : "text-fg-subtle hover:bg-hover hover:text-fg-muted",
       )}
       layout
       onBlurCapture={(event) => {
@@ -803,12 +803,15 @@ function SessionRow({
         />
       ) : (
         <button
+          aria-current={isActive ? "page" : undefined}
           className="flex min-w-0 flex-1 items-center pr-1 text-left"
           onClick={onSelect}
           title="Open"
           type="button"
         >
-          <span className="min-w-0 flex-1 truncate-fade">{displayTitle}</span>
+          <span className={cn("min-w-0 flex-1 truncate-fade", isActive && "text-accent")}>
+            {displayTitle}
+          </span>
         </button>
       )}
       <span className="ml-0.5 hidden shrink-0 items-center group-hover:flex group-focus-within:flex">

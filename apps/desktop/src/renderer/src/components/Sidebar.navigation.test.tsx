@@ -55,11 +55,13 @@ function session(id: string, extra: Partial<AgentSessionInfo> = {}): AgentSessio
 
 function Navigation({
   initialSessions,
+  activeSessionId,
   activityBySession = {},
   pinned = true,
   onSelect = () => {},
 }: {
   initialSessions: AgentSessionInfo[];
+  activeSessionId?: string;
   activityBySession?: Record<string, SessionActivity>;
   pinned?: boolean;
   onSelect?: (session: AgentSessionInfo) => void;
@@ -83,6 +85,7 @@ function Navigation({
         projectsExpanded={projectsExpanded}
       >
         <Sidebar
+          activeSessionId={activeSessionId}
           activityBySession={activityBySession}
           agents={[AGENT]}
           agentSessions={sessions}
@@ -128,6 +131,23 @@ function Navigation({
 }
 
 describe("sidebar project and Agent navigation", () => {
+  it.each([false, true])("highlights only the active session text (pinned=%s)", (pinned) => {
+    render(
+      <Navigation
+        activeSessionId="Oi"
+        initialSessions={[
+          session("Oi", pinned ? { pinnedAt: "2026-10-14T00:00:00Z" } : {}),
+          session("Other"),
+        ]}
+      />,
+    );
+    const active = screen.getByText("Oi");
+    expect(active.className).toContain("text-accent");
+    expect(active.closest("button")?.getAttribute("aria-current")).toBe("page");
+    expect(active.closest("button")?.parentElement?.className).not.toContain("row-selected");
+    expect(screen.getByText("Other").className).not.toContain("text-accent");
+  });
+
   it("uses one Projects toggle and lists each project session exactly once", async () => {
     render(<Navigation initialSessions={[session("Oi")]} />);
     expect(screen.queryByText("Project context")).toBeNull();
