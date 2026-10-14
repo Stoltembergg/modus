@@ -18,7 +18,7 @@ export function PromptMessage({
   return (
     <div
       className={cn(
-        "flex max-w-[94%] gap-2.5 rounded-lg bg-card px-3 py-2.5 sm:max-w-[88%]",
+        "chat-message-surface flex max-w-[94%] gap-2.5 rounded-lg bg-card px-3 py-2.5 sm:max-w-[88%]",
         className,
       )}
       data-prompt-kit="message"

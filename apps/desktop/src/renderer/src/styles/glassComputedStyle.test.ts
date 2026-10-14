@@ -29,12 +29,25 @@ const SCENE = `
     <div class="popup-chrome"></div>
     <div class="pdf-page-chrome"></div>
     <div class="dialog-scrim"></div>
+    <div class="composer-glass"></div>
+    <div class="message-card-slot bg-canvas"><div class="composer-glass" data-message-card></div></div>
+    <div class="chat-message-surface bg-card"></div>
+    <div class="chat-run-status"></div>
   </main>
 </div></div></div>`;
-const CANDIDATES = ["bg-panel", "rounded-b-lg", "border", "border-hairline-strong", "border-t-0"];
+const CANDIDATES = [
+  "bg-panel",
+  "rounded-b-lg",
+  "border",
+  "border-hairline-strong",
+  "border-t-0",
+  "bg-canvas",
+  "bg-card",
+];
 const PANELS = [".app-rail", ".app-context-sidebar", ".surface-main"];
 const CHROME_PARTS = [".app-rail", ".app-context-sidebar"];
 const OVERLAYS = [".surface-raised", ".popup-chrome", ".pdf-page-chrome"];
+const CHAT_SURFACES = [".composer-glass", "[data-message-card]", ".chat-message-surface"];
 const THEMES = ["dark", "dark-plus", "light"] as const;
 const OS = ["reduced-transparency", "more-contrast", "forced-colors"] as const;
 type Os = (typeof OS)[number] | undefined;
@@ -135,7 +148,14 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
       transparency,
     })});`;
     const response = await send("Runtime.evaluate", {
-      expression: `${root} ${MEASURE}(${JSON.stringify([...PANELS, ...OVERLAYS, ".app-shell", "html"])})`,
+      expression: `(async () => {
+        ${root}
+        // Measure the settled palette, including the Composer's existing transition.
+        getComputedStyle(document.querySelector('.composer-glass')).backgroundColor;
+        await Promise.allSettled(document.getAnimations().map(animation => animation.finished));
+        return ${MEASURE}(${JSON.stringify([...PANELS, ...OVERLAYS, ...CHAT_SURFACES, ".chat-run-status", ".app-shell", "html"])});
+      })()`,
+      awaitPromise: true,
       returnByValue: true,
     });
     return JSON.parse(response.result?.result?.value ?? "{}") as Measured;
@@ -255,7 +275,7 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
       }
       expect(m[".surface-main"]?.effective, `${theme} main`).toBe(1);
       expect(m[".surface-main"]?.backdrop, `${theme} main blur`).toBe("none");
-      for (const part of OVERLAYS) {
+      for (const part of [...OVERLAYS, ...CHAT_SURFACES]) {
         expect(m[part]?.effective, `${theme} ${part}`).toBe(1);
         expect(m[part]?.backdrop, `${theme} ${part}`).toBe("none");
       }
@@ -289,12 +309,25 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
     }
   });
 
+  it("Full: chat surfaces are only slightly denser than the app; Thinking adds no layer", async () => {
+    for (const theme of THEMES) {
+      const m = await measure(theme, true, "full");
+      for (const part of CHAT_SURFACES) {
+        expect(m[part]?.alpha, `${theme} ${part} tint`).toBeCloseTo(0.18, 2);
+        expect(m[part]?.effective, `${theme} ${part} composite`).toBeCloseTo(0.82, 2);
+      }
+      expect(m[".chat-run-status"]?.alpha).toBe(0);
+      expect(m[".chat-run-status"]?.effective).toBe(m[".surface-main"]?.effective);
+      expect(m[".chat-run-status"]?.backdrop).toBe("none");
+    }
+  });
+
   it("Off (also what main resolves OS accessibility to): opaque, today's dividers, no CSS blur", async () => {
     for (const theme of THEMES) {
       for (const transparency of ["off", "full", "sidebar"] as const) {
         // data-native-glass="false" is what main sends for Off and for any OS block.
         const m = await measure(theme, false, transparency);
-        for (const part of [...PANELS, ...OVERLAYS]) {
+        for (const part of [...PANELS, ...OVERLAYS, ...CHAT_SURFACES]) {
           expect(m[part]?.effective, `${theme} ${transparency} ${part}`).toBe(1);
           expect(m[part]?.backdrop, `${theme} ${transparency} ${part}`).toBe("none");
         }
@@ -311,7 +344,7 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
         for (const os of OS) {
           const m = await measure(theme, true, transparency, os);
           const at = `${theme} ${transparency} ${os}`;
-          for (const part of [...PANELS, ...OVERLAYS]) {
+          for (const part of [...PANELS, ...OVERLAYS, ...CHAT_SURFACES]) {
             expect(m[part]?.effective, `${at} ${part}`).toBe(1);
             expect(m[part]?.backdrop, `${at} ${part}`).toBe("none");
           }

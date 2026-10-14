@@ -97,6 +97,44 @@ function worst(theme: Theme, tier: keyof typeof TIERS, text: string, backdrops: 
 }
 
 describe("glass tokens (D1)", () => {
+  it("chat surfaces add a small tint above the window, rather than a nearly opaque second layer", () => {
+    const tint = alpha("--glass-alpha-chat");
+    const windowAlpha = alpha("--glass-alpha-chrome");
+    const effective = 1 - (1 - windowAlpha) * (1 - tint);
+    expect(effective).toBeGreaterThan(windowAlpha);
+    expect(effective - windowAlpha).toBeLessThanOrEqual(0.05);
+    expect(effective).toBeLessThan(0.85);
+    expect(decl(block(".composer-glass {").body, "background")).toBe("var(--surface-chat)");
+    const full = block(':root[data-native-glass="true"][data-transparency="full"] {').body;
+    expect(decl(full, "--surface-chat")).toContain("var(--glass-alpha-chat)");
+    expect(
+      decl(
+        block(':root[data-native-glass="true"][data-transparency="full"] .message-card-slot {')
+          .body,
+        "background-color",
+      ),
+    ).toBe("transparent");
+    for (const theme of THEMES) {
+      for (const bg of [WHITE, GREY, BLACK]) {
+        const panel = over(windowAlpha, color(theme, "--color-panel"), bg);
+        const card = over(tint, color(theme, "--color-elevated"), panel);
+        expect(
+          contrast(color(theme, "--color-fg"), card),
+          `${theme} chat fg`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it("chat tint falls back to solid under accessibility and unsupported blur", () => {
+    for (const selector of [
+      "@media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {",
+      "@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {",
+    ]) {
+      expect(decl(block(":root {", block(selector).start).body, "--glass-alpha-chat")).toBe("100%");
+    }
+  });
+
   it("(a) pins the token table: current values, one set for every theme", () => {
     const tokens = Object.fromEntries(
       [

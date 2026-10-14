@@ -146,7 +146,7 @@ export const MessageBlock = memo(function MessageBlock({
     return (
       <div
         className={cn(
-          "sticky top-0 z-10 block w-full min-w-0",
+          "message-card-slot sticky top-0 z-10 block w-full min-w-0",
           COMPOSER_RADIUS_CLASS,
           // Preview sheet is elevated; main chat is canvas.
           compactClip ? "bg-elevated" : "bg-canvas",
