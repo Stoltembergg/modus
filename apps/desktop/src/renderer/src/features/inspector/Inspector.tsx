@@ -82,7 +82,8 @@ const INSPECTOR_MAX_WIDTH = 1040;
 const INSPECTOR_BROWSER_PREFERRED_WIDTH = 760;
 const INSPECTOR_COLLAPSED_WIDTH = 0;
 const INSPECTOR_TRANSITION = { duration: 0.18, ease: [0.25, 0.1, 0.25, 1] } as const;
-const INSPECTOR_TAB_PANEL_CLASS = "inspector-tab-panel min-h-0 flex-1 outline-none";
+const INSPECTOR_TAB_PANEL_CLASS =
+  "inspector-tab-panel flex min-h-0 flex-1 flex-col overflow-hidden outline-none";
 const loadBrowserPanel = () => import("../browser/BrowserPanel");
 const loadTerminalPanel = () => import("../terminal/TerminalPanel");
 const BrowserPanel = lazy(() =>
@@ -329,7 +330,7 @@ export function Inspector({
                 onValueChange={(value) => setTab(value as string)}
                 value={tab}
               >
-                <div className="toolbar-row flex shrink-0 items-center bg-canvas px-2">
+                <div className="toolbar-row flex shrink-0 items-center bg-transparent px-2">
                   <Tabs.List className="relative flex min-w-0 flex-1 items-center gap-0.5">
                     {TABS.map((tab) => (
                       <Tooltip content={tab.label} key={tab.value} side="bottom" sideOffset={6}>
