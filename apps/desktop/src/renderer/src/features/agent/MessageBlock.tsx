@@ -191,7 +191,7 @@ export const MessageBlock = memo(function MessageBlock({
             <div
               className={cn(
                 compactClip && "max-h-[5.6875em] overflow-hidden",
-                clipped && "clip-fade",
+                compactClip && clipped && "clip-fade",
               )}
               ref={boxRef}
             >

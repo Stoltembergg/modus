@@ -9,7 +9,10 @@ import { MessageBlock } from "./MessageBlock";
 beforeAll(async () => {
   await import("./MarkdownMessageRenderer");
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 const MODEL: ModelInfo = {
   id: "gpt-5",
@@ -52,6 +55,18 @@ describe("message cards", () => {
     );
     expect(container.querySelector(".message-card-slot")?.className).toContain("sticky");
     expect(container.querySelector('[class*="max-h-"]')).toBeTruthy();
+  });
+
+  it("removes a preview's fade when the same message moves into the main chat", async () => {
+    // Happy DOM has no layout. Simulate a measured compact viewport using real
+    // useClipFade logic, rather than replacing the hook or its decisions.
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(200);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(20);
+    const props = { content: "Long preview", messageId: "u", messageRole: "user" as const };
+    const view = render(<MessageBlock {...props} compactClip />);
+    await waitFor(() => expect(view.container.querySelector(".clip-fade")).toBeTruthy());
+    view.rerender(<MessageBlock {...props} compactClip={false} />);
+    expect(view.container.querySelector(".clip-fade")).toBeNull();
   });
 
   it("keeps assistant text and source evidence inside the left card", async () => {
