@@ -12,6 +12,7 @@ describe("Modus semantic design tokens", () => {
       "--surface-main",
       "--surface-glass-window",
       "--surface-raised",
+      "--surface-chat",
       "--surface-glass",
       "--text-primary",
       "--text-secondary",
@@ -43,6 +44,7 @@ describe("Modus semantic design tokens", () => {
       "--motion-overlay",
       "--glass-alpha-chrome",
       "--glass-alpha-overlay",
+      "--glass-alpha-chat",
       "--glass-blur",
       "--glass-saturate",
       "--glass-filter",
@@ -95,7 +97,8 @@ describe("Modus semantic design tokens", () => {
     const composerGlass = css.match(/(?:^|\n)\.composer-glass\s*\{([^}]+)\}/)?.[1] ?? "";
     expect(composerGlass).toContain("border: 0");
     expect(composerGlass).toContain("border-radius: 16px");
-    expect(composerGlass).toContain("var(--surface-glass-elevated");
+    // Chat uses a lighter tint over the shared window layer; popup glass is unchanged.
+    expect(composerGlass).toContain("background: var(--surface-chat)");
   });
 
   it("the dialog surface only reshapes .popup-chrome (radius + shadow), never its own glass", () => {
