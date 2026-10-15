@@ -191,13 +191,28 @@ function boundedResult(result: CallToolResult): CallToolResult {
     if (result.structuredContent !== undefined)
       bounded.structuredContent = result.structuredContent;
   }
-  const text = result.content
-    .filter(
-      (item): item is Extract<(typeof result.content)[number], { type: "text" }> =>
-        item.type === "text",
-    )
-    .map((item) => item.text)
-    .join("\n\n");
+  const field = (value: unknown): string => (typeof value === "string" ? value.slice(0, 512) : "");
+  const unknownMarker = "[REA content block omitted: unknown or future block type]";
+  const rendered = result.content.map((item) => {
+    switch (item.type) {
+      case "text":
+        return item.text;
+      case "image":
+        return `[Image omitted; mimeType=${field(item.mimeType) || "unknown"}; base64 data omitted]`;
+      case "audio":
+        return `[Audio omitted; mimeType=${field(item.mimeType) || "unknown"}; base64 data omitted]`;
+      case "resource_link":
+        return `[Resource link metadata; uri=${field(item.uri)}; name=${field(item.name)}; mimeType=${field(item.mimeType)}; description=${field(item.description)}]`;
+      case "resource":
+        return "text" in item.resource
+          ? `[Embedded resource text; uri=${field(item.resource.uri)}; mimeType=${field(item.resource.mimeType)}]\n${item.resource.text}`
+          : `[Embedded resource omitted; uri=${field(item.resource.uri)}; mimeType=${field(item.resource.mimeType)}; blob data omitted]`;
+      default:
+        return unknownMarker;
+    }
+  });
+  if (rendered.includes(unknownMarker)) rendered.unshift(unknownMarker);
+  const text = rendered.join("\n\n");
   const base = {
     ...bounded,
     content: [{ type: "text", text: RESULT_TRUNCATION_MARKER.trimStart() }],
@@ -324,6 +339,12 @@ export class ReaSessionManager {
       this.activeGenerations.delete(owner.sessionId);
     }
     const worker = this.workers.get(key);
+    if (worker) await this.retireWorker(worker);
+  }
+
+  /** Retire the current worker after an uncertain operation without retiring its owner generation. */
+  async cancel(owner: ReaSessionOwner): Promise<void> {
+    const worker = this.workers.get(ownerKey(owner));
     if (worker) await this.retireWorker(worker);
   }
 

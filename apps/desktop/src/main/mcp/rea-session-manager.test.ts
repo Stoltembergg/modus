@@ -670,6 +670,37 @@ describe("ReaSessionManager", () => {
     await manager.disposeAll();
   });
 
+  it("cancels active and queued calls without execution or replay and permits same-generation recovery", async () => {
+    const operation = deferred<unknown>();
+    let operationCount = 0;
+    const { manager, clients, calls } = setup({
+      callTool: () =>
+        operationCount++ === 0
+          ? operation.promise
+          : Promise.resolve({ content: [{ type: "text", text: "echo" }] }),
+    });
+    const sameOwner = owner("cancel-call-owner");
+    const active = manager.callTool(sameOwner, "echo", {});
+    await vi.waitFor(() => expect(clients[0]?.callTool).toHaveBeenCalledTimes(1));
+    const queued = manager.callTool(sameOwner, "echo", {});
+    void active.catch(() => {});
+    void queued.catch(() => {});
+
+    await manager.cancel(sameOwner);
+    await expect(active).rejects.toThrow(/cancel/i);
+    await expect(queued).rejects.toThrow(/cancel|stale|disposed/i);
+    expect(calls).toHaveLength(1);
+    operation.resolve({ content: [{ type: "text", text: "late" }] });
+    await Promise.resolve();
+
+    await expect(manager.callTool(sameOwner, "echo", {})).resolves.toMatchObject({
+      content: [{ text: "echo" }],
+    });
+    expect(clients).toHaveLength(2);
+    expect(calls).toHaveLength(2);
+    await manager.disposeAll();
+  });
+
   it("holds worker capacity until disconnect cleanup finishes, then allows same-generation recovery", async () => {
     let closeBegan = false;
     const closeGate = deferred<void>();

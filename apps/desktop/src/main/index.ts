@@ -15,6 +15,7 @@ import {
 } from "./agent/model-service";
 import { startModusProvider, stopModusProvider } from "./agent/modus-provider-instance";
 import { shutdownAgentRuntime } from "./agent/runtime-registry";
+import { disposeAllReaSessions } from "./agent/tools/rea-tools";
 import {
   type AppearanceController,
   createAppearanceController,
@@ -273,6 +274,7 @@ if (!app.requestSingleInstanceLock()) {
     shutdownBillingService();
     void drainShutdown([
       shutdownAgentRuntime(),
+      disposeAllReaSessions(),
       shutdownProviderAuthOperations(),
       shutdownAuthService(),
       (async () => {
