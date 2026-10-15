@@ -36,15 +36,12 @@ export function SubagentPreviewSheet({
   children: ReactNode;
 }) {
   const [present, setPresent] = useState(false);
-  const [scrimIn, setScrimIn] = useState(false);
 
   useEffect(() => {
     if (open) {
       setPresent(true);
-      const id = window.requestAnimationFrame(() => setScrimIn(true));
-      return () => window.cancelAnimationFrame(id);
+      return;
     }
-    setScrimIn(false);
     // Fallback when motion skips onAnimationComplete (already-at-target / reduced motion).
     const id = window.setTimeout(
       () => setPresent(false),
@@ -62,15 +59,14 @@ export function SubagentPreviewSheet({
       <button
         aria-label="Close subagent preview"
         className="subagent-preview-scrim absolute inset-0 cursor-default border-0 bg-transparent p-0"
-        data-mounted={scrimIn ? "" : undefined}
-        data-settled={open ? "" : undefined}
         onClick={onClose}
         type="button"
       />
       <m.div
         animate={open ? { opacity: 1, y: 0 } : { opacity: 0, y: 12 }}
         aria-hidden={open ? undefined : true}
-        className="absolute inset-x-4 top-9 bottom-1 z-10 mx-auto flex max-w-5xl flex-col overflow-hidden popup-chrome rounded-[16px]"
+        aria-label={title}
+        className="subagent-preview-panel composer-glass absolute inset-x-4 bottom-3 z-10 mx-auto flex max-w-5xl flex-col overflow-hidden"
         initial={{ opacity: 0, y: 12 }}
         onAnimationComplete={() => {
           if (!open) setPresent(false);

@@ -53,7 +53,10 @@ afterEach(() => {
 });
 
 describe("ChatPane message author wiring", () => {
-  it("renders the session profile after completion and keeps its avatar mounted when profile data changes", async () => {
+  it.each([
+    false,
+    true,
+  ])("keeps live activity visible for subagents (%s) and preserves the final answer and avatar", async (subagent) => {
     const events: AgentEventItem[] = [
       {
         id: "run",
@@ -71,10 +74,10 @@ describe("ChatPane message author wiring", () => {
       {
         id: "text",
         event: {
-          type: "message.delta",
+          type: "thinking.delta",
           sessionId: SESSION.id,
           messageId: "answer",
-          delta: "A real rendered reply.",
+          delta: "Inspect the relevant source first.",
         },
       },
     ];
@@ -107,7 +110,7 @@ describe("ChatPane message author wiring", () => {
       <LazyMotion features={domMax} strict>
         <ChatPane
           assistantAgent={agent}
-          session={SESSION}
+          session={subagent ? { ...SESSION, parentSessionId: "parent" } : SESSION}
           hub={hub}
           models={[]}
           defaultModel=""
@@ -123,8 +126,67 @@ describe("ChatPane message author wiring", () => {
     );
     const view = render(pane(AGENT));
     await waitFor(() => expect(hub.getHistory(SESSION.id)).toHaveLength(3));
-    // In-progress answers belong in Activity; preserve the existing transcript contract.
-    expect(screen.queryByRole("img", { name: "Judas" })).toBeNull();
+    if (subagent) {
+      await waitFor(() => expect(view.container.textContent).toContain("Thinking"));
+    } else {
+      expect(view.container.textContent).not.toContain("Thinking");
+    }
+    act(() => {
+      hub.publish({
+        id: "thinking-end",
+        event: {
+          type: "thinking.completed",
+          sessionId: SESSION.id,
+          messageId: "answer",
+        },
+      });
+      hub.publish({
+        id: "read-start",
+        event: {
+          type: "tool.started",
+          sessionId: SESSION.id,
+          runId: "run",
+          toolCallId: "read",
+          toolName: "read",
+          args: { path: "/repo/preview.ts" },
+        },
+      });
+    });
+    if (subagent) {
+      await waitFor(() => expect(view.container.textContent).toContain("preview.ts"));
+    } else {
+      expect(view.container.textContent).not.toContain("preview.ts");
+    }
+    act(() => {
+      hub.publish({
+        id: "read-end",
+        event: {
+          type: "tool.ended",
+          sessionId: SESSION.id,
+          runId: "run",
+          toolCallId: "read",
+          isError: false,
+        },
+      });
+      hub.publish({
+        id: "reply",
+        event: {
+          type: "message.delta",
+          sessionId: SESSION.id,
+          messageId: "answer",
+          delta: "A real rendered reply.",
+        },
+      });
+    });
+    if (subagent) {
+      const liveAvatar = await screen.findByRole("img", { name: "Judas" });
+      const liveCard = liveAvatar.parentElement?.querySelector('[data-message-role="assistant"]');
+      await waitFor(() => expect(liveCard?.textContent).toContain("A real rendered reply."));
+      expect(liveAvatar.getAttribute("data-state")).toBe("working");
+    } else {
+      // Main conversations retain the separate Activity presentation.
+      expect(screen.queryByRole("img", { name: "Judas" })).toBeNull();
+    }
     act(() => {
       hub.publish({
         id: "end-message",
@@ -135,7 +197,10 @@ describe("ChatPane message author wiring", () => {
         event: { type: "run.completed", sessionId: SESSION.id, runId: "run" },
       });
     });
-    const avatar = await screen.findByRole("img", { name: "Judas" });
+    await waitFor(() =>
+      expect(screen.getByRole("img", { name: "Judas" }).getAttribute("data-state")).toBe("idle"),
+    );
+    const avatar = screen.getByRole("img", { name: "Judas" });
     expect(avatar.getAttribute("data-color")).toBe("green");
     expect(avatar.getAttribute("data-state")).toBe("idle");
     expect(avatar.getAttribute("data-paused")).not.toBe("true");
