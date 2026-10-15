@@ -1,0 +1,145 @@
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling version_check v0.9.5
+   Compiling serde_core v1.0.228
+   Compiling autocfg v1.5.1
+   Compiling cfg-if v1.0.4
+   Compiling pkg-config v0.3.34
+   Compiling syn v2.0.117
+   Compiling libc v0.2.186
+   Compiling crossbeam-utils v0.8.23
+   Compiling strsim v0.11.1
+   Compiling serde v1.0.228
+   Compiling fnv v1.0.7
+   Compiling zerocopy v0.8.63
+   Compiling memchr v2.8.1
+   Compiling ident_case v1.0.1
+   Compiling crossbeam-epoch v0.9.21
+   Compiling getrandom v0.3.4
+   Compiling serde_derive v1.0.228
+   Compiling darling_core v0.20.11
+   Compiling num-traits v0.2.19
+   Compiling generic-array v0.14.7
+   Compiling shlex v2.0.1
+   Compiling crossbeam-deque v0.8.8
+   Compiling find-msvc-tools v0.1.14
+   Compiling cc v1.8.0
+   Compiling darling_macro v0.20.11
+   Compiling typenum v1.20.1
+   Compiling rayon-core v1.13.0
+   Compiling rustversion v1.0.23
+   Compiling onig_sys v69.9.3
+   Compiling darling v0.20.11
+   Compiling matrixmultiply v0.3.11
+   Compiling either v1.19.0
+   Compiling zmij v1.0.21
+   Compiling derive_builder_core v0.20.2
+   Compiling ppv-lite86 v0.2.21
+   Compiling rand_core v0.9.5
+   Compiling aho-corasick v1.1.5
+   Compiling ort-sys v2.0.0-rc.10
+   Compiling syn v3.0.9
+   Compiling ahash v0.8.12
+   Compiling minimal-lexical v0.2.1
+   Compiling once_cell v1.21.4
+   Compiling paste v1.0.15
+   Compiling itoa v1.0.18
+   Compiling rawpointer v0.2.1
+   Compiling regex-syntax v0.8.11
+   Compiling esaxx-rs v0.1.10
+   Compiling thiserror v2.0.21
+   Compiling serde_json v1.0.150
+   Compiling regex-automata v0.4.18
+   Compiling thiserror-impl v2.0.21
+   Compiling nom v7.1.3
+   Compiling rand_chacha v0.9.0
+   Compiling castaway v0.2.4
+   Compiling derive_builder_macro v0.20.2
+   Compiling rayon v1.12.0
+   Compiling itertools v0.14.0
+   Compiling num-complex v0.4.6
+   Compiling num-integer v0.1.47
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling monostate-impl v0.1.18
+   Compiling pastey v0.2.3
+   Compiling bitflags v2.11.1
+   Compiling static_assertions v1.1.0
+   Compiling base64 v0.13.1
+   Compiling smallvec v1.16.3
+   Compiling macro_rules_attribute-proc_macro v0.2.3
+   Compiling ryu v1.0.23
+   Compiling unicode-segmentation v1.13.3
+   Compiling macro_rules_attribute v0.2.3
+   Compiling compact_str v0.9.1
+   Compiling spm_precompiled v0.1.4
+   Compiling unicode-normalization-alignments v0.1.12
+   Compiling onig v6.5.3
+   Compiling monostate v0.1.18
+   Compiling digest v0.10.7
+   Compiling ndarray v0.16.1
+   Compiling rayon-cond v0.4.0
+   Compiling derive_builder v0.20.2
+   Compiling rand v0.9.5
+   Compiling regex v1.13.1
+   Compiling dary_heap v0.3.9
+   Compiling libloading v0.8.9
+   Compiling log v0.4.30
+   Compiling smallvec v2.0.0-alpha.10
+   Compiling cpufeatures v0.2.17
+   Compiling unicode_categories v0.1.1
+   Compiling ort v2.0.0-rc.10
+   Compiling tokenizers v0.22.2
+   Compiling sha2 v0.10.9
+   Compiling modus-decision-runtime v0.1.0 (/workspace/modus-pr191/crates/decision-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 03s
+     Running unittests src/lib.rs (/workspace/scratch/thx01-m13/target/debug/deps/modus_decision_runtime-103335213f7da8e3)
+
+running 8 tests
+test artifacts::loader_tests::denies_native_library_override_channels ... ok
+test artifacts::seal_tests::detects_bytes_changed_before_the_seal_became_effective ... ok
+test inference::tests::bounds_do_not_truncate ... ok
+test inference::tests::calibration_uniform_distribution ... ok
+test inference::tests::logits_outside_tolerance_rejected ... ok
+test inference::tests::nonfinite_values_rejected ... ok
+test inference::tests::ties_preserve_first_alternative ... ok
+test inference::tests::artifact_change_is_rejected ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (/workspace/scratch/thx01-m13/target/debug/deps/modus_decision_runtime-f6b0d22d2d078962)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/artifact_trust.rs (/workspace/scratch/thx01-m13/target/debug/deps/artifact_trust-406782906486ab4e)
+
+running 5 tests
+test library_bytes_are_kernel_sealed_even_for_same_uid_fd_writes ... ok
+test rejects_size_mismatch_and_manifest_change_before_parse ... ok
+test rejects_symlinked_file_ancestor_traversal_and_nonregular_input ... ok
+test a_sidecar_cannot_authorize_a_different_library_or_extra_external_file ... ok
+test snapshot_is_the_consumer_after_path_replacement_or_inplace_mutation ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/protocol.rs (/workspace/scratch/thx01-m13/target/debug/deps/protocol-ff3746e0dfa1f6fd)
+
+running 6 tests
+test preserves_complete_frames_across_stream_reads ... ok
+test rejects_observations_without_input_and_commands_with_extra_input ... ok
+test does_not_load_dependencies_from_an_uncovered_manifest ... ok
+test rejects_partial_frames_and_invalid_utf8 ... ok
+test rejects_oversize_frame_without_reading_unbounded_input ... ok
+test requires_protocol_version_generation_and_bounded_identifiers ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests examples/artifact-trust-smoke.rs (/workspace/scratch/thx01-m13/target/debug/examples/artifact_trust_smoke-ef868ce0edf06986)
+
+running 1 test
+test replacement_does_not_follow_a_substituted_symlink ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

@@ -1,0 +1,32 @@
+{
+  "revision": 1,
+  "checkpoint": "01262517979528a0103108ba473b78d6baeec016",
+  "ort_version": "1.22.0",
+  "external_location": "thx01-choice3-dynamic.onnx.data",
+  "artifacts": {
+    "graph": {
+      "bytes": 2482868,
+      "sha256": "13a870e7211257b3a6eb93696ec25f8ff91488638bc308a6738957edf9024a58"
+    },
+    "external_data": {
+      "bytes": 1287651328,
+      "sha256": "8e5c1f58aa060e9279ebd07d27f3cc160dd0cc1ee7a9407819ac54c200e58f5c"
+    },
+    "tokenizer": {
+      "bytes": 34363188,
+      "sha256": "609d8f4c067cd3950f88594c5a802616cea245823836ef5848ee4fc40aab5b6f"
+    },
+    "tokenizer_config": {
+      "bytes": 524,
+      "sha256": "6c6b2d8e3c84ce0e671c129cd6b374b235d6f9863042a5836358d00a89bbb5a1"
+    },
+    "calibration": {
+      "bytes": 2199,
+      "sha256": "1bb5c62b14c0029fea4891fd6f82ae882f81dae2ba5786a813a8d8de2c02f930"
+    },
+    "ort_library": {
+      "bytes": 21050608,
+      "sha256": "7520bc1b4f649ee8fa956442a66ded303e8fd3b465b0159b7e893bdc87df4e38"
+    }
+  }
+}

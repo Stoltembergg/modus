@@ -8,6 +8,18 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 vi.mock("node:child_process", () => ({ spawn: spawnMock }));
+vi.mock("./artifact-trust", async () => {
+  const { open, readFile } = await import("node:fs/promises");
+  const { createHash } = await import("node:crypto");
+  return {
+    openTrustedExecutable: async (config: { executablePath: string; executableSha256: string }) => {
+      const bytes = await readFile(config.executablePath);
+      if (createHash("sha256").update(bytes).digest("hex") !== config.executableSha256)
+        throw new Error("decision_runtime:artifact");
+      return await open(config.executablePath, "r");
+    },
+  };
+});
 
 import { DecisionRuntime, type DecisionRuntimeConfig } from "./decision-runtime";
 

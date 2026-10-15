@@ -42,12 +42,14 @@ pub struct Inputs {
     pub qtype: Vec<i64>,
 }
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Artifact {
     pub path: PathBuf,
     pub bytes: u64,
     pub sha256: String,
 }
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub graph: PathBuf,
     pub tokenizer: PathBuf,
@@ -71,6 +73,8 @@ pub fn digest(path: &Path) -> Result<String> {
     }
     Ok(format!("{:x}", hash.finalize()))
 }
+/// Development diagnostic only; path approval is not a runtime authorization.
+/// Actual consumers must load a verified owned Bundle, not reopen this path.
 pub fn verify(artifact: &Artifact) -> Result<()> {
     if fs::metadata(&artifact.path)?.len() != artifact.bytes
         || digest(&artifact.path)? != artifact.sha256
@@ -299,80 +303,70 @@ pub struct Engine {
     config: Value,
     calibration: Value,
     temperature: f64,
+    #[cfg(target_os = "linux")]
+    _library: crate::artifacts::SealedLibrary,
+    #[cfg(target_os = "linux")]
+    _system_libraries: crate::artifacts::SystemLibraries,
 }
 impl Engine {
+    #[cfg(not(target_os = "linux"))]
+    pub fn load(_path: &Path, _trusted_manifest_sha256: &str) -> Result<Self> {
+        Err("platform_unvalidated".into())
+    }
+
+    #[cfg(target_os = "linux")]
     pub fn load(path: &Path, trusted_manifest_sha256: &str) -> Result<Self> {
-        if trusted_manifest_sha256.len() != 64
-            || !trusted_manifest_sha256
-                .bytes()
-                .all(|c| c.is_ascii_hexdigit())
-            || digest(path)? != trusted_manifest_sha256
-        {
-            return Err("artifact_manifest".into());
-        }
-        if fs::metadata(path)?.len() > 64 * 1024 {
-            return Err("artifact_manifest_size".into());
-        }
-        let manifest: Manifest = serde_json::from_slice(&fs::read(path)?)?;
-        // Require all actually loaded dependencies to be covered, not merely any file list.
-        let data = PathBuf::from(format!("{}.data", manifest.graph.display()));
-        for required in [
-            &manifest.graph,
-            &data,
-            &manifest.tokenizer,
-            &manifest.tokenizer_config,
-            &manifest.calibration,
-            &manifest.ort_library,
-        ] {
-            if !required.is_absolute()
-                || manifest
-                    .files
-                    .iter()
-                    .filter(|a| &a.path == required)
-                    .count()
-                    != 1
-            {
-                return Err("artifact_unlisted".into());
-            }
-        }
-        for file in &manifest.files {
-            verify(file)?;
-        }
-        if digest(&manifest.graph)?
-            != "13a870e7211257b3a6eb93696ec25f8ff91488638bc308a6738957edf9024a58"
-            || digest(&data)? != "8e5c1f58aa060e9279ebd07d27f3cc160dd0cc1ee7a9407819ac54c200e58f5c"
-            || manifest.ort_version != "1.22.0"
-        {
-            return Err("artifact_unapproved_graph".into());
-        }
-        let config: Value = serde_json::from_slice(&fs::read(&manifest.tokenizer_config)?)?;
-        let calibration: Value = serde_json::from_slice(&fs::read(&manifest.calibration)?)?;
+        Self::from_verified_bundle(crate::artifacts::Bundle::load(
+            path,
+            trusted_manifest_sha256,
+        )?)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn from_verified_bundle(bundle: crate::artifacts::Bundle) -> Result<Self> {
+        use crate::artifacts::{system_libraries, SealedLibrary};
+        use std::borrow::Cow;
+        let config: Value = serde_json::from_slice(&bundle.config)?;
+        let calibration: Value = serde_json::from_slice(&bundle.calibration)?;
         let temperature = calibration["temperature_by_options"]["choice:3-5"]
             .as_f64()
             .ok_or("artifact_calibration")?;
         if temperature != 2.55 {
             return Err("artifact_calibration".into());
         }
-        let mut tokenizer = Tokenizer::from_file(&manifest.tokenizer)?;
+        let mut tokenizer = Tokenizer::from_bytes(&bundle.tokenizer)?;
         tokenizer.with_truncation(None)?;
         tokenizer.with_padding(None);
-        ort::init_from(manifest.ort_library.to_string_lossy())
+        let dependencies = system_libraries()?;
+        let library = SealedLibrary::new(&bundle.library)?;
+        if !ort::init_from(library.path().to_string_lossy())
             .with_name("modus-decision-runtime")
             .with_telemetry(false)
-            .commit()?;
+            .commit()?
+        {
+            return Err("artifact_library_already_initialized".into());
+        }
+        // The pinned graph has exactly this approved external location. Supply its
+        // authenticated bytes explicitly; ORT must never resolve the original disk path.
         let session = Session::builder()?
             .with_intra_threads(2)?
             .with_inter_threads(1)?
             .with_execution_providers([CPUExecutionProvider::default()
                 .with_arena_allocator(true)
                 .build()])?
-            .commit_from_file(&manifest.graph)?;
+            .with_external_initializer_file_in_memory(
+                &bundle.external_location,
+                Cow::Owned(bundle.data),
+            )?
+            .commit_from_memory(&bundle.graph)?;
         Ok(Self {
             session,
             tokenizer,
             config,
             calibration,
             temperature,
+            _library: library,
+            _system_libraries: dependencies,
         })
     }
     pub fn observe(

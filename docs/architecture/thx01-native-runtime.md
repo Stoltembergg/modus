@@ -2,6 +2,8 @@
 
 **GO for the explicitly scoped experimental Linux x64 runtime. NOT distributed, enabled or integrated into Pi SDK. Stop before Marco2.2/3.**
 
+> Subsequent artifact-trust work: see [Marco 2.2a](thx01-native-artifact-trust.md). Its production bootstrap now fails closed for all installation modes until executable immutability is established. The experimental results below describe Marco 2.1, not current distribution approval.
+
 ## Delivered architecture
 
 - `crates/decision-runtime/` is a root Rust-workspace member. `inference.rs` promotes the Marco1.3 tokenizer, input assembly, tensors, inference and calibrated postprocessing; the independent equivalence runner now consumes that shared library instead of maintaining a second implementation. No conversion, checkpoint or calibration change.

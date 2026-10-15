@@ -1,0 +1,2 @@
+   Compiling modus-decision-runtime v0.1.0 (/workspace/modus-pr191/crates/decision-runtime)
+    Finished `release` profile [optimized] target(s) in 1.95s

@@ -2,10 +2,11 @@ import { Buffer } from "node:buffer";
 import { type ChildProcessByStdio, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { realpath, stat } from "node:fs/promises";
+import { type FileHandle, realpath, stat } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { z } from "zod";
+import { openTrustedExecutable } from "./artifact-trust.ts";
 
 const REQUEST_BYTES = 64 * 1024;
 const RESPONSE_BYTES = 16 * 1024;
@@ -155,17 +156,18 @@ export class DecisionRuntime {
       throw failure("platform_unvalidated");
     this.#state = "starting";
     const startedAt = Date.now();
+    let executable: FileHandle | undefined;
     const abortVerification = new AbortController();
     let verificationTimer: NodeJS.Timeout | undefined;
     try {
       await Promise.race([
         (async () => {
-          await verifyFile(
-            this.#config.executablePath,
-            this.#config.executableSha256,
-            128 * 1024 * 1024,
-            abortVerification.signal,
-          );
+          executable = await openTrustedExecutable(this.#config, abortVerification.signal);
+          if (abortVerification.signal.aborted) {
+            await executable.close();
+            executable = undefined;
+            throw failure("startup_timeout");
+          }
           await verifyFile(
             this.#config.manifestPath,
             this.#config.manifestSha256,
@@ -181,18 +183,23 @@ export class DecisionRuntime {
         }),
       ]);
     } catch {
+      await executable?.close().catch(() => undefined);
       this.#state = "failed";
       throw failure(abortVerification.signal.aborted ? "startup_timeout" : "artifact");
     } finally {
       if (verificationTimer) clearTimeout(verificationTimer);
     }
-    if (this.#closed) throw failure("closed");
+    if (this.#closed) {
+      await executable?.close();
+      throw failure("closed");
+    }
+    if (!executable) throw failure("artifact");
     this.#generation = randomUUID();
     this.#buffer = Buffer.alloc(0);
     let child: Child;
     try {
       child = spawn(
-        this.#config.executablePath,
+        "/proc/self/fd/3",
         [
           "--manifest",
           this.#config.manifestPath,
@@ -204,11 +211,12 @@ export class DecisionRuntime {
         {
           shell: false,
           windowsHide: true,
-          stdio: ["pipe", "pipe", "ignore"],
+          stdio: ["pipe", "pipe", "ignore", executable.fd],
           env: { LANG: "C.UTF-8", TOKENIZERS_PARALLELISM: "false" },
         },
-      );
+      ) as Child;
     } catch {
+      await executable.close();
       this.#state = "failed";
       throw failure("spawn");
     }
@@ -245,7 +253,11 @@ export class DecisionRuntime {
     child.stdout.on("end", () => {
       if (this.#child === child && !this.#closed) this.#invalidate("communication");
     });
-    await started;
+    try {
+      await started;
+    } finally {
+      await executable.close();
+    }
   }
 
   observe(raw: unknown, signal?: AbortSignal): Promise<Observation> {
