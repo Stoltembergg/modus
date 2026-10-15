@@ -3,10 +3,10 @@ import { Popover } from "@base-ui/react/popover";
 import {
   IconChevronDown,
   IconDots,
+  IconHammer,
   IconListCheck,
   IconLoader2,
   IconPlus,
-  IconSparkles,
   IconX,
 } from "@tabler/icons-react";
 import { AnimatePresence, m } from "motion/react";
@@ -805,7 +805,7 @@ function ModePill({
         {activePlanningMode ? (
           <IconListCheck aria-hidden size={ICON.sm} stroke={ICON_STROKE.sm} />
         ) : (
-          <IconSparkles aria-hidden size={ICON.sm} stroke={ICON_STROKE.sm} />
+          <IconHammer aria-hidden size={ICON.sm} stroke={ICON_STROKE.sm} />
         )}
         <span className="font-medium text-xs">{label}</span>
         <IconChevronDown

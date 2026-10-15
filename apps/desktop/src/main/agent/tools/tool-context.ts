@@ -16,6 +16,8 @@ export type AgentToolContext = {
   workspaceId: string;
   cwd: string;
   sessionId: string;
+  /** Host-created identity for the logical REA worker lifetime. */
+  reaGeneration?: string;
   /** Host-assigned run currently owning this tool invocation. */
   runId?: string;
   profile?: ToolProfileName;

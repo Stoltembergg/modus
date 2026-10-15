@@ -1,3 +1,4 @@
+import { resolveSkillsPrompt } from "../../../../skills/skills-service";
 import type { HarnessContext } from "../../kernel/harness-hooks";
 import type { PromptSectionProvider } from "../prompt-section";
 
@@ -25,8 +26,12 @@ export class SkillsSectionProvider implements PromptSectionProvider {
       "todo",
     ];
 
-    return ["Available Capabilities & Tools:", ...activeTools.map((tool) => `- ${tool}`)].join(
-      "\n",
-    );
+    const skills = context.cwd ? resolveSkillsPrompt(context.cwd, []) : "";
+    return [
+      ["Available Capabilities & Tools:", ...activeTools.map((tool) => `- ${tool}`)].join("\n"),
+      skills,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
   }
 }

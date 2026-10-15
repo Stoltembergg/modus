@@ -189,6 +189,7 @@ import {
   upsertProjectModelDiscoveries,
 } from "./harness/project-model-store";
 import { PromptRegistry } from "./harness/prompt/prompt-registry";
+import { SkillsSectionProvider } from "./harness/prompt/sections/skills-section";
 import {
   bindRunQAtoWorkspaceRevision,
   type RunQAEvent,
@@ -282,6 +283,12 @@ import { isGroupToolName, registerGroupTools } from "./tools/group-tools";
 import { plansRoot, registerPlanTools } from "./tools/plan-tools";
 import { registerProjectMemoryTools } from "./tools/project-memory-tools";
 import { registerQuestionTools } from "./tools/question-tools";
+import {
+  getReaSessionManager,
+  REA_CALL_NAME,
+  REA_TOOLS_NAME,
+  registerReaTools,
+} from "./tools/rea-tools";
 import { toolRegistry } from "./tools/registry";
 import { registerSpillTools } from "./tools/spill-tools";
 import { registerSubagentTools } from "./tools/subagent-tools";
@@ -344,6 +351,8 @@ ${VISUAL_AUTHORING_GUIDELINES.map((line) => `- ${line}`).join("\n")}
 
 type SdkRuntimeSession = {
   info: AgentSessionInfo;
+  /** Stable across harmless Pi session-definition rebuilds. */
+  reaGeneration: string;
   session: AgentSession;
   profile: ToolProfileName;
   toolRegistryRevision: number;
@@ -945,6 +954,8 @@ export class PiSdkRuntime implements AgentRuntime {
   #bootstrapPromise?: Promise<void> | undefined;
   #pluginSyncPromise?: Promise<string[]> | undefined;
   private sessions = new Map<string, SdkRuntimeSession>();
+  /** REA worker identity belongs to the persisted session, not the pane's SDK cache. */
+  private reaGenerations = new Map<string, string>();
   /** The persona block each cached 1:1 chat was built with (A3): a change rebuilds it. */
   private personaPrompts = new Map<string, string | undefined>();
   private turnSettledListeners = new Set<(event: TurnSettledEvent) => void>();
@@ -1011,6 +1022,7 @@ export class PiSdkRuntime implements AgentRuntime {
     registerProjectMemoryTools();
     registerPlanTools();
     registerQuestionTools();
+    registerReaTools();
     registerSpillTools();
     registerSubagentTools(this);
     registerWaitTools(this);
@@ -1355,6 +1367,10 @@ export class PiSdkRuntime implements AgentRuntime {
 
   /** Stop runtime-owned child services when the desktop application shuts down. */
   async shutdown(): Promise<void> {
+    for (const [sessionId, generation] of this.reaGenerations) {
+      await this.disposeReaWorker(sessionId, generation);
+    }
+    this.reaGenerations.clear();
     await this.#externalPluginSupervisor.close();
   }
 
@@ -2637,6 +2653,7 @@ export class PiSdkRuntime implements AgentRuntime {
       workspaceId: runtimeSession.info.workspaceId,
       cwd: runtimeSession.info.cwd,
       sessionId,
+      reaGeneration: runtimeSession.reaGeneration,
       ...(activeRunId ? { runId: activeRunId } : {}),
       profile,
       ...(mode ? { mode } : {}),
@@ -2671,14 +2688,13 @@ export class PiSdkRuntime implements AgentRuntime {
     const existing = this.sessions.get(sessionId);
     let previousSession: SdkRuntimeSession | undefined;
     let previousSelection: PreviousSessionSelection | undefined;
-    let disposing: Promise<void> | undefined;
+    const workspaceMoved = existing ? this.storedCwdMoved(sessionId, existing) : false;
     if (existing) {
-      const resourcesChanged =
-        this.storedCwdMoved(sessionId, existing) || this.personaChanged(sessionId, existing);
+      const personaChanged = this.personaChanged(sessionId, existing);
       const toolsChanged =
         existing.toolRegistryRevision !== toolRegistry.revision &&
         this.isIdleForRebuild(sessionId, existing);
-      if (!resourcesChanged && !toolsChanged) {
+      if (!workspaceMoved && !personaChanged && !toolsChanged) {
         return existing;
       }
       // The stored cwd moved (an Agent Group member entered or left its
@@ -2687,7 +2703,7 @@ export class PiSdkRuntime implements AgentRuntime {
       // are current for this turn. The in-memory to-dos stay.
       // PI has no public custom-definition setter. A tool-only refresh reuses
       // the live SessionManager: its branch may not have reached disk yet.
-      if (toolsChanged && !resourcesChanged) {
+      if (!workspaceMoved) {
         previousSession = existing;
         // dispose() aborts the SDK agent and can reset its live thinking state. Snapshot the
         // selected identity and thinking configuration before awaiting that disposal.
@@ -2699,22 +2715,39 @@ export class PiSdkRuntime implements AgentRuntime {
             : {}),
         };
       }
-      // Publish the rebuild promise before yielding so concurrent ensure/prompt
-      // calls cannot resume from disk and discard the live branch.
-      disposing = this.disposeSessionOnly(sessionId, { keepTodos: true });
     }
 
-    const resume = () =>
-      this.createRuntimeSession(
-        window,
-        sessionId,
-        previousSession,
-        previousSelection,
-        requestedModelId,
-      );
-    const next = (disposing ? disposing.then(resume) : resume()).finally(() => {
-      this.resumePromises.delete(sessionId);
-    });
+    const previousGeneration = existing?.reaGeneration;
+    const reaGeneration = workspaceMoved
+      ? randomUUID()
+      : (this.reaGenerations.get(sessionId) ?? randomUUID());
+    this.reaGenerations.set(sessionId, reaGeneration);
+    // Publish the reservation before worker cleanup or any other asynchronous
+    // rebuild work so concurrent ensure calls join this exact generation.
+    let next!: Promise<SdkRuntimeSession | undefined>;
+    next = Promise.resolve()
+      .then(async () => {
+        if (workspaceMoved && previousGeneration) {
+          await this.disposeReaWorker(sessionId, previousGeneration);
+        }
+        if (existing) {
+          await this.disposeSessionOnly(sessionId, { keepTodos: true, skipPendingResume: true });
+        }
+        return this.createRuntimeSession(
+          window,
+          sessionId,
+          previousSession,
+          previousSelection,
+          requestedModelId,
+          reaGeneration,
+        );
+      })
+      .then((result) => result)
+      .finally(() => {
+        if (this.resumePromises.get(sessionId) === next) {
+          this.resumePromises.delete(sessionId);
+        }
+      });
     this.resumePromises.set(sessionId, next);
     return await next;
   }
@@ -2844,6 +2877,13 @@ export class PiSdkRuntime implements AgentRuntime {
         throw new Error("Destination workspace is unavailable.");
       }
       const moved = moveAgentSessionWorkspace(info.id, target.id, input.pinned);
+      const oldGeneration =
+        this.reaGenerations.get(info.id) ?? this.sessions.get(info.id)?.reaGeneration;
+      const nextGeneration = randomUUID();
+      this.reaGenerations.set(info.id, nextGeneration);
+      if (oldGeneration) {
+        await this.disposeReaWorker(info.id, oldGeneration);
+      }
       releaseAgentBrowserControl(info.workspaceId, info.id);
       this.emitToWindow(window)({
         type: "session.updated",
@@ -3109,6 +3149,10 @@ export class PiSdkRuntime implements AgentRuntime {
     const state: HarnessContext["state"] = new Map();
     state.set("promptRegistry", registry);
     state.set("promptRegistryManagedSections", true);
+    state.set(
+      "activeTools",
+      activeToolNamesForSession(runtimeSession.info, runtimeSession.profile),
+    );
     const context: HarnessContext = {
       sessionId,
       runId: runId ?? sessionId,
@@ -3126,7 +3170,18 @@ export class PiSdkRuntime implements AgentRuntime {
         { basePrompt: "", systemSections },
         context,
       );
-      if (!isCurrent()) return undefined;
+      if (!isCurrent()) {
+        if (
+          this.sessions.get(sessionId) !== runtimeSession ||
+          runtimeSession.promptLifecycleToken !== promptLifecycleToken
+        ) {
+          registry.cleanSession(sessionId);
+          for (const section of registry.getAllSections()) {
+            registry.unregisterSection(section.id);
+          }
+        }
+        return undefined;
+      }
       if (typeof assembled?.finalSystemPrompt !== "string") {
         throw new Error("PromptRegistry returned no complete system prompt.");
       }
@@ -3152,9 +3207,19 @@ export class PiSdkRuntime implements AgentRuntime {
         error,
       );
 
-      const fallbackSections = [...(systemSections ?? [])].sort(
-        (a, b) => (a.priority ?? 250) - (b.priority ?? 250),
-      );
+      const fallbackSections = [...(systemSections ?? [])];
+      if (!fallbackSections.some((section) => section.id === "skills")) {
+        const skillsManifest = resolveSkillsPrompt(runtimeSession.info.cwd, []);
+        if (skillsManifest) {
+          fallbackSections.push({
+            id: "skills",
+            priority: 300,
+            content: skillsManifest,
+            volatile: false,
+          });
+        }
+      }
+      fallbackSections.sort((a, b) => (a.priority ?? 250) - (b.priority ?? 250));
       const fallbackPrompt = fallbackSections
         .map((section) => section.content.trim())
         .filter((content) => content.length > 0)
@@ -3289,11 +3354,25 @@ export class PiSdkRuntime implements AgentRuntime {
     promptLifecycleToken: symbol;
     settingsManager: SettingsManager;
     sessionManager: SessionManager;
+    reaGeneration?: string;
     model: NonNullable<Parameters<typeof createAgentSession>[0]>["model"];
     thinkingLevel: NonNullable<Parameters<typeof createAgentSession>[0]>["thinkingLevel"];
     thinkingBudget?: number;
   }): Promise<SdkRuntimeSession> {
     const toolRegistryRevision = toolRegistry.revision;
+    const allowedChatTools = toolRegistry
+      .resolveActiveTools("chat")
+      .filter(
+        (name) =>
+          !params.info.parentSessionId || (name !== REA_TOOLS_NAME && name !== REA_CALL_NAME),
+      );
+    const allowedChatCustomTools = toolRegistry
+      .getCustomToolDefinitions("chat")
+      .filter(
+        (tool) =>
+          !params.info.parentSessionId ||
+          (tool.name !== REA_TOOLS_NAME && tool.name !== REA_CALL_NAME),
+      );
     const sessionOptions: Parameters<typeof createAgentSession>[0] = {
       cwd: params.info.cwd,
       agentDir: params.agentDir,
@@ -3308,16 +3387,11 @@ export class PiSdkRuntime implements AgentRuntime {
       // every profile we may switch to per-turn, or setActiveToolsByName can't
       // activate a tool that was filtered out — which is exactly why plan_write
       // was invisible in plan mode. Per-turn narrowing happens in prompt().
-      tools: [
-        ...new Set([
-          ...toolRegistry.resolveActiveTools("chat"),
-          ...toolRegistry.resolveActiveTools("plan"),
-        ]),
-      ],
+      tools: [...new Set([...allowedChatTools, ...toolRegistry.resolveActiveTools("plan")])],
       // Register chat + plan custom tools so a turn can switch its active set by
       // mode (plan_write becomes available without recreating the session).
       customTools: dedupeToolsByName([
-        ...toolRegistry.getCustomToolDefinitions("chat"),
+        ...allowedChatCustomTools,
         ...toolRegistry.getCustomToolDefinitions("plan"),
       ]),
     };
@@ -3480,6 +3554,8 @@ export class PiSdkRuntime implements AgentRuntime {
     updateAgentSessionStatus(params.info.id, "idle");
     runtimeSession = {
       info: updated,
+      reaGeneration:
+        params.reaGeneration ?? this.reaGenerations.get(params.info.id) ?? randomUUID(),
       session,
       profile: "chat",
       toolRegistryRevision,
@@ -3488,7 +3564,13 @@ export class PiSdkRuntime implements AgentRuntime {
       emitVolatile: params.emitVolatile,
       observerSessionToken: HarnessObserver.getInstance().beginSession(params.info.id),
       ...(isFeatureFlagEnabled("MODUS_PROMPT_REGISTRY")
-        ? { promptRegistry: new PromptRegistry() }
+        ? {
+            promptRegistry: (() => {
+              const registry = new PromptRegistry();
+              registry.registerProvider(new SkillsSectionProvider());
+              return registry;
+            })(),
+          }
         : {}),
       promptLifecycleToken: params.promptLifecycleToken,
       resourceLoader: params.loader,
@@ -3531,6 +3613,8 @@ export class PiSdkRuntime implements AgentRuntime {
     }
     const info = createAgentSessionRecord(recordInput);
     const selectedThinking = selectedModel ? resolveModelThinking(selectedModel) : undefined;
+    const reaGeneration = randomUUID();
+    this.reaGenerations.set(info.id, reaGeneration);
 
     const agentDir = join(app.getPath("userData"), "pi-agent");
     const sessionDir = join(app.getPath("userData"), "pi-sessions");
@@ -3544,7 +3628,7 @@ export class PiSdkRuntime implements AgentRuntime {
         emit,
         agentDir,
       );
-      return await this.assembleSession({
+      const runtimeSession = await this.assembleSession({
         info,
         emit,
         emitVolatile,
@@ -3553,18 +3637,28 @@ export class PiSdkRuntime implements AgentRuntime {
         promptLifecycleToken,
         settingsManager,
         sessionManager: SessionManager.create(input.cwd, sessionDir),
+        reaGeneration,
         model: selectedThinking?.model ?? selectedModel,
         thinkingLevel: selectedThinking?.thinkingLevel,
         ...(selectedThinking?.thinkingBudget !== undefined
           ? { thinkingBudget: selectedThinking.thinkingBudget }
           : {}),
       });
+      if (this.reaGenerations.get(info.id) !== reaGeneration) {
+        if (this.sessions.get(info.id) === runtimeSession) this.sessions.delete(info.id);
+        runtimeSession.unsubscribe();
+        runtimeSession.session.dispose();
+        throw new Error(`Session ${info.id} was disposed while its runtime was assembling.`);
+      }
+      return runtimeSession;
     })().finally(() => {
-      this.resumePromises.delete(info.id);
+      if (this.resumePromises.get(info.id) === warmup) this.resumePromises.delete(info.id);
     });
     this.resumePromises.set(info.id, warmup);
     void warmup.catch(() => {
-      updateAgentSessionStatus(info.id, "error");
+      if (this.reaGenerations.get(info.id) === reaGeneration) {
+        updateAgentSessionStatus(info.id, "error");
+      }
     });
     return info;
   }
@@ -3575,6 +3669,7 @@ export class PiSdkRuntime implements AgentRuntime {
     previousSession?: SdkRuntimeSession,
     previousSelection?: PreviousSessionSelection,
     requestedModelId?: string | null,
+    reaGeneration?: string,
   ): Promise<SdkRuntimeSession | undefined> {
     const info = getAgentSession(sessionId);
     if (!info) {
@@ -3660,12 +3755,23 @@ export class PiSdkRuntime implements AgentRuntime {
       promptLifecycleToken,
       settingsManager,
       sessionManager,
+      reaGeneration:
+        reaGeneration ??
+        previousSession?.reaGeneration ??
+        this.reaGenerations.get(info.id) ??
+        randomUUID(),
       model: selectedThinking?.model ?? selectedModel,
       thinkingLevel: selectedThinking?.thinkingLevel,
       ...(selectedThinking?.thinkingBudget !== undefined
         ? { thinkingBudget: selectedThinking.thinkingBudget }
         : {}),
     });
+    if (this.reaGenerations.get(info.id) !== resumed.reaGeneration) {
+      if (this.sessions.get(info.id) === resumed) this.sessions.delete(info.id);
+      resumed.unsubscribe();
+      resumed.session.dispose();
+      throw new Error(`Session ${info.id} was disposed while its runtime was assembling.`);
+    }
     if (previousSession) resumed.lastCompactionEnd = previousSession.lastCompactionEnd;
     return resumed;
   }
@@ -5125,7 +5231,9 @@ export class PiSdkRuntime implements AgentRuntime {
     const appDigest = summarizeApps({ sessionId: runtimeSession.info.id });
     const digest = [terminalDigest, appDigest].filter(Boolean).join("\n");
     const awareness = digest ? `<active_terminals>\n${digest}\n</active_terminals>` : "";
-    const skillsText = resolveSkillsPrompt(runtimeSession.info.cwd, input.skills ?? []);
+    const skillsText = resolveSkillsPrompt(runtimeSession.info.cwd, input.skills ?? [], undefined, {
+      includeManifest: !isFeatureFlagEnabled("MODUS_PROMPT_REGISTRY"),
+    });
     const subagentsText = runtimeSession.info.parentSessionId
       ? ""
       : resolveSubagentsPrompt(runtimeSession.info.cwd);
@@ -5392,7 +5500,12 @@ export class PiSdkRuntime implements AgentRuntime {
     const meta = this.backgroundChildTasks.get(session.id);
     if (!meta) {
       // Registry already gone (parent disposed) — just drop the SDK session.
+      await this.disposeReaWorker(
+        session.id,
+        this.sessions.get(session.id)?.reaGeneration ?? this.reaGenerations.get(session.id),
+      );
       await this.disposeSessionOnly(session.id).catch(() => undefined);
+      this.reaGenerations.delete(session.id);
       return;
     }
 
@@ -5415,7 +5528,12 @@ export class PiSdkRuntime implements AgentRuntime {
     });
     await this.cleanupSessionProcesses(session.id);
     // Keep the stashed result; releaseRuntime / disposeSessionOnly must not clear it.
+    await this.disposeReaWorker(
+      session.id,
+      this.sessions.get(session.id)?.reaGeneration ?? this.reaGenerations.get(session.id),
+    );
     await this.disposeSessionOnly(session.id).catch(() => undefined);
+    this.reaGenerations.delete(session.id);
   }
 
   async waitBackground(input: {
@@ -5653,10 +5771,14 @@ export class PiSdkRuntime implements AgentRuntime {
 
   async dispose(sessionId: string): Promise<void> {
     this.cancelPendingIntentGate(sessionId);
+    const generation =
+      this.sessions.get(sessionId)?.reaGeneration ?? this.reaGenerations.get(sessionId);
+    this.reaGenerations.delete(sessionId);
     await this.closeSubagentTree(sessionId, "Session disposed");
     await this.cleanupSessionProcesses(sessionId);
     this.clearBackgroundTasksForParent(sessionId);
     this.backgroundChildTasks.delete(sessionId);
+    await this.disposeReaWorker(sessionId, generation);
     await this.disposeSessionOnly(sessionId);
   }
 
@@ -5664,6 +5786,15 @@ export class PiSdkRuntime implements AgentRuntime {
     // A pane owns the SDK cache, never the session's managed processes.
     this.cancelPendingIntentGate(sessionId);
     await this.disposeSessionOnly(sessionId);
+  }
+
+  private async disposeReaWorker(sessionId: string, generation?: string): Promise<void> {
+    if (!generation) return;
+    try {
+      await getReaSessionManager().disposeSession({ sessionId, generation });
+    } catch {
+      // The worker manager keeps failed cleanup quarantined; don't strand Pi teardown.
+    }
   }
 
   private clearBackgroundTasksForParent(parentSessionId: string): void {
@@ -5676,7 +5807,7 @@ export class PiSdkRuntime implements AgentRuntime {
 
   private async disposeSessionOnly(
     sessionId: string,
-    options: { keepTodos?: boolean } = {},
+    options: { keepTodos?: boolean; skipPendingResume?: boolean } = {},
   ): Promise<void> {
     this.cancelPendingIntentGate(sessionId);
     // This is one-way IPC with no supervisor acknowledgement. Keep it from
@@ -5690,7 +5821,7 @@ export class PiSdkRuntime implements AgentRuntime {
     // Settle any in-flight resume first: it would otherwise re-cache a live
     // session right after this dispose (and a rollback would then truncate the
     // session file while a stale in-memory tree keeps answering prompts).
-    const pending = this.resumePromises.get(sessionId);
+    const pending = options.skipPendingResume ? undefined : this.resumePromises.get(sessionId);
     if (pending) {
       await pending.catch(() => undefined);
     }
@@ -5738,7 +5869,12 @@ export class PiSdkRuntime implements AgentRuntime {
       denyPendingQuestionRequestsForSession(child.id);
       await this.cleanupSessionProcesses(child.id);
       this.backgroundChildTasks.delete(child.id);
+      await this.disposeReaWorker(
+        child.id,
+        this.sessions.get(child.id)?.reaGeneration ?? this.reaGenerations.get(child.id),
+      );
       await this.disposeSessionOnly(child.id).catch(() => undefined);
+      this.reaGenerations.delete(child.id);
     }
   }
 

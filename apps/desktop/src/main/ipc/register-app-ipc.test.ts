@@ -25,6 +25,9 @@ const mocks = vi.hoisted(() => ({
   requireAgentChatWritable: vi.fn(),
   restoreCheckpoint: vi.fn(),
   fromWebContents: vi.fn(),
+  reaGetStatus: vi.fn(),
+  reaSetEnabled: vi.fn(),
+  reaRetry: vi.fn(),
 }));
 
 vi.mock("electron", () => ({
@@ -141,6 +144,84 @@ describe("permission decision IPC", () => {
       ),
     ).toThrow("Permission request is no longer active.");
     expect(mocks.recordPermissionDecision).not.toHaveBeenCalled();
+  });
+});
+
+describe("built-in REA settings IPC", () => {
+  const sender = { mainFrame: { url: "file:///app/index.html" } };
+  const trustedEvent = { sender, senderFrame: sender.mainFrame };
+  const reaIntegration = {
+    getStatus: mocks.reaGetStatus,
+    setEnabled: mocks.reaSetEnabled,
+    retry: mocks.reaRetry,
+  };
+
+  beforeEach(() => {
+    mocks.handlers.clear();
+    mocks.reaGetStatus.mockReset();
+    mocks.reaSetEnabled.mockReset();
+    mocks.reaRetry.mockReset();
+    registerTrustedSender(sender, "file:///app/index.html");
+    registerAppIpc({ reaIntegration });
+  });
+
+  it("validates status, toggle, and retry requests and returns sanitized status", async () => {
+    mocks.reaGetStatus.mockReturnValue({ enabled: true, status: "not_started", providerNotes: [] });
+    mocks.reaSetEnabled.mockResolvedValue({
+      enabled: false,
+      status: "disabled",
+      providerNotes: [],
+    });
+    mocks.reaRetry.mockReturnValue({ enabled: true, status: "not_started", providerNotes: [] });
+    const getStatus = mocks.handlers.get(IPC_CHANNELS.reaGetStatus);
+    const setEnabled = mocks.handlers.get(IPC_CHANNELS.reaSetEnabled);
+    const retry = mocks.handlers.get(IPC_CHANNELS.reaRetry);
+    if (!getStatus || !setEnabled || !retry) throw new Error("REA settings IPC handlers missing");
+
+    expect(await getStatus(trustedEvent as never, undefined as never)).toEqual({
+      enabled: true,
+      status: "not_started",
+      providerNotes: [],
+    });
+    expect(await setEnabled(trustedEvent as never, { enabled: false } as never)).toEqual({
+      enabled: false,
+      status: "disabled",
+      providerNotes: [],
+    });
+    expect(await retry(trustedEvent as never, undefined as never)).toMatchObject({
+      enabled: true,
+      status: "not_started",
+    });
+    await expect(
+      setEnabled(trustedEvent as never, { enabled: false, cwd: "project" } as never),
+    ).rejects.toThrow(/invalid IPC payload/i);
+    mocks.reaGetStatus.mockReturnValueOnce({
+      enabled: true,
+      status: "failed",
+      note: "C:\\private\\provider stderr secret",
+      providerNotes: [],
+    });
+    expect(() => getStatus(trustedEvent as never, undefined as never)).toThrow();
+    expect(mocks.reaSetEnabled).toHaveBeenCalledTimes(1);
+  });
+
+  it("sanitizes persistence failures returned by the REA enable toggle", async () => {
+    mocks.reaSetEnabled.mockRejectedValue(
+      new Error("EACCES while writing C:\\private\\modus\\rea.json with secret details"),
+    );
+    const setEnabled = mocks.handlers.get(IPC_CHANNELS.reaSetEnabled);
+    if (!setEnabled) throw new Error("REA enable IPC handler missing");
+
+    let rendererError: unknown;
+    try {
+      await setEnabled(trustedEvent as never, { enabled: false } as never);
+    } catch (error) {
+      rendererError = error;
+    }
+    expect(rendererError).toBeInstanceOf(Error);
+    expect(String(rendererError)).toContain("Unable to save REA settings.");
+    expect(String(rendererError)).not.toContain("C:\\private");
+    expect(String(rendererError)).not.toContain("secret details");
   });
 });
 

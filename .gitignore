@@ -23,4 +23,8 @@ MODUS_V0.1.2_EXECUTION_PLAN.md
 # BEGIN oh-my-opencode-slim deepwork
 .slim/deepwork/
 # END oh-my-opencode-slim deepwork
+# BEGIN oh-my-opencode-slim worktrees
+.slim/worktrees/
+.slim/worktrees.json
+# END oh-my-opencode-slim worktrees
 _agent_push/

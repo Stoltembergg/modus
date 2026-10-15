@@ -10515,6 +10515,395 @@ describe("PiSdkRuntime PromptRegistry production wiring", () => {
     return { sessionId, runtime };
   }
 
+  it("includes stable REA broker definitions in fresh and resumed Pi sessions", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_PROMPT_REGISTRY: true,
+      MODUS_RESPONSE_POLICY: false,
+    });
+    const { sessionAt } = await useOfflinePiToolSessions();
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    const { sessionId } = await createSession(runtime);
+    await runtime.prompt(window, {
+      context: [],
+      delivery: "normal",
+      message: "Check stable tools.",
+      sessionId,
+    });
+    const names = () =>
+      (
+        mocks.createAgentSession.mock.calls.at(-1)?.[0] as { customTools: Array<{ name: string }> }
+      ).customTools.map((tool) => tool.name);
+    expect(names()).toEqual(expect.arrayContaining(["rea_tools", "rea_call"]));
+    expect(sessionAt()).toBeDefined();
+
+    await runtime.releaseRuntime(sessionId);
+    await runtime.ensure(window, sessionId);
+    expect(names()).toEqual(expect.arrayContaining(["rea_tools", "rea_call"]));
+    await runtime.releaseRuntime(sessionId);
+  }, 20_000);
+
+  it("preserves the REA worker generation across pane release and resume", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_PROMPT_REGISTRY: true });
+    const { getReaSessionManager } = await import("./tools/rea-tools");
+    const reaManager = getReaSessionManager();
+    const disposeSession = vi.spyOn(reaManager, "disposeSession").mockResolvedValue();
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    const { sessionId } = await createSession(runtime);
+    const generationFor = () =>
+      (
+        runtime as unknown as {
+          sessions: Map<string, { reaGeneration: string }>;
+        }
+      ).sessions.get(sessionId)?.reaGeneration;
+    const markerToolName = `rea_rebuild_marker_${crypto.randomUUID().replace(/-/g, "")}`;
+
+    try {
+      await runtime.ensure(window, sessionId);
+      const originalGeneration = generationFor();
+      expect(originalGeneration).toBeTruthy();
+      registerOfflineMcpTool(markerToolName, "rebuild marker");
+      await runtime.ensure(window, sessionId);
+      expect(generationFor()).toBe(originalGeneration);
+      expect(disposeSession).not.toHaveBeenCalled();
+
+      await runtime.releaseRuntime(sessionId);
+      expect(disposeSession).not.toHaveBeenCalled();
+      await runtime.ensure(window, sessionId);
+      expect(generationFor()).toBe(originalGeneration);
+      expect(disposeSession).not.toHaveBeenCalled();
+    } finally {
+      toolRegistry.unregisterTool(markerToolName);
+      await runtime.releaseRuntime(sessionId);
+    }
+  }, 20_000);
+
+  it("retires the REA worker generation on logical session disposal", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_PROMPT_REGISTRY: true });
+    const { getReaSessionManager } = await import("./tools/rea-tools");
+    const disposeSession = vi.spyOn(getReaSessionManager(), "disposeSession").mockResolvedValue();
+    const runtime = new PiSdkRuntime();
+    const { sessionId } = await createSession(runtime);
+
+    await runtime.ensure(createWindowStub(), sessionId);
+    const generation = (
+      runtime as unknown as {
+        sessions: Map<string, { reaGeneration: string }>;
+      }
+    ).sessions.get(sessionId)?.reaGeneration;
+    expect(generation).toBeTruthy();
+
+    await runtime.dispose(sessionId);
+
+    expect(disposeSession).toHaveBeenCalledWith({ sessionId, generation });
+    expect(
+      (runtime as unknown as { reaGenerations: Map<string, string> }).reaGenerations.has(sessionId),
+    ).toBe(false);
+    await runtime.ensure(createWindowStub(), sessionId);
+    expect(
+      (runtime as unknown as { sessions: Map<string, { reaGeneration: string }> }).sessions.get(
+        sessionId,
+      )?.reaGeneration,
+    ).not.toBe(generation);
+    await runtime.releaseRuntime(sessionId);
+  }, 20_000);
+
+  it("retires the REA worker generation when a session moves workspaces", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_PROMPT_REGISTRY: true });
+    const { getReaSessionManager } = await import("./tools/rea-tools");
+    const disposeSession = vi.spyOn(getReaSessionManager(), "disposeSession").mockResolvedValue();
+    const runtime = new PiSdkRuntime();
+    const { sessionId } = await createSession(runtime);
+
+    await runtime.ensure(createWindowStub(), sessionId);
+    const sessions = (runtime as unknown as { sessions: Map<string, { reaGeneration: string }> })
+      .sessions;
+    const oldGeneration = sessions.get(sessionId)?.reaGeneration;
+    getDatabase()
+      .prepare("update agent_sessions set cwd = ? where id = ?")
+      .run(join(cwd, "relocated"), sessionId);
+
+    await runtime.ensure(createWindowStub(), sessionId);
+
+    expect(disposeSession).toHaveBeenCalledWith({ sessionId, generation: oldGeneration });
+    expect(sessions.get(sessionId)?.reaGeneration).not.toBe(oldGeneration);
+    await runtime.releaseRuntime(sessionId);
+  }, 20_000);
+
+  it("retires and rotates the REA worker generation on moveSession", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_PROMPT_REGISTRY: true });
+    const { getReaSessionManager } = await import("./tools/rea-tools");
+    const disposeSession = vi.spyOn(getReaSessionManager(), "disposeSession").mockResolvedValue();
+    const runtime = new PiSdkRuntime();
+    const sessionId = `rea-move-${crypto.randomUUID()}`;
+    const sourceWorkspaceId = `workspace-source-${crypto.randomUUID()}`;
+    const targetWorkspaceId = `workspace-target-${crypto.randomUUID()}`;
+    insertSession(sessionId, sourceWorkspaceId, join(userData, `${sessionId}.jsonl`));
+    const targetRoot = join(cwd, `target-${crypto.randomUUID()}`);
+    await mkdir(targetRoot, { recursive: true });
+    const now = new Date().toISOString();
+    getDatabase()
+      .prepare(
+        `insert into workspaces (id, root_path, display_name, is_git_repository, last_opened_at, created_at)
+         values (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(targetWorkspaceId, targetRoot, "target", 1, now, now);
+
+    await runtime.ensure(createWindowStub(), sessionId);
+    const sessions = (runtime as unknown as { sessions: Map<string, { reaGeneration: string }> })
+      .sessions;
+    const oldGeneration = sessions.get(sessionId)?.reaGeneration;
+
+    await runtime.moveSession(createWindowStub(), {
+      id: sessionId,
+      workspaceId: targetWorkspaceId,
+      pinned: false,
+    });
+    expect(disposeSession).toHaveBeenCalledWith({ sessionId, generation: oldGeneration });
+    await runtime.ensure(createWindowStub(), sessionId);
+
+    expect(sessions.get(sessionId)?.reaGeneration).not.toBe(oldGeneration);
+    await runtime.releaseRuntime(sessionId);
+  }, 20_000);
+
+  it("reserves and preserves a generation created through runtime.create", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_PROMPT_REGISTRY: true });
+    const { getReaSessionManager } = await import("./tools/rea-tools");
+    const disposeSession = vi.spyOn(getReaSessionManager(), "disposeSession").mockResolvedValue();
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    const workspaceId = `rea-create-${crypto.randomUUID()}`;
+    insertWorkspace(workspaceId);
+    const info = await runtime.create(window, { workspaceId, cwd, title: "Created session" });
+
+    await runtime.ensure(window, info.id);
+    const generations = (runtime as unknown as { reaGenerations: Map<string, string> })
+      .reaGenerations;
+    const originalGeneration = generations.get(info.id);
+    expect(originalGeneration).toBeTruthy();
+    await runtime.releaseRuntime(info.id);
+    await runtime.ensure(window, info.id);
+    expect(generations.get(info.id)).toBe(originalGeneration);
+
+    const targetRoot = join(cwd, `created-target-${crypto.randomUUID()}`);
+    await mkdir(targetRoot, { recursive: true });
+    const targetWorkspaceId = `rea-created-target-${crypto.randomUUID()}`;
+    const now = new Date().toISOString();
+    getDatabase()
+      .prepare(
+        `insert into workspaces (id, root_path, display_name, is_git_repository, last_opened_at, created_at)
+         values (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(targetWorkspaceId, targetRoot, "target", 1, now, now);
+    await runtime.moveSession(window, {
+      id: info.id,
+      workspaceId: targetWorkspaceId,
+      pinned: false,
+    });
+    expect(disposeSession).toHaveBeenCalledWith({
+      sessionId: info.id,
+      generation: originalGeneration,
+    });
+    await runtime.ensure(window, info.id);
+    expect(generations.get(info.id)).not.toBe(originalGeneration);
+    await runtime.releaseRuntime(info.id);
+  }, 20_000);
+
+  it("fences a fresh runtime.create warmup disposed before assembly completes", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_PROMPT_REGISTRY: true });
+    const { getReaSessionManager } = await import("./tools/rea-tools");
+    const disposeSession = vi.spyOn(getReaSessionManager(), "disposeSession").mockResolvedValue();
+    const runtime = new PiSdkRuntime();
+    const workspaceId = `rea-create-race-${crypto.randomUUID()}`;
+    insertWorkspace(workspaceId);
+    let finishAssembly!: () => void;
+    const assemblyGate = new Promise<void>((resolve) => {
+      finishAssembly = resolve;
+    });
+    let latePiSession: ReturnType<typeof createMockPiSession> | undefined;
+    mocks.createAgentSession.mockImplementation(async () => {
+      await assemblyGate;
+      latePiSession = createMockPiSession();
+      return { session: latePiSession as never };
+    });
+
+    const info = await runtime.create(createWindowStub(), {
+      workspaceId,
+      cwd,
+      title: "Deferred created session",
+    });
+    const generations = (runtime as unknown as { reaGenerations: Map<string, string> })
+      .reaGenerations;
+    expect(generations.get(info.id)).toBeTruthy();
+    const reservedGeneration = generations.get(info.id);
+    const disposing = runtime.dispose(info.id);
+    finishAssembly();
+    await disposing;
+
+    expect(disposeSession).toHaveBeenCalledWith({
+      sessionId: info.id,
+      generation: reservedGeneration,
+    });
+    expect(latePiSession?.dispose).toHaveBeenCalledOnce();
+    expect(generations.has(info.id)).toBe(false);
+    expect((runtime as unknown as { sessions: Map<string, unknown> }).sessions.has(info.id)).toBe(
+      false,
+    );
+  }, 20_000);
+
+  it("rotates a created session generation before move worker cleanup completes", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_PROMPT_REGISTRY: true });
+    const { getReaSessionManager } = await import("./tools/rea-tools");
+    let finishCleanup!: () => void;
+    const cleanupGate = new Promise<void>((resolve) => {
+      finishCleanup = resolve;
+    });
+    const disposeSession = vi
+      .spyOn(getReaSessionManager(), "disposeSession")
+      .mockImplementation(async () => cleanupGate);
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    const workspaceId = `rea-create-move-race-${crypto.randomUUID()}`;
+    insertWorkspace(workspaceId);
+    const info = await runtime.create(window, { workspaceId, cwd, title: "Created move race" });
+    await runtime.ensure(window, info.id);
+    const generations = (runtime as unknown as { reaGenerations: Map<string, string> })
+      .reaGenerations;
+    const oldGeneration = generations.get(info.id);
+    const targetRoot = join(cwd, `created-cleanup-target-${crypto.randomUUID()}`);
+    await mkdir(targetRoot, { recursive: true });
+    const targetWorkspaceId = `rea-cleanup-target-${crypto.randomUUID()}`;
+    const now = new Date().toISOString();
+    getDatabase()
+      .prepare(
+        `insert into workspaces (id, root_path, display_name, is_git_repository, last_opened_at, created_at)
+         values (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(targetWorkspaceId, targetRoot, "target", 1, now, now);
+
+    const moving = runtime.moveSession(window, {
+      id: info.id,
+      workspaceId: targetWorkspaceId,
+      pinned: false,
+    });
+    await vi.waitFor(() => expect(disposeSession).toHaveBeenCalledOnce());
+    expect(generations.get(info.id)).not.toBe(oldGeneration);
+    finishCleanup();
+    await moving;
+    await runtime.releaseRuntime(info.id);
+  }, 20_000);
+
+  it("fences a deferred initial assembly after logical disposal", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_PROMPT_REGISTRY: true });
+    const { getReaSessionManager } = await import("./tools/rea-tools");
+    const disposeSession = vi.spyOn(getReaSessionManager(), "disposeSession").mockResolvedValue();
+    const runtime = new PiSdkRuntime();
+    const { sessionId } = await createSession(runtime);
+    let finishAssembly!: () => void;
+    const assemblyGate = new Promise<void>((resolve) => {
+      finishAssembly = resolve;
+    });
+    let latePiSession: ReturnType<typeof createMockPiSession> | undefined;
+    mocks.createAgentSession.mockImplementation(async () => {
+      await assemblyGate;
+      latePiSession = createMockPiSession();
+      return { session: latePiSession as never };
+    });
+
+    const ensuring = runtime.ensure(createWindowStub(), sessionId);
+    const generations = (runtime as unknown as { reaGenerations: Map<string, string> })
+      .reaGenerations;
+    expect(generations.get(sessionId)).toBeTruthy();
+    const reservedGeneration = generations.get(sessionId);
+    const disposing = runtime.dispose(sessionId);
+    finishAssembly();
+    await disposing;
+
+    await expect(ensuring).rejects.toThrow();
+    expect(disposeSession).toHaveBeenCalledWith({ sessionId, generation: reservedGeneration });
+    expect(latePiSession?.dispose).toHaveBeenCalledOnce();
+    expect(generations.has(sessionId)).toBe(false);
+    expect((runtime as unknown as { sessions: Map<string, unknown> }).sessions.has(sessionId)).toBe(
+      false,
+    );
+  }, 20_000);
+
+  it("shares a workspace-rebuild reservation while worker cleanup is pending", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_PROMPT_REGISTRY: true });
+    const { getReaSessionManager } = await import("./tools/rea-tools");
+    const reaManager = getReaSessionManager();
+    let finishCleanup!: () => void;
+    const cleanupGate = new Promise<void>((resolve) => {
+      finishCleanup = resolve;
+    });
+    const disposeSession = vi
+      .spyOn(reaManager, "disposeSession")
+      .mockImplementation(async () => cleanupGate);
+    const runtime = new PiSdkRuntime();
+    const { sessionId } = await createSession(runtime);
+    const window = createWindowStub();
+    await runtime.ensure(window, sessionId);
+    getDatabase()
+      .prepare("update agent_sessions set cwd = ? where id = ?")
+      .run(join(cwd, "relocated-shared"), sessionId);
+
+    const firstEnsure = runtime.ensure(window, sessionId);
+    await vi.waitFor(() => expect(disposeSession).toHaveBeenCalledOnce());
+    const secondEnsure = runtime.ensure(window, sessionId);
+    await Promise.resolve();
+    expect(disposeSession).toHaveBeenCalledOnce();
+    finishCleanup();
+    const [first, second] = await Promise.all([firstEnsure, secondEnsure]);
+
+    expect(first.id).toBe(second.id);
+    expect(
+      (runtime as unknown as { sessions: Map<string, { reaGeneration: string }> }).sessions.get(
+        sessionId,
+      )?.reaGeneration,
+    ).toBeTruthy();
+    await runtime.releaseRuntime(sessionId);
+  }, 20_000);
+
+  it("disposes REA workers for a session and its subagent subtree", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_PROMPT_REGISTRY: true });
+    const { getReaSessionManager } = await import("./tools/rea-tools");
+    const reaManager = getReaSessionManager();
+    const disposeSession = vi.spyOn(reaManager, "disposeSession").mockResolvedValue();
+    const workspaceId = `rea-lifecycle-${crypto.randomUUID()}`;
+    const parentSessionId = `rea-parent-${crypto.randomUUID()}`;
+    const childSessionId = `rea-child-${crypto.randomUUID()}`;
+    insertSession(parentSessionId, workspaceId, join(userData, `${parentSessionId}.jsonl`));
+    insertSubagentSession(childSessionId, parentSessionId, workspaceId);
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    await runtime.ensure(window, parentSessionId);
+    await runtime.ensure(window, childSessionId);
+    const childCustomTools = (
+      mocks.createAgentSession.mock.calls.at(-1)?.[0] as { customTools: Array<{ name: string }> }
+    ).customTools.map((tool) => tool.name);
+    expect(childCustomTools).not.toEqual(expect.arrayContaining(["rea_tools", "rea_call"]));
+    const sessions = (
+      runtime as unknown as {
+        sessions: Map<string, { reaGeneration: string }>;
+      }
+    ).sessions;
+    const parentOwner = {
+      sessionId: parentSessionId,
+      generation: sessions.get(parentSessionId)?.reaGeneration,
+    };
+    const childOwner = {
+      sessionId: childSessionId,
+      generation: sessions.get(childSessionId)?.reaGeneration,
+    };
+
+    await runtime.dispose(parentSessionId);
+
+    expect(disposeSession).toHaveBeenCalledWith(parentOwner);
+    expect(disposeSession).toHaveBeenCalledWith(childOwner);
+  }, 20_000);
+
   it("assembles current Modus instructions through a session registry and sends that exact prompt to Pi", async () => {
     setFeatureFlagOverrides({
       MODUS_USE_KERNEL: true,
@@ -10523,8 +10912,15 @@ describe("PiSdkRuntime PromptRegistry production wiring", () => {
     });
     mocks.globalGuidance = "<global_guidance>registry global marker</global_guidance>";
     await writeFile(join(cwd, "AGENTS.md"), "registry workspace marker", "utf8");
+    const skillPath = join(cwd, ".modus", "skills", "registry-skill", "SKILL.md");
+    await mkdir(join(cwd, ".modus", "skills", "registry-skill"), { recursive: true });
+    await writeFile(
+      skillPath,
+      "---\nname: registry-skill\ndescription: Registry skill marker\n---\nREGISTRY SELECTED BODY",
+      "utf8",
+    );
 
-    const { sessionAt, systemPromptsFor } = await useOfflinePiToolSessions();
+    const { sessionAt, systemPromptsFor, messagesFor } = await useOfflinePiToolSessions();
     const runtime = new PiSdkRuntime();
     const { sessionId } = await createSession(runtime);
 
@@ -10532,6 +10928,7 @@ describe("PiSdkRuntime PromptRegistry production wiring", () => {
       context: [],
       delivery: "normal",
       message: "Use the current project instructions.",
+      skills: [{ name: "registry-skill", path: skillPath }],
       sessionId,
     });
 
@@ -10558,13 +10955,21 @@ describe("PiSdkRuntime PromptRegistry production wiring", () => {
     expect(deliveredPrompt).toContain("registry global marker");
     expect(deliveredPrompt).toContain("registry workspace marker");
     expect(deliveredPrompt?.match(/registry workspace marker/g)).toHaveLength(1);
+    expect(deliveredPrompt).toContain("- registry-skill: Registry skill marker");
+    expect(deliveredPrompt?.match(/A skill is a local `SKILL.md` workflow/g)).toHaveLength(1);
+    expect(
+      JSON.stringify(messagesFor(piSession).filter((message) => message.role === "user")),
+    ).toContain("REGISTRY SELECTED BODY");
     // Pi already includes AGENTS.md in its base prompt, so the registry avoids
     // registering a duplicate workspace_rules section for the same content.
     expect(registry?.getAllSections().map((section) => section.id)).toEqual(
       expect.arrayContaining(["pi_sdk_system_prompt", "global_guidance"]),
     );
+    expect(registry?.getAllSections().map((section) => section.id)).toEqual(
+      expect.arrayContaining(["skills"]),
+    );
     expect(registry?.getAllSections().map((section) => section.id)).not.toEqual(
-      expect.arrayContaining(["persona", "rules", "skills", "memory", "context", "policy"]),
+      expect.arrayContaining(["persona", "rules", "memory", "context", "policy"]),
     );
     await runtime.releaseRuntime(sessionId);
   });
@@ -10702,6 +11107,13 @@ describe("PiSdkRuntime PromptRegistry production wiring", () => {
     const workspaceId = `prompt-registry-fallback-workspace-${crypto.randomUUID()}`;
     insertSession(sessionId, workspaceId, join(userData, "missing-fallback.jsonl"));
     await writeFile(join(cwd, "AGENTS.md"), "fallback workspace marker", "utf8");
+    const skillPath = join(cwd, ".modus", "skills", "fallback-skill", "SKILL.md");
+    await mkdir(join(cwd, ".modus", "skills", "fallback-skill"), { recursive: true });
+    await writeFile(
+      skillPath,
+      "---\nname: fallback-skill\ndescription: Fallback skill marker\n---\nFALLBACK SELECTED BODY",
+      "utf8",
+    );
     const { createAgent } = await import("../agents/agents-store");
     const agent = createAgent({
       name: `Prompt fallback ${crypto.randomUUID()}`,
@@ -10712,7 +11124,7 @@ describe("PiSdkRuntime PromptRegistry production wiring", () => {
       .prepare("update agent_sessions set agent_id = ?, kind = 'chat' where id = ?")
       .run(agent.id, sessionId);
 
-    const { sessionAt, systemPromptsFor } = await useOfflinePiToolSessions();
+    const { sessionAt, systemPromptsFor, messagesFor } = await useOfflinePiToolSessions();
     const runtime = new PiSdkRuntime();
     const window = createWindowStub();
     await runtime.ensure(window, sessionId);
@@ -10739,6 +11151,7 @@ describe("PiSdkRuntime PromptRegistry production wiring", () => {
       context: [],
       delivery: "normal",
       message: "Keep required instructions during registry failure.",
+      skills: [{ name: "fallback-skill", path: skillPath }],
       sessionId,
     });
 
@@ -10747,6 +11160,40 @@ describe("PiSdkRuntime PromptRegistry production wiring", () => {
     expect(deliveredPrompt).toContain("fallback workspace marker");
     expect(deliveredPrompt).toContain("fallback persona marker");
     expect(deliveredPrompt.match(/<response_policy level="standard">/g)).toHaveLength(1);
+    expect(deliveredPrompt).toContain("A skill is a local `SKILL.md` workflow.");
+    expect(deliveredPrompt).toContain("fallback-skill: Fallback skill marker");
+    expect(deliveredPrompt).toContain(skillPath);
+    expect(deliveredPrompt.match(/A skill is a local `SKILL.md` workflow/g)).toHaveLength(1);
+    expect(
+      JSON.stringify(messagesFor(sessionAt()).filter((message) => message.role === "user")),
+    ).toContain("FALLBACK SELECTED BODY");
+    await runtime.releaseRuntime(sessionId);
+  });
+
+  it("advertises the active plan tools in the PromptRegistry skills section", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_PROMPT_REGISTRY: true,
+      MODUS_RESPONSE_POLICY: false,
+    });
+    const { sessionAt, systemPromptsFor } = await useOfflinePiToolSessions();
+    const runtime = new PiSdkRuntime();
+    const { sessionId } = await createSession(runtime);
+
+    await runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Plan the requested work.",
+      mode: "plan",
+      sessionId,
+    });
+
+    const deliveredPrompt = systemPromptsFor(sessionAt()).at(-1) ?? "";
+    expect(deliveredPrompt).toContain("Available Capabilities & Tools:");
+    expect(deliveredPrompt).toContain("- read");
+    expect(deliveredPrompt).toContain("- grep");
+    expect(deliveredPrompt).not.toContain("- edit");
+    expect(deliveredPrompt).not.toContain("- terminal_run");
     await runtime.releaseRuntime(sessionId);
   });
 

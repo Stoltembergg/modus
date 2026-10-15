@@ -385,6 +385,11 @@ const api: ModusApi = {
     setEnabled: (input) => ipcRenderer.invoke("mcp:set-enabled", input),
     entry: (input) => ipcRenderer.invoke("mcp:entry", input),
   },
+  rea: {
+    getStatus: () => ipcRenderer.invoke("rea:get-status"),
+    setEnabled: (enabled) => ipcRenderer.invoke("rea:set-enabled", { enabled }),
+    retry: () => ipcRenderer.invoke("rea:retry"),
+  },
   composio: {
     getState: () => ipcRenderer.invoke("composio:get-state"),
     diagnose: () => ipcRenderer.invoke("composio:diagnose"),

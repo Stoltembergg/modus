@@ -1,0 +1,3 @@
+﻿Vendored from https://github.com/morluto/rea
+npm package: rea-agents@6.5.0
+Copied from the package bundled skill: skills/reverse-engineer-anything

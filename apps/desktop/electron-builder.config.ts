@@ -7,6 +7,10 @@ const fastCodebaseResource = join("resources", "bin", "codegraph");
 
 /** Sidecar name matches `terminal-service` resolution (`.exe` only on Windows). */
 const ptyHostBinary = process.platform === "win32" ? "modus-pty-host.exe" : "modus-pty-host";
+const reaSupervisorBinary =
+  process.platform === "win32"
+    ? "modus-rea-process-supervisor.exe"
+    : "modus-rea-process-supervisor";
 
 /**
  * Update channel for this build: "-beta.N" versions => beta (beta*.yml), everything
@@ -59,6 +63,10 @@ const config: Configuration = {
     {
       from: `../../target/release/${ptyHostBinary}`,
       to: `bin/${ptyHostBinary}`,
+    },
+    {
+      from: `../../target/release/${reaSupervisorBinary}`,
+      to: `bin/${reaSupervisorBinary}`,
     },
     ...(process.platform === "linux"
       ? [

@@ -1,5 +1,9 @@
+// @vitest-environment happy-dom
+
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ReaIntegrationStatus } from "../../../../shared/contracts";
 import {
   canSaveReadOnlyMcpAllowlist,
   confirmedReadOnlyMcpAllowlist,
@@ -8,6 +12,139 @@ import {
   normalizeReadOnlyMcpAllowlist,
   toggleReadOnlyMcpTool,
 } from "./SettingsPanel";
+import { McpSettingsPanel, ReaIntegrationRow } from "./sections/mcp";
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+const reaStatus = (overrides: Partial<ReaIntegrationStatus> = {}): ReaIntegrationStatus => ({
+  enabled: true,
+  status: "not_started",
+  providerNotes: [],
+  ...overrides,
+});
+
+function renderRea(status: ReaIntegrationStatus, onToggle = vi.fn(), onRetry = vi.fn()) {
+  return {
+    ...render(
+      <ReaIntegrationRow busy={false} onRetry={onRetry} onToggle={onToggle} status={status} />,
+    ),
+    onRetry,
+    onToggle,
+  };
+}
+
+describe("built-in REA settings row", () => {
+  it("shows the default-enabled state and first-use notice without starting REA", () => {
+    const { container } = renderRea(reaStatus());
+
+    expect(screen.getByRole("switch", { name: "Enable REA" }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    expect(container.textContent).toContain("Ready when needed");
+    expect(container.textContent).toContain("first approved REA tool call");
+    expect(container.textContent).toContain("not a sandbox");
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("shows disabled state and no retry control", () => {
+    renderRea(reaStatus({ enabled: false, status: "disabled" }));
+
+    expect(screen.getByRole("switch", { name: "Enable REA" }).getAttribute("aria-checked")).toBe(
+      "false",
+    );
+    expect(screen.getByText("Disabled")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it.each([
+    ["needs_node", "Node.js and npm are required."],
+    ["network_error", "Couldn’t download REA."],
+    ["failed", "REA couldn’t start."],
+  ] as const)("shows actionable %s guidance and retry", (status, message) => {
+    renderRea(reaStatus({ status, note: "Try again when ready." }));
+
+    expect(screen.getByText(message)).toBeTruthy();
+    expect(screen.getByText("Try again when ready.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("shows provider limitations without hiding an otherwise ready integration", () => {
+    renderRea(reaStatus({ status: "ready", providerNotes: ["Ghidra is not available here."] }));
+
+    expect(screen.getByText("Available")).toBeTruthy();
+    expect(screen.getByText("Ghidra is not available here.")).toBeTruthy();
+  });
+
+  it("calls only preference and retry handlers; it never starts an REA worker", () => {
+    const { onRetry, onToggle } = renderRea(
+      reaStatus({ status: "failed", note: "A sanitized error." }),
+    );
+
+    fireEvent.click(screen.getByRole("switch", { name: "Enable REA" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(onToggle).toHaveBeenCalledWith(false);
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables duplicate actions while a preference or retry request is saving", () => {
+    render(
+      <ReaIntegrationRow
+        busy
+        onRetry={() => {}}
+        onToggle={() => {}}
+        status={reaStatus({ status: "failed" })}
+      />,
+    );
+
+    expect(screen.getByRole("switch", { name: "Enable REA" }).getAttribute("aria-disabled")).toBe(
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Retrying…" }).hasAttribute("disabled")).toBe(true);
+  });
+});
+
+describe("MCP settings panel integration", () => {
+  it("keeps the built-in REA row separate from the generic MCP server controls", () => {
+    const markup = renderToStaticMarkup(<McpSettingsPanel cwd={undefined} workspaces={[]} />);
+
+    expect(markup).toContain("Built-in integration");
+    expect(markup).toContain("Enable REA");
+    expect(markup).toContain("New MCP Server");
+    expect(markup).toContain("Global MCP Servers");
+  });
+
+  it("uses only the REA preference and retry APIs from the settings controls", async () => {
+    const initialStatus = reaStatus({ status: "failed", note: "A sanitized error." });
+    const getStatus = vi.fn().mockResolvedValue(initialStatus);
+    const setEnabled = vi.fn().mockResolvedValue(reaStatus({ enabled: false, status: "disabled" }));
+    const retry = vi.fn().mockResolvedValue(reaStatus());
+    vi.stubGlobal("modus", {
+      mcp: { list: vi.fn().mockResolvedValue([]) },
+      composio: {
+        getState: vi.fn().mockResolvedValue({
+          apiKeyConfigured: false,
+          status: "unconfigured",
+          toolkits: [],
+        }),
+      },
+      rea: { getStatus, setEnabled, retry },
+    });
+
+    render(<McpSettingsPanel cwd={undefined} workspaces={[]} />);
+    await screen.findByText("REA couldn’t start.");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(retry).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("switch", { name: "Enable REA" }));
+    await waitFor(() => expect(setEnabled).toHaveBeenCalledWith(false));
+
+    expect(getStatus).toHaveBeenCalledTimes(1);
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+});
 
 function form(overrides: Partial<McpFormState> = {}): McpFormState {
   return {

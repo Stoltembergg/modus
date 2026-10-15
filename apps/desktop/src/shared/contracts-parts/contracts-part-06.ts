@@ -129,6 +129,24 @@ export type RawMcpEntry = {
   entry: Record<string, unknown>;
 };
 
+export type ReaIntegrationState =
+  | "disabled"
+  | "not_started"
+  | "starting"
+  | "ready"
+  | "needs_node"
+  | "network_error"
+  | "failed";
+
+/** Sanitized built-in REA readiness state; never contains process diagnostics or paths. */
+export type ReaIntegrationStatus = {
+  enabled: boolean;
+  status: ReaIntegrationState;
+  note?: string;
+  providerNotes: string[];
+  settingsError?: boolean;
+};
+
 export type AgentReviewDepth = "fast" | "standard" | "deep";
 
 export type AgentReviewIssue = {

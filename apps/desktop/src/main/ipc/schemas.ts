@@ -683,6 +683,45 @@ export const mcpSetEnabledSchema = z.object({
   enabled: z.boolean(),
 });
 
+export const reaGetStatusSchema = z.undefined();
+export const reaSetEnabledSchema = z.object({ enabled: z.boolean() }).strict();
+export const reaRetrySchema = z.undefined();
+export const reaIntegrationStatusSchema = z
+  .object({
+    enabled: z.boolean(),
+    status: z.enum([
+      "disabled",
+      "not_started",
+      "starting",
+      "ready",
+      "needs_node",
+      "network_error",
+      "failed",
+    ]),
+    note: z
+      .enum([
+        "REA is disabled in Modus settings.",
+        "REA settings could not be read. Check the user-level Modus settings file.",
+        "REA worker cleanup could not be confirmed.",
+        "REA connection was interrupted. Retry before the next approved call.",
+        "REA needs a supported Node.js and npm installation.",
+        "REA could not acquire or connect to its pinned package; check network access and retry.",
+        "REA could not start. Retry after checking Node.js, npm, and network availability.",
+      ])
+      .optional(),
+    providerNotes: z
+      .array(
+        z.enum([
+          "Ghidra provider is unsupported on this host.",
+          "IDA provider requires a user installation and configuration.",
+          "JADX provider requires a user installation and configuration.",
+        ]),
+      )
+      .max(16),
+    settingsError: z.boolean().optional(),
+  })
+  .strict();
+
 export const personalizationSaveSchema = z.object({
   content: z.string().max(200_000),
 });

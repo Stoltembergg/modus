@@ -5,5 +5,6 @@ members = [
     "crates/plugin-execution-protocol",
     "crates/plugin-execution-supervisor",
     "crates/plugin-execution-worker",
+    "crates/modus-rea-process-supervisor",
 ]
 resolver = "3"
