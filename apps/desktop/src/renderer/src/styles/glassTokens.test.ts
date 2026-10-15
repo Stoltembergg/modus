@@ -114,6 +114,7 @@ describe("glass tokens (D1)", () => {
   });
   it("chat surfaces add a small tint above the window, rather than a nearly opaque second layer", () => {
     const tint = alpha("--glass-alpha-chat");
+    expect(tint).toBe(0.1);
     const windowAlpha = alpha("--glass-alpha-chrome");
     const effective = 1 - (1 - windowAlpha) * (1 - tint);
     expect(effective).toBeGreaterThan(windowAlpha);

@@ -72,9 +72,9 @@ describe("Appearance settings — Transparency", () => {
       /high-contrast/,
     );
     expect(transparencyDescription(null)).toMatch(/not available/);
-    expect(transparencyDescription(base)).toMatch(/every theme/);
+    expect(transparencyDescription(base)).toMatch(/desktop shows through/);
     expect(transparencyDescription({ ...base, theme: "light", effectiveTheme: "light" })).toMatch(
-      /every theme/,
+      /desktop shows through/,
     );
   });
 });

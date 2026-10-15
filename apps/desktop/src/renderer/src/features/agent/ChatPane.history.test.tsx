@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEventItem,
@@ -22,11 +22,14 @@ vi.mock("./Timeline", async (importOriginal) => {
 vi.mock("./ConversationTimeline", () => ({ ConversationTimeline: () => null }));
 
 afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
   Object.assign(window, { modus: undefined });
 });
 
 describe("ChatPane paged history", () => {
-  it("loads the latest page first and requests older events with its fixed snapshot", async () => {
+  it("automatically fills an underfilled session viewport using its fixed snapshot", async () => {
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(300);
     const latestEvent: AgentEventItem = {
       id: "latest-run",
       event: {
@@ -120,12 +123,17 @@ describe("ChatPane paged history", () => {
       />,
     );
 
-    const loadEarlier = await screen.findByTestId("chat-load-older-events");
+    await waitFor(() =>
+      expect(
+        listEventPage.mock.calls.some(
+          ([, options]) => options.direction === "backward" && options.beforeCursor === 9,
+        ),
+      ).toBe(true),
+    );
     expect(listEventPage).toHaveBeenCalledWith(
       "session-1",
       expect.objectContaining({ direction: "backward", includeSummary: true }),
     );
-    fireEvent.click(loadEarlier);
 
     await waitFor(() =>
       expect(
@@ -147,6 +155,74 @@ describe("ChatPane paged history", () => {
     await waitFor(() => expect(screen.queryByTestId("chat-load-older-events")).toBeNull());
     view.unmount();
   });
+  it("does not carry the previous session pagination cursor into the newly selected session", async () => {
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(300);
+    const height = vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(500);
+    const listEventPage = vi.fn(async (sessionId: string, _options: AgentEventPageOptions) => ({
+      events: [
+        {
+          id: `${sessionId}-run`,
+          createdAt: "now",
+          event: {
+            type: "run.started" as const,
+            sessionId,
+            runId: `${sessionId}-run`,
+            delivery: "normal" as const,
+          },
+        },
+      ],
+      summaryEvents: [],
+      activityEvents: [],
+      snapshotCursor: sessionId === "first" ? 10 : 20,
+      nextCursor: 10,
+      hasMore: sessionId === "first",
+    }));
+    Object.assign(window, {
+      modus: {
+        agent: { listEventPage, releaseRuntime: vi.fn(async () => undefined) },
+        diff: { sessionStats: vi.fn(async () => ({})) },
+        process: { list: vi.fn(async () => []), onChanged: vi.fn(() => () => undefined) },
+      },
+    });
+    const hub = new AgentEventHub();
+    const pane = (id: string) => (
+      <ChatPane
+        defaultModel=""
+        hideComposer
+        hub={hub}
+        models={[]}
+        onModelChange={() => {}}
+        onModelConfigChange={async () => {}}
+        onOpenReview={() => {}}
+        onPlanUpdated={() => {}}
+        onSessionsChanged={() => {}}
+        workspace={null}
+        session={{
+          id,
+          workspaceId: "workspace",
+          title: id,
+          cwd: "/repo",
+          status: "running",
+          createdAt: "now",
+          updatedAt: "now",
+        }}
+      />
+    );
+    const view = render(pane("first"));
+    await screen.findByTestId("chat-load-older-events");
+    height.mockReturnValue(0);
+    view.rerender(pane("second"));
+    await waitFor(() => expect(hub.getHistory("second")).toHaveLength(1));
+    expect(
+      listEventPage.mock.calls.some(
+        ([id, options]) =>
+          id === "second" &&
+          options?.direction === "backward" &&
+          options.beforeCursor !== undefined,
+      ),
+    ).toBe(false);
+  });
+
   it("keeps the SDK alive when leaving a pane while plan approval is still starting", async () => {
     const session: AgentSessionInfo = {
       id: "approval-session",

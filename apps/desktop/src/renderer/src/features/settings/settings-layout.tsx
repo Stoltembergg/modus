@@ -8,23 +8,25 @@ export function SettingsPageHeader({
   title,
 }: {
   actions?: ReactNode;
-  description: string;
+  description?: string;
   singleLineDescription?: boolean;
   title: string;
 }) {
   return (
-    <header className="flex items-start justify-between gap-4 pb-1">
+    <header className="flex flex-wrap items-start justify-between gap-4 pb-1">
       <div className="min-w-0">
         <h2 className="text-base font-medium text-fg">{title}</h2>
-        <p
-          className={cn(
-            "mt-1 max-w-2xl text-xs leading-4 text-fg-muted",
-            singleLineDescription && "truncate",
-          )}
-          title={singleLineDescription ? description : undefined}
-        >
-          {description}
-        </p>
+        {description ? (
+          <p
+            className={cn(
+              "mt-1 max-w-2xl text-xs leading-4 text-fg-muted",
+              singleLineDescription && "truncate",
+            )}
+            title={singleLineDescription ? description : undefined}
+          >
+            {description}
+          </p>
+        ) : null}
       </div>
       {actions ? <div className="flex shrink-0 items-center gap-2 pb-0.5">{actions}</div> : null}
     </header>
@@ -67,16 +69,18 @@ export function SettingsRow({
   title,
 }: {
   control: ReactNode;
-  description: string;
+  description?: string;
   title: string;
 }) {
   return (
-    <div className="flex min-h-[60px] items-center gap-4 border-hairline-soft border-b px-4 py-3 last:border-b-0">
-      <div className="min-w-0 flex-1">
+    <div className="flex min-h-14 flex-wrap items-center gap-x-4 gap-y-2 border-hairline-soft border-b px-4 py-3 last:border-b-0">
+      <div className="min-w-0 flex-1 basis-48">
         <div className="text-sm text-fg">{title}</div>
-        <div className="mt-0.5 text-xs leading-4 text-fg-muted">{description}</div>
+        {description ? (
+          <div className="mt-0.5 text-xs leading-4 text-fg-muted">{description}</div>
+        ) : null}
       </div>
-      <div className="shrink-0">{control}</div>
+      <div className="max-w-full shrink-0">{control}</div>
     </div>
   );
 }

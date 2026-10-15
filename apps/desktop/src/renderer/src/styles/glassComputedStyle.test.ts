@@ -36,6 +36,11 @@ const SCENE = `
     <div class="chat-message-bubble chat-message-surface" data-table-menu-card><div class="modus-markdown"><div data-streamdown="table-wrapper"><div><button type="button">Copy table</button></div><div data-table-frame><table style="width:1200px"><thead><tr>${Array.from({ length: 12 }, (_, i) => `<th>Column ${i}</th>`).join("")}</tr></thead><tbody><tr>${Array.from({ length: 12 }, (_, i) => `<td>Wide table cell ${i}</td>`).join("")}</tr></tbody></table></div><div class="top-full" data-table-menu><button type="button">Markdown</button><button type="button">CSV</button><button type="button">TSV</button></div></div></div></div>
     <div class="chat-message-surface bg-card"></div>
     <div class="chat-run-status"></div>
+    <section class="settings-content">
+      <div class="bg-panel" data-settings-list></div>
+      <input class="bg-canvas" data-settings-input />
+      <textarea class="bg-panel" data-settings-editor></textarea>
+    </section>
   </main>
 </div></div></div>`;
 const CANDIDATES = [
@@ -67,6 +72,9 @@ const CHAT_SURFACES = [
   "[data-assistant-card]",
   "[data-technical-card]",
   ".chat-message-surface",
+  "[data-settings-list]",
+  "[data-settings-input]",
+  "[data-settings-editor]",
 ];
 const THEMES = ["dark", "dark-plus", "light"] as const;
 const OS = ["reduced-transparency", "more-contrast", "forced-colors"] as const;
@@ -377,8 +385,8 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
     for (const theme of THEMES) {
       const m = await measure(theme, true, "full");
       for (const part of CHAT_SURFACES) {
-        expect(m[part]?.alpha, `${theme} ${part} tint`).toBeCloseTo(0.18, 2);
-        expect(m[part]?.effective, `${theme} ${part} composite`).toBeCloseTo(0.82, 2);
+        expect(m[part]?.alpha, `${theme} ${part} tint`).toBeCloseTo(0.1, 2);
+        expect(m[part]?.effective, `${theme} ${part} composite`).toBeCloseTo(0.802, 3);
       }
       expect(m[".chat-run-status"]?.alpha).toBe(0);
       expect(m[".chat-run-status"]?.effective).toBe(m[".surface-main"]?.effective);

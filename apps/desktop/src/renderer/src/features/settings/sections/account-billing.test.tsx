@@ -574,7 +574,7 @@ describe("L5b credit packs", () => {
     expect(html).toContain("One-time payment with Pix or card. Purchased credits never expire.");
     expect(html).toContain("Credit packs</h3>");
     expect(html).toContain(
-      "Buy credit packs in your browser with Pix or card, in Brazilian reais. Your credits are added as soon as Mercado Pago confirms the payment.",
+      "Pay with Pix or card in BRL. Credits arrive after Mercado Pago confirms payment.",
     );
     expect(html).not.toContain("Subscribe</button>");
     expect(html).not.toContain("aren&#x27;t on sale");

@@ -93,7 +93,6 @@ export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
             </button>
           </>
         }
-        description="Task-specific capabilities the agent can use."
         singleLineDescription
         title="Skills"
       />
