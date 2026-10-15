@@ -98,6 +98,19 @@ describe("AgentAvatar adapter", () => {
     }
   });
 
+  it("starts the real package animation loop for an active profile and cancels it on unmount", () => {
+    const frame = vi.spyOn(globalThis, "requestAnimationFrame");
+    const cancel = vi.spyOn(globalThis, "cancelAnimationFrame");
+    const view = render(<AgentAvatar color="green" face="happy" seed="judas" state="idle" />);
+    expect(frame).toHaveBeenCalled();
+    const avatar = wrapper();
+    view.rerender(<AgentAvatar color="green" face="happy" seed="judas" state="working" />);
+    expect(wrapper()).toBe(avatar);
+    const handle = frame.mock.results.at(-1)?.value;
+    view.unmount();
+    expect(cancel).toHaveBeenCalledWith(handle);
+  });
+
   it("pauses package motion when animation is disabled or archived", () => {
     const { rerender } = render(
       <AgentAvatar animated={false} color="teal" face="calm" state="working" />,

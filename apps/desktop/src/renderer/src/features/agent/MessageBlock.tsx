@@ -8,10 +8,13 @@ import {
   IconPencil,
   IconSearch,
   IconTerminal2,
+  IconUser,
   IconWorld,
 } from "@tabler/icons-react";
 import { memo, useState } from "react";
+import { agentAvatarForId } from "../../../../shared/agent-templates";
 import type {
+  AgentInfo,
   ContextItem,
   MessageContextChip,
   ModelInfo,
@@ -20,8 +23,10 @@ import type {
 } from "../../../../shared/contracts";
 import { CopyButton } from "../../components/ui/CopyButton";
 import { ImageThumb } from "../../components/ui/ImageViewer";
+import { ModusBot } from "../../components/ui/ModusBot";
 import { cn } from "../../lib/cn";
 import { useClipFade } from "../../lib/useClipFade";
+import { AgentAvatar } from "../agents/AgentAvatar";
 import {
   COMPOSER_RADIUS_CLASS,
   Composer,
@@ -38,6 +43,8 @@ import { MarkdownMessage } from "./MarkdownMessage";
 
 type MessageBlockProps = {
   messageRole: "assistant" | "user";
+  assistantAgent?: AgentInfo | undefined;
+  assistantAgentId?: string | undefined;
   /** Timeline id of this message — the rollback anchor for edit & resend. */
   messageId: string;
   content: string;
@@ -79,6 +86,8 @@ type MessageBlockProps = {
 
 export const MessageBlock = memo(function MessageBlock({
   messageRole,
+  assistantAgent,
+  assistantAgentId,
   messageId,
   content,
   streaming = false,
@@ -143,7 +152,7 @@ export const MessageBlock = memo(function MessageBlock({
     return (
       <div
         className={cn(
-          "message-card-slot block w-full min-w-0",
+          "message-card-slot flex w-full min-w-0 items-start justify-end gap-2",
           compactClip && cn("sticky top-0 z-10 bg-elevated", COMPOSER_RADIUS_CLASS),
         )}
       >
@@ -201,6 +210,15 @@ export const MessageBlock = memo(function MessageBlock({
             </div>
           </div>
         )}
+        {!showEditor ? (
+          <span
+            aria-label="You"
+            role="img"
+            className="mt-2 flex size-[24px] shrink-0 items-center justify-center text-fg-subtle"
+          >
+            <IconUser aria-hidden size={20} stroke={1.5} />
+          </span>
+        ) : null}
       </div>
     );
   }
@@ -208,34 +226,70 @@ export const MessageBlock = memo(function MessageBlock({
   if (!content && (streaming || (!sources?.length && !sourceStatus))) return null;
 
   return (
-    <div
-      className="chat-message-bubble chat-message-surface text-xs leading-relaxed"
-      data-message-role="assistant"
-    >
-      {content ? (
-        <MarkdownMessage
-          content={content}
-          cwd={cwd}
-          onOpenFile={onOpenFile}
-          streaming={streaming}
-        />
-      ) : null}
-      {!streaming && sources?.length ? (
-        <PromptSources onOpenFile={onOpenFile} sources={sources} />
-      ) : null}
-      {!streaming && sourceStatus === "loading" ? (
-        <div className="mt-2 text-xs text-muted" role="status">
-          Loading run sources…
-        </div>
-      ) : null}
-      {!streaming && sourceStatus === "unavailable" ? (
-        <div className="mt-2 text-xs text-muted" role="status">
-          Run sources could not be loaded. Tool activity remains in the timeline.
-        </div>
-      ) : null}
+    <div className="flex w-full min-w-0 items-start gap-2" data-message-row="assistant">
+      <AssistantAvatar agent={assistantAgent} agentId={assistantAgentId} streaming={streaming} />
+      <div
+        className="chat-message-bubble chat-message-surface text-xs leading-relaxed"
+        data-message-role="assistant"
+      >
+        {content ? (
+          <MarkdownMessage
+            content={content}
+            cwd={cwd}
+            onOpenFile={onOpenFile}
+            streaming={streaming}
+          />
+        ) : null}
+        {!streaming && sources?.length ? (
+          <PromptSources onOpenFile={onOpenFile} sources={sources} />
+        ) : null}
+        {!streaming && sourceStatus === "loading" ? (
+          <div className="mt-2 text-xs text-muted" role="status">
+            Loading run sources…
+          </div>
+        ) : null}
+        {!streaming && sourceStatus === "unavailable" ? (
+          <div className="mt-2 text-xs text-muted" role="status">
+            Run sources could not be loaded. Tool activity remains in the timeline.
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 });
+
+function AssistantAvatar({
+  agent,
+  agentId,
+  streaming,
+}: {
+  agent?: AgentInfo | undefined;
+  agentId?: string | undefined;
+  streaming: boolean;
+}) {
+  const id = agentId ?? agent?.id;
+  if (!id) {
+    return (
+      <span className="mt-2 size-[24px] shrink-0">
+        <ModusBot active={false} className="size-[24px]" motionScale={0.25} />
+      </span>
+    );
+  }
+  const profile = agent?.id === id ? agent : undefined;
+  const avatar = profile ?? agentAvatarForId(id);
+  return (
+    <AgentAvatar
+      className="mt-2"
+      color={avatar.avatarColor}
+      face={avatar.avatarFace}
+      label={profile?.name || "Agent"}
+      seed={id}
+      shape={avatar.avatarShape}
+      size={24}
+      state={profile?.archivedAt ? "archived" : streaming ? "working" : "idle"}
+    />
+  );
+}
 
 /** Seeds the shared Composer for edit-resend — no parallel editor UI. */
 function InlineEditComposer({

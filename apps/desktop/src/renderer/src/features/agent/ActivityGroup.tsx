@@ -1,7 +1,7 @@
 import { IconChevronRight } from "@tabler/icons-react";
 import { m } from "motion/react";
 import { memo, type ReactNode, useEffect, useId, useState } from "react";
-import type { ModelInfo, PlanRef } from "../../../../shared/contracts";
+import type { AgentInfo, ModelInfo, PlanRef } from "../../../../shared/contracts";
 import { getToolUiMeta, type ToolSummaryMeta } from "../../../../shared/tools";
 import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
 import { ThinkingStates } from "../../components/ui/ThinkingStates";
@@ -303,6 +303,8 @@ export function WorkActivityRow({
  * A live turn mounts open; its authoritative settled transition closes it once.
  */
 export const WorkFold = memo(function WorkFold({
+  assistantAgent,
+  assistantAgentId,
   run,
   items,
   models,
@@ -311,6 +313,8 @@ export const WorkFold = memo(function WorkFold({
   onOpenSubagent,
   onOpenPlan,
 }: {
+  assistantAgent?: AgentInfo | undefined;
+  assistantAgentId?: string | undefined;
   run: RunBlockItem;
   items: WorkFoldItem[];
   models?: ModelInfo[];
@@ -421,6 +425,8 @@ export const WorkFold = memo(function WorkFold({
               if (item.type === "message") {
                 return (
                   <MessageBlock
+                    assistantAgent={assistantAgent}
+                    assistantAgentId={assistantAgentId}
                     content={item.content}
                     key={item.id}
                     messageId={item.id}

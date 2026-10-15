@@ -1414,6 +1414,9 @@ export function App() {
                               ) : (
                                 <Suspense fallback={<ModusLoadingFallback />}>
                                   <ChatPane
+                                    assistantAgent={sidebarAgents.find(
+                                      (agent) => agent.id === visibleSession.agentId,
+                                    )}
                                     composerDraft={composerDraftBySession[visibleSession.id]}
                                     composerReplacement={
                                       visibleSession.readOnly ? (
@@ -1546,6 +1549,10 @@ export function App() {
                           }
                         >
                           <Inspector
+                            assistantAgent={sidebarAgents.find(
+                              (agent) => agent.id === activeSession?.agentId,
+                            )}
+                            assistantAgentId={activeSession?.agentId}
                             activeWorkspace={activeWorkspace}
                             contextUsageBySession={contextUsageBySession}
                             cwd={reviewCwd ?? activeCwd}

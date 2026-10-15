@@ -714,13 +714,20 @@ export function GroupMessageRow({
             avatar={
               avatar ? (
                 <AgentAvatar
-                  animated={false}
                   color={avatar.color}
                   face={avatar.face}
                   seed={avatar.agentId}
                   shape={avatar.shape}
                   size={16}
-                  state={avatar.archived ? "archived" : "idle"}
+                  state={
+                    avatar.archived
+                      ? "archived"
+                      : cardWaiting === "active"
+                        ? "waiting"
+                        : writing || liveTurn?.mode === "running"
+                          ? "working"
+                          : "idle"
+                  }
                 />
               ) : (
                 <span
