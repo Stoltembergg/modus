@@ -139,7 +139,6 @@ export function AccountSettingsPanel({
             <ReadOnlyPill>{accountStatusLabel(state)}</ReadOnlyPill>
           ) : null
         }
-        description="Manage your account. Sign-in stays in the main process; credentials stay out of this window."
         title="Account"
       />
 

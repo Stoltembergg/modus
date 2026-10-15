@@ -2,6 +2,7 @@ import { IconCheck, IconFileText } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
 import type { PersonalizationState } from "../../../../../shared/contracts";
 import { WorkingText } from "../../../components/ui/WorkingText";
+import { Disclosure } from "../form-controls";
 import {
   ReadOnlyPill,
   SettingsList,
@@ -90,7 +91,6 @@ export function PersonalizationSettingsPanel() {
             </button>
           </>
         }
-        description="Instructions applied to your workspace."
         title="Personalization"
       />
 
@@ -111,7 +111,7 @@ export function PersonalizationSettingsPanel() {
       </SettingsSection>
 
       {state ? (
-        <SettingsSection title="Files">
+        <Disclosure label="Instruction files">
           <SettingsList>
             <SettingsRow
               control={<ReadOnlyPill>{state.overrideActive ? "Override" : "Base"}</ReadOnlyPill>}
@@ -124,7 +124,7 @@ export function PersonalizationSettingsPanel() {
               title="AGENTS.override.md"
             />
           </SettingsList>
-        </SettingsSection>
+        </Disclosure>
       ) : null}
     </>
   );

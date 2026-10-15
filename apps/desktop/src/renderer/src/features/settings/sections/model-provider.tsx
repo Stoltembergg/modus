@@ -154,7 +154,6 @@ export function ModelProviderSettingsPanel({
             </button>
           </>
         }
-        description="Connect providers and choose available models."
         title="Model & Provider"
       />
 

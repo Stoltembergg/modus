@@ -543,11 +543,11 @@ export function SettingsPanel({
       ) : null}
 
       <main
-        className="surface-main scroll-thin min-h-0 min-w-0 flex-1 overflow-y-auto"
+        className="settings-content surface-main scroll-thin min-h-0 min-w-0 flex-1 overflow-y-auto"
         ref={contentScrollRef}
       >
         <ContentTransition
-          className="mx-auto flex w-full max-w-[1080px] flex-col gap-6 px-8 pt-8 pb-8"
+          className="mx-auto flex w-full max-w-[960px] flex-col gap-6 px-5 py-6 sm:px-8 sm:py-8"
           transitionKey={activeSection}
         >
           {activeSection === "general" ? (

@@ -296,7 +296,7 @@
      Text contrast on these tiers is pinned by styles/glassTokens.test.ts. */
   --glass-alpha-chrome: 78%; /* window tint: rail + sidebar, and main in Full */
   --glass-alpha-overlay: 82%; /* raised/glass surfaces, popups, pdf + mermaid chrome */
-  --glass-alpha-chat: 18%; /* over the 78% window tint: about 82% effective */
+  --glass-alpha-chat: 10%; /* over the 78% window tint: about 80% effective */
   --glass-alpha-strip: 78%; /* sticky title strips over scrolling content: frost + enough tint to keep the label legible */
   --glass-blur: 18px;
   --glass-saturate: 1.12;
@@ -3034,6 +3034,13 @@ body
 }
 :root[data-native-glass="true"][data-transparency="full"] {
   --surface-chat: color-mix(in srgb, var(--color-elevated) var(--glass-alpha-chat), transparent);
+}
+/* Settings use the same light tint for lists and fields. Keep selected states,
+   warnings and primary actions distinct; the token retains solid OS fallbacks. */
+:root[data-native-glass="true"][data-transparency="full"]
+  .settings-content
+  :where(.bg-panel, .bg-canvas, .bg-card, .bg-elevated, .bg-surface) {
+  background-color: var(--surface-chat);
 }
 /* The sticky user-message wrapper must not hide the material behind its card. */
 :root[data-native-glass="true"][data-transparency="full"] .message-card-slot {

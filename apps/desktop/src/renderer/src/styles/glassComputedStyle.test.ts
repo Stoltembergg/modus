@@ -35,6 +35,11 @@ const SCENE = `
     <div class="flex w-full min-w-0 items-start gap-2"><span class="size-[24px] shrink-0" data-technical-avatar></span><div class="chat-message-bubble chat-message-surface" data-message-role="assistant" data-technical-card><pre><code>+kept line</code></pre></div></div>
     <div class="chat-message-surface bg-card"></div>
     <div class="chat-run-status"></div>
+    <section class="settings-content">
+      <div class="bg-panel" data-settings-list></div>
+      <input class="bg-canvas" data-settings-input />
+      <textarea class="bg-panel" data-settings-editor></textarea>
+    </section>
   </main>
 </div></div></div>`;
 const CANDIDATES = [
@@ -64,6 +69,9 @@ const CHAT_SURFACES = [
   "[data-assistant-card]",
   "[data-technical-card]",
   ".chat-message-surface",
+  "[data-settings-list]",
+  "[data-settings-input]",
+  "[data-settings-editor]",
 ];
 const THEMES = ["dark", "dark-plus", "light"] as const;
 const OS = ["reduced-transparency", "more-contrast", "forced-colors"] as const;
@@ -349,8 +357,8 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
     for (const theme of THEMES) {
       const m = await measure(theme, true, "full");
       for (const part of CHAT_SURFACES) {
-        expect(m[part]?.alpha, `${theme} ${part} tint`).toBeCloseTo(0.18, 2);
-        expect(m[part]?.effective, `${theme} ${part} composite`).toBeCloseTo(0.82, 2);
+        expect(m[part]?.alpha, `${theme} ${part} tint`).toBeCloseTo(0.1, 2);
+        expect(m[part]?.effective, `${theme} ${part} composite`).toBeCloseTo(0.802, 3);
       }
       expect(m[".chat-run-status"]?.alpha).toBe(0);
       expect(m[".chat-run-status"]?.effective).toBe(m[".surface-main"]?.effective);

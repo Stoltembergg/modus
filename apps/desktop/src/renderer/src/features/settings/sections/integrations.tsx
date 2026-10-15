@@ -18,6 +18,7 @@ import type {
   ComposioToolSummary,
 } from "../../../../../shared/contracts";
 import { cn } from "../../../lib/cn";
+import { Disclosure } from "../form-controls";
 import { SettingsList, SettingsPageHeader, SettingsSection } from "../settings-layout";
 
 const MAX_ALLOWED_TOOLS = 500;
@@ -434,21 +435,25 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
         }
         description={
           consumerMode
-            ? "Choose which Composio For You MCP tools agents can use with your personal connected apps."
-            : "Connect Composio For You or Platform and choose which tools agents can use."
+            ? "Choose the tools agents can use."
+            : "Connect your apps and choose allowed tools."
         }
         title={standalone ? "Connections" : "Composio"}
       />
 
       <SettingsSection
-        description="Stored securely on this device and never displayed again. The connection mode is detected automatically from your key."
+        description="Stored securely on this device. Never shown again."
         title="Composio API Key"
       >
         <SettingsList>
-          <p className="border-hairline-soft border-b px-4 py-3 text-xs text-fg-muted">
-            Use a Composio For You key (ck_…) from Settings → Sessions &amp; API Key, or a Composio
-            Platform Project API Key from your project → Settings → API Keys.
-          </p>
+          <div className="px-4 pt-3">
+            <Disclosure label="Where to find your key">
+              <p className="text-xs leading-5 text-fg-muted">
+                Use a Composio For You key (ck_…) from Settings → Sessions &amp; API Key, or a
+                Composio Platform Project API Key from your project → Settings → API Keys.
+              </p>
+            </Disclosure>
+          </div>
           <form
             className="flex flex-col gap-3 p-4 sm:flex-row"
             onSubmit={(event) => void saveApiKey(event)}
@@ -494,7 +499,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
           </form>
           {settings?.apiKeyConfigured ? (
             <div className="border-hairline-soft border-t px-4 py-3 text-xs text-success">
-              <p>The key is configured for this local profile and cannot be read back.</p>
+              <p>Key saved for this profile. It cannot be read back.</p>
               <p className="mt-1">
                 Connected mode: {consumerMode ? "Composio For You" : "Composio Platform"}
               </p>
@@ -578,7 +583,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
 
       {settings?.apiKeyConfigured && consumerMode ? (
         <SettingsSection
-          description="MCP discovery and execution tools can access your personal connected apps. Selection controls which MCP tools agents can call; it does not restrict the app actions available inside an execution tool. Manage connected apps in Composio For You."
+          description="Allowed tools can access your connected apps. This list does not restrict actions within execution tools."
           title="Composio For You tools"
         >
           <SettingsList>

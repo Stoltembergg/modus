@@ -214,7 +214,6 @@ function CreditPackRows({
               Buy credits
             </button>
           }
-          description="One-time payment with Pix or card. Purchased credits never expire."
           key={pack.packId}
           title={packTitle(pack)}
         />
@@ -293,8 +292,8 @@ export function BillingSectionView({
     <SettingsSection
       description={
         plansOnSale
-          ? "Plans are paid through Mercado Pago in your browser, billed monthly in Brazilian reais. Your credits are added as soon as Mercado Pago confirms the payment."
-          : "Buy credit packs in your browser with Pix or card, in Brazilian reais. Your credits are added as soon as Mercado Pago confirms the payment."
+          ? "Plans billed monthly in BRL through Mercado Pago. Credits arrive after payment confirmation."
+          : "Pay with Pix or card in BRL. Credits arrive after Mercado Pago confirms payment."
       }
       title="Plan and credits"
     >
@@ -518,6 +517,9 @@ export function BillingSectionView({
       {!loading && packs.length > 0 ? (
         <div className="mt-4">
           <h3 className="mb-2 font-medium text-fg text-xs">Credit packs</h3>
+          <p className="mb-3 text-xs leading-4 text-fg-muted">
+            One-time payment with Pix or card. Purchased credits never expire.
+          </p>
           <SettingsList>
             <CreditPackRows
               disabled={busy || loading || Boolean(state.pending)}
