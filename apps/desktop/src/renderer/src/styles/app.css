@@ -296,7 +296,7 @@
      Text contrast on these tiers is pinned by styles/glassTokens.test.ts. */
   --glass-alpha-chrome: 78%; /* window tint: rail + sidebar, and main in Full */
   --glass-alpha-overlay: 82%; /* raised/glass surfaces, popups, pdf + mermaid chrome */
-  --glass-alpha-chat: 18%; /* over the 78% window tint: about 82% effective */
+  --glass-alpha-chat: 10%; /* over the 78% window tint: about 80% effective */
   --glass-alpha-strip: 78%; /* sticky title strips over scrolling content: frost + enough tint to keep the label legible */
   --glass-blur: 18px;
   --glass-saturate: 1.12;
@@ -1492,34 +1492,13 @@ body {
     mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 1.5rem), transparent 100%);
   }
 
-  /**
-   * Subagent preview scrim: even frosted backdrop, like a native sheet.
-   *
-   * No mask. Masking `backdrop-filter` leaves part of the background sharp next
-   * to the blurred part, so the same text shows twice (sharp + soft) with a
-   * visible gradient seam — that is what read as fake. Uniform frost + a light
-   * tint is what a real sheet does.
-   */
+  /* The preview floats above the composer without repainting the whole chat.
+     Its surface uses the same glass/fallback tokens as the composer. */
   .subagent-preview-scrim {
-    background-color: color-mix(in oklab, var(--color-canvas) 55%, transparent);
-    opacity: 0;
-    transition: opacity 200ms cubic-bezier(0.22, 1, 0.36, 1);
-    will-change: opacity;
+    background-color: transparent;
   }
-  .subagent-preview-scrim[data-mounted] {
-    opacity: 1;
-  }
-  /**
-   * The frost lands only after the sheet has settled. A `backdrop-filter` whose
-   * own opacity is animating forces the compositor to re-sample the entire
-   * timeline behind it every frame, which competes with the sheet animation for
-   * the same budget. Applied as a step (no transition) — at 1px the arrival is
-   * imperceptible, and it then costs nothing while the sheet sits open.
-   */
-  :root[data-native-glass="true"][data-transparency="full"] .subagent-preview-scrim[data-settled] {
-    -webkit-backdrop-filter: var(--glass-scrim-filter);
-    backdrop-filter: var(--glass-scrim-filter);
-    will-change: auto;
+  .subagent-preview-panel {
+    height: min(28rem, calc(100% - 24px));
   }
 
   /* Body mounts after the sheet animation, so it fades in on its own. */
@@ -3078,6 +3057,13 @@ body
 }
 :root[data-native-glass="true"][data-transparency="full"] {
   --surface-chat: color-mix(in srgb, var(--color-elevated) var(--glass-alpha-chat), transparent);
+}
+/* Settings use the same light tint for lists and fields. Keep selected states,
+   warnings and primary actions distinct; the token retains solid OS fallbacks. */
+:root[data-native-glass="true"][data-transparency="full"]
+  .settings-content
+  :where(.bg-panel, .bg-canvas, .bg-card, .bg-elevated, .bg-surface) {
+  background-color: var(--surface-chat);
 }
 /* The sticky user-message wrapper must not hide the material behind its card. */
 :root[data-native-glass="true"][data-transparency="full"] .message-card-slot {

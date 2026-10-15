@@ -22,7 +22,9 @@ import { AccountBillingSection } from "./account-billing";
 const SECONDARY_BUTTON =
   "flex h-8 items-center gap-1.5 rounded-md border border-hairline bg-surface px-2.5 text-xs text-fg transition-colors hover:bg-hover disabled:opacity-40";
 const PRIMARY_BUTTON =
-  "flex h-8 items-center gap-1.5 rounded-md bg-fg px-2.5 text-canvas text-xs transition-colors hover:bg-fg-muted disabled:opacity-40";
+  "flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-fg px-3 text-canvas text-sm font-medium transition-colors hover:bg-fg-muted disabled:opacity-40";
+const OAUTH_BUTTON =
+  "flex min-h-10 min-w-0 items-center justify-center gap-2 rounded-lg border border-hairline bg-surface/40 px-3 text-xs text-fg transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-40";
 
 const OAUTH_ICONS: Record<AuthOAuthProviderId, ReactNode> = {
   github: <IconBrandGithub size={14} stroke={1.7} />,
@@ -121,7 +123,9 @@ export function AccountSettingsPanel({
   const unavailable = !state || state.status === "unconfigured";
   const waiting = state?.status === "awaiting-oauth" || state?.status === "restoring";
 
-  return (
+  const signedIn = state?.status === "signed-in" && !!state.user;
+
+  const content = (
     <>
       <SettingsPageHeader
         actions={
@@ -136,21 +140,34 @@ export function AccountSettingsPanel({
               Sign out
             </button>
           ) : state ? (
-            <ReadOnlyPill>{accountStatusLabel(state)}</ReadOnlyPill>
+            <span
+              className={state.status === "signed-out" ? "sr-only" : "text-xs text-fg-muted"}
+              aria-live="polite"
+            >
+              {accountStatusLabel(state)}
+            </span>
           ) : null
         }
-        description="Manage your account. Sign-in stays in the main process; credentials stay out of this window."
-        title="Account"
+        description={
+          signedIn
+            ? ""
+            : unavailable
+              ? "Account sign-in is not configured in this build."
+              : mode === "sign-up"
+                ? `Use at least ${AUTH_PASSWORD_MIN_LENGTH} characters.`
+                : ""
+        }
+        title={signedIn ? "Account" : mode === "sign-in" ? "Sign in to Modus" : "Create account"}
       />
 
-      {shownError ? <p className="-mt-4 text-danger text-xs">{shownError}</p> : null}
+      {shownError ? <p className="text-danger text-xs">{shownError}</p> : null}
       {state?.notice === "session-expired" ? (
-        <p className="-mt-4 text-danger text-xs" role="status">
+        <p className="text-danger text-xs" role="status">
           {modusText("modus.sessionExpired")}
         </p>
       ) : null}
       {state?.notice === "confirm-email" ? (
-        <p className="-mt-4 text-success text-xs">
+        <p className="text-success text-xs">
           Check your inbox to confirm your email, then sign in.
         </p>
       ) : null}
@@ -197,78 +214,69 @@ export function AccountSettingsPanel({
         </>
       ) : (
         <>
-          <SettingsSection
-            description={
-              unavailable
-                ? "Account sign-in is not configured in this build."
-                : mode === "sign-in"
-                  ? "Sign in with your email and password."
-                  : `Create an account. Use at least ${AUTH_PASSWORD_MIN_LENGTH} characters.`
-            }
-            title={mode === "sign-in" ? "Sign in" : "Create account"}
+          <form
+            className="grid w-full gap-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submit();
+            }}
           >
-            <form
-              className="grid max-w-md gap-4"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void submit();
-              }}
-            >
-              <Field
-                autoComplete="email"
-                label="Email"
-                onChange={setEmail}
-                placeholder="you@example.com"
-                type="email"
-                value={email}
-              />
-              <Field
-                autoComplete={mode === "sign-in" ? "current-password" : "new-password"}
-                label="Password"
-                onChange={setPassword}
-                placeholder="Password"
-                type="password"
-                value={password}
-              />
-              <div className="flex items-center gap-2">
-                <button
-                  className={PRIMARY_BUTTON}
-                  disabled={unavailable || busy || waiting || !email || !password}
-                  type="submit"
-                >
-                  <IconMail size={13} stroke={2} />
-                  {busy ? (
-                    <WorkingText className="text-canvas">Working…</WorkingText>
-                  ) : mode === "sign-in" ? (
-                    "Sign in"
-                  ) : (
-                    "Create account"
-                  )}
-                </button>
-                <button
-                  className={SECONDARY_BUTTON}
-                  disabled={busy}
-                  onClick={() => setMode(mode === "sign-in" ? "sign-up" : "sign-in")}
-                  type="button"
-                >
-                  {mode === "sign-in" ? "Create an account instead" : "I already have an account"}
-                </button>
-              </div>
-            </form>
-          </SettingsSection>
-
-          <SettingsSection
-            description="Opens your default browser and returns to Modus."
-            title="Other ways to sign in"
-          >
-            <div className="flex flex-wrap items-center gap-2">
+            <Field
+              autoComplete="email"
+              label="Email"
+              onChange={setEmail}
+              placeholder="you@example.com"
+              type="email"
+              value={email}
+            />
+            <Field
+              autoComplete={mode === "sign-in" ? "current-password" : "new-password"}
+              label="Password"
+              onChange={setPassword}
+              placeholder="Password"
+              type="password"
+              value={password}
+            />
+            <div className="grid gap-3">
+              <button
+                className={PRIMARY_BUTTON}
+                disabled={unavailable || busy || waiting || !email || !password}
+                type="submit"
+              >
+                <IconMail size={13} stroke={2} />
+                {busy ? (
+                  <WorkingText className="text-canvas">Working…</WorkingText>
+                ) : mode === "sign-in" ? (
+                  "Sign in"
+                ) : (
+                  "Create account"
+                )}
+              </button>
+              <button
+                className="justify-self-center rounded px-2 py-1 text-xs text-fg-muted transition-colors hover:text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-40"
+                disabled={busy}
+                onClick={() => setMode(mode === "sign-in" ? "sign-up" : "sign-in")}
+                type="button"
+              >
+                {mode === "sign-in" ? "Create account" : "Back to sign in"}
+              </button>
+            </div>
+          </form>
+          <div className="space-y-4">
+            <div className="flex items-center gap-3" aria-hidden="true">
+              <span className="h-px flex-1 bg-hairline" />
+              <span className="text-xs text-fg-faint">or</span>
+              <span className="h-px flex-1 bg-hairline" />
+            </div>
+            <fieldset className="grid min-w-0 grid-cols-1 gap-2">
+              <legend className="sr-only">Other ways to sign in</legend>
               {AUTH_PROVIDERS.flatMap((provider) =>
                 provider.kind === "oauth" ? [provider] : [],
               ).map((provider) => {
                 const enabled = state?.oauthProviders.includes(provider.id) ?? false;
                 return (
                   <button
-                    className={SECONDARY_BUTTON}
+                    className={OAUTH_BUTTON}
                     disabled={unavailable || busy || waiting || !enabled}
                     key={provider.id}
                     onClick={() =>
@@ -284,17 +292,25 @@ export function AccountSettingsPanel({
               })}
               {state?.status === "awaiting-oauth" ? (
                 <button
-                  className={SECONDARY_BUTTON}
+                  className={`${OAUTH_BUTTON} col-span-full`}
                   onClick={() => void window.modus.auth.cancelOAuth().then(setState)}
                   type="button"
                 >
                   Cancel
                 </button>
               ) : null}
-            </div>
-          </SettingsSection>
+            </fieldset>
+          </div>
         </>
       )}
     </>
+  );
+
+  return signedIn ? (
+    content
+  ) : (
+    <div className="mx-auto w-full max-w-[400px] space-y-6 rounded-2xl bg-panel/20 p-5 sm:p-8">
+      {content}
+    </div>
   );
 }

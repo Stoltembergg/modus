@@ -1053,6 +1053,32 @@ export function ChatPane({
     };
   }, [sessionId, hub, flushQueued, clearQueued, seedEventPage, settleSessionViewport]);
 
+  // A short newest page cannot produce a scroll event. Fill the viewport
+  // automatically; older overflowing history remains paginated on scroll.
+  useEffect(() => {
+    if (!eventHistoryPage.hasOlder || eventHistoryPage.loadingOlder || eventHistoryPage.error)
+      return;
+    const viewport = scrollContainerRef.current;
+    if (!viewport) return;
+    let disposed = false;
+    const fill = (): void => {
+      if (
+        !disposed &&
+        viewport.clientHeight > 0 &&
+        viewport.scrollHeight <= viewport.clientHeight + 1
+      )
+        void loadOlderEventPage();
+    };
+    const observer = new ResizeObserver(fill);
+    observer.observe(viewport);
+    if (viewport.firstElementChild) observer.observe(viewport.firstElementChild);
+    fill();
+    return () => {
+      disposed = true;
+      observer.disconnect();
+    };
+  }, [eventHistoryPage, loadOlderEventPage]);
+
   /* ── Conversation actions ──────────────────────────────────────────── */
 
   // A saved session model stays selected across Settings/catalog changes; only a session
@@ -1335,7 +1361,9 @@ export function ChatPane({
           <Timeline
             assistantAgent={assistantAgent}
             assistantAgentId={session.agentId}
-            blocks={transcriptBlocks}
+            // Subagent previews/details have no separate Activity tab. Render
+            // their existing live work projection as well as the final answer.
+            blocks={session.parentSessionId ? visibleBlocks : transcriptBlocks}
             cwd={activeCwd}
             {...(isLite ? { embedded: true } : {})}
             model={paneModel}

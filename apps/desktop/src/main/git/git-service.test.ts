@@ -900,6 +900,28 @@ describe("git-service", () => {
     );
   });
 
+  it.each([
+    false,
+    true,
+  ])("selects a remote branch with existing local=%s without detaching HEAD or losing edits", async (existingLocal) => {
+    await git(["remote", "add", "origin", repo]);
+    await git(["update-ref", "refs/remotes/origin/feature", "HEAD"]);
+    if (existingLocal) await git(["branch", "feature"]);
+    await writeFile(join(repo, "tracked.txt"), "local edit\n");
+
+    expect((await checkoutBranch(repo, "origin/feature", true)).kind).toBe("ok");
+    expect((await git(["symbolic-ref", "--short", "HEAD"])).trim()).toBe("feature");
+    if (!existingLocal) {
+      expect((await git(["rev-parse", "--abbrev-ref", "@{upstream}"])).trim()).toBe(
+        "origin/feature",
+      );
+    }
+    expect((await readFile(join(repo, "tracked.txt"), "utf8")).replace(/\r\n/g, "\n")).toBe(
+      "local edit\n",
+    );
+    expect(await git(["stash", "list"])).toBe("");
+  });
+
   it("reports branches already checked out by linked worktrees", async () => {
     const current = (await git(["symbolic-ref", "--short", "HEAD"])).trim();
     const worktree = await createSubagentWorktree(repo, {

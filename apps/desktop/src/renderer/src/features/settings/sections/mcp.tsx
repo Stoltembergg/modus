@@ -407,16 +407,11 @@ export function McpSettingsPanel({
             </button>
           </>
         }
-        description="Connect external tools and integrations."
+        description="Tools and connections available to your agents."
         title="MCP"
       />
 
-      <SettingsSection
-        description="Test API access and MCP connectivity separately. The test preserves existing tools and authorizations."
-        title="Composio"
-      >
-        <IntegrationsSettingsPanel />
-      </SettingsSection>
+      <IntegrationsSettingsPanel />
       <SettingsSection title="Built-in integration">
         <ReaIntegrationRow
           busy={reaBusy}

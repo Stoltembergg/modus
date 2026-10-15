@@ -11,6 +11,7 @@ import type { AppearanceState, TransparencyPreference } from "../../../../../sha
 import { setTransparency, useAppearanceState } from "../../../lib/appearance";
 import { cn } from "../../../lib/cn";
 import { type ThemeMode, useTheme } from "../../../lib/theme";
+import { Disclosure } from "../form-controls";
 import {
   ReadOnlyPill,
   SettingsList,
@@ -28,7 +29,7 @@ export function AppearanceSettingsPanel() {
 
   return (
     <>
-      <SettingsPageHeader description="Theme and transparency." title="Appearance" />
+      <SettingsPageHeader title="Appearance" />
       <SettingsSection title="Theme">
         <SettingsList>
           <SettingsRow
@@ -43,7 +44,6 @@ export function AppearanceSettingsPanel() {
                 value={themeValue}
               />
             }
-            description={"Follow your system appearance or choose light or dark."}
             title="Color scheme"
           />
           <SettingsRow
@@ -59,13 +59,17 @@ export function AppearanceSettingsPanel() {
             description={transparencyDescription(appearance)}
             title="Transparency"
           />
+        </SettingsList>
+      </SettingsSection>
+      <Disclosure label="Font details">
+        <SettingsList>
           <SettingsRow
             control={<ReadOnlyPill>Inter + Noto SC</ReadOnlyPill>}
-            description="Self-hosted Inter Variable (Latin) and Noto Sans SC Variable (CJK); system faces only cover gaps."
+            description="Inter Variable for Latin, Noto Sans SC for CJK; bundled with Modus."
             title="Font family"
           />
         </SettingsList>
-      </SettingsSection>
+      </Disclosure>
     </>
   );
 }
@@ -81,7 +85,7 @@ export function transparencyDescription(appearance: AppearanceState | null): str
     case "os-high-contrast":
       return "Solid while a high-contrast system setting is on.";
     default:
-      return "Let the desktop show through the sidebar only, the whole app, or nothing. Same in every theme.";
+      return "Choose where the desktop shows through.";
   }
 }
 

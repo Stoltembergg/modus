@@ -23,7 +23,7 @@ describe("Account settings", () => {
 
   it("renders the sign-in form with disabled actions until main reports its state", () => {
     const markup = renderToStaticMarkup(<AccountSettingsPanel />);
-    expect(markup).toContain("Account");
+    expect(markup).toContain("Sign in to Modus");
     expect(markup).toContain('type="password"');
     expect(markup).toContain("Continue with GitHub");
     expect(markup).toContain("Continue with Google");

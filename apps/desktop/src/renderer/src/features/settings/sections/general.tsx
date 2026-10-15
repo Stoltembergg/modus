@@ -11,7 +11,7 @@ export function GeneralSettingsPanel({
 }) {
   return (
     <>
-      <SettingsPageHeader description="Set approval prompts for agent actions." title="General" />
+      <SettingsPageHeader title="General" />
       <ApprovalModeSettings {...(cwd ? { cwd } : {})} workspaces={workspaces} />
     </>
   );

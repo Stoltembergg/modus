@@ -127,7 +127,6 @@ export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
             </button>
           </>
         }
-        description="Choose which project instructions apply automatically."
         title="Rules"
       />
 
@@ -138,8 +137,8 @@ export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
         title="AGENTS.md"
         description={
           exampleLoaded
-            ? "Starter example — edit freely, then create the file in this workspace."
-            : "Always-applied workspace rules. Edit here or open the file on disk."
+            ? "Edit this example, then save it to your workspace."
+            : "Applied automatically in this workspace."
         }
       >
         {!cwd ? (

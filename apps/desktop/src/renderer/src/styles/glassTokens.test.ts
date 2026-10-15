@@ -97,8 +97,24 @@ function worst(theme: Theme, tier: keyof typeof TIERS, text: string, backdrops: 
 }
 
 describe("glass tokens (D1)", () => {
+  it("subagent previews do not paint a rectangular veil over the chat", () => {
+    const scrim = block(".subagent-preview-scrim {").body;
+    expect(decl(scrim, "background-color")).toBe("transparent");
+    expect(css).not.toContain(".subagent-preview-scrim[data-settled]");
+    const panel = block(".subagent-preview-panel {").body;
+    expect(decl(panel, "height")).toBe("min(28rem, calc(100% - 24px))");
+    const sheet = readFileSync(
+      new URL("../features/agent/SubagentPreviewSheet.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(sheet).toContain("subagent-preview-panel");
+    expect(sheet).toContain("composer-glass");
+    expect(sheet).not.toContain("popup-chrome");
+    expect(sheet).not.toContain("top-9 bottom-1");
+  });
   it("chat surfaces add a small tint above the window, rather than a nearly opaque second layer", () => {
     const tint = alpha("--glass-alpha-chat");
+    expect(tint).toBe(0.1);
     const windowAlpha = alpha("--glass-alpha-chrome");
     const effective = 1 - (1 - windowAlpha) * (1 - tint);
     expect(effective).toBeGreaterThan(windowAlpha);
