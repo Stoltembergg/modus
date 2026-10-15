@@ -404,6 +404,9 @@ describe("REA broker tools", () => {
       tempDirectory,
       supervisorPath: "fake-supervisor",
       platform: "win32",
+      // This test simulates a Windows supervisor, so the real probe would shell out to `cmd.exe`
+      // and fail on non-Windows runners. Stub it: prerequisite behavior is covered elsewhere.
+      checkPrerequisites: async () => ({ ok: true }),
       clientFactory: () =>
         ({
           connect: async () => {},
