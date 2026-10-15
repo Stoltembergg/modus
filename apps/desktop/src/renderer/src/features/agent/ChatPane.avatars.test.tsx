@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { domMax, LazyMotion } from "motion/react";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AgentEventItem } from "../../../../shared/agent-events";
 import type { AgentInfo, AgentSessionInfo } from "../../../../shared/contracts";
 import { WorkFold } from "./ActivityGroup";
@@ -18,6 +18,11 @@ const nativeAnimation = vi.hoisted(() => {
 });
 afterAll(() => {
   if (nativeAnimation) Object.defineProperty(Element.prototype, "animate", nativeAnimation);
+});
+
+// Exercise the actual animated Markdown renderer, not its cold-load fallback.
+beforeAll(async () => {
+  await import("./MarkdownMessageRenderer");
 });
 
 const AGENT: AgentInfo = {
@@ -201,7 +206,8 @@ describe("Activity author wiring", () => {
     const avatar = await screen.findByRole("img", { name: "Judas" });
     expect(avatar.getAttribute("data-state")).toBe("working");
     expect(avatar.getAttribute("data-paused")).not.toBe("true");
-    expect(await screen.findByText("Still writing")).toBeTruthy();
+    const card = avatar.parentElement?.querySelector('[data-message-role="assistant"]');
+    await waitFor(() => expect(card?.textContent).toContain("Still writing"));
   });
 
   it("keeps the profile identity for a response nested inside an execution fold", async () => {
