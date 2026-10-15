@@ -55,7 +55,7 @@ const MAX_REA_DIAGNOSTIC_BYTES = 8 * 1024;
 const REA_NETWORK_FAILURE_PATTERN =
   /enotfound|etimedout|econnrefused|econnreset|eai_again|getaddrinfo|fetch failed|network|offline|registry/;
 const REA_MISSING_RUNTIME_PATTERN =
-  /enoent|ebadengine|unsupported engine|npx|node\.exe|is not recognized as an internal or external command|command not found/;
+  /spawn (?:npx|node)(?:\.cmd|\.exe)? enoent|npx(?:\.cmd)?: command not found|node(?:\.exe)?: command not found|'npx' is not recognized|'node' is not recognized|is not recognized as an internal or external command|ebadengine|unsupported engine/;
 const CLEANUP_FAILURE_MESSAGE =
   "REA worker cleanup failed; the worker remains quarantined until cleanup is confirmed.";
 const REA_PROVIDER_ENV = [
@@ -118,6 +118,10 @@ type Worker = {
   owner: ReaSessionOwner;
   key: string;
   retired: boolean;
+  /** Set by dispose/disable/cancel paths so a cancelled startup skips failure classification. */
+  externallyRetired?: boolean;
+  /** True while startWorker is in flight; drives aggregate `starting` readiness. */
+  starting?: boolean;
   client?: ReaClient;
   transport?: ReaTransport;
   workingDirectory?: string;
@@ -369,6 +373,10 @@ export class ReaSessionManager {
     if (this.hasReadyWorker()) {
       return { enabled: true, status: "ready", providerNotes };
     }
+    if (this.lifecycleStatus === "starting" && !this.hasStartingWorker()) {
+      // Every startup was cancelled (disposal/disable) and none is in flight: stay lazy.
+      return { enabled: true, status: "not_started", providerNotes };
+    }
     return {
       enabled: true,
       status: this.lifecycleStatus === "ready" ? "not_started" : this.lifecycleStatus,
@@ -385,6 +393,10 @@ export class ReaSessionManager {
     return [...this.workers.values()].some(
       (worker) => !worker.retired && worker.tools !== undefined,
     );
+  }
+
+  private hasStartingWorker(): boolean {
+    return [...this.workers.values()].some((worker) => !worker.retired && worker.starting === true);
   }
 
   private getProviderNotes(): string[] {
@@ -405,7 +417,9 @@ export class ReaSessionManager {
       this.lifecycleStatus = "disabled";
       this.lifecycleNote = "REA is disabled in Modus settings.";
       const workers = [...this.workers.values()];
-      const results = await Promise.allSettled(workers.map((worker) => this.retireWorker(worker)));
+      const results = await Promise.allSettled(
+        workers.map((worker) => this.retireWorker(worker, true)),
+      );
       if (results.some((result) => result.status === "rejected")) {
         this.lifecycleStatus = "failed";
         this.markCleanupFailure();
@@ -479,7 +493,7 @@ export class ReaSessionManager {
       this.activeGenerations.delete(owner.sessionId);
     }
     const worker = this.workers.get(key);
-    if (worker) await this.retireWorker(worker);
+    if (worker) await this.retireWorker(worker, true);
   }
 
   /** Retire the current worker after an uncertain operation without retiring its owner generation. */
@@ -488,7 +502,7 @@ export class ReaSessionManager {
     if (!worker) return;
     this.markUncertainFailure();
     try {
-      await this.retireWorker(worker);
+      await this.retireWorker(worker, true);
     } catch (error) {
       this.markCleanupFailure();
       throw error;
@@ -504,7 +518,7 @@ export class ReaSessionManager {
     for (const worker of workers) {
       this.retiredOwners.add(worker.key);
     }
-    await Promise.all(workers.map((worker) => this.retireWorker(worker)));
+    await Promise.all(workers.map((worker) => this.retireWorker(worker, true)));
   }
 
   private getWorker(owner: ReaSessionOwner): Worker {
@@ -567,6 +581,7 @@ export class ReaSessionManager {
 
   private ensureStarted(worker: Worker): Promise<void> {
     if (worker.startup) return worker.startup;
+    worker.starting = true;
     this.lifecycleStatus = "starting";
     this.lifecycleNote = undefined;
     worker.startup = this.startWorker(worker);
@@ -648,15 +663,18 @@ export class ReaSessionManager {
       if (transport.pid && transport.pid > 0) worker.supervisorPid = transport.pid;
       this.assertCurrent(worker.owner, worker);
     } catch (error) {
-      if (!worker.retired && this.workers.get(worker.key) === worker) {
+      const current = this.workers.get(worker.key);
+      const superseded = current !== undefined && current !== worker;
+      // Classify real startup failures even when the worker was already retired by its own
+      // transport closing (the SDK emits close before rejecting connect). Only an external
+      // dispose/disable/cancel, or a newer worker for the same key, suppresses classification.
+      if (!worker.externallyRetired && !superseded) {
         this.setFailureStatus(error, worker);
-      } else if (this.lifecycleStatus === "starting") {
-        // A disposal/disable cancelled this startup; return to the lazy baseline.
-        this.lifecycleStatus = "not_started";
-        this.lifecycleNote = undefined;
       }
       await this.retireWorker(worker);
       throw error;
+    } finally {
+      worker.starting = false;
     }
   }
 
@@ -825,7 +843,8 @@ export class ReaSessionManager {
     }
   }
 
-  private async retireWorker(worker: Worker): Promise<void> {
+  private async retireWorker(worker: Worker, externallyRetired = false): Promise<void> {
+    if (externallyRetired) worker.externallyRetired = true;
     if (!worker.retired) {
       worker.retired = true;
       worker.cancel();

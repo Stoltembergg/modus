@@ -523,6 +523,83 @@ describe("ReaSessionManager", () => {
     await harness.manager.disposeAll();
   });
 
+  it("classifies an offline failure when the transport closes before connect rejects", async () => {
+    let feedStderr: ((text: string) => void) | undefined;
+    let closeTransport: (() => void) | undefined;
+    const harness = setup({
+      transportStderr: true,
+      connect: () => {
+        feedStderr?.("npm ERR! code ENOTFOUND registry.npmjs.org fetch failed");
+        closeTransport?.();
+        throw new Error("MCP error -32000: Connection closed");
+      },
+    });
+    feedStderr = (text) => harness.emitStderr(0, text);
+    closeTransport = () => harness.transports[0]?.emitClose();
+
+    await expect(
+      harness.manager.listTools(owner("close-before-reject"), { offset: 0, limit: 10 }),
+    ).rejects.toThrow();
+    expect(harness.manager.getIntegrationStatus().status).toBe("network_error");
+    await harness.manager.disposeAll();
+  });
+
+  it("does not read an _npx stack path as a missing Node install", async () => {
+    let feedStderr: ((text: string) => void) | undefined;
+    const harness = setup({
+      transportStderr: true,
+      connect: async () => {
+        feedStderr?.(
+          "TypeError: invalid result at file:///home/alice/.npm/_npx/abcdef/node_modules/rea-agents/dist/index.js:1:1",
+        );
+        throw new Error("MCP error -32000: Connection closed");
+      },
+    });
+    feedStderr = (text) => harness.emitStderr(0, text);
+
+    await expect(
+      harness.manager.listTools(owner("npx-stack-path"), { offset: 0, limit: 10 }),
+    ).rejects.toThrow();
+    expect(harness.manager.getIntegrationStatus().status).toBe("failed");
+    await harness.manager.disposeAll();
+  });
+
+  it("does not read an unrelated file ENOENT as a missing Node install", async () => {
+    let feedStderr: ((text: string) => void) | undefined;
+    const harness = setup({
+      transportStderr: true,
+      connect: async () => {
+        feedStderr?.("Error: ENOENT: no such file or directory, open /opt/rea/provider.json");
+        throw new Error("MCP error -32000: Connection closed");
+      },
+    });
+    feedStderr = (text) => harness.emitStderr(0, text);
+
+    await expect(
+      harness.manager.listTools(owner("unrelated-enoent"), { offset: 0, limit: 10 }),
+    ).rejects.toThrow();
+    expect(harness.manager.getIntegrationStatus().status).toBe("failed");
+    await harness.manager.disposeAll();
+  });
+
+  it("classifies a missing npx command as needs_node", async () => {
+    let feedStderr: ((text: string) => void) | undefined;
+    const harness = setup({
+      transportStderr: true,
+      connect: async () => {
+        feedStderr?.("'npx' is not recognized as an internal or external command");
+        throw new Error("MCP error -32000: Connection closed");
+      },
+    });
+    feedStderr = (text) => harness.emitStderr(0, text);
+
+    await expect(
+      harness.manager.listTools(owner("missing-npx"), { offset: 0, limit: 10 }),
+    ).rejects.toThrow();
+    expect(harness.manager.getIntegrationStatus().status).toBe("needs_node");
+    await harness.manager.disposeAll();
+  });
+
   it("does not launch a worker when the session is disposed during the prerequisite probe", async () => {
     const probe = deferred<ReaPrerequisiteResult>();
     const checkPrerequisites = vi.fn(() => probe.promise);
