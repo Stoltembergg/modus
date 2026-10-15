@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import {
@@ -273,6 +273,7 @@ export class ReaSessionManager {
   private readonly settingsStore: ReaSettingsStore;
   private lifecycleStatus: ReaIntegrationState = "not_started";
   private lifecycleNote: string | undefined;
+  private sweptStaleWorkerDirectories = false;
 
   constructor(options: ReaSessionManagerOptions = {}) {
     this.clientFactory =
@@ -535,11 +536,36 @@ export class ReaSessionManager {
     return worker.startup;
   }
 
+  /**
+   * Removes per-session working directories left behind by a previous, non-graceful
+   * exit. Runs at most once per manager instance and only before the first worker
+   * directory is created, so it can never delete a directory this manager still owns.
+   */
+  private sweepStaleWorkerDirectories(): void {
+    if (this.sweptStaleWorkerDirectories) return;
+    this.sweptStaleWorkerDirectories = true;
+    let entries: string[];
+    try {
+      entries = readdirSync(this.workersDirectory);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.startsWith("worker-")) continue;
+      try {
+        rmSync(join(this.workersDirectory, entry), { recursive: true, force: true });
+      } catch {
+        // Best effort: a leftover directory must never block starting a worker.
+      }
+    }
+  }
+
   private async startWorker(worker: Worker): Promise<void> {
     try {
       ensurePrivateDirectory(this.reaDirectory);
       ensurePrivateDirectory(this.workersDirectory);
       ensurePrivateDirectory(this.npmCacheDirectory);
+      this.sweepStaleWorkerDirectories();
       worker.workingDirectory = mkdtempSync(join(this.workersDirectory, "worker-"));
       const client = this.clientFactory();
       const transport = this.transportFactory({

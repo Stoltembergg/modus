@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -354,6 +354,22 @@ describe("ReaSessionManager", () => {
         expect(statSync(directory).mode & 0o777).toBe(0o700);
       }
     }
+    await manager.disposeAll();
+  });
+
+  it("removes stale per-session working directories left by an earlier run", async () => {
+    const { manager, userDataDirectory } = setup();
+    const workersDirectory = join(userDataDirectory, "rea", "workers");
+    const staleDirectory = join(workersDirectory, "worker-stale-leftover");
+    mkdirSync(staleDirectory, { recursive: true });
+    writeFileSync(join(staleDirectory, "leftover.txt"), "stale");
+    const unrelatedDirectory = join(userDataDirectory, "rea", "not-a-worker");
+    mkdirSync(unrelatedDirectory, { recursive: true });
+
+    await manager.listTools(owner("stale-sweep"), { offset: 0, limit: 10 });
+
+    expect(existsSync(staleDirectory)).toBe(false);
+    expect(existsSync(unrelatedDirectory)).toBe(true);
     await manager.disposeAll();
   });
 
