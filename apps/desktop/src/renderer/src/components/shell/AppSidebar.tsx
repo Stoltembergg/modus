@@ -1,10 +1,4 @@
-import {
-  IconEdit,
-  IconPin,
-  IconPinnedOff,
-  IconSettings,
-  IconUserPlus,
-} from "@tabler/icons-react";
+import { IconEdit, IconPin, IconPinnedOff, IconSettings, IconUserPlus } from "@tabler/icons-react";
 import { type ReactNode, useState } from "react";
 import { cn } from "../../lib/cn";
 import { useShellText } from "../../lib/shellText";

@@ -776,11 +776,7 @@ function InboxChatsSection({
         expanded={expanded}
         onToggle={onToggle}
         action={
-          <IconButton
-            ariaExpanded={archivedOpen}
-            label="Archived chats"
-            onClick={toggleArchived}
-          >
+          <IconButton ariaExpanded={archivedOpen} label="Archived chats" onClick={toggleArchived}>
             <IconArchiveOff size={SB_ACTION} stroke={SB_ACTION_STROKE} />
           </IconButton>
         }
