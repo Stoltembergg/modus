@@ -1492,34 +1492,13 @@ body {
     mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 1.5rem), transparent 100%);
   }
 
-  /**
-   * Subagent preview scrim: even frosted backdrop, like a native sheet.
-   *
-   * No mask. Masking `backdrop-filter` leaves part of the background sharp next
-   * to the blurred part, so the same text shows twice (sharp + soft) with a
-   * visible gradient seam — that is what read as fake. Uniform frost + a light
-   * tint is what a real sheet does.
-   */
+  /* The preview floats above the composer without repainting the whole chat.
+     Its surface uses the same glass/fallback tokens as the composer. */
   .subagent-preview-scrim {
-    background-color: color-mix(in oklab, var(--color-canvas) 55%, transparent);
-    opacity: 0;
-    transition: opacity 200ms cubic-bezier(0.22, 1, 0.36, 1);
-    will-change: opacity;
+    background-color: transparent;
   }
-  .subagent-preview-scrim[data-mounted] {
-    opacity: 1;
-  }
-  /**
-   * The frost lands only after the sheet has settled. A `backdrop-filter` whose
-   * own opacity is animating forces the compositor to re-sample the entire
-   * timeline behind it every frame, which competes with the sheet animation for
-   * the same budget. Applied as a step (no transition) — at 1px the arrival is
-   * imperceptible, and it then costs nothing while the sheet sits open.
-   */
-  :root[data-native-glass="true"][data-transparency="full"] .subagent-preview-scrim[data-settled] {
-    -webkit-backdrop-filter: var(--glass-scrim-filter);
-    backdrop-filter: var(--glass-scrim-filter);
-    will-change: auto;
+  .subagent-preview-panel {
+    height: min(28rem, calc(100% - 24px));
   }
 
   /* Body mounts after the sheet animation, so it fades in on its own. */
