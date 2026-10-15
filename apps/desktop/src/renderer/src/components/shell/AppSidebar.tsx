@@ -3,6 +3,7 @@ import {
   IconMessageCircle,
   IconPin,
   IconPinnedOff,
+  IconPlus,
   IconSettings,
   IconUserPlus,
 } from "@tabler/icons-react";
@@ -32,6 +33,7 @@ export type AppSidebarProps = {
   onNewProfile?: (() => void) | undefined;
   projectsExpanded?: boolean | undefined;
   onToggleProjects?: (() => void) | undefined;
+  onOpenWorkspace?: (() => void) | undefined;
   /** Host slot for the pinned session list, before the Projects disclosure. */
   beforeProjects?: ReactNode;
   /** macOS: leave room for the traffic lights above the logo. */
@@ -78,6 +80,7 @@ export function AppSidebar({
   onNewProfile,
   projectsExpanded,
   onToggleProjects,
+  onOpenWorkspace,
   beforeProjects,
   trafficLightClearance = false,
   children,
@@ -129,8 +132,9 @@ export function AppSidebar({
               ) : null}
             </div>
             {pinned || hoverOpen ? beforeProjects : null}
-            <div className="mt-0.5">
+            <div className="mt-0.5 flex items-center">
               <SidebarLink
+                className="min-w-0 flex-1"
                 active={active === "direct-messages"}
                 expanded={active === "direct-messages" ? projectsExpanded : undefined}
                 link={{
@@ -142,6 +146,17 @@ export function AppSidebar({
                   },
                 }}
               />
+              {onOpenWorkspace && (pinned || hoverOpen) ? (
+                <button
+                  aria-label="Open workspace"
+                  className="app-sidebar-icon-button shrink-0"
+                  onClick={onOpenWorkspace}
+                  title="Open workspace"
+                  type="button"
+                >
+                  <IconPlus aria-hidden size={ICON.sm} stroke={ICON_STROKE.sm} />
+                </button>
+              ) : null}
             </div>
             <ContextList>{children}</ContextList>
           </div>
