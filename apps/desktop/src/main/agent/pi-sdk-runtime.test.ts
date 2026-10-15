@@ -17,7 +17,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { BrowserWindow as BrowserWindowType } from "electron";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentEvent, PlanRef } from "../../shared/contracts";
+import type { AgentEvent, PlanRef, SubagentWorktreeInfo } from "../../shared/contracts";
 import type {
   HarnessContext,
   HarnessHook,
@@ -56,11 +56,11 @@ const mocks = vi.hoisted(() => {
     setPiSubscriber: (next: ((event: unknown) => void) | undefined) => {
       subscriber = next;
     },
-    sessionManagerCreate: vi.fn(() => ({
+    sessionManagerCreate: vi.fn((_cwd?: string, _sessionDir?: string) => ({
       kind: "create",
       buildSessionContext: () => ({ messages: [], thinkingLevel: "off", model: null }),
     })),
-    sessionManagerOpen: vi.fn(() => ({
+    sessionManagerOpen: vi.fn((_file?: string, _sessionDir?: string, _cwd?: string) => ({
       kind: "open",
       buildSessionContext: () => ({ messages: [], thinkingLevel: "off", model: null }),
     })),
@@ -12128,5 +12128,367 @@ describe("PiSdkRuntime Repeat Guard tool-call integration", () => {
       toolRegistry.unregisterTool(toolName);
       await runtime.releaseRuntime(sessionId);
     }
+  });
+});
+
+describe("workspace move", () => {
+  async function fixture() {
+    const sessionId = `move-${crypto.randomUUID()}`;
+    const sourceId = `source-${crypto.randomUUID()}`;
+    const targetId = `target-${crypto.randomUUID()}`;
+    const targetCwd = join(fixtureRoot, "target");
+    await mkdir(targetCwd);
+    insertSession(sessionId, sourceId, join(userData, "missing-session.jsonl"));
+    const now = new Date().toISOString();
+    getDatabase()
+      .prepare(
+        "insert into workspaces (id, root_path, display_name, is_git_repository, last_opened_at, created_at) values (?, ?, ?, 0, ?, ?)",
+      )
+      .run(targetId, targetCwd, "Target", now, now);
+    return {
+      sessionId,
+      sourceId,
+      targetId,
+      targetCwd,
+      runtime: new PiSdkRuntime(),
+      window: createWindowStub(),
+    };
+  }
+
+  it("rebuilds the next Pi SDK session in the host-owned destination, retaining model and history", async () => {
+    const f = await fixture();
+    await f.runtime.ensure(f.window, f.sessionId);
+    const before = getAgentSession(f.sessionId);
+    expect(before).toBeTruthy();
+    recordAgentEvent({
+      type: "todos.updated",
+      sessionId: f.sessionId,
+      todos: [{ id: "history", content: "Keep history", status: "completed" }],
+    });
+    const events = listAgentEvents(f.sessionId);
+    getDatabase()
+      .prepare("update agent_sessions set branch = 'old-branch' where id = ?")
+      .run(f.sessionId);
+    const moved = await f.runtime.moveSession(f.window, {
+      id: f.sessionId,
+      workspaceId: f.targetId,
+      pinned: false,
+    });
+    expect(moved).toMatchObject({
+      id: f.sessionId,
+      workspaceId: f.targetId,
+      cwd: f.targetCwd,
+      model: before?.model,
+      piSessionFile: before?.piSessionFile,
+      updatedAt: before?.updatedAt,
+    });
+    expect(listAgentEvents(f.sessionId).slice(0, events.length)).toEqual(events);
+    expect(
+      getDatabase().prepare("select branch from agent_sessions where id = ?").get(f.sessionId),
+    ).toEqual({ branch: null });
+    await f.runtime.ensure(f.window, f.sessionId);
+    expect(mocks.createAgentSession.mock.calls.at(-1)?.[0]).toMatchObject({
+      cwd: f.targetCwd,
+      model: mocks.model,
+    });
+    await f.runtime.releaseRuntime(f.sessionId);
+  });
+
+  it("prompts the real offline Pi SDK in the new cwd with the original transcript and model", async () => {
+    const { sessionAt, messagesFor } = await useOfflinePiToolSessions();
+    const sdk = await vi.importActual<typeof import("@earendil-works/pi-coding-agent")>(
+      "@earendil-works/pi-coding-agent",
+    );
+    mocks.sessionManagerCreate.mockImplementation(
+      (directory, storage) => sdk.SessionManager.create(directory ?? cwd, storage) as never,
+    );
+    mocks.sessionManagerOpen.mockImplementation(
+      (file, storage, directory) =>
+        sdk.SessionManager.open(file ?? "", storage, directory) as never,
+    );
+    const f = await fixture();
+    try {
+      await f.runtime.prompt(f.window, {
+        sessionId: f.sessionId,
+        message: "Remember the original project.",
+        context: [],
+      });
+      const originalFile = getAgentSession(f.sessionId)?.piSessionFile;
+      expect(originalFile).toBeTruthy();
+      const original = sessionAt();
+      await f.runtime.moveSession(f.window, {
+        id: f.sessionId,
+        workspaceId: f.targetId,
+        pinned: false,
+      });
+      await f.runtime.prompt(f.window, {
+        sessionId: f.sessionId,
+        message: "Continue in the destination.",
+        context: [],
+      });
+      const resumed = sessionAt();
+      expect(resumed).not.toBe(original);
+      expect(resumed.sessionManager.getCwd()).toBe(f.targetCwd);
+      expect(resumed.model).toMatchObject({ provider: "mock", id: "model" });
+      expect(JSON.stringify(messagesFor(resumed))).toContain("Remember the original project.");
+      expect(JSON.stringify(messagesFor(resumed))).toContain("Continue in the destination.");
+      expect(getAgentSession(f.sessionId)?.piSessionFile).toBe(originalFile);
+      expect(getAgentSession(f.sessionId)?.model).toBe("mock/model");
+    } finally {
+      await f.runtime.releaseRuntime(f.sessionId);
+    }
+  });
+
+  it.each([
+    "read_only",
+    "archived_at",
+    "kind",
+    "parent_session_id",
+  ])("refuses cross-project movement of %s sessions", async (column) => {
+    const f = await fixture();
+    const statements = {
+      read_only: "update agent_sessions set read_only = 1 where id = ?",
+      archived_at: "update agent_sessions set archived_at = '2026-10-14' where id = ?",
+      kind: "update agent_sessions set kind = 'group_member' where id = ?",
+      parent_session_id: "update agent_sessions set parent_session_id = id where id = ?",
+    };
+    getDatabase()
+      .prepare(statements[column as keyof typeof statements])
+      .run(f.sessionId);
+    await expect(
+      f.runtime.moveSession(f.window, { id: f.sessionId, workspaceId: f.targetId, pinned: false }),
+    ).rejects.toThrow();
+    expect(getAgentSession(f.sessionId)?.workspaceId).toBe(f.sourceId);
+  });
+
+  it("refuses a parent with a running child and keeps completed child history in its original scope", async () => {
+    const f = await fixture();
+    const childId = `child-${crypto.randomUUID()}`;
+    getDatabase()
+      .prepare(
+        "insert into agent_sessions (id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file, created_at, updated_at) select ?, workspace_id, 'Child', cwd, status, runtime, model, pi_session_id, pi_session_file, created_at, updated_at from agent_sessions where id = ?",
+      )
+      .run(childId, f.sessionId);
+    getDatabase()
+      .prepare("update agent_sessions set parent_session_id = ?, status = 'running' where id = ?")
+      .run(f.sessionId, childId);
+    await expect(
+      f.runtime.moveSession(f.window, { id: f.sessionId, workspaceId: f.targetId, pinned: false }),
+    ).rejects.toThrow(/busy|finish|active/i);
+    expect(getAgentSession(f.sessionId)?.workspaceId).toBe(f.sourceId);
+    getDatabase()
+      .prepare("update agent_sessions set status = 'completed' where id = ?")
+      .run(childId);
+    await f.runtime.moveSession(f.window, {
+      id: f.sessionId,
+      workspaceId: f.targetId,
+      pinned: false,
+    });
+    expect(getAgentSession(childId)).toMatchObject({
+      workspaceId: f.sourceId,
+      cwd,
+      parentSessionId: f.sessionId,
+    });
+  });
+
+  it("blocks relocation while a child is still being created and releases that guard on startup failure", async () => {
+    const f = await fixture();
+    let rejectStartup: (error: Error) => void = () => {};
+    const pending = new Promise<never>((_resolve, reject) => {
+      rejectStartup = reject;
+    });
+    vi.spyOn(f.runtime, "create").mockReturnValueOnce(pending);
+    const child = f.runtime.runSubagent(f.window, {
+      parentSessionId: f.sessionId,
+      task: "Synthetic startup",
+      prompt: "No tool execution",
+      subagentType: "reader",
+    });
+    await expect(
+      f.runtime.moveSession(f.window, { id: f.sessionId, workspaceId: f.targetId, pinned: false }),
+    ).rejects.toThrow(/background|subagent/i);
+    rejectStartup(new Error("Synthetic startup failure"));
+    await expect(child).rejects.toThrow("Synthetic startup failure");
+    await expect(
+      f.runtime.moveSession(f.window, { id: f.sessionId, workspaceId: f.targetId, pinned: false }),
+    ).resolves.toMatchObject({ workspaceId: f.targetId });
+  });
+
+  it("blocks relocation while a completed child's background finalization is still pending", async () => {
+    const f = await fixture();
+    const worktree: SubagentWorktreeInfo = {
+      path: cwd,
+      branch: "synthetic",
+      baseSha: "fixture-only",
+      integrationStatus: "running",
+    };
+    vi.spyOn(gitMemoryContext, "createSubagentWorktree").mockResolvedValueOnce(worktree);
+    let finish: (result: SubagentWorktreeInfo) => void = () => {};
+    const pending = new Promise<SubagentWorktreeInfo>((resolve) => {
+      finish = resolve;
+    });
+    const finalization = vi
+      .spyOn(gitMemoryContext, "finishSubagentWorktree")
+      .mockReturnValueOnce(pending);
+    vi.spyOn(f.runtime, "prompt").mockResolvedValueOnce({ outcome: "ok" });
+    const child = await f.runtime.runSubagent(f.window, {
+      parentSessionId: f.sessionId,
+      task: "Synthetic finalization",
+      prompt: "No tool execution",
+      subagentType: "writer",
+      subagent: {
+        name: "writer",
+        body: "",
+        model: "inherit",
+        readOnly: false,
+        isolation: "worktree",
+      },
+    });
+    await vi.waitFor(() => expect(finalization).toHaveBeenCalled());
+    // Even with settled persisted metadata, the host still owns pending finalization.
+    getDatabase()
+      .prepare("update agent_sessions set status = 'completed' where id = ?")
+      .run(child.session.id);
+    const cleaned = { ...worktree, integrationStatus: "cleaned" as const };
+    updateAgentSessionWorktree(child.session.id, cleaned);
+    try {
+      await expect(
+        f.runtime.moveSession(f.window, {
+          id: f.sessionId,
+          workspaceId: f.targetId,
+          pinned: false,
+        }),
+      ).rejects.toThrow(/background|subagent/i);
+      expect(getAgentSession(f.sessionId)?.workspaceId).toBe(f.sourceId);
+    } finally {
+      finish(cleaned);
+      await f.runtime.waitBackground({
+        sessionId: f.sessionId,
+        subagentIds: [child.session.id],
+        timeoutMs: 5000,
+      });
+      await f.runtime.dispose(f.sessionId);
+    }
+  });
+
+  it("refuses movement while a completed child still has an actionable worktree", async () => {
+    const f = await fixture();
+    const childId = `child-${crypto.randomUUID()}`;
+    getDatabase()
+      .prepare(
+        "insert into agent_sessions (id, workspace_id, title, cwd, status, parent_session_id, created_at, updated_at) select ?, workspace_id, 'Child', cwd, 'completed', id, created_at, updated_at from agent_sessions where id = ?",
+      )
+      .run(childId, f.sessionId);
+    const worktree: SubagentWorktreeInfo = {
+      path: join(cwd, ".modus/worktrees/child"),
+      branch: "child",
+      baseSha: "source-only",
+      integrationStatus: "ready",
+    };
+    updateAgentSessionWorktree(childId, worktree);
+    await expect(
+      f.runtime.moveSession(f.window, { id: f.sessionId, workspaceId: f.targetId, pinned: false }),
+    ).rejects.toThrow(/worktree|child|subagent/i);
+    expect(getAgentSession(f.sessionId)?.workspaceId).toBe(f.sourceId);
+    updateAgentSessionWorktree(childId, { ...worktree, integrationStatus: "cleaned" });
+    await expect(
+      f.runtime.moveSession(f.window, { id: f.sessionId, workspaceId: f.targetId, pinned: false }),
+    ).resolves.toMatchObject({ workspaceId: f.targetId });
+  });
+
+  it("rejects an unknown destination without releasing or changing the session", async () => {
+    const f = await fixture();
+    const release = vi.spyOn(f.runtime, "releaseRuntime");
+    await expect(
+      f.runtime.moveSession(f.window, { id: f.sessionId, workspaceId: "unknown", pinned: false }),
+    ).rejects.toThrow(/workspace|project/i);
+    expect(getAgentSession(f.sessionId)?.workspaceId).toBe(f.sourceId);
+    expect(release).not.toHaveBeenCalled();
+  });
+
+  it.each(["running", "starting", "blocked"] as const)("refuses %s sessions", async (status) => {
+    const f = await fixture();
+    getDatabase()
+      .prepare("update agent_sessions set status = ? where id = ?")
+      .run(status, f.sessionId);
+    await expect(
+      f.runtime.moveSession(f.window, { id: f.sessionId, workspaceId: f.targetId, pinned: false }),
+    ).rejects.toThrow(/busy|finish|active/i);
+    expect(getAgentSession(f.sessionId)?.workspaceId).toBe(f.sourceId);
+  });
+
+  it("reserves the session while cleanup is pending and rejects concurrent ensures and moves", async () => {
+    const f = await fixture();
+    let finish!: () => void;
+    vi.spyOn(f.runtime, "releaseRuntime").mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const move = f.runtime.moveSession(f.window, {
+      id: f.sessionId,
+      workspaceId: f.targetId,
+      pinned: false,
+    });
+    await expect(f.runtime.ensure(f.window, f.sessionId)).rejects.toThrow(/moving|busy/i);
+    await expect(
+      f.runtime.moveSession(f.window, { id: f.sessionId, workspaceId: f.targetId, pinned: false }),
+    ).rejects.toThrow(/busy|reserved/i);
+    expect(getAgentSession(f.sessionId)?.workspaceId).toBe(f.sourceId);
+    finish();
+    await move;
+    await expect(f.runtime.ensure(f.window, f.sessionId)).resolves.toMatchObject({
+      cwd: f.targetCwd,
+    });
+    await f.runtime.releaseRuntime(f.sessionId);
+  });
+
+  it("refuses a session archived while runtime cleanup was pending", async () => {
+    const f = await fixture();
+    vi.spyOn(f.runtime, "releaseRuntime").mockImplementationOnce(async () => {
+      getDatabase()
+        .prepare("update agent_sessions set archived_at = '2026-10-14' where id = ?")
+        .run(f.sessionId);
+    });
+    await expect(
+      f.runtime.moveSession(f.window, { id: f.sessionId, workspaceId: f.targetId, pinned: false }),
+    ).rejects.toThrow(/changed|archived|unavailable/i);
+    expect(getAgentSession(f.sessionId)?.workspaceId).toBe(f.sourceId);
+  });
+
+  it("leaves location intact after cleanup fails and releases its reservation", async () => {
+    const f = await fixture();
+    vi.spyOn(f.runtime, "releaseRuntime").mockRejectedValueOnce(new Error("cleanup unavailable"));
+    await expect(
+      f.runtime.moveSession(f.window, { id: f.sessionId, workspaceId: f.targetId, pinned: false }),
+    ).rejects.toThrow("cleanup unavailable");
+    expect(getAgentSession(f.sessionId)?.workspaceId).toBe(f.sourceId);
+    await expect(
+      f.runtime.moveSession(f.window, { id: f.sessionId, workspaceId: f.targetId, pinned: false }),
+    ).resolves.toMatchObject({ workspaceId: f.targetId });
+  });
+
+  it("refuses to carry a running managed process into a different project", async () => {
+    const f = await fixture();
+    mocks.setManagedProcesses([
+      { id: "fixture", origin: "agent", sessionId: f.sessionId, status: "running" },
+    ]);
+    await expect(
+      f.runtime.moveSession(f.window, { id: f.sessionId, workspaceId: f.targetId, pinned: false }),
+    ).rejects.toThrow(/process/i);
+    expect(mocks.killManagedProcess).not.toHaveBeenCalled();
+    expect(getAgentSession(f.sessionId)?.workspaceId).toBe(f.sourceId);
+  });
+
+  it("allows pinning a busy session without moving its workspace", async () => {
+    const f = await fixture();
+    getDatabase()
+      .prepare("update agent_sessions set status = 'running' where id = ?")
+      .run(f.sessionId);
+    await expect(
+      f.runtime.moveSession(f.window, { id: f.sessionId, pinned: true }),
+    ).resolves.toMatchObject({ workspaceId: f.sourceId, cwd });
+    expect(getAgentSession(f.sessionId)?.pinnedAt).toBeTruthy();
   });
 });

@@ -373,7 +373,8 @@ describe("GroupRoom", () => {
     const authorAvatar = within(memberRow as HTMLElement).getByTestId("agent-avatar");
     expect(authorAvatar.dataset.size).toBe("16");
     expect(authorAvatar.closest('[data-testid="group-message-header"]')).toBeTruthy();
-    expect(authorAvatar.dataset.animated).toBe("false");
+    expect(authorAvatar.dataset.animated).not.toBe("false");
+    expect(authorAvatar.dataset.paused).not.toBe("true");
     // Same markdown renderer as the chat, mention as a chip (title + short id when repeated).
     await within(memberRow as HTMLElement).findByText("bold", {}, { timeout: 15_000 });
     expect(memberRow?.textContent).not.toContain("**");

@@ -39,6 +39,23 @@ function agentMessage(body: string): GroupMessage {
 
 describe("GroupMessageRow Prompt Kit", () => {
   it.each([
+    false,
+    true,
+  ])("keeps member avatar animation unless archived (archived=%s)", (archived) => {
+    render(
+      <GroupMessageRow
+        avatar={{ agentId: "planner", color: "violet", face: "happy", shape: "circle", archived }}
+        labels={labels}
+        members={members}
+        message={agentMessage("Agent response")}
+      />,
+    );
+    const avatar = screen.getByTestId("agent-avatar");
+    expect(avatar.getAttribute("data-paused") === "true").toBe(archived);
+    expect(avatar.getAttribute("data-animated")).not.toBe("false");
+  });
+
+  it.each([
     ["agent", agentMessage("Agent response")],
     [
       "user",

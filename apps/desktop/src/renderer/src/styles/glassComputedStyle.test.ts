@@ -30,14 +30,22 @@ const SCENE = `
     <div class="pdf-page-chrome"></div>
     <div class="dialog-scrim"></div>
     <div class="composer-glass"></div>
-    <div class="message-card-slot"><div class="chat-message-bubble chat-message-surface" data-message-role="user" data-message-card>Oi</div></div>
-    <div class="chat-message-bubble chat-message-surface" data-message-role="assistant" data-assistant-card>Reply</div>
-    <div class="chat-message-bubble chat-message-surface" data-message-role="assistant" data-technical-card><pre><code>+kept line</code></pre></div>
+    <div class="message-card-slot flex w-full min-w-0 items-start justify-end gap-2"><div class="chat-message-bubble chat-message-surface" data-message-role="user" data-message-card>Oi</div><span class="size-[24px] shrink-0" data-user-avatar></span></div>
+    <div class="flex w-full min-w-0 items-start gap-2"><span class="size-[24px] shrink-0" data-assistant-avatar></span><div class="chat-message-bubble chat-message-surface" data-message-role="assistant" data-assistant-card>Reply</div></div>
+    <div class="flex w-full min-w-0 items-start gap-2"><span class="size-[24px] shrink-0" data-technical-avatar></span><div class="chat-message-bubble chat-message-surface" data-message-role="assistant" data-technical-card><pre><code>+kept line</code></pre></div></div>
     <div class="chat-message-surface bg-card"></div>
     <div class="chat-run-status"></div>
   </main>
 </div></div></div>`;
 const CANDIDATES = [
+  "flex",
+  "w-full",
+  "min-w-0",
+  "items-start",
+  "justify-end",
+  "gap-2",
+  "size-[24px]",
+  "shrink-0",
   "bg-panel",
   "rounded-b-lg",
   "border",
@@ -49,6 +57,7 @@ const CANDIDATES = [
 const PANELS = [".app-rail", ".app-context-sidebar", ".surface-main"];
 const CHROME_PARTS = [".app-rail", ".app-context-sidebar"];
 const OVERLAYS = [".surface-raised", ".popup-chrome", ".pdf-page-chrome"];
+const CHAT_AVATARS = ["[data-user-avatar]", "[data-assistant-avatar]", "[data-technical-avatar]"];
 const CHAT_SURFACES = [
   ".composer-glass",
   "[data-message-card]",
@@ -180,7 +189,7 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
         // Measure the settled palette, including the Composer's existing transition.
         getComputedStyle(document.querySelector('.composer-glass')).backgroundColor;
         await Promise.allSettled(document.getAnimations().map(animation => animation.finished));
-        return ${MEASURE}(${JSON.stringify([...PANELS, ...OVERLAYS, ...CHAT_SURFACES, ".chat-run-status", ".app-shell", "html"])});
+        return ${MEASURE}(${JSON.stringify([...PANELS, ...OVERLAYS, ...CHAT_SURFACES, ...CHAT_AVATARS, ".chat-run-status", ".app-shell", "html"])});
       })()`,
       awaitPromise: true,
       returnByValue: true,
@@ -357,10 +366,15 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
       const assistant = m["[data-assistant-card]"] as Probe;
       const technical = m["[data-technical-card]"] as Probe;
       expect(user.width).toBeLessThan(main.innerWidth * 0.5);
-      expect(user.right).toBeCloseTo(main.innerRight, 0);
+      expect(m["[data-user-avatar]"]?.right).toBeCloseTo(main.innerRight, 0);
+      expect(user.right).toBeLessThan(m["[data-user-avatar]"]?.left ?? 0);
       expect(assistant.width).toBeLessThan(main.innerWidth * 0.5);
-      expect(assistant.left).toBeCloseTo(main.innerLeft, 0);
-      expect(technical.width).toBeCloseTo(main.innerWidth, 0);
+      expect(m["[data-assistant-avatar]"]?.left).toBeCloseTo(main.innerLeft, 0);
+      expect(assistant.left).toBeGreaterThan(m["[data-assistant-avatar]"]?.right ?? 0);
+      expect(technical.left).toBeCloseTo(assistant.left, 0);
+      expect(technical.width).toBeCloseTo(main.innerRight - technical.left, 0);
+      expect(technical.right).toBeCloseTo(main.innerRight, 0);
+      for (const selector of CHAT_AVATARS) expect(m[selector]?.width).toBe(24);
     }
   });
 

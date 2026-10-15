@@ -40,6 +40,18 @@ function renderSidebar(props: Partial<Parameters<typeof AppSidebar>[0]> = {}, li
 }
 
 describe("AppSidebar", () => {
+  it("opens a workspace from a plus beside Projects without toggling the disclosure", () => {
+    const onOpenWorkspace = vi.fn();
+    const onToggleProjects = vi.fn();
+    renderSidebar({ pinned: true, onOpenWorkspace, onToggleProjects, projectsExpanded: false });
+    const add = screen.getByRole("button", { name: "Open workspace" });
+    expect(add.textContent?.trim()).toBe("");
+    expect(add.parentElement).toBe(screen.getByRole("button", { name: "Projects" }).parentElement);
+    fireEvent.click(add);
+    expect(onOpenWorkspace).toHaveBeenCalledOnce();
+    expect(onToggleProjects).not.toHaveBeenCalled();
+  });
+
   function SettingsNavigation() {
     const [slot, setSlot] = useState<HTMLDivElement | null>(null);
     const [section, setSection] = useState<SettingsSectionId>("general");

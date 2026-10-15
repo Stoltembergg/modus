@@ -11,6 +11,7 @@ import {
 } from "react";
 import type { AgentEventPage } from "../../../../shared/agent-events";
 import type {
+  AgentInfo,
   AgentMode,
   AgentSessionInfo,
   BrowserEvent,
@@ -199,6 +200,7 @@ export function planSourceProjection(plan: PlanRef) {
 }
 
 type ChatPaneProps = {
+  assistantAgent?: AgentInfo | undefined;
   session: AgentSessionInfo;
   hub: AgentEventHub;
   models: ModelInfo[];
@@ -499,6 +501,7 @@ export function designEventToPromptInput(
 }
 
 export function ChatPane({
+  assistantAgent,
   session,
   hub,
   models,
@@ -1330,6 +1333,8 @@ export function ChatPane({
             </div>
           ) : null}
           <Timeline
+            assistantAgent={assistantAgent}
+            assistantAgentId={session.agentId}
             blocks={transcriptBlocks}
             cwd={activeCwd}
             {...(isLite ? { embedded: true } : {})}

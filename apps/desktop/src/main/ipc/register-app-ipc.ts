@@ -324,6 +324,7 @@ import {
   reviewStartSchema,
   rulesSaveAgentsSchema,
   sessionIdSchema,
+  sessionMoveSchema,
   sessionPinSchema,
   sessionTitleSchema,
   setProviderModelsEnabledSchema,
@@ -676,6 +677,13 @@ export function registerAppIpc({
     const parsed = parseIpcInput(agentRollbackSchema, input, IPC_CHANNELS.agentRollback);
     requireSessionWritable(parsed.sessionId);
     return await rollbackToUserMessage(getAgentRuntime(), parsed);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.agentMove, async (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(sessionMoveSchema, input, IPC_CHANNELS.agentMove);
+    const window = getSenderWindow(event);
+    return await getAgentRuntime().moveSession(window, parsed);
   });
 
   ipcMain.handle(IPC_CHANNELS.agentPin, (event, input) => {

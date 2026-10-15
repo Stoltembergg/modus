@@ -2,6 +2,7 @@ import { IconAlertCircle, IconCircleDashed, IconListCheck } from "@tabler/icons-
 import { Fragment, type ReactNode, useEffect, useMemo, useRef } from "react";
 import type { AgentEventItem } from "../../../../shared/agent-events";
 import type {
+  AgentInfo,
   CompactionReason,
   ContextItem,
   MessageContextChip,
@@ -43,6 +44,8 @@ import {
 } from "./runMetadata";
 
 type TimelineProps = {
+  assistantAgent?: AgentInfo | undefined;
+  assistantAgentId?: string | undefined;
   /** Blocks built by the owner (ChatPane) — the single authority for this list. */
   blocks: TimelineBlock[];
   /** Session cwd — file chips / markdown file nav resolve against the workspace. */
@@ -1403,6 +1406,8 @@ function TurnFooter({ turn, models }: { turn: TimelineTurn; models?: ModelInfo[]
 }
 
 export function Timeline({
+  assistantAgent,
+  assistantAgentId,
   blocks,
   cwd,
   model,
@@ -1482,6 +1487,8 @@ export function Timeline({
                   <div className={block.type === "message" ? "w-full min-w-0" : "w-full px-8"}>
                     {block.type === "work-fold" ? (
                       <WorkFold
+                        assistantAgent={assistantAgent}
+                        assistantAgentId={assistantAgentId}
                         items={block.items}
                         {...(models ? { models } : {})}
                         {...(cwd ? { cwd } : {})}
@@ -1493,6 +1500,8 @@ export function Timeline({
                     ) : null}
                     {block.type === "message" ? (
                       <MessageBlock
+                        assistantAgent={assistantAgent}
+                        assistantAgentId={assistantAgentId}
                         {...(block.attachments ? { attachments: block.attachments } : {})}
                         {...(block.contextChips ? { contextChips: block.contextChips } : {})}
                         {...(block.contextItems ? { contextItems: block.contextItems } : {})}

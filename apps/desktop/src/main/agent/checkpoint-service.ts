@@ -51,20 +51,20 @@ function toInfo(row: CheckpointRow): CheckpointInfo {
   };
 }
 
-function getLastCheckpoint(sessionId: string): CheckpointInfo | undefined {
+function getLastCheckpoint(sessionId: string, cwd: string): CheckpointInfo | undefined {
   const row = getDatabase()
     .prepare(
       `select * from agent_checkpoints
-       where session_id = ?
+       where session_id = ? and cwd = ?
        order by created_at desc, rowid desc
        limit 1`,
     )
-    .get(sessionId) as CheckpointRow | undefined;
+    .get(sessionId, cwd) as CheckpointRow | undefined;
   return row ? toInfo(row) : undefined;
 }
 
 /**
- * The session's baseline: the earliest checkpoint, captured before the first
+ * The session's baseline in its current cwd: the earliest checkpoint before the first
  * run touched the working tree. Diffing the checkout against it yields exactly
  * the changes this session produced — the authoritative base for the composer
  * changes strip (vs. the whole repo's uncommitted state). `restore-backup`
@@ -75,10 +75,11 @@ export function getSessionBaseCheckpoint(sessionId: string): CheckpointInfo | un
     .prepare(
       `select * from agent_checkpoints
        where session_id = ? and kind = 'auto'
+         and cwd = (select cwd from agent_sessions where id = ?)
        order by created_at asc, rowid asc
        limit 1`,
     )
-    .get(sessionId) as CheckpointRow | undefined;
+    .get(sessionId, sessionId) as CheckpointRow | undefined;
   return row ? toInfo(row) : undefined;
 }
 
@@ -192,7 +193,7 @@ export async function createCheckpoint(
     return undefined;
   }
 
-  const previous = getLastCheckpoint(input.sessionId);
+  const previous = getLastCheckpoint(input.sessionId, input.cwd);
   const snapshot = await captureCheckoutSnapshot(input.cwd, {
     refName: checkpointRef(input.sessionId),
     message: `modus checkpoint (${input.kind ?? "auto"})`,
@@ -258,6 +259,15 @@ export async function restoreCheckpoint(checkpointId: string): Promise<Checkpoin
     throw new Error(`Checkpoint not found: ${checkpointId}`);
   }
 
+  const current = getDatabase()
+    .prepare("select cwd from agent_sessions where id = ?")
+    .get(checkpoint.sessionId) as { cwd: string } | undefined;
+  if (!current || !samePath(current.cwd, checkpoint.cwd)) {
+    throw new Error(
+      "This checkpoint belongs to a different project. Move the session back before restoring it.",
+    );
+  }
+
   await createCheckpoint({
     sessionId: checkpoint.sessionId,
     cwd: checkpoint.cwd,
@@ -269,5 +279,11 @@ export async function restoreCheckpoint(checkpointId: string): Promise<Checkpoin
 
 /** Cleanup on session delete: drop the keep-alive ref (rows cascade via FK). */
 export async function deleteSessionCheckpoints(sessionId: string, cwd: string): Promise<void> {
-  await deleteSnapshotRef(cwd, checkpointRef(sessionId)).catch(() => {});
+  const directories = new Set([
+    cwd,
+    ...listCheckpoints(sessionId).map((checkpoint) => checkpoint.cwd),
+  ]);
+  for (const directory of directories) {
+    await deleteSnapshotRef(directory, checkpointRef(sessionId)).catch(() => {});
+  }
 }

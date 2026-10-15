@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { ModelInfo } from "../../../../shared/contracts";
+import type { AgentInfo, ModelInfo } from "../../../../shared/contracts";
 import { MessageBlock } from "./MessageBlock";
 
 // These assertions concern the rendered cards, not cold loading of Markdown's
@@ -27,9 +27,93 @@ const MODEL: ModelInfo = {
   thinkingLevel: "off",
   thinkingLevels: ["off"],
 };
+const AGENT: AgentInfo = {
+  id: "judas",
+  name: "Judas",
+  role: "",
+  instructions: "",
+  avatarColor: "green",
+  avatarFace: "happy",
+  avatarShape: "blob",
+  createdAt: "now",
+  updatedAt: "now",
+};
 const SOURCE = { id: "src", kind: "file" as const, label: "app.ts", path: "/repo/app.ts" };
 
 describe("message cards", () => {
+  it("shows the stored Agent avatar beside the response and keeps its animation while streaming", async () => {
+    const props = {
+      assistantAgent: AGENT,
+      assistantAgentId: AGENT.id,
+      content: "Reply",
+      messageId: "a",
+      messageRole: "assistant" as const,
+    };
+    const view = render(<MessageBlock {...props} streaming />);
+    const avatar = screen.getByRole("img", { name: "Judas" });
+    const card = view.container.querySelector('[data-message-role="assistant"]');
+    expect(avatar.parentElement).toBe(card?.parentElement);
+    expect(avatar.compareDocumentPosition(card as Node) & 4).toBe(4);
+    expect(avatar.getAttribute("data-size")).toBe("24");
+    expect(avatar.getAttribute("data-color")).toBe("green");
+    expect(avatar.getAttribute("data-shape")).toBe("blob");
+    expect(avatar.getAttribute("data-state")).toBe("working");
+    expect(avatar.getAttribute("data-paused")).not.toBe("true");
+    view.rerender(<MessageBlock {...props} streaming={false} content="Reply complete" />);
+    expect(screen.getByRole("img", { name: "Judas" })).toBe(avatar);
+    expect(avatar.getAttribute("data-state")).toBe("idle");
+    expect(avatar.getAttribute("data-paused")).not.toBe("true");
+    expect(await screen.findByText("Reply complete")).toBeTruthy();
+  });
+
+  it("places the user's badge after the bubble, outside its edit control", () => {
+    const { container } = render(<MessageBlock content="Oi" messageId="u" messageRole="user" />);
+    const avatar = screen.getByRole("img", { name: "You" });
+    const bubble = container.querySelector('[data-message-role="user"]');
+    expect(avatar.parentElement).toBe(bubble?.parentElement);
+    expect((bubble as Element).compareDocumentPosition(avatar) & 4).toBe(4);
+    expect(bubble?.contains(avatar)).toBe(false);
+  });
+
+  it("uses Modus for a normal chat and an id-derived Agent avatar when the profile is unavailable", () => {
+    const props = { content: "Reply", messageId: "a", messageRole: "assistant" as const };
+    const view = render(<MessageBlock {...props} />);
+    expect(screen.getByRole("img", { name: "Modus" })).toBeTruthy();
+    view.rerender(<MessageBlock {...props} assistantAgentId="missing-profile" />);
+    expect(screen.queryByRole("img", { name: "Modus" })).toBeNull();
+    expect(screen.getByTestId("agent-avatar").getAttribute("data-paused")).not.toBe("true");
+  });
+
+  it("never labels a different session with stale profile data", () => {
+    render(
+      <MessageBlock
+        assistantAgent={AGENT}
+        assistantAgentId="another-agent"
+        content="Different conversation"
+        messageId="a"
+        messageRole="assistant"
+      />,
+    );
+    expect(screen.queryByRole("img", { name: "Judas" })).toBeNull();
+    expect(screen.getByRole("img", { name: "Agent" })).toBeTruthy();
+  });
+
+  it("keeps an archived profile's avatar recognizable and paused", () => {
+    render(
+      <MessageBlock
+        assistantAgent={{ ...AGENT, archivedAt: "now" }}
+        assistantAgentId={AGENT.id}
+        content="Historical answer"
+        messageId="a"
+        messageRole="assistant"
+        streaming
+      />,
+    );
+    const avatar = screen.getByRole("img", { name: "Judas" });
+    expect(avatar.getAttribute("data-state")).toBe("archived");
+    expect(avatar.getAttribute("data-paused")).toBe("true");
+  });
+
   it("gives a short user message its own bubble rather than a full-width Composer surface", () => {
     const { container } = render(<MessageBlock content="Oi" messageId="u" messageRole="user" />);
     const card = container.querySelector('[data-message-role="user"]');

@@ -7,10 +7,10 @@ import {
   IconEdit,
   IconFolder,
   IconFolderOpen,
-  IconFolderPlus,
   IconPencil,
   IconPin,
   IconPinnedOff,
+  IconPlus,
   IconTrash,
   IconUserEdit,
   IconUserPlus,
@@ -18,9 +18,12 @@ import {
 } from "@tabler/icons-react";
 import { AnimatePresence, m, useMotionValue, useReducedMotion } from "motion/react";
 import {
+  createContext,
+  type DragEvent,
   type MouseEvent,
   type PointerEvent,
   type ReactNode,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -28,7 +31,12 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { agentAvatarForId } from "../../../shared/agent-templates";
-import type { AgentInfo, AgentSessionInfo, WorkspaceInfo } from "../../../shared/contracts";
+import type {
+  AgentInfo,
+  AgentSessionInfo,
+  MoveAgentSessionInput,
+  WorkspaceInfo,
+} from "../../../shared/contracts";
 import type { SessionActivity } from "../features/agent/agentEventHub";
 import { SessionStatusDot } from "../features/agent/SessionStatusDot";
 import { AgentAvatar } from "../features/agents/AgentAvatar";
@@ -37,6 +45,12 @@ import { beginResizeGesture, endResizeGesture } from "../lib/resizeGesture";
 import { useShellText } from "../lib/shellText";
 import { ICON, ICON_STROKE } from "../lib/uiDensity";
 import { useScrollFade } from "../lib/useScrollFade";
+import {
+  moveSessionBefore,
+  orderSessions,
+  readSessionOrder,
+  writeSessionOrder,
+} from "./sidebar-session-order";
 import { CollapsibleMotion } from "./ui/CollapsibleMotion";
 
 /** Former hidden group room sessions are never listed (all are converted by the PR 4 migration). */
@@ -71,6 +85,15 @@ const SB_ACTION = ICON.sm;
 const SB_ACTION_STROKE = ICON_STROKE.sm;
 const LIST_MOTION = { duration: 0.16, ease: "easeOut" } as const;
 
+// Scoped to this sidebar; drag payloads never authorize a workspace or executable path.
+const SessionMovement = createContext<{
+  workspaces: WorkspaceInfo[];
+  pending: boolean;
+  before?: string | undefined;
+  move(input: MoveAgentSessionInput, before?: string): Promise<void>;
+  reorder(id: string, direction: -1 | 1): void;
+} | null>(null);
+
 type SidebarProps = {
   /** The primary rail destination whose list belongs in this context panel. */
   section?: "direct-messages";
@@ -92,6 +115,7 @@ type SidebarProps = {
   onNewSession(): void;
   onNewWorkspaceSession(workspace: WorkspaceInfo): void;
   onPinSession(session: AgentSessionInfo, pinned: boolean): void;
+  onMoveSession?(input: MoveAgentSessionInput): Promise<AgentSessionInfo>;
   onRenameSession?(id: string, title: string): void;
   /** An agent's 1:1 chat: open that agent's profile for editing. */
   onEditAgentProfile?(agentId: string): void;
@@ -131,6 +155,7 @@ export function Sidebar({
   onNewSession,
   onNewWorkspaceSession,
   onPinSession,
+  onMoveSession,
   onArchiveSession,
   onRestoreSession,
   onDeleteSession,
@@ -154,13 +179,23 @@ export function Sidebar({
   const agentsById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents]);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [pinnedExpanded, setPinnedExpanded] = useState(true);
+  const [sessionOrder, setSessionOrder] = useState(readSessionOrder);
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const draggedRef = useRef<string | null>(null);
+  const movePending = useRef(false);
+  const [moving, setMoving] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<HTMLElement | null>(null);
   // Hidden group room sessions (kind "group_member") are never listed as chats.
   const ungroupedSessions = useMemo(
     () =>
-      agentSessions.filter(
-        (session) => isListedChat(session) && !session.parentSessionId && !session.archivedAt,
+      orderSessions(
+        agentSessions.filter(
+          (session) => isListedChat(session) && !session.parentSessionId && !session.archivedAt,
+        ),
+        sessionOrder,
       ),
-    [agentSessions],
+    [agentSessions, sessionOrder],
   );
   const workspaceIds = useMemo(
     () => new Set(workspaces.map((workspace) => workspace.id)),
@@ -246,8 +281,126 @@ export function Sidebar({
     onWidthChange(finalWidth);
   };
 
+  const saveOrder = (ids: string[]): void => {
+    setSessionOrder(ids);
+    writeSessionOrder(ids);
+  };
+  const move = async (input: MoveAgentSessionInput, before?: string): Promise<void> => {
+    if (!onMoveSession || movePending.current) return;
+    if (!ungroupedSessions.some((session) => session.id === input.id)) return;
+    movePending.current = true;
+    setMoving(true);
+    setMoveError(null);
+    try {
+      await onMoveSession(input);
+      saveOrder(
+        moveSessionBefore(
+          ungroupedSessions.map((session) => session.id),
+          input.id,
+          before,
+        ),
+      );
+    } catch (error) {
+      setMoveError(error instanceof Error ? error.message : String(error));
+    } finally {
+      movePending.current = false;
+      setMoving(false);
+    }
+  };
+  const reorder = (id: string, direction: -1 | 1): void => {
+    if (movePending.current) return;
+    const source = ungroupedSessions.find((session) => session.id === id);
+    if (!source) return;
+    const peers = ungroupedSessions.filter((session) =>
+      source.pinnedAt
+        ? Boolean(session.pinnedAt)
+        : !session.pinnedAt && session.workspaceId === source.workspaceId,
+    );
+    const index = peers.findIndex((session) => session.id === id);
+    const neighbor = peers[index + direction];
+    if (!neighbor) return;
+    saveOrder(
+      moveSessionBefore(
+        ungroupedSessions.map((session) => session.id),
+        direction < 0 ? id : neighbor.id,
+        direction < 0 ? neighbor.id : id,
+      ),
+    );
+  };
+  const clearDrag = (): void => {
+    draggedRef.current = null;
+    setDraggedId(null);
+    setDropTarget(null);
+  };
+  const dragStart = (event: DragEvent<HTMLElement>): void => {
+    const row =
+      event.target instanceof Element
+        ? event.target.closest<HTMLElement>("[data-session-id]")
+        : null;
+    const id = row?.dataset.sessionId;
+    if (
+      !onMoveSession ||
+      !id ||
+      movePending.current ||
+      !ungroupedSessions.some((session) => session.id === id)
+    ) {
+      event.preventDefault();
+      return;
+    }
+    draggedRef.current = id;
+    setDraggedId(id);
+    setMoveError(null);
+    event.dataTransfer.effectAllowed = "move";
+    // Only an in-memory drag started by this sidebar is accepted on drop.
+    event.dataTransfer.setData("application/x-modus-session", id);
+  };
+  const targetFor = (event: DragEvent<HTMLElement>): HTMLElement | null => {
+    if (!draggedRef.current || movePending.current || !(event.target instanceof Element))
+      return null;
+    return event.target.closest<HTMLElement>(
+      "[data-session-id], [data-workspace-drop], [data-pin-drop]",
+    );
+  };
+  const dragOver = (event: DragEvent<HTMLElement>): void => {
+    const target = targetFor(event);
+    if (!target) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setDropTarget(target);
+  };
+  const drop = (event: DragEvent<HTMLElement>): void => {
+    const target = targetFor(event);
+    const id = draggedRef.current;
+    if (!target || !id) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const before = target.dataset.sessionId;
+    const targetSession = before
+      ? ungroupedSessions.find((session) => session.id === before)
+      : undefined;
+    const pinned = Boolean(targetSession?.pinnedAt || target.hasAttribute("data-pin-drop"));
+    const workspaceId = pinned
+      ? undefined
+      : (targetSession?.workspaceId ?? target.dataset.workspaceDrop);
+    clearDrag();
+    if (before === id || (!pinned && !workspaces.some((workspace) => workspace.id === workspaceId)))
+      return;
+    void move({ id, ...(workspaceId ? { workspaceId } : {}), pinned }, before);
+  };
+
   const pinnedList = (
-    <>
+    <div
+      data-pin-drop=""
+      data-testid="sidebar-pin-drop"
+      className={cn(
+        "rounded-md",
+        draggedId && "min-h-8 border border-dashed border-composer-border",
+        dropTarget?.hasAttribute("data-pin-drop") && "bg-hover",
+      )}
+    >
+      {draggedId && pinnedSessions.length === 0 ? (
+        <div className="px-2 py-2 text-fg-faint text-xs">Drop here to pin</div>
+      ) : null}
       {section === "direct-messages" && pinnedSessions.length > 0 && (
         <>
           <SectionHeader
@@ -264,6 +417,7 @@ export function Sidebar({
             <div data-testid="sidebar-pinned">
               {pinnedSessions.map((session) => (
                 <SessionRow
+                  sessionId={session.id}
                   agent={session.agentId ? agentsById.get(session.agentId) : undefined}
                   agentId={session.agentId}
                   key={session.id}
@@ -298,131 +452,160 @@ export function Sidebar({
           <div className="mt-1" />
         </>
       )}
-    </>
+    </div>
   );
 
   const list = (
-    <div
-      className={cn(
-        "scroll-thin min-h-0 flex-1 overflow-y-auto px-2 pb-2",
-        (fadeTop || fadeBottom) && "scroll-fade",
-      )}
-      {...(fadeTop ? { "data-fade-top": "" } : {})}
-      {...(fadeBottom ? { "data-fade-bottom": "" } : {})}
-      ref={scrollFadeRef}
+    <SessionMovement.Provider
+      value={
+        onMoveSession
+          ? { workspaces, pending: moving, before: dropTarget?.dataset.sessionId, move, reorder }
+          : null
+      }
     >
-      {pinnedContainer === undefined
-        ? pinnedList
-        : pinnedContainer
-          ? createPortal(pinnedList, pinnedContainer)
-          : null}
-
-      {section === "direct-messages" ? (
-        <div data-testid="sidebar-projects">
-          {!embedded ? (
-            <SectionHeader
-              expanded={projectsExpanded}
-              onToggle={() => setProjectsExpanded((expanded) => !expanded)}
-            >
-              {t("shell.projects")}
-            </SectionHeader>
+      <section
+        className="contents"
+        aria-label="Project sessions"
+        onDragStartCapture={dragStart}
+        onDragEndCapture={clearDrag}
+        onDragOver={dragOver}
+        onDragLeave={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+            setDropTarget(null);
+        }}
+        onDrop={drop}
+        aria-busy={moving}
+      >
+        <div
+          className={cn(
+            "scroll-thin min-h-0 flex-1 overflow-y-auto px-2 pb-2",
+            (fadeTop || fadeBottom) && "scroll-fade",
+          )}
+          {...(fadeTop ? { "data-fade-top": "" } : {})}
+          {...(fadeBottom ? { "data-fade-bottom": "" } : {})}
+          ref={scrollFadeRef}
+        >
+          {moveError ? (
+            <div role="alert" className="px-2 py-2 text-danger text-xs">
+              {moveError}
+            </div>
           ) : null}
-
-          <CollapsibleMotion open={projectsExpanded} preset="default">
-            <AnimatePresence initial={false}>
-              {workspaces.map((workspace) => (
-                <m.div
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={reduceMotion ? { opacity: 1 } : { opacity: 0, y: -4 }}
-                  initial={reduceMotion ? false : { opacity: 0, y: 4 }}
-                  key={workspace.id}
-                  layout
-                  transition={{
-                    duration: reduceMotion ? 0 : LIST_MOTION.duration,
-                    ease: LIST_MOTION.ease,
-                  }}
-                >
-                  <WorkspaceItem
-                    activityBySession={activityBySession}
-                    agentsById={agentsById}
-                    onArchiveSession={onArchiveSession}
-                    onDeleteSession={onDeleteSession}
-                    onListArchivedSessions={onListArchivedSessions}
-                    onNewSession={() => onNewWorkspaceSession(workspace)}
-                    onPinSession={onPinSession}
-                    onRenameSession={(id, title) => onRenameSession?.(id, title)}
-                    onEditAgentProfile={onEditAgentProfile}
-                    onRestoreSession={onRestoreSession}
-                    onSelectSession={onSelectSession}
-                    activeSessionId={activeSessionId}
-                    sessions={sessionsByWorkspace.get(workspace.id) ?? []}
-                    workspace={workspace}
-                    renaming={renamingId === workspace.id}
-                    onStartRename={() => setRenamingId(workspace.id)}
-                    onCommitRename={(name) => {
-                      setRenamingId(null);
-                      const next = name.trim();
-                      if (next && next !== workspace.displayName) {
-                        onRenameProject(workspace.id, next);
-                      }
-                    }}
-                    onCancelRename={() => setRenamingId(null)}
-                    onPin={() => onPinProject(workspace.id, !workspace.pinned)}
-                    onReveal={() => onRevealProject(workspace.id)}
-                    onArchiveChats={() => onArchiveProjectChats(workspace.id)}
-                    onDeleteChats={() => onDeleteProjectChats(workspace.id)}
-                    onRemove={() => onRemoveProject(workspace.id)}
-                    groupNames={NO_NAMES}
-                  />
-                </m.div>
-              ))}
-            </AnimatePresence>
-            {unavailableProjectSessions.length > 0
-              ? unavailableProjectSessions.map((session) => (
-                  <SessionRow
-                    agent={session.agentId ? agentsById.get(session.agentId) : undefined}
-                    agentId={session.agentId}
-                    key={session.id}
-                    activity={activityBySession[session.id]}
-                    isActive={activeSessionId === session.id}
-                    onArchive={(event) => {
-                      event.stopPropagation();
-                      onArchiveSession(session);
-                    }}
-                    onDelete={(event) => {
-                      event.stopPropagation();
-                      onDeleteSession(session);
-                    }}
-                    onPin={(event) => {
-                      event.stopPropagation();
-                      onPinSession(session, !session.pinnedAt);
-                    }}
-                    onEditProfile={
-                      session.agentId && onEditAgentProfile
-                        ? () => onEditAgentProfile(session.agentId as string)
-                        : undefined
-                    }
-                    onRename={(title) => onRenameSession?.(session.id, title)}
-                    onSelect={() => onSelectSession(session)}
-                    pinned={Boolean(session.pinnedAt)}
-                    title={session.title}
-                    updatedAt={session.updatedAt}
-                  />
-                ))
+          {pinnedContainer === undefined
+            ? pinnedList
+            : pinnedContainer
+              ? createPortal(pinnedList, pinnedContainer)
               : null}
-          </CollapsibleMotion>
-          <div className="mt-1">
-            <NavRow
-              icon={<IconFolderPlus size={SB_ICON} stroke={SB_STROKE} />}
-              muted
-              onClick={onOpenWorkspace}
-            >
-              Open workspace
-            </NavRow>
-          </div>
+
+          {section === "direct-messages" ? (
+            <div data-testid="sidebar-projects">
+              {!embedded ? (
+                <SectionHeader
+                  expanded={projectsExpanded}
+                  onToggle={() => setProjectsExpanded((expanded) => !expanded)}
+                  action={
+                    <IconButton label="Open workspace" onClick={onOpenWorkspace}>
+                      <IconPlus aria-hidden size={SB_ACTION} stroke={SB_ACTION_STROKE} />
+                    </IconButton>
+                  }
+                >
+                  {t("shell.projects")}
+                </SectionHeader>
+              ) : null}
+
+              <CollapsibleMotion open={projectsExpanded} preset="default">
+                <AnimatePresence initial={false}>
+                  {workspaces.map((workspace) => (
+                    <m.div
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={reduceMotion ? { opacity: 1 } : { opacity: 0, y: -4 }}
+                      initial={reduceMotion ? false : { opacity: 0, y: 4 }}
+                      key={workspace.id}
+                      data-workspace-drop={workspace.id}
+                      className={cn(
+                        "rounded-md",
+                        dropTarget?.dataset.workspaceDrop === workspace.id && "bg-hover",
+                      )}
+                      layout
+                      transition={{
+                        duration: reduceMotion ? 0 : LIST_MOTION.duration,
+                        ease: LIST_MOTION.ease,
+                      }}
+                    >
+                      <WorkspaceItem
+                        activityBySession={activityBySession}
+                        agentsById={agentsById}
+                        onArchiveSession={onArchiveSession}
+                        onDeleteSession={onDeleteSession}
+                        onListArchivedSessions={onListArchivedSessions}
+                        onNewSession={() => onNewWorkspaceSession(workspace)}
+                        onPinSession={onPinSession}
+                        onRenameSession={(id, title) => onRenameSession?.(id, title)}
+                        onEditAgentProfile={onEditAgentProfile}
+                        onRestoreSession={onRestoreSession}
+                        onSelectSession={onSelectSession}
+                        activeSessionId={activeSessionId}
+                        sessions={sessionsByWorkspace.get(workspace.id) ?? []}
+                        workspace={workspace}
+                        renaming={renamingId === workspace.id}
+                        onStartRename={() => setRenamingId(workspace.id)}
+                        onCommitRename={(name) => {
+                          setRenamingId(null);
+                          const next = name.trim();
+                          if (next && next !== workspace.displayName) {
+                            onRenameProject(workspace.id, next);
+                          }
+                        }}
+                        onCancelRename={() => setRenamingId(null)}
+                        onPin={() => onPinProject(workspace.id, !workspace.pinned)}
+                        onReveal={() => onRevealProject(workspace.id)}
+                        onArchiveChats={() => onArchiveProjectChats(workspace.id)}
+                        onDeleteChats={() => onDeleteProjectChats(workspace.id)}
+                        onRemove={() => onRemoveProject(workspace.id)}
+                        groupNames={NO_NAMES}
+                      />
+                    </m.div>
+                  ))}
+                </AnimatePresence>
+                {unavailableProjectSessions.length > 0
+                  ? unavailableProjectSessions.map((session) => (
+                      <SessionRow
+                        sessionId={session.id}
+                        agent={session.agentId ? agentsById.get(session.agentId) : undefined}
+                        agentId={session.agentId}
+                        key={session.id}
+                        activity={activityBySession[session.id]}
+                        isActive={activeSessionId === session.id}
+                        onArchive={(event) => {
+                          event.stopPropagation();
+                          onArchiveSession(session);
+                        }}
+                        onDelete={(event) => {
+                          event.stopPropagation();
+                          onDeleteSession(session);
+                        }}
+                        onPin={(event) => {
+                          event.stopPropagation();
+                          onPinSession(session, !session.pinnedAt);
+                        }}
+                        onEditProfile={
+                          session.agentId && onEditAgentProfile
+                            ? () => onEditAgentProfile(session.agentId as string)
+                            : undefined
+                        }
+                        onRename={(title) => onRenameSession?.(session.id, title)}
+                        onSelect={() => onSelectSession(session)}
+                        pinned={Boolean(session.pinnedAt)}
+                        title={session.title}
+                        updatedAt={session.updatedAt}
+                      />
+                    ))
+                  : null}
+              </CollapsibleMotion>
+            </div>
+          ) : null}
         </div>
-      ) : null}
-    </div>
+      </section>
+    </SessionMovement.Provider>
   );
 
   // Inside the animated app sidebar: just the list (nav rows live in the rail).
@@ -601,6 +784,7 @@ function WorkspaceItem({
             transition={LIST_MOTION}
           >
             <SessionRow
+              sessionId={session.id}
               agent={session.agentId ? agentsById.get(session.agentId) : undefined}
               agentId={session.agentId}
               activity={activityBySession[session.id]}
@@ -671,6 +855,7 @@ function WorkspaceItem({
 }
 
 function SessionRow({
+  sessionId,
   title,
   agent,
   agentId,
@@ -685,6 +870,7 @@ function SessionRow({
   onArchive,
   onDelete,
 }: {
+  sessionId: string;
   title: string;
   agent?: AgentInfo | undefined;
   agentId?: string | undefined;
@@ -699,6 +885,7 @@ function SessionRow({
   onArchive(event: MouseEvent<HTMLButtonElement>): void;
   onDelete(event: MouseEvent<HTMLButtonElement>): void;
 }) {
+  const movement = useContext(SessionMovement);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
   const [displayTitle, setDisplayTitle] = useState(title);
@@ -739,9 +926,12 @@ function SessionRow({
   const avatar = agentId ? (agent ?? agentAvatarForId(agentId)) : undefined;
   return (
     <m.div
+      data-session-id={sessionId}
+      draggable={Boolean(movement) && !movement?.pending && !isRenaming}
       className={cn(
         SB_SESSION,
         "group",
+        movement?.before === sessionId && "border-t border-accent",
         isActive ? "text-fg-subtle" : "text-fg-subtle hover:bg-hover hover:text-fg-muted",
       )}
       layout
@@ -828,6 +1018,44 @@ function SessionRow({
             <IconPin size={SB_ACTION} stroke={SB_ACTION_STROKE} />
           )}
         </IconButton>
+        {movement ? (
+          <Menu.Root>
+            <Menu.Trigger
+              aria-label="Move session"
+              className="flex size-6 items-center justify-center rounded-md text-fg-faint hover:bg-active hover:text-fg-muted"
+              disabled={movement.pending}
+            >
+              <IconDots aria-hidden size={SB_ACTION} stroke={SB_ACTION_STROKE} />
+            </Menu.Trigger>
+            <Menu.Portal>
+              <Menu.Positioner align="start" side="bottom" sideOffset={4}>
+                <Menu.Popup className="origin-(--transform-origin) min-w-[184px] popup-chrome popup-motion p-1">
+                  <ProjectMenuItem icon={null} onClick={() => movement.reorder(sessionId, -1)}>
+                    Move up
+                  </ProjectMenuItem>
+                  <ProjectMenuItem icon={null} onClick={() => movement.reorder(sessionId, 1)}>
+                    Move down
+                  </ProjectMenuItem>
+                  {movement.workspaces.map((workspace) => (
+                    <ProjectMenuItem
+                      key={workspace.id}
+                      icon={<IconFolder size={SB_ACTION} stroke={SB_ACTION_STROKE} />}
+                      onClick={() =>
+                        void movement.move({
+                          id: sessionId,
+                          workspaceId: workspace.id,
+                          pinned: false,
+                        })
+                      }
+                    >
+                      Move to {workspace.displayName}
+                    </ProjectMenuItem>
+                  ))}
+                </Menu.Popup>
+              </Menu.Positioner>
+            </Menu.Portal>
+          </Menu.Root>
+        ) : null}
         <IconButton label="Rename session" onClick={startRename}>
           <IconPencil size={SB_ACTION} stroke={SB_ACTION_STROKE} />
         </IconButton>
@@ -1315,10 +1543,12 @@ function SectionHeader({
   children,
   expanded,
   onToggle,
+  action,
 }: {
   children: ReactNode;
   expanded: boolean;
   onToggle(): void;
+  action?: ReactNode;
 }) {
   return (
     <div className="group mt-3 mb-0.5 flex h-6 items-center px-2 text-2xs font-normal text-fg-faint">
@@ -1337,6 +1567,7 @@ function SectionHeader({
           <IconChevronRight size={ICON.xs} stroke={ICON_STROKE.xs} />
         </m.span>
       </button>
+      {action ? <span className="ml-auto">{action}</span> : null}
     </div>
   );
 }

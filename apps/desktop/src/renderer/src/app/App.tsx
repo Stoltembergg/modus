@@ -19,6 +19,7 @@ import type {
   ContextUsageInfo,
   ModelInfo,
   ModelSettingsState,
+  MoveAgentSessionInput,
   PlanRef,
   PromptDelivery,
   PromptImageAttachment,
@@ -799,6 +800,34 @@ export function App() {
     }
   }
 
+  async function moveSession(input: MoveAgentSessionInput): Promise<AgentSessionInfo> {
+    try {
+      const previousWorkspaceId = agentSessions.find(
+        (session) => session.id === input.id,
+      )?.workspaceId;
+      const updated = await window.modus.agent.move(input);
+      setAgentSessions((current) =>
+        current.map((item) => (item.id === updated.id ? updated : item)),
+      );
+      if (input.workspaceId && previousWorkspaceId !== updated.workspaceId) {
+        if (activeSessionIdRef.current === updated.id) {
+          const target = workspaces.find((workspace) => workspace.id === updated.workspaceId);
+          setActiveWorkspace(target && !target.inbox ? target : null);
+        }
+        setActivePlanBySession((current) => {
+          const next = { ...current };
+          delete next[updated.id];
+          return next;
+        });
+      }
+      return updated;
+    } catch (error) {
+      // Reconcile with the host even if event delivery failed after persistence.
+      await refreshSessions();
+      throw error;
+    }
+  }
+
   async function archiveSession(session: AgentSessionInfo): Promise<void> {
     try {
       await window.modus.agent.archive(session.id);
@@ -1182,6 +1211,7 @@ export function App() {
                     }}
                     onNewMessage={() => openNewChat()}
                     onNewProfile={() => void openNewProfile()}
+                    onOpenWorkspace={() => void openWorkspace()}
                     onPinnedChange={setSidebarOpen}
                     onToggleProjects={() => setProjectsExpanded((expanded) => !expanded)}
                     pinned={responsiveSidebarOpen}
@@ -1211,6 +1241,7 @@ export function App() {
                         }
                         onPinProject={(id, pinned) => void pinProject(id, pinned)}
                         onPinSession={(session, pinned) => void pinSession(session, pinned)}
+                        onMoveSession={moveSession}
                         onRenameSession={(id, title) => void renameSession(id, title)}
                         onEditAgentProfile={(agentId) => void openEditProfile(agentId)}
                         onRenameProject={(id, displayName) => void renameProject(id, displayName)}
@@ -1383,6 +1414,9 @@ export function App() {
                               ) : (
                                 <Suspense fallback={<ModusLoadingFallback />}>
                                   <ChatPane
+                                    assistantAgent={sidebarAgents.find(
+                                      (agent) => agent.id === visibleSession.agentId,
+                                    )}
                                     composerDraft={composerDraftBySession[visibleSession.id]}
                                     composerReplacement={
                                       visibleSession.readOnly ? (
@@ -1515,6 +1549,10 @@ export function App() {
                           }
                         >
                           <Inspector
+                            assistantAgent={sidebarAgents.find(
+                              (agent) => agent.id === activeSession?.agentId,
+                            )}
+                            assistantAgentId={activeSession?.agentId}
                             activeWorkspace={activeWorkspace}
                             contextUsageBySession={contextUsageBySession}
                             cwd={reviewCwd ?? activeCwd}

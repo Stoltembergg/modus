@@ -77,6 +77,7 @@ export const IPC_CHANNELS = {
   agentCompact: "agent:compact",
   agentAbort: "agent:abort",
   agentRollback: "agent:rollback",
+  agentMove: "agent:move",
   agentPin: "agent:pin",
   agentRename: "agent:rename",
   agentArchive: "agent:archive",

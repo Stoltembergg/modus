@@ -14,6 +14,7 @@ import { animate, m, useMotionValue } from "motion/react";
 import { lazy, type PointerEvent, Suspense, useEffect, useRef, useState } from "react";
 import type { SecurityState } from "../../../../preload/types";
 import type {
+  AgentInfo,
   AgentSessionInfo,
   ContextItem,
   ContextUsageInfo,
@@ -37,6 +38,8 @@ import { INSPECTOR_MIN_WIDTH } from "./inspector-layout";
 import { SubagentsPanel } from "./SubagentsPanel";
 
 type InspectorProps = {
+  assistantAgent?: AgentInfo | undefined;
+  assistantAgentId?: string | undefined;
   activeWorkspace: WorkspaceInfo | null;
   cwd?: string | undefined;
   sessionCwd?: string | undefined;
@@ -139,6 +142,8 @@ const TABS = [
 ];
 
 export function Inspector({
+  assistantAgent,
+  assistantAgentId,
   activeWorkspace,
   cwd,
   sessionCwd,
@@ -355,6 +360,8 @@ export function Inspector({
                     transitionKey="activity"
                   >
                     <ActivityTimeline
+                      assistantAgent={assistantAgent}
+                      assistantAgentId={assistantAgentId}
                       cwd={cwd}
                       hub={hub}
                       key={sessionId ?? "none"}

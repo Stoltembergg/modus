@@ -6,7 +6,7 @@ import {
   appendUniqueAgentEvents,
   prependAgentEventPage,
 } from "../../../../shared/agent-events";
-import type { PlanRef } from "../../../../shared/contracts";
+import type { AgentInfo, PlanRef } from "../../../../shared/contracts";
 import { useShellText } from "../../lib/shellText";
 import type { AgentEventHub } from "./agentEventHub";
 import { buildVisibleTimelineBlocks, Timeline } from "./Timeline";
@@ -28,6 +28,8 @@ function pageCursor(item: AgentEventItem): number | undefined {
 
 /** Full per-session execution history, kept outside the durable chat transcript. */
 export function ActivityTimeline({
+  assistantAgent,
+  assistantAgentId,
   hub,
   sessionId,
   cwd,
@@ -35,6 +37,8 @@ export function ActivityTimeline({
   onOpenPlan,
   onOpenSubagent,
 }: {
+  assistantAgent?: AgentInfo | undefined;
+  assistantAgentId?: string | undefined;
   hub: AgentEventHub;
   sessionId: string | undefined;
   cwd: string | undefined;
@@ -205,6 +209,8 @@ export function ActivityTimeline({
         ) : null}
         {sessionId && activityBlocks.length > 0 ? (
           <Timeline
+            assistantAgent={assistantAgent}
+            assistantAgentId={assistantAgentId}
             blocks={activityBlocks}
             cwd={cwd}
             embedded

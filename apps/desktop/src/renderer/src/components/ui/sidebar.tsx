@@ -137,6 +137,7 @@ export function DesktopSidebar({
     const root = rootRef.current;
     if (!root) return;
     let pointerInside = false;
+    let draggingSession = false;
     const enter = () => {
       pointerInside = true;
       setOpen(true);
@@ -144,7 +145,7 @@ export function DesktopSidebar({
     const closeOutside = (event: MouseEvent | FocusEvent) => {
       const next = event.relatedTarget;
       if (next instanceof Node && root.contains(next)) return;
-      if (!hasOpenPopup(root)) setOpen(false);
+      if (!draggingSession && !hasOpenPopup(root)) setOpen(false);
     };
     const leave = (event: MouseEvent) => {
       pointerInside = false;
@@ -154,6 +155,20 @@ export function DesktopSidebar({
     const blur = (event: FocusEvent) => {
       if (!pointerInside) closeOutside(event);
     };
+    const dragStart = (event: DragEvent) => {
+      if (event.defaultPrevented || !(event.target instanceof Element)) return;
+      if (!event.target.closest('[data-session-id][draggable="true"]')) return;
+      draggingSession = true;
+      setOpen(true);
+    };
+    const dragEnd = () => {
+      if (!draggingSession) return;
+      draggingSession = false;
+      if (!pointerInside && !hasOpenPopup(root)) setOpen(false);
+    };
+    root.addEventListener("dragstart", dragStart);
+    document.addEventListener("dragend", dragEnd, true);
+    document.addEventListener("drop", dragEnd, true);
     // Settings navigation is portaled here from another React tree. Native
     // events follow DOM containment, so entering it is not mistaken for leaving.
     root.addEventListener("mouseenter", enter);
@@ -161,6 +176,9 @@ export function DesktopSidebar({
     root.addEventListener("focusin", focus);
     root.addEventListener("focusout", blur);
     return () => {
+      root.removeEventListener("dragstart", dragStart);
+      document.removeEventListener("dragend", dragEnd, true);
+      document.removeEventListener("drop", dragEnd, true);
       root.removeEventListener("mouseenter", enter);
       root.removeEventListener("mouseleave", leave);
       root.removeEventListener("focusin", focus);

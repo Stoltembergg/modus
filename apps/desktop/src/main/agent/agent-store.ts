@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { AgentSessionInfo, SubagentWorktreeInfo } from "../../shared/contracts";
 import { getDatabase } from "../db/database";
 import { detachSessionFromGroupRows } from "../groups/group-store";
+import { getWorkspace } from "../workspace/workspace-store";
 
 type AgentSessionRow = {
   id: string;
@@ -442,4 +443,23 @@ export function getAgentSessionBranch(sessionId: string): string | undefined {
 
 export function setAgentSessionBranch(sessionId: string, branch: string): void {
   getDatabase().prepare("update agent_sessions set branch = ? where id = ?").run(branch, sessionId);
+}
+
+/** Location metadata only: transcript, model, run evidence and timestamps remain unchanged. */
+export function moveAgentSessionWorkspace(
+  sessionId: string,
+  workspaceId: string,
+  pinned: boolean,
+): AgentSessionInfo {
+  const session = getAgentSession(sessionId);
+  const workspace = getWorkspace(workspaceId);
+  if (!session || !workspace) throw new Error("Session or destination workspace not found.");
+  getDatabase()
+    .prepare(
+      "update agent_sessions set workspace_id = ?, cwd = ?, pinned_at = ?, branch = null where id = ?",
+    )
+    .run(workspace.id, workspace.rootPath, pinned ? new Date().toISOString() : null, sessionId);
+  const moved = getAgentSession(sessionId);
+  if (!moved) throw new Error("Session disappeared during movement.");
+  return moved;
 }
