@@ -166,6 +166,29 @@ export function ActivityTimeline({
     };
   }, [hub, sessionId, updateHistoryPage]);
 
+  useEffect(() => {
+    if (!historyPage.hasOlder || historyPage.loadingOlder || historyPage.error) return;
+    const viewport = scrollContainerRef.current;
+    if (!viewport) return;
+    let disposed = false;
+    const fill = (): void => {
+      if (
+        !disposed &&
+        viewport.clientHeight > 0 &&
+        viewport.scrollHeight <= viewport.clientHeight + 1
+      )
+        void loadOlderPage();
+    };
+    const observer = new ResizeObserver(fill);
+    observer.observe(viewport);
+    for (const child of viewport.children) observer.observe(child);
+    fill();
+    return () => {
+      disposed = true;
+      observer.disconnect();
+    };
+  }, [historyPage, loadOlderPage]);
+
   // To-dos are pinned above the Composer, so Activity never repeats them.
   const activityBlocks = useMemo(
     () => splitTimelinePresentation(buildVisibleTimelineBlocks(events)).activityBlocks,

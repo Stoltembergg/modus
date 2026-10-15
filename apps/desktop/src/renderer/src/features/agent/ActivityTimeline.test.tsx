@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEventItem,
@@ -45,11 +45,23 @@ vi.mock("./Timeline", async (importOriginal) => {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   Object.assign(window, { modus: undefined });
 });
 
 describe("ActivityTimeline", () => {
-  it("loads earlier persisted activity pages on demand", async () => {
+  it.each([
+    "underfilled",
+    "overflow",
+    "retry",
+    "hidden",
+  ])("loads earlier activity automatically or on scroll, with explicit retry (%s)", async (mode) => {
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(
+      mode === "hidden" ? 0 : 300,
+    );
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(
+      mode === "overflow" ? 500 : 0,
+    );
     const page = (
       events: AgentEventItem[],
       snapshotCursor: number,
@@ -93,20 +105,36 @@ describe("ActivityTimeline", () => {
       event: { type: "run.completed", sessionId: "s", runId: "run-older", eventCursor: 11 },
       createdAt: "2026-10-01T11:01:00.000Z",
     };
-    const listEventPage = vi.fn(async (_sessionId: string, options: AgentEventPageOptions) =>
-      options.direction === "backward" && options.beforeCursor !== undefined
-        ? page([olderStarted, olderCompleted], 20, 10, false)
-        : page([latest], 20, 20, true),
-    );
+    let olderAttempts = 0;
+    const listEventPage = vi.fn(async (_sessionId: string, options: AgentEventPageOptions) => {
+      if (options.direction === "backward" && options.beforeCursor !== undefined) {
+        olderAttempts += 1;
+        if (mode === "retry" && olderAttempts === 1)
+          throw new Error("Storage temporarily unavailable");
+        return page([olderStarted, olderCompleted], 20, 10, false);
+      }
+      return page([latest], 20, 20, true);
+    });
     Object.assign(window, { modus: { agent: { listEventPage } } });
     render(<ActivityTimeline cwd="/repo" hub={new AgentEventHub()} sessionId="s" />);
-
-    await waitFor(() =>
-      expect(screen.getByTestId("activity-event-count").textContent).toBe("1 event"),
-    );
-    expect(screen.getByRole("button", { name: "Load earlier activity" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Load earlier activity" }));
-
+    if (mode === "hidden") {
+      await screen.findByRole("button", { name: "Load earlier activity" });
+      expect(olderAttempts).toBe(0);
+      return;
+    }
+    if (mode === "overflow") {
+      const button = await screen.findByRole("button", { name: "Load earlier activity" });
+      expect(olderAttempts).toBe(0);
+      fireEvent.scroll(button.parentElement as HTMLElement);
+    }
+    if (mode === "retry") {
+      await screen.findByText("Unable to load activity history. Try again.");
+      expect(olderAttempts).toBe(1);
+      const button = screen.getByRole("button", { name: "Load earlier activity" });
+      fireEvent.scroll(button.parentElement as HTMLElement);
+      expect(olderAttempts).toBe(1);
+      fireEvent.click(button);
+    }
     await waitFor(() =>
       expect(screen.getByTestId("activity-event-count").textContent).toBe("3 events"),
     );
@@ -114,6 +142,52 @@ describe("ActivityTimeline", () => {
       "s",
       expect.objectContaining({ direction: "backward", beforeCursor: 20, snapshotCursor: 20 }),
     );
+  });
+
+  it("ignores an older-page response arriving after switching sessions", async () => {
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(300);
+    let finishOlder!: (page: AgentEventPage) => void;
+    const run = (sessionId: string): AgentEventPage => ({
+      events: [
+        {
+          id: `${sessionId}-run`,
+          createdAt: "now",
+          event: {
+            type: "run.started",
+            sessionId,
+            runId: `${sessionId}-run`,
+            delivery: "normal",
+            eventCursor: 20,
+          },
+        },
+      ],
+      summaryEvents: [],
+      activityEvents: [],
+      snapshotCursor: 20,
+      nextCursor: 20,
+      hasMore: sessionId === "first",
+    });
+    const listEventPage = vi.fn(async (sessionId: string, options: AgentEventPageOptions) => {
+      if (options.direction === "backward" && options.beforeCursor !== undefined) {
+        return new Promise<AgentEventPage>((resolve) => {
+          finishOlder = resolve;
+        });
+      }
+      return run(sessionId);
+    });
+    Object.assign(window, { modus: { agent: { listEventPage } } });
+    const hub = new AgentEventHub();
+    const view = render(<ActivityTimeline cwd="/repo" hub={hub} sessionId="first" />);
+    await waitFor(() => expect(finishOlder).toBeTypeOf("function"));
+    view.rerender(<ActivityTimeline cwd="/repo" hub={hub} sessionId="second" />);
+    await waitFor(() =>
+      expect(screen.getByTestId("activity-blocks").textContent).toContain("second-run"),
+    );
+    await act(async () => {
+      finishOlder({ ...run("first"), hasMore: false });
+    });
+    expect(screen.getByTestId("activity-blocks").textContent).not.toContain("first-run");
+    expect(screen.getByTestId("activity-event-count").textContent).toBe("1 event");
   });
 
   it("drops the previous session history when the selected session changes", async () => {
