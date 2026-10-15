@@ -660,6 +660,24 @@ describe("ReaSessionManager", () => {
     await manager.disposeAll();
   });
 
+  it("keeps reporting starting for overlapping callers on one acquisition", async () => {
+    const catalogPage = deferred<{ tools: Array<{ name: string }> }>();
+    const { manager, clients } = setup({ listTools: () => catalogPage.promise as never });
+    const target = owner("catalog-overlap");
+    const first = manager.listTools(target, { offset: 0, limit: 10 });
+    await vi.waitFor(() => expect(clients[0]?.listTools).toHaveBeenCalledTimes(1));
+    const second = manager.listTools(target, { offset: 0, limit: 10 });
+
+    await vi.waitFor(() => expect(manager.getIntegrationStatus().status).toBe("starting"));
+    expect(clients[0]?.listTools).toHaveBeenCalledTimes(1);
+
+    catalogPage.resolve({ tools: [{ name: "echo" }] });
+    await expect(first).resolves.toMatchObject({ tools: [{ name: "echo" }] });
+    await expect(second).resolves.toMatchObject({ tools: [{ name: "echo" }] });
+    expect(manager.getIntegrationStatus().status).toBe("ready");
+    await manager.disposeAll();
+  });
+
   it("suppresses the readiness failure when a worker is disposed mid-catalog", async () => {
     const catalogPage = deferred<{ tools: Array<{ name: string }> }>();
     const { manager, clients } = setup({ listTools: () => catalogPage.promise as never });
@@ -861,6 +879,7 @@ describe("ReaSessionManager", () => {
     try {
       await vi.advanceTimersByTimeAsync(100);
       expect(settled).toBe(true);
+      expect(manager.getIntegrationStatus().status).toBe("failed");
     } finally {
       pendingPage.resolve({ tools: [] });
       await manager.disposeAll();

@@ -120,8 +120,8 @@ type Worker = {
   retired: boolean;
   /** Set by dispose/disable/cancel paths so a cancelled startup skips failure classification. */
   externallyRetired?: boolean;
-  /** True while startWorker is in flight; drives aggregate `starting` readiness. */
-  starting?: boolean;
+  /** Count of in-flight readiness acquisitions (connect + catalog) for this worker. */
+  readinessPending?: number;
   client?: ReaClient;
   transport?: ReaTransport;
   workingDirectory?: string;
@@ -400,7 +400,9 @@ export class ReaSessionManager {
   }
 
   private hasStartingWorker(): boolean {
-    return [...this.workers.values()].some((worker) => !worker.retired && worker.starting === true);
+    return [...this.workers.values()].some(
+      (worker) => !worker.retired && (worker.readinessPending ?? 0) > 0,
+    );
   }
 
   private getProviderNotes(): string[] {
@@ -585,7 +587,6 @@ export class ReaSessionManager {
 
   private ensureStarted(worker: Worker): Promise<void> {
     if (worker.startup) return worker.startup;
-    worker.starting = true;
     this.lifecycleStatus = "starting";
     this.lifecycleNote = undefined;
     worker.startup = this.startWorker(worker);
@@ -718,13 +719,11 @@ export class ReaSessionManager {
   }
 
   private async ensureCatalog(worker: Worker): Promise<void> {
-    // `starting` covers the whole path to readiness (connect + initial catalog), not just
-    // connect, so an in-flight initial catalog never reports `not_started`.
+    // Reference-counted so a concurrent caller's settlement can never clear another caller's
+    // in-flight readiness. Covers connect + (re)acquiring the catalog.
+    worker.readinessPending = (worker.readinessPending ?? 0) + 1;
     try {
       this.assertCurrent(worker.owner, worker);
-      // Reached on both first connect and catalog retries, so readiness is `starting`
-      // whenever a worker is (re)acquiring its catalog, not only when connecting.
-      worker.starting = true;
       await this.ensureStarted(worker);
       this.assertCurrent(worker.owner, worker);
       if (!worker.catalog) {
@@ -735,15 +734,16 @@ export class ReaSessionManager {
         await catalog;
       } catch (error) {
         if (worker.catalog === catalog && !worker.retired) delete worker.catalog;
-        // A disposal/disable mid-catalog cancels via retirement; only a genuine catalog
-        // failure on the current worker should be published as a readiness failure.
+        // Mirror the startup discipline: suppress only an externally retired or superseded
+        // worker, so an internally-retired catalog timeout still publishes its failure.
         const current = this.workers.get(worker.key);
-        if (!worker.externallyRetired && current === worker) this.setFailureStatus(error);
+        const superseded = current !== undefined && current !== worker;
+        if (!worker.externallyRetired && !superseded) this.setFailureStatus(error);
         throw error;
       }
       this.assertCurrent(worker.owner, worker);
     } finally {
-      worker.starting = false;
+      worker.readinessPending = Math.max(0, (worker.readinessPending ?? 1) - 1);
     }
   }
 
