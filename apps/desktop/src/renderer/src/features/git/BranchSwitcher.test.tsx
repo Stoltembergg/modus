@@ -1,12 +1,13 @@
 // @vitest-environment happy-dom
 import { Menu } from "@base-ui/react/menu";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GitBranchSummary } from "../../../../shared/contracts";
 import {
   type BranchMenuGroup,
   BranchMenuGroups,
+  BranchSwitcher,
   branchMenuGroups,
   branchNameFromValue,
 } from "./BranchSwitcher";
@@ -92,5 +93,71 @@ describe("BranchMenuGroups", () => {
     const items = screen.getAllByRole("menuitemradio");
     expect(document.querySelectorAll("[role=menu] svg")).toHaveLength(items.length);
     expect(document.querySelector("svg line")).toBeNull();
+  });
+});
+
+describe("BranchSwitcher checkout", () => {
+  afterEach(() => {
+    delete (window as unknown as { modus?: unknown }).modus;
+  });
+
+  it.each([
+    { name: "origin/feature", remote: true },
+    { name: "feature", remote: false },
+  ])("preserves remote=$remote when selecting $name", async ({ name, remote }) => {
+    const checkout = vi.fn(async () => ({ kind: "ok", output: "" }));
+    const onAfterSwitch = vi.fn();
+    (window as unknown as { modus: unknown }).modus = {
+      git: {
+        branches: async () => ({
+          local: [
+            { name: "main", current: true },
+            { name: "feature", current: false },
+          ],
+          remote: [{ name: "origin/feature" }],
+        }),
+        checkout,
+      },
+    };
+    const user = userEvent.setup();
+    render(
+      <BranchSwitcher cwd="/repo" triggerClassName="" onAfterSwitch={onAfterSwitch}>
+        Choose branch
+      </BranchSwitcher>,
+    );
+    await user.click(screen.getByRole("button", { name: "Choose branch" }));
+    await user.click(
+      await screen.findByRole("menuitemradio", { name: new RegExp(`^${name}(?: |$)`) }),
+    );
+    await waitFor(() => expect(checkout).toHaveBeenCalledWith({ cwd: "/repo", name, remote }));
+    expect(onAfterSwitch).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the last remote branch reachable by keyboard in a long menu", async () => {
+    const remotes = Array.from({ length: 80 }, (_, index) => ({ name: `origin/feature-${index}` }));
+    const checkout = vi.fn(async () => ({ kind: "ok", output: "" }));
+    (window as unknown as { modus: unknown }).modus = {
+      git: {
+        branches: async () => ({ local: [{ name: "main", current: true }], remote: remotes }),
+        checkout,
+      },
+    };
+    const user = userEvent.setup();
+    render(
+      <BranchSwitcher cwd="/repo" triggerClassName="">
+        Choose branch
+      </BranchSwitcher>,
+    );
+    await user.click(screen.getByRole("button", { name: "Choose branch" }));
+    const last = await screen.findByRole("menuitemradio", { name: /^origin\/feature-79 / });
+    expect(last.title).toBe("origin/feature-79");
+    await user.keyboard("{End}{Enter}");
+    await waitFor(() =>
+      expect(checkout).toHaveBeenCalledWith({
+        cwd: "/repo",
+        name: "origin/feature-79",
+        remote: true,
+      }),
+    );
   });
 });
