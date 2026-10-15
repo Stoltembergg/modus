@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } f
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ReaPrerequisiteResult } from "./rea-prerequisites";
 import {
   MAX_REA_CATALOG_PAGE_SIZE,
   MAX_REA_RESULT_BYTES,
@@ -40,6 +41,9 @@ function setup(
     transportClose?: (index: number) => Promise<void>;
     platformProcessOps?: { killTree: (pid: number) => Promise<void> | void };
     settingsStore?: ReaSettingsStore;
+    checkPrerequisites?: () => Promise<ReaPrerequisiteResult>;
+    transportStderr?: boolean;
+    removeWorkerDirectory?: (directory: string) => void;
   } = {},
 ) {
   const calls: Array<{ name: string; arguments?: Record<string, unknown> }> = [];
@@ -51,6 +55,7 @@ function setup(
     emitClose: () => void;
   }> = [];
   const transportParameters: Array<Record<string, unknown>> = [];
+  const stderrListeners: Array<Array<(chunk: unknown) => void>> = [];
   const userDataDirectory = mkdtempSync(join(tmpdir(), "rea-manager-userdata-"));
   testDataDirectories.push(userDataDirectory);
   const manager = new ReaSessionManager({
@@ -68,6 +73,10 @@ function setup(
     platform: options.platform ?? "win32",
     ...(options.settingsStore ? { settingsStore: options.settingsStore } : {}),
     ...(options.platformProcessOps ? { platformProcessOps: options.platformProcessOps } : {}),
+    checkPrerequisites: options.checkPrerequisites ?? (async () => ({ ok: true })),
+    ...(options.removeWorkerDirectory
+      ? { removeWorkerDirectory: options.removeWorkerDirectory }
+      : {}),
     clientFactory: () => {
       const client = {
         connect: vi.fn(options.connect ?? (async () => {})),
@@ -90,6 +99,16 @@ function setup(
       const transport = {
         pid: options.transportPid ?? 5000 + index,
         onclose: undefined as (() => void) | undefined,
+        stderr: options.transportStderr
+          ? {
+              on: (event: string, handler: (chunk: unknown) => void) => {
+                if (event !== "data") return;
+                const listeners = stderrListeners[index];
+                if (listeners) listeners.push(handler);
+                else stderrListeners[index] = [handler];
+              },
+            }
+          : undefined,
         close: vi.fn(async () => {
           await options.transportClose?.(index);
           transport.onclose?.();
@@ -101,7 +120,18 @@ function setup(
       return transport as never;
     },
   });
-  return { manager, clients, transports, transportParameters, calls, userDataDirectory };
+  const emitStderr = (index: number, text: string) => {
+    for (const handler of stderrListeners[index] ?? []) handler(text);
+  };
+  return {
+    manager,
+    clients,
+    transports,
+    transportParameters,
+    calls,
+    userDataDirectory,
+    emitStderr,
+  };
 }
 
 const owner = (sessionId: string, generation = "g1"): ReaSessionOwner => ({
@@ -357,20 +387,102 @@ describe("ReaSessionManager", () => {
     await manager.disposeAll();
   });
 
-  it("removes stale per-session working directories left by an earlier run", async () => {
-    const { manager, userDataDirectory } = setup();
+  it("sweeps stale worker directories once without touching non-worker siblings", async () => {
+    const { manager, userDataDirectory, transportParameters } = setup();
     const workersDirectory = join(userDataDirectory, "rea", "workers");
     const staleDirectory = join(workersDirectory, "worker-stale-leftover");
     mkdirSync(staleDirectory, { recursive: true });
     writeFileSync(join(staleDirectory, "leftover.txt"), "stale");
-    const unrelatedDirectory = join(userDataDirectory, "rea", "not-a-worker");
-    mkdirSync(unrelatedDirectory, { recursive: true });
+    const nonWorkerSibling = join(workersDirectory, "scratch");
+    mkdirSync(nonWorkerSibling, { recursive: true });
 
     await manager.listTools(owner("stale-sweep"), { offset: 0, limit: 10 });
-
+    const firstWorkerDirectory = transportParameters[0]?.cwd as string;
     expect(existsSync(staleDirectory)).toBe(false);
-    expect(existsSync(unrelatedDirectory)).toBe(true);
+    expect(existsSync(nonWorkerSibling)).toBe(true);
+
+    await manager.listTools(owner("stale-sweep-second"), { offset: 0, limit: 10 });
+    expect(existsSync(firstWorkerDirectory)).toBe(true);
+    expect(transportParameters[1]?.cwd).not.toBe(firstWorkerDirectory);
     await manager.disposeAll();
+  });
+
+  it("still starts a worker when stale-directory removal fails", async () => {
+    const { manager, userDataDirectory } = setup({
+      removeWorkerDirectory: () => {
+        throw new Error("directory is locked");
+      },
+    });
+    const staleDirectory = join(userDataDirectory, "rea", "workers", "worker-locked");
+    mkdirSync(staleDirectory, { recursive: true });
+
+    await expect(
+      manager.listTools(owner("stale-locked"), { offset: 0, limit: 10 }),
+    ).resolves.toMatchObject({ tools: [{ name: "echo" }] });
+    expect(existsSync(staleDirectory)).toBe(true);
+    await manager.disposeAll();
+  });
+
+  it("reports needs_node and starts nothing when prerequisites are missing", async () => {
+    const { manager, clients } = setup({
+      checkPrerequisites: async () => ({
+        ok: false,
+        status: "needs_node",
+        note: "REA needs Node.js ^22.19.0 || ^24.11.0 || >=26.0.0 and npm/npx on PATH.",
+      }),
+    });
+    await expect(manager.listTools(owner("no-node"), { offset: 0, limit: 10 })).rejects.toThrow(
+      /Node\.js/,
+    );
+    expect(clients).toHaveLength(0);
+    expect(manager.getIntegrationStatus()).toMatchObject({
+      enabled: true,
+      status: "needs_node",
+      note: expect.stringContaining("^22.19.0"),
+    });
+    await manager.disposeAll();
+  });
+
+  it("classifies a cold-cache offline failure from captured stderr as a network error", async () => {
+    let feedStderr: ((text: string) => void) | undefined;
+    const harness = setup({
+      transportStderr: true,
+      connect: async () => {
+        feedStderr?.("npm ERR! code ENOTFOUND registry.npmjs.org fetch failed");
+        throw new Error("MCP error -32000: Connection closed");
+      },
+    });
+    feedStderr = (text) => harness.emitStderr(0, text);
+
+    await expect(
+      harness.manager.listTools(owner("offline-cache"), { offset: 0, limit: 10 }),
+    ).rejects.toThrow();
+    expect(harness.manager.getIntegrationStatus()).toMatchObject({
+      enabled: true,
+      status: "network_error",
+    });
+    await harness.manager.disposeAll();
+  });
+
+  it("redacts host paths from captured stderr diagnostics", async () => {
+    let feedStderr: ((text: string) => void) | undefined;
+    const harness = setup({
+      transportStderr: true,
+      connect: async () => {
+        feedStderr?.("worker crashed at C:\\Users\\secret\\rea\\worker\\log.txt");
+        throw new Error("MCP error -32000: Connection closed");
+      },
+    });
+    feedStderr = (text) => harness.emitStderr(0, text);
+
+    await expect(
+      harness.manager.listTools(owner("stderr-redaction"), { offset: 0, limit: 10 }),
+    ).rejects.toThrow();
+    const status = harness.manager.getIntegrationStatus();
+    expect(status).toMatchObject({ enabled: true, status: "failed" });
+    expect(status.note).toContain("<path>");
+    expect(JSON.stringify(status)).not.toContain("secret");
+    await harness.manager.disposeAll();
   });
 
   it("forwards only the documented OS and REA provider environment allowlist", async () => {

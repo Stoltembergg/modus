@@ -10,6 +10,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { app } from "electron";
 import type { ReaIntegrationState, ReaIntegrationStatus } from "../../shared/contracts";
 import { createPlatformProcessOps } from "../process/platform-process-ops";
+import { checkReaPrerequisites, type ReaPrerequisiteResult } from "./rea-prerequisites";
 import { ReaSettingsStore } from "./rea-settings";
 import { resolveReaSupervisorPath } from "./rea-supervisor-path";
 
@@ -42,6 +43,8 @@ const SERVER_NAME = "modus-rea";
 const SERVER_VERSION = "0.1.0";
 const RESULT_TRUNCATION_MARKER = "\n[REA result truncated]";
 const MAX_REA_METADATA_BYTES = 16 * 1024;
+const MAX_REA_DIAGNOSTIC_BYTES = 8 * 1024;
+const MAX_REA_DIAGNOSTIC_NOTE_CHARS = 240;
 const CLEANUP_FAILURE_MESSAGE =
   "REA worker cleanup failed; the worker remains quarantined until cleanup is confirmed.";
 const REA_PROVIDER_ENV = [
@@ -72,6 +75,7 @@ type ReaClient = {
 type ReaTransport = Transport & {
   close(): Promise<void>;
   pid?: number | null;
+  stderr?: NodeJS.ReadableStream | null;
 };
 type ReaClientTransportFactory = {
   clientFactory: () => ReaClient;
@@ -89,6 +93,9 @@ export type ReaSessionManagerOptions = Partial<ReaClientTransportFactory> & {
   /** Explicit REA root override for tests; defaults to `<userData>/rea`. */
   tempDirectory?: string;
   settingsStore?: ReaSettingsStore;
+  checkPrerequisites?: () => Promise<ReaPrerequisiteResult>;
+  /** Test seam for the once-per-instance stale worker-directory sweep. */
+  removeWorkerDirectory?: (directory: string) => void;
 };
 
 export type PlatformProcessOps = {
@@ -120,7 +127,19 @@ type Worker = {
   supervisorPid?: number;
   processCleanup?: Promise<void>;
   transportCloseHandled: boolean;
+  diagnostics?: { chunks: string[]; bytes: number };
 };
+
+/** A prerequisite probe failure that must surface as its own readiness state, not `failed`. */
+class ReaStartupError extends Error {
+  constructor(
+    readonly status: "needs_node" | "network_error" | "failed",
+    readonly note: string,
+  ) {
+    super(note);
+    this.name = "ReaStartupError";
+  }
+}
 
 function ownerKey(owner: ReaSessionOwner): string {
   return JSON.stringify([owner.sessionId, owner.generation]);
@@ -255,6 +274,20 @@ function ensurePrivateDirectory(directory: string): void {
   if (process.platform !== "win32") chmodSync(directory, 0o700);
 }
 
+/**
+ * Collapses and redacts a bounded child-stderr excerpt so it can inform readiness
+ * classification without leaking host paths. Child diagnostics are untrusted data.
+ */
+function redactReaDiagnostics(text: string): string {
+  return text
+    .replace(/\r/g, "")
+    .replace(/[A-Za-z]:\\[^\s"']*/g, "<path>")
+    .replace(/\/(?:home|Users|root|tmp|private|var)\/[^\s"']*/g, "<path>")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_REA_DIAGNOSTIC_NOTE_CHARS);
+}
+
 export class ReaSessionManager {
   private readonly workers = new Map<string, Worker>();
   private readonly activeGenerations = new Map<string, string>();
@@ -271,6 +304,8 @@ export class ReaSessionManager {
   private readonly workersDirectory: string;
   private readonly npmCacheDirectory: string;
   private readonly settingsStore: ReaSettingsStore;
+  private readonly checkPrerequisites: () => Promise<ReaPrerequisiteResult>;
+  private readonly removeWorkerDirectory: (directory: string) => void;
   private lifecycleStatus: ReaIntegrationState = "not_started";
   private lifecycleNote: string | undefined;
   private sweptStaleWorkerDirectories = false;
@@ -296,6 +331,11 @@ export class ReaSessionManager {
     this.workersDirectory = join(this.reaDirectory, "workers");
     this.npmCacheDirectory = join(this.reaDirectory, "npm-cache");
     this.settingsStore = options.settingsStore ?? new ReaSettingsStore();
+    this.checkPrerequisites =
+      options.checkPrerequisites ?? (() => checkReaPrerequisites({ platform: this.platform }));
+    this.removeWorkerDirectory =
+      options.removeWorkerDirectory ??
+      ((directory) => rmSync(directory, { recursive: true, force: true }));
   }
 
   getIntegrationStatus(): ReaIntegrationStatus {
@@ -553,7 +593,7 @@ export class ReaSessionManager {
     for (const entry of entries) {
       if (!entry.startsWith("worker-")) continue;
       try {
-        rmSync(join(this.workersDirectory, entry), { recursive: true, force: true });
+        this.removeWorkerDirectory(join(this.workersDirectory, entry));
       } catch {
         // Best effort: a leftover directory must never block starting a worker.
       }
@@ -562,6 +602,10 @@ export class ReaSessionManager {
 
   private async startWorker(worker: Worker): Promise<void> {
     try {
+      const prerequisite = await this.checkPrerequisites();
+      if (!prerequisite.ok) {
+        throw new ReaStartupError(prerequisite.status, prerequisite.note);
+      }
       ensurePrivateDirectory(this.reaDirectory);
       ensurePrivateDirectory(this.workersDirectory);
       ensurePrivateDirectory(this.npmCacheDirectory);
@@ -573,10 +617,11 @@ export class ReaSessionManager {
         args: [],
         env: safeEnvironment(this.npmCacheDirectory),
         cwd: worker.workingDirectory,
-        stderr: "ignore",
+        stderr: "pipe",
       });
       worker.client = client;
       worker.transport = transport;
+      this.captureWorkerDiagnostics(worker, transport);
       const previousOnClose = transport.onclose;
       transport.onclose = () => {
         try {
@@ -602,25 +647,50 @@ export class ReaSessionManager {
       if (transport.pid && transport.pid > 0) worker.supervisorPid = transport.pid;
       this.assertCurrent(worker.owner, worker);
     } catch (error) {
-      this.setFailureStatus(error);
+      this.setFailureStatus(error, worker);
       await this.retireWorker(worker);
       throw error;
     }
   }
 
-  private setFailureStatus(error: unknown): void {
-    const message = error instanceof Error ? error.message.toLowerCase() : "";
-    if (/node|npx/.test(message)) {
-      this.lifecycleStatus = "needs_node";
-      this.lifecycleNote = "REA needs a supported Node.js and npm installation.";
-    } else if (/network|fetch|offline|econn|enotfound/.test(message)) {
+  private captureWorkerDiagnostics(worker: Worker, transport: ReaTransport): void {
+    const stream = transport.stderr;
+    if (!stream || typeof stream.on !== "function") return;
+    const diagnostics = { chunks: [] as string[], bytes: 0 };
+    worker.diagnostics = diagnostics;
+    stream.on("data", (chunk: unknown) => {
+      if (diagnostics.bytes >= MAX_REA_DIAGNOSTIC_BYTES) return;
+      const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+      const remaining = MAX_REA_DIAGNOSTIC_BYTES - diagnostics.bytes;
+      const bounded = text.slice(0, remaining);
+      diagnostics.chunks.push(bounded);
+      diagnostics.bytes += Buffer.byteLength(bounded, "utf8");
+    });
+    stream.on("error", () => {});
+  }
+
+  private setFailureStatus(error: unknown, worker?: Worker): void {
+    if (error instanceof ReaStartupError) {
+      this.lifecycleStatus = error.status;
+      this.lifecycleNote = error.note;
+      return;
+    }
+    const diagnostic = worker?.diagnostics
+      ? redactReaDiagnostics(worker.diagnostics.chunks.join(""))
+      : "";
+    const message = `${error instanceof Error ? error.message : ""} ${diagnostic}`.toLowerCase();
+    if (/network|fetch|offline|econn|enotfound|etimedout|eai_again|registry|proxy/.test(message)) {
       this.lifecycleStatus = "network_error";
       this.lifecycleNote =
         "REA could not acquire or connect to its pinned package; check network access and retry.";
+    } else if (/\bnode\b|npx|not recognized|not found|unsupported/.test(message)) {
+      this.lifecycleStatus = "needs_node";
+      this.lifecycleNote = "REA needs a supported Node.js and npm installation.";
     } else {
       this.lifecycleStatus = "failed";
-      this.lifecycleNote =
-        "REA could not start. Retry after checking Node.js, npm, and network availability.";
+      this.lifecycleNote = diagnostic
+        ? `REA could not start (${diagnostic}). Retry after checking Node.js, npm, and network availability.`
+        : "REA could not start. Retry after checking Node.js, npm, and network availability.";
     }
   }
 

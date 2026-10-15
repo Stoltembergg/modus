@@ -161,6 +161,27 @@ jobs:
       - name: Test managed PTY process-tree cancellation
         run: cargo test --locked -p modus-pty-host
 
+  rea-process-supervisor-tests:
+    name: REA process supervisor · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check REA supervisor formatting
+        run: cargo fmt --manifest-path crates/modus-rea-process-supervisor/Cargo.toml -- --check
+
+      - name: Test REA supervisor process-tree termination
+        run: cargo test --locked -p modus-rea-process-supervisor
+
   plugin-execution-protocol-tests:
     name: plugin execution protocol and supervisor tests · safe fixtures
     runs-on: ubuntu-latest
