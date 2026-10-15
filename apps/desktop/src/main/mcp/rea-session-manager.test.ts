@@ -678,6 +678,50 @@ describe("ReaSessionManager", () => {
     await manager.disposeAll();
   });
 
+  it("keeps reporting starting when a caller reacquires after a catalog rejection", async () => {
+    const attempts: Array<{
+      resolve: (value: { tools: Array<{ name: string }> }) => void;
+      reject: (error: unknown) => void;
+    }> = [];
+    const { manager } = setup({
+      listTools: () => {
+        const attempt = deferred<{ tools: Array<{ name: string }> }>();
+        attempts.push(attempt);
+        return attempt.promise as never;
+      },
+    });
+    const target = owner("catalog-reacquire");
+    const first = manager.listTools(target, { offset: 0, limit: 10 });
+    void first.catch(() => {});
+    await vi.waitFor(() => expect(attempts).toHaveLength(1));
+
+    // Schedule a second caller across microtask hops so it enters ensureCatalog while request 1's
+    // rejection continuation is still queued: it claims readiness before that continuation clears
+    // it, then reacquires once the failed catalog has been deleted. A shared readiness flag would
+    // leave this worker reporting "failed" while the second request is still in flight.
+    let second: Promise<unknown> | undefined;
+    attempts[0]?.reject(new Error("catalog unavailable"));
+    await new Promise<void>((resolve) => {
+      queueMicrotask(() => {
+        queueMicrotask(() => {
+          queueMicrotask(() => {
+            second = manager.listTools(target, { offset: 0, limit: 10 });
+            void second.catch(() => {});
+            resolve();
+          });
+        });
+      });
+    });
+
+    await vi.waitFor(() => expect(attempts).toHaveLength(2));
+    expect(manager.getIntegrationStatus().status).toBe("starting");
+
+    attempts[1]?.resolve({ tools: [{ name: "echo" }] });
+    await expect(second).resolves.toMatchObject({ tools: [{ name: "echo" }] });
+    expect(manager.getIntegrationStatus().status).toBe("ready");
+    await manager.disposeAll();
+  });
+
   it("suppresses the readiness failure when a worker is disposed mid-catalog", async () => {
     const catalogPage = deferred<{ tools: Array<{ name: string }> }>();
     const { manager, clients } = setup({ listTools: () => catalogPage.promise as never });
