@@ -133,6 +133,7 @@ export function App() {
   const [agentSessions, setAgentSessions] = useState<AgentSessionInfo[]>([]);
   const [sidebarAgents, setSidebarAgents] = useState<AgentInfo[]>([]);
   const [projectsExpanded, setProjectsExpanded] = useState(true);
+  const [chatsExpanded, setChatsExpanded] = useState(true);
   const [sidebarPinnedSlot, setSidebarPinnedSlot] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
     const applyNativeGlass = (available: boolean): void => {
@@ -1213,9 +1214,7 @@ export function App() {
                     onNewProfile={() => void openNewProfile()}
                     onOpenWorkspace={() => void openWorkspace()}
                     onPinnedChange={setSidebarOpen}
-                    onToggleProjects={() => setProjectsExpanded((expanded) => !expanded)}
                     pinned={responsiveSidebarOpen}
-                    projectsExpanded={projectsExpanded}
                     trafficLightClearance={isMac}
                   >
                     {settingsOpen ? (
@@ -1228,8 +1227,12 @@ export function App() {
                       <Sidebar
                         agents={sidebarAgents}
                         embedded
+                        chatsExpanded={chatsExpanded}
                         pinnedContainer={sidebarPinnedSlot}
                         projectsExpanded={projectsExpanded}
+                        onToggleChats={() => setChatsExpanded((expanded) => !expanded)}
+                        onExpandChats={() => setChatsExpanded(true)}
+                        onToggleProjects={() => setProjectsExpanded((expanded) => !expanded)}
                         section="direct-messages"
                         activityBySession={activityBySession}
                         agentSessions={rootSessions}

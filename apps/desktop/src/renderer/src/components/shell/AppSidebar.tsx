@@ -1,12 +1,4 @@
-import {
-  IconEdit,
-  IconMessageCircle,
-  IconPin,
-  IconPinnedOff,
-  IconPlus,
-  IconSettings,
-  IconUserPlus,
-} from "@tabler/icons-react";
+import { IconEdit, IconPin, IconPinnedOff, IconSettings, IconUserPlus } from "@tabler/icons-react";
 import { type ReactNode, useState } from "react";
 import { cn } from "../../lib/cn";
 import { useShellText } from "../../lib/shellText";
@@ -29,11 +21,13 @@ export type AppSidebarProps = {
   pinned: boolean;
   onPinnedChange(pinned: boolean): void;
   onNewMessage(): void;
-  canCreateSession: boolean;
-  onNewProfile?: (() => void) | undefined;
+  /** Retained for callers; the action is rendered in the Projects section. */
+  onOpenWorkspace?: (() => void) | undefined;
+  /** Retained for callers; disclosure state is owned by the contextual list. */
   projectsExpanded?: boolean | undefined;
   onToggleProjects?: (() => void) | undefined;
-  onOpenWorkspace?: (() => void) | undefined;
+  canCreateSession: boolean;
+  onNewProfile?: (() => void) | undefined;
   /** Host slot for the pinned session list, before the Projects disclosure. */
   beforeProjects?: ReactNode;
   /** macOS: leave room for the traffic lights above the logo. */
@@ -78,9 +72,6 @@ export function AppSidebar({
   onNewMessage,
   canCreateSession,
   onNewProfile,
-  projectsExpanded,
-  onToggleProjects,
-  onOpenWorkspace,
   beforeProjects,
   trafficLightClearance = false,
   children,
@@ -132,32 +123,6 @@ export function AppSidebar({
               ) : null}
             </div>
             {pinned || hoverOpen ? beforeProjects : null}
-            <div className="mt-0.5 flex items-center">
-              <SidebarLink
-                className="min-w-0 flex-1"
-                active={active === "direct-messages"}
-                expanded={active === "direct-messages" ? projectsExpanded : undefined}
-                link={{
-                  label: t("shell.projects"),
-                  icon: <IconMessageCircle size={ICON.rail} stroke={ICON_STROKE.rail} />,
-                  onClick: () => {
-                    if (active === "direct-messages" && onToggleProjects) onToggleProjects();
-                    else onNavigate("direct-messages");
-                  },
-                }}
-              />
-              {onOpenWorkspace && (pinned || hoverOpen) ? (
-                <button
-                  aria-label="Open workspace"
-                  className="app-sidebar-icon-button shrink-0"
-                  onClick={onOpenWorkspace}
-                  title="Open workspace"
-                  type="button"
-                >
-                  <IconPlus aria-hidden size={ICON.sm} stroke={ICON_STROKE.sm} />
-                </button>
-              ) : null}
-            </div>
             <ContextList>{children}</ContextList>
           </div>
           <div className="pt-2">

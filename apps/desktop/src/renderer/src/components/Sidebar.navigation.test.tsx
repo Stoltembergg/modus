@@ -9,6 +9,7 @@ import type {
   MoveAgentSessionInput,
   WorkspaceInfo,
 } from "../../../shared/contracts";
+import { CHATS_WORKSPACE_ID } from "../../../shared/contracts";
 import type { SessionActivity } from "../features/agent/agentEventHub";
 import { Sidebar } from "./Sidebar";
 import { AppSidebar } from "./shell/AppSidebar";
@@ -43,6 +44,15 @@ const SECOND_WORKSPACE: WorkspaceInfo = {
   displayName: "Destination",
   rootPath: "/modus",
 };
+const CHATS_WORKSPACE: WorkspaceInfo = {
+  id: CHATS_WORKSPACE_ID,
+  displayName: "Chats",
+  rootPath: "/chats",
+  isGitRepository: false,
+  lastOpenedAt: "2026-10-14T00:00:00Z",
+  pinned: false,
+  inbox: true,
+};
 const AGENT: AgentInfo = {
   id: "atlas",
   name: "Atlas",
@@ -74,6 +84,10 @@ function Navigation({
   pinned = true,
   onSelect = () => {},
   onMove = async () => {},
+  onArchive = () => {},
+  onRestore = () => {},
+  onListArchived = async () => [],
+  workspaces = [WORKSPACE, SECOND_WORKSPACE],
 }: {
   initialSessions: AgentSessionInfo[];
   activeSessionId?: string;
@@ -81,9 +95,14 @@ function Navigation({
   pinned?: boolean;
   onSelect?: (session: AgentSessionInfo) => void;
   onMove?: (input: MoveAgentSessionInput) => Promise<void>;
+  onArchive?: (session: AgentSessionInfo) => void;
+  onRestore?: (session: AgentSessionInfo) => void;
+  onListArchived?: (workspaceId: string) => Promise<AgentSessionInfo[]>;
+  workspaces?: WorkspaceInfo[];
 }) {
   const [sessions, setSessions] = useState(initialSessions);
   const [projectsExpanded, setProjectsExpanded] = useState(true);
+  const [chatsExpanded, setChatsExpanded] = useState(true);
   const [pinnedContainer, setPinnedContainer] = useState<HTMLDivElement | null>(null);
   const noop = () => {};
   return (
@@ -97,9 +116,7 @@ function Navigation({
         onNewProfile={noop}
         onOpenWorkspace={noop}
         onPinnedChange={noop}
-        onToggleProjects={() => setProjectsExpanded((value) => !value)}
         pinned={pinned}
-        projectsExpanded={projectsExpanded}
       >
         <Sidebar
           activeSessionId={activeSessionId}
@@ -110,10 +127,10 @@ function Navigation({
           embedded
           maxWidth={480}
           onArchiveProjectChats={noop}
-          onArchiveSession={noop}
+          onArchiveSession={onArchive}
           onDeleteProjectChats={noop}
           onDeleteSession={noop}
-          onListArchivedSessions={async () => []}
+          onListArchivedSessions={onListArchived}
           onNewSession={noop}
           onNewWorkspaceSession={noop}
           onOpenSettings={noop}
@@ -122,9 +139,7 @@ function Navigation({
             await onMove(input);
             const current = sessions.find((item) => item.id === input.id);
             if (!current) throw new Error("Session unavailable");
-            const workspace = [WORKSPACE, SECOND_WORKSPACE].find(
-              (item) => item.id === input.workspaceId,
-            );
+            const workspace = workspaces.find((item) => item.id === input.workspaceId);
             const next = {
               ...current,
               ...(workspace ? { workspaceId: workspace.id, cwd: workspace.rootPath } : {}),
@@ -148,15 +163,19 @@ function Navigation({
           }
           onRemoveProject={noop}
           onRenameProject={noop}
-          onRestoreSession={noop}
+          onRestoreSession={onRestore}
           onRevealProject={noop}
           onSelectSession={onSelect}
           onWidthChange={noop}
           open
           pinnedContainer={pinnedContainer}
           projectsExpanded={projectsExpanded}
+          chatsExpanded={chatsExpanded}
+          onToggleChats={() => setChatsExpanded((value) => !value)}
+          onExpandChats={() => setChatsExpanded(true)}
+          onToggleProjects={() => setProjectsExpanded((value) => !value)}
           width={300}
-          workspaces={[WORKSPACE, SECOND_WORKSPACE]}
+          workspaces={workspaces}
         />
       </AppSidebar>
     </LazyMotion>
@@ -196,6 +215,166 @@ describe("sidebar project and Agent navigation", () => {
     fireEvent.click(projects);
     expect(await screen.findByText("Oi")).toBeTruthy();
     expect(screen.getAllByText("Oi")).toHaveLength(1);
+  });
+
+  it("renders Chats and Projects as independent peer disclosures", async () => {
+    render(
+      <Navigation
+        initialSessions={[
+          session("Inbox chat", { workspaceId: CHATS_WORKSPACE_ID }),
+          session("Project chat"),
+        ]}
+        workspaces={[WORKSPACE, CHATS_WORKSPACE]}
+      />,
+    );
+    const chats = screen.getByTestId("sidebar-chats");
+    const projects = screen.getByTestId("sidebar-projects");
+    const chatsHeader = within(chats).getByRole("button", { name: "Chats" });
+    const projectsHeader = within(projects).getByRole("button", { name: "Projects" });
+    expect(chats.compareDocumentPosition(projects) & 4).toBe(4);
+    expect(chatsHeader.getAttribute("aria-expanded")).toBe("true");
+    expect(projectsHeader.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(chatsHeader);
+    await waitFor(() => expect(within(chats).queryByText("Inbox chat")).toBeNull());
+    expect(projectsHeader.getAttribute("aria-expanded")).toBe("true");
+    expect(within(projects).getByText("Project chat")).toBeTruthy();
+  });
+
+  it("lists inbox chats only in Chats, keeps project and unavailable sessions in Projects, and selects by ID", () => {
+    const onSelect = vi.fn();
+    const inboxSession = session("Inbox chat", { workspaceId: CHATS_WORKSPACE_ID });
+    const projectSession = session("Project chat");
+    const unavailableSession = session("Unavailable", { workspaceId: "missing" });
+    const pinnedInbox = session("Pinned inbox", {
+      workspaceId: CHATS_WORKSPACE_ID,
+      pinnedAt: "2026-10-14T00:00:00Z",
+    });
+    render(
+      <Navigation
+        initialSessions={[inboxSession, projectSession, unavailableSession, pinnedInbox]}
+        onSelect={onSelect}
+        workspaces={[WORKSPACE, SECOND_WORKSPACE, CHATS_WORKSPACE]}
+      />,
+    );
+
+    const chats = screen.getByTestId("sidebar-chats");
+    const projects = screen.getByTestId("sidebar-projects");
+    expect(within(chats).getByText("Inbox chat")).toBeTruthy();
+    expect(within(chats).queryByText("Project chat")).toBeNull();
+    expect(within(projects).getByText("Project chat")).toBeTruthy();
+    expect(within(projects).getByText("Unavailable")).toBeTruthy();
+    expect(within(projects).queryByText("Inbox chat")).toBeNull();
+    expect(within(screen.getByTestId("pinned-slot")).getByText("Pinned inbox")).toBeTruthy();
+    expect(within(chats).queryByText("Pinned inbox")).toBeNull();
+    expect(screen.getAllByText("Inbox chat")).toHaveLength(1);
+    fireEvent.click(within(chats).getByRole("button", { name: "Inbox chat" }));
+    expect(onSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "Inbox chat",
+        workspaceId: CHATS_WORKSPACE_ID,
+      }),
+    );
+    fireEvent.click(within(chats).getByRole("button", { name: "Pin chat" }));
+    expect(within(screen.getByTestId("pinned-slot")).getByText("Inbox chat")).toBeTruthy();
+    expect(within(chats).queryByText("Inbox chat")).toBeNull();
+    expect(screen.getAllByText("Inbox chat")).toHaveLength(1);
+  });
+
+  it("gives Chats its own collapsible header without project actions and preserves inbox session actions and archives", async () => {
+    const inbox = session("Inbox chat", { workspaceId: CHATS_WORKSPACE_ID });
+    const archived = session("Archived inbox chat", {
+      workspaceId: CHATS_WORKSPACE_ID,
+      archivedAt: "2026-10-13T00:00:00Z",
+    });
+    const onArchive = vi.fn();
+    const onRestore = vi.fn();
+    const onListArchived = vi.fn(async () => [archived]);
+    render(
+      <Navigation
+        initialSessions={[inbox]}
+        onArchive={onArchive}
+        onListArchived={onListArchived}
+        onRestore={onRestore}
+        workspaces={[WORKSPACE, CHATS_WORKSPACE]}
+      />,
+    );
+
+    const chats = screen.getByTestId("sidebar-chats");
+    const header = within(chats).getByRole("button", { name: "Chats" });
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+    expect(within(chats).queryByRole("button", { name: "Project actions" })).toBeNull();
+    expect(within(chats).queryByRole("button", { name: "New session" })).toBeNull();
+    expect(within(chats).queryByText("Pin project")).toBeNull();
+    expect(within(chats).queryByText("Open in Explorer")).toBeNull();
+    expect(within(chats).queryByText("Rename project")).toBeNull();
+    expect(within(chats).queryByText("Remove project")).toBeNull();
+    expect(within(chats).getByRole("button", { name: "Rename session" })).toBeTruthy();
+    expect(within(chats).getByRole("button", { name: "Archive" })).toBeTruthy();
+    expect(within(chats).getByRole("button", { name: "Pin chat" })).toBeTruthy();
+    fireEvent.click(within(chats).getByRole("button", { name: "Archived chats" }));
+    expect(onListArchived).toHaveBeenCalledWith(CHATS_WORKSPACE_ID);
+    expect(await within(chats).findByText("Archived inbox chat")).toBeTruthy();
+    fireEvent.click(within(chats).getByRole("button", { name: "Restore" }));
+    expect(onRestore).toHaveBeenCalledWith(archived);
+    fireEvent.click(within(chats).getByRole("button", { name: "Archive" }));
+    expect(onArchive).toHaveBeenCalledWith(inbox);
+
+    fireEvent.click(header);
+    await waitFor(() => expect(within(chats).queryByText("Inbox chat")).toBeNull());
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("keeps the inbox drop target present while empty and collapsed, with drop feedback", async () => {
+    const onMove = vi.fn(async () => {});
+    render(
+      <Navigation
+        initialSessions={[session("Project chat")]}
+        onMove={onMove}
+        workspaces={[WORKSPACE, CHATS_WORKSPACE]}
+      />,
+    );
+    const chats = screen.getByTestId("sidebar-chats");
+    const chatsHeader = within(chats).getByRole("button", { name: "Chats" });
+    fireEvent.click(chatsHeader);
+    await waitFor(() => expect(chatsHeader.getAttribute("aria-expanded")).toBe("false"));
+    expect(chats.getAttribute("data-workspace-drop")).toBe(CHATS_WORKSPACE_ID);
+    expect(within(chats).queryByRole("button", { name: "Chats" })).toBe(chatsHeader);
+    expect(within(chats).queryByRole("button", { name: "Project chat" })).toBeNull();
+
+    const drag = dragSession("Project chat");
+    fireEvent.dragOver(chats, { dataTransfer: drag.dataTransfer });
+    expect(chats.className).toContain("bg-hover");
+    fireEvent.drop(chats, { dataTransfer: drag.dataTransfer });
+    await waitFor(() =>
+      expect(onMove).toHaveBeenCalledWith({
+        id: "Project chat",
+        workspaceId: CHATS_WORKSPACE_ID,
+        pinned: false,
+      }),
+    );
+  });
+
+  it("opens Archived chats from the collapsed Chats disclosure and reports expanded states", async () => {
+    const archived = session("Previously archived", {
+      workspaceId: CHATS_WORKSPACE_ID,
+      archivedAt: "2026-10-13T00:00:00Z",
+    });
+    render(
+      <Navigation
+        initialSessions={[session("Inbox chat", { workspaceId: CHATS_WORKSPACE_ID })]}
+        onListArchived={async () => [archived]}
+        workspaces={[WORKSPACE, CHATS_WORKSPACE]}
+      />,
+    );
+    const chats = screen.getByTestId("sidebar-chats");
+    const header = within(chats).getByRole("button", { name: "Chats" });
+    fireEvent.click(header);
+    await waitFor(() => expect(header.getAttribute("aria-expanded")).toBe("false"));
+    const archivedControl = within(chats).getByRole("button", { name: "Archived chats" });
+    fireEvent.click(archivedControl);
+    expect(archivedControl.getAttribute("aria-expanded")).toBe("true");
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+    expect(await within(chats).findByText("Previously archived")).toBeTruthy();
   });
 
   it("keeps pinned Agents and sessions above Projects and returns unpinned items to their project", async () => {

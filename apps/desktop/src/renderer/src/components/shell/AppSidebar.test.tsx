@@ -40,16 +40,10 @@ function renderSidebar(props: Partial<Parameters<typeof AppSidebar>[0]> = {}, li
 }
 
 describe("AppSidebar", () => {
-  it("opens a workspace from a plus beside Projects without toggling the disclosure", () => {
-    const onOpenWorkspace = vi.fn();
-    const onToggleProjects = vi.fn();
-    renderSidebar({ pinned: true, onOpenWorkspace, onToggleProjects, projectsExpanded: false });
-    const add = screen.getByRole("button", { name: "Open workspace" });
-    expect(add.textContent?.trim()).toBe("");
-    expect(add.parentElement).toBe(screen.getByRole("button", { name: "Projects" }).parentElement);
-    fireEvent.click(add);
-    expect(onOpenWorkspace).toHaveBeenCalledOnce();
-    expect(onToggleProjects).not.toHaveBeenCalled();
+  it("leaves Projects and its workspace action to the context Sidebar disclosure", () => {
+    renderSidebar({ pinned: true });
+    expect(screen.queryByRole("button", { name: "Projects" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open workspace" })).toBeNull();
   });
 
   function SettingsNavigation() {
@@ -148,7 +142,7 @@ describe("AppSidebar", () => {
     expect(screen.getByTestId("context-sidebar")).toBeTruthy();
     fireEvent.mouseLeave(nav);
     expect(screen.queryByTestId("context-sidebar")).toBeNull();
-    fireEvent.focus(screen.getByRole("button", { name: "Projects" }));
+    fireEvent.focus(screen.getByRole("button", { name: "New message" }));
     expect(screen.getByTestId("context-sidebar")).toBeTruthy();
   });
 
@@ -170,15 +164,12 @@ describe("AppSidebar", () => {
     const h = renderSidebar({ pinned: true });
     fireEvent.click(screen.getByRole("button", { name: "New message" }));
     expect(screen.queryByRole("button", { name: "Groups" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Projects" }));
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     fireEvent.click(screen.getByRole("button", { name: "New Agent" }));
     expect(h.onNewMessage).toHaveBeenCalledOnce();
     expect(h.onNewProfile).toHaveBeenCalledOnce();
-    expect(h.onNavigate.mock.calls).toEqual([["direct-messages"], ["settings"]]);
-    expect(screen.getByRole("button", { name: "Projects" }).getAttribute("aria-current")).toBe(
-      "page",
-    );
+    expect(h.onNavigate.mock.calls).toEqual([["settings"]]);
+    expect(screen.queryByRole("button", { name: "Projects" })).toBeNull();
   });
 
   it("pin button toggles the pinned state", () => {
