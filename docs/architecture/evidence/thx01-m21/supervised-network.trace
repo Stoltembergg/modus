@@ -1,0 +1,39 @@
+12520 socketpair(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC, 0, [21, 22]) = 0
+12520 setsockopt(21, SOL_SOCKET, SO_RCVBUF, [65536], 4) = 0
+12520 setsockopt(21, SOL_SOCKET, SO_SNDBUF, [65536], 4) = 0
+12520 setsockopt(22, SOL_SOCKET, SO_RCVBUF, [65536], 4) = 0
+12520 setsockopt(22, SOL_SOCKET, SO_SNDBUF, [65536], 4) = 0
+12520 socketpair(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC, 0, [23, 24]) = 0
+12520 setsockopt(23, SOL_SOCKET, SO_RCVBUF, [65536], 4) = 0
+12520 setsockopt(23, SOL_SOCKET, SO_SNDBUF, [65536], 4) = 0
+12520 setsockopt(24, SOL_SOCKET, SO_RCVBUF, [65536], 4) = 0
+12520 setsockopt(24, SOL_SOCKET, SO_SNDBUF, [65536], 4) = 0
+12534 +++ exited with 0 +++
+12535 +++ exited with 0 +++
+12536 +++ exited with 0 +++
+12537 +++ exited with 0 +++
+12538 +++ exited with 0 +++
+12539 +++ exited with 0 +++
+12540 +++ exited with 0 +++
+12541 +++ exited with 0 +++
+12542 +++ exited with 0 +++
+12543 +++ exited with 0 +++
+12544 +++ exited with 0 +++
+12545 +++ exited with 0 +++
+12532 +++ exited with 0 +++
+12520 shutdown(21, SHUT_WR)             = 0
+12533 +++ exited with 0 +++
+12531 +++ exited with 0 +++
+12520 --- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=12531, si_uid=1000, si_status=0, si_utime=1552 /* 15.52 s */, si_stime=106 /* 1.06 s */} ---
+12520 shutdown(23, SHUT_WR)             = 0
+12524 +++ exited with 0 +++
+12522 +++ exited with 0 +++
+12525 +++ exited with 0 +++
+12523 +++ exited with 0 +++
+12521 +++ exited with 0 +++
+12530 +++ exited with 0 +++
+12528 +++ exited with 0 +++
+12527 +++ exited with 0 +++
+12529 +++ exited with 0 +++
+12526 +++ exited with 0 +++
+12520 +++ exited with 0 +++

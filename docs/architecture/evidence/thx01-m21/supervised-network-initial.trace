@@ -1,0 +1,30 @@
+12402 socketpair(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC, 0, [21, 22]) = 0
+12402 setsockopt(21, SOL_SOCKET, SO_RCVBUF, [65536], 4) = 0
+12402 setsockopt(21, SOL_SOCKET, SO_SNDBUF, [65536], 4) = 0
+12402 setsockopt(22, SOL_SOCKET, SO_RCVBUF, [65536], 4) = 0
+12402 setsockopt(22, SOL_SOCKET, SO_SNDBUF, [65536], 4) = 0
+12402 socketpair(AF_UNIX, SOCK_STREAM|SOCK_CLOEXEC, 0, [23, 24]) = 0
+12402 setsockopt(23, SOL_SOCKET, SO_RCVBUF, [65536], 4) = 0
+12402 setsockopt(23, SOL_SOCKET, SO_SNDBUF, [65536], 4) = 0
+12402 setsockopt(24, SOL_SOCKET, SO_RCVBUF, [65536], 4) = 0
+12402 setsockopt(24, SOL_SOCKET, SO_SNDBUF, [65536], 4) = 0
+12416 +++ exited with 0 +++
+12417 +++ exited with 0 +++
+12418 +++ killed by SIGKILL +++
+12414 +++ killed by SIGKILL +++
+12402 shutdown(21, SHUT_WR)             = 0
+12402 shutdown(23, SHUT_WR)             = 0
+12415 +++ killed by SIGKILL +++
+12413 +++ killed by SIGKILL +++
+12402 --- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_KILLED, si_pid=12413, si_uid=1000, si_status=SIGKILL, si_utime=1105 /* 11.05 s */, si_stime=117 /* 1.17 s */} ---
+12404 +++ exited with 0 +++
+12406 +++ exited with 0 +++
+12405 +++ exited with 0 +++
+12407 +++ exited with 0 +++
+12403 +++ exited with 0 +++
+12412 +++ exited with 0 +++
+12410 +++ exited with 0 +++
+12411 +++ exited with 0 +++
+12409 +++ exited with 0 +++
+12408 +++ exited with 0 +++
+12402 +++ exited with 0 +++

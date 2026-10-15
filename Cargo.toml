@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/pty-host",
+    "crates/decision-runtime",
     "crates/plugin-sandbox-probe",
     "crates/plugin-execution-protocol",
     "crates/plugin-execution-supervisor",

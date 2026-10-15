@@ -8,6 +8,7 @@ import {
   shell,
 } from "electron";
 import { resolveWindowAppearance } from "../shared/window-appearance";
+import { shutdownDecisionRuntime } from "./agent/decision/decision-runtime";
 import {
   shutdownProviderAuthOperations,
   startRemoteModelCatalog,
@@ -273,6 +274,7 @@ if (!app.requestSingleInstanceLock()) {
     shutdownBillingService();
     void drainShutdown([
       shutdownAgentRuntime(),
+      shutdownDecisionRuntime(),
       shutdownProviderAuthOperations(),
       shutdownAuthService(),
       (async () => {

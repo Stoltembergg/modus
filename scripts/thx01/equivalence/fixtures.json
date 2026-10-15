@@ -1,0 +1,583 @@
+{
+  "purpose": "technical_equivalence_only_not_quality_evaluation",
+  "close_choice_margin_threshold": 0.1,
+  "construction": "fixed templates; near-limit fillers depend on token count only; no score-based inclusion/exclusion",
+  "fixtures": [
+    {
+      "id": "equiv-pt-01",
+      "language": "pt",
+      "question": "Does the supplied task context contain enough information to begin the requested work?",
+      "options": [
+        {
+          "key": "context_sufficient",
+          "description": "The supplied context supports starting the requested task."
+        },
+        {
+          "key": "retrieve_local_context",
+          "description": "Additional authorized local project information is needed."
+        },
+        {
+          "key": "insufficient_information",
+          "description": "The available information does not support a reliable decision."
+        }
+      ],
+      "state": "Altere Entrar para Acessar neste componente fornecido: <button>Entrar</button>. Preserve o comportamento.",
+      "padding": 0,
+      "tokens_before_padding": 89,
+      "tokens_with_padding": 89,
+      "ambiguous_by_design": false
+    },
+    {
+      "id": "equiv-pt-02",
+      "language": "pt",
+      "question": "Does the supplied task context contain enough information to begin the requested work?",
+      "options": [
+        {
+          "key": "insufficient_information",
+          "description": "The available information does not support a reliable decision."
+        },
+        {
+          "key": "context_sufficient",
+          "description": "The supplied context supports starting the requested task."
+        },
+        {
+          "key": "retrieve_local_context",
+          "description": "Additional authorized local project information is needed."
+        }
+      ],
+      "state": "O botão Salvar falha. Os arquivos locais podem ser consultados, mas ainda não forneci código nem erro.",
+      "padding": 0,
+      "tokens_before_padding": 89,
+      "tokens_with_padding": 89,
+      "ambiguous_by_design": false
+    },
+    {
+      "id": "equiv-pt-03",
+      "language": "pt",
+      "question": "Does the supplied task context contain enough information to begin the requested work?",
+      "options": [
+        {
+          "key": "retrieve_local_context",
+          "description": "Additional authorized local project information is needed."
+        },
+        {
+          "key": "insufficient_information",
+          "description": "The available information does not support a reliable decision."
+        },
+        {
+          "key": "context_sufficient",
+          "description": "The supplied context supports starting the requested task."
+        }
+      ],
+      "state": "Talvez já exista contexto suficiente. Faça o ajuste necessário, se conseguir determinar qual é.",
+      "padding": 0,
+      "tokens_before_padding": 82,
+      "tokens_with_padding": 82,
+      "ambiguous_by_design": true
+    },
+    {
+      "id": "equiv-pt-04",
+      "language": "pt",
+      "question": "Does the supplied task context contain enough information to begin the requested work?",
+      "options": [
+        {
+          "key": "insufficient_information",
+          "description": "The available information does not support a reliable decision."
+        },
+        {
+          "key": "retrieve_local_context",
+          "description": "Additional authorized local project information is needed."
+        },
+        {
+          "key": "context_sufficient",
+          "description": "The supplied context supports starting the requested task."
+        }
+      ],
+      "state": "Temos parte do contexto, mas não sabemos se falta o arquivo relevante ou apenas uma explicação.",
+      "padding": 0,
+      "tokens_before_padding": 84,
+      "tokens_with_padding": 84,
+      "ambiguous_by_design": true
+    },
+    {
+      "id": "equiv-pt-05",
+      "language": "pt",
+      "question": "Does the supplied task context contain enough information to begin the requested work?",
+      "options": [
+        {
+          "key": "context_sufficient",
+          "description": "The supplied context supports starting the requested task."
+        },
+        {
+          "key": "retrieve_local_context",
+          "description": "Additional authorized local project information is needed."
+        },
+        {
+          "key": "insufficient_information",
+          "description": "The available information does not support a reliable decision."
+        }
+      ],
+      "state": "Renomeie café para ação em ação.ts. Preserve 👩🏽‍💻, 東京 e a sequência é. Código fornecido: const café = 1;",
+      "padding": 0,
+      "tokens_before_padding": 100,
+      "tokens_with_padding": 100,
+      "ambiguous_by_design": false
+    },
+    {
+      "id": "equiv-pt-06",
+      "language": "pt",
+      "question": "Does the supplied task context contain enough information to begin the requested work?",
+      "options": [
+        {
+          "key": "insufficient_information",
+          "description": "The available information does not support a reliable decision."
+        },
+        {
+          "key": "context_sufficient",
+          "description": "The supplied context supports starting the requested task."
+        },
+        {
+          "key": "retrieve_local_context",
+          "description": "Additional authorized local project information is needed."
+        }
+      ],
+      "state": "O rótulo literal contém <mask> e <bos>. Só há este exemplo de texto; não há uma tarefa de alteração definida.",
+      "padding": 0,
+      "tokens_before_padding": 92,
+      "tokens_with_padding": 92,
+      "ambiguous_by_design": false
+    },
+    {
+      "id": "equiv-pt-07",
+      "language": "pt",
+      "question": "Does the supplied task context contain enough information to begin the requested work?",
+      "options": [
+        {
+          "key": "retrieve_local_context",
+          "description": "Additional authorized local project information is needed."
+        },
+        {
+          "key": "insufficient_information",
+          "description": "The available information does not support a reliable decision."
+        },
+        {
+          "key": "context_sufficient",
+          "description": "The supplied context supports starting the requested task."
+        }
+      ],
+      "state": "O teste foi descrito, mas não há resultado. O arquivo local está disponível para leitura autorizada.",
+      "padding": 0,
+      "tokens_before_padding": 85,
+      "tokens_with_padding": 85,
+      "ambiguous_by_design": false
+    },
+    {
+      "id": "equiv-pt-08",
+      "language": "pt",
+      "question": "Does the supplied task context contain enough information to begin the requested work?",
+      "options": [
+        {
+          "key": "insufficient_information",
+          "description": "The available information does not support a reliable decision."
+        },
+        {
+          "key": "retrieve_local_context",
+          "description": "Additional authorized local project information is needed."
+        },
+        {
+          "key": "context_sufficient",
+          "description": "The supplied context supports starting the requested task."
+        }
+      ],
+      "state": "O componente completo está abaixo: <h1>Olá</h1>. Troque Olá por Bem-vindo, sem outras mudanças.",
+      "padding": 0,
+      "tokens_before_padding": 90,
+      "tokens_with_padding": 90,
+      "ambiguous_by_design": false
+    },
+    {
+      "id": "equiv-pt-09",
+      "language": "pt",
+      "question": "Does the supplied task context contain enough information to begin the requested work?",
+      "options": [
+        {
+          "key": "context_sufficient",
+          "description": "The supplied context supports starting the requested task."
+        },
+        {
+          "key": "retrieve_local_context",
+          "description": "Additional authorized local project information is needed."
+        },
+        {
+          "key": "insufficient_information",
+          "description": "The available information does not support a reliable decision."
+        }
+      ],
+      "state": "Há dados conflitantes: o texto diz que o código foi enviado, mas nenhum trecho está presente. O projeto local existe.",
+      "padding": 0,
+      "tokens_before_padding": 90,
+      "tokens_with_padding": 90,
+      "ambiguous_by_design": true
+    },
+    {
+      "id": "equiv-pt-10",
+      "language": "pt",
+      "question": "Does the supplied task context contain enough information to begin the requested work?",
+      "options": [
+        {
+          "key": "insufficient_information",
+          "description": "The available information does not support a reliable decision."
+        },
+        {
+          "key": "context_sufficient",
+          "description": "The supplied context supports starting the requested task."
+        },
+        {
+          "key": "retrieve_local_context",
+          "description": "Additional authorized local project information is needed."
+        }
+      ],
+      "state": "   Ajuste o espaçamento.\n\nCódigo: <div>oi</div>\t\nNão há imagem ou medida desejada.   ",
+      "padding": 0,
+      "tokens_before_padding": 96,
+      "tokens_with_padding": 96,
+      "ambiguous_by_design": true
+    },
+    {
+      "id": "equiv-pt-11",
+      "language": "pt",
+      "question": "Does the supplied task context contain enough information to begin the requested work?",
+      "options": [
+        {
+          "key": "retrieve_local_context",
+          "description": "Additional authorized local project information is needed."
+        },
+        {
+          "key": "insufficient_information",
+          "description": "The available information does not support a reliable decision."
+        },
+        {
+          "key": "context_sufficient",
+          "description": "The supplied context supports starting the requested task."
+        }
+      ],
+      "state": "Contexto local autorizado para avaliar a alteração; nenhum resultado de QA deve ser inventado. contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto contexto",
+      "padding": 0,
+      "tokens_before_padding": 1024,
+      "tokens_with_padding": 1024,
+      "ambiguous_by_design": false
+    },
+    {
+      "id": "equiv-pt-12",
+      "language": "pt",
+      "question": "Does the supplied task context contain enough information to begin the requested work?",
+      "options": [
+        {
+          "key": "insufficient_information",
+          "description": "The available information does not support a reliable decision."
+        },
+        {
+          "key": "retrieve_local_context",
+          "description": "Additional authorized local project information is needed."
+        },
+        {
+          "key": "context_sufficient",
+          "description": "The supplied context supports starting the requested task."
+        }
+      ],
+      "state": "Trecho completo: const nome = \"Ana\"; altere somente Ana para Bia. Não modifique o restante.",
+      "padding": 7,
+      "tokens_before_padding": 88,
+      "tokens_with_padding": 95,
+      "ambiguous_by_design": false
+    },
+    {
+      "id": "equiv-en-01",
+      "language": "en",
+      "question": "Does the supplied task context contain enough information to begin the requested work?",
+      "options": [
+        {
+          "key": "context_sufficient",
+          "description": "The supplied context supports starting the requested task."
+        },
+        {
+          "key": "retrieve_local_context",
+          "description": "Additional authorized local project information is needed."
+        },
+        {
+          "key": "insufficient_information",
+          "description": "The available information does not support a reliable decision."
+        }
+      ],
+      "state": "Replace Sign in with Continue in this provided component: <button>Sign in</button>. Preserve behavior.",
+      "padding": 0,
+      "tokens_before_padding": 86,
+      "tokens_with_padding": 86,
+      "ambiguous_by_design": false
+    },
+    {
+      "id": "equiv-en-02",
+      "language": "en",
+      "question": "Does the supplied task context contain enough information to begin the requested work?",
+      "options": [
+        {
+          "key": "insufficient_information",
+          "description": "The available information does not support a reliable decision."
+        },
+        {
+          "key": "context_sufficient",
+          "description": "The supplied context supports starting the requested task."
+        },
+        {
+          "key": "retrieve_local_context",
+          "description": "Additional authorized local project information is needed."
+        }
+      ],
+      "state": "Save crashes. Authorized local source files are available, but no source or stack trace is included.",
+      "padding": 0,
+      "tokens_before_padding": 84,
+      "tokens_with_padding": 84,
+      "ambiguous_by_design": false
+    },
+    {
+      "id": "equiv-en-03",
+      "language": "en",
+      "question": "Does the supplied task context contain enough information to begin the requested work?",
+      "options": [
+        {
+          "key": "retrieve_local_context",
+          "description": "Additional authorized local project information is needed."
+        },
+        {
+          "key": "insufficient_information",
+          "description": "The available information does not support a reliable decision."
+        },
+        {
+          "key": "context_sufficient",
+          "description": "The supplied context supports starting the requested task."
+        }
+      ],
+      "state": "There may be enough context, or we may need one more file. Make the intended change if its scope is clear.",
+      "padding": 0,
+      "tokens_before_padding": 89,
+      "tokens_with_padding": 89,
+      "ambiguous_by_design": true
+    },
+    {
+      "id": "equiv-en-04",
+      "language": "en",
+      "question": "Does the supplied task context contain enough information to begin the requested work?",
+      "options": [
+        {
+          "key": "insufficient_information",
+          "description": "The available information does not support a reliable decision."
+        },
+        {
+          "key": "retrieve_local_context",
+          "description": "Additional authorized local project information is needed."
+        },
+        {
+          "key": "context_sufficient",
+          "description": "The supplied context supports starting the requested task."
+        }
+      ],
+      "state": "Some context is present. It is unclear whether the missing information is local code or the user's intended outcome.",
+      "padding": 0,
+      "tokens_before_padding": 88,
+      "tokens_with_padding": 88,
+      "ambiguous_by_design": true
+    },
+    {
+      "id": "equiv-en-05",
+      "language": "en",
+      "question": "Does the supplied task context contain enough information to begin the requested work?",
+      "options": [
+        {
+          "key": "context_sufficient",
+          "description": "The supplied context supports starting the requested task."
+        },
+        {
+          "key": "retrieve_local_context",
+          "description": "Additional authorized local project information is needed."
+        },
+        {
+          "key": "insufficient_information",
+          "description": "The available information does not support a reliable decision."
+        }
+      ],
+      "state": "Keep café, ação.ts, 👩🏽‍💻, 東京, and decomposed é unchanged. Provided code: const label = \"café\";",
+      "padding": 0,
+      "tokens_before_padding": 95,
+      "tokens_with_padding": 95,
+      "ambiguous_by_design": false
+    },
+    {
+      "id": "equiv-en-06",
+      "language": "en",
+      "question": "Does the supplied task context contain enough information to begin the requested work?",
+      "options": [
+        {
+          "key": "insufficient_information",
+          "description": "The available information does not support a reliable decision."
+        },
+        {
+          "key": "context_sufficient",
+          "description": "The supplied context supports starting the requested task."
+        },
+        {
+          "key": "retrieve_local_context",
+          "description": "Additional authorized local project information is needed."
+        }
+      ],
+      "state": "A literal <mask> occurs in the documentation. No concrete code change has been requested.",
+      "padding": 0,
+      "tokens_before_padding": 82,
+      "tokens_with_padding": 82,
+      "ambiguous_by_design": false
+    },
+    {
+      "id": "equiv-en-07",
+      "language": "en",
+      "question": "Does the supplied task context contain enough information to begin the requested work?",
+      "options": [
+        {
+          "key": "retrieve_local_context",
+          "description": "Additional authorized local project information is needed."
+        },
+        {
+          "key": "insufficient_information",
+          "description": "The available information does not support a reliable decision."
+        },
+        {
+          "key": "context_sufficient",
+          "description": "The supplied context supports starting the requested task."
+        }
+      ],
+      "state": "A failing test is mentioned without output. The relevant local project files are authorized for inspection.",
+      "padding": 0,
+      "tokens_before_padding": 83,
+      "tokens_with_padding": 83,
+      "ambiguous_by_design": false
+    },
+    {
+      "id": "equiv-en-08",
+      "language": "en",
+      "question": "Does the supplied task context contain enough information to begin the requested work?",
+      "options": [
+        {
+          "key": "insufficient_information",
+          "description": "The available information does not support a reliable decision."
+        },
+        {
+          "key": "retrieve_local_context",
+          "description": "Additional authorized local project information is needed."
+        },
+        {
+          "key": "context_sufficient",
+          "description": "The supplied context supports starting the requested task."
+        }
+      ],
+      "state": "Complete source: <h1>Hello</h1>. Replace Hello with Welcome and make no other edits.",
+      "padding": 0,
+      "tokens_before_padding": 83,
+      "tokens_with_padding": 83,
+      "ambiguous_by_design": false
+    },
+    {
+      "id": "equiv-en-09",
+      "language": "en",
+      "question": "Does the supplied task context contain enough information to begin the requested work?",
+      "options": [
+        {
+          "key": "context_sufficient",
+          "description": "The supplied context supports starting the requested task."
+        },
+        {
+          "key": "retrieve_local_context",
+          "description": "Additional authorized local project information is needed."
+        },
+        {
+          "key": "insufficient_information",
+          "description": "The available information does not support a reliable decision."
+        }
+      ],
+      "state": "The request claims the source was attached, but no attachment or code is present. The local project can be read.",
+      "padding": 0,
+      "tokens_before_padding": 88,
+      "tokens_with_padding": 88,
+      "ambiguous_by_design": true
+    },
+    {
+      "id": "equiv-en-10",
+      "language": "en",
+      "question": "Does the supplied task context contain enough information to begin the requested work?",
+      "options": [
+        {
+          "key": "insufficient_information",
+          "description": "The available information does not support a reliable decision."
+        },
+        {
+          "key": "context_sufficient",
+          "description": "The supplied context supports starting the requested task."
+        },
+        {
+          "key": "retrieve_local_context",
+          "description": "Additional authorized local project information is needed."
+        }
+      ],
+      "state": " \n Fix spacing.\tProvided source: <div>hello</div>.\nThe desired spacing is unspecified. ",
+      "padding": 0,
+      "tokens_before_padding": 89,
+      "tokens_with_padding": 89,
+      "ambiguous_by_design": true
+    },
+    {
+      "id": "equiv-en-11",
+      "language": "en",
+      "question": "Does the supplied task context contain enough information to begin the requested work?",
+      "options": [
+        {
+          "key": "retrieve_local_context",
+          "description": "Additional authorized local project information is needed."
+        },
+        {
+          "key": "insufficient_information",
+          "description": "The available information does not support a reliable decision."
+        },
+        {
+          "key": "context_sufficient",
+          "description": "The supplied context supports starting the requested task."
+        }
+      ],
+      "state": "Authorized local context for checking the intended change; verification evidence must not be invented. context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context context",
+      "padding": 0,
+      "tokens_before_padding": 1024,
+      "tokens_with_padding": 1024,
+      "ambiguous_by_design": false
+    },
+    {
+      "id": "equiv-en-12",
+      "language": "en",
+      "question": "Does the supplied task context contain enough information to begin the requested work?",
+      "options": [
+        {
+          "key": "insufficient_information",
+          "description": "The available information does not support a reliable decision."
+        },
+        {
+          "key": "retrieve_local_context",
+          "description": "Additional authorized local project information is needed."
+        },
+        {
+          "key": "context_sufficient",
+          "description": "The supplied context supports starting the requested task."
+        }
+      ],
+      "state": "Complete source: const name = \"Ada\"; replace only Ada with Grace. Preserve the rest.",
+      "padding": 7,
+      "tokens_before_padding": 84,
+      "tokens_with_padding": 91,
+      "ambiguous_by_design": false
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+Traceback (most recent call last):
+  File "/workspace/scratch/thx01-m1/venv/lib/python3.12/site-packages/onnx_ir/passes/_pass_infra.py", line 251, in call
+    pass_result = pass_(model)
+                  ^^^^^^^^^^^^
+  File "/workspace/scratch/thx01-m1/venv/lib/python3.12/site-packages/onnx_ir/passes/_pass_infra.py", line 127, in __call__
+    result = self.call(model)
+             ^^^^^^^^^^^^^^^^
+  File "/workspace/modus-pr191/scripts/thx01/diagnostic_export.py", line 30, in observe
+    return original(self, model)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/thx01-m1/venv/lib/python3.12/site-packages/onnxscript/version_converter/__init__.py", line 77, in call
+    raise ValueError(
+ValueError: The model contains functions. The version conversion pass does not support functions. Please use `common_passes.InlinePass` to inline the functions before applying this pass (_ConvertVersionPassRequiresInline).
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/workspace/modus-pr191/scripts/thx01/smoke_export.py", line 84, in run
+    torch.onnx.export(
+  File "/workspace/scratch/thx01-m1/venv/lib/python3.12/site-packages/torch/onnx/__init__.py", line 377, in export
+    return _compat.export_compat(
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/thx01-m1/venv/lib/python3.12/site-packages/torch/onnx/_internal/exporter/_compat.py", line 186, in export_compat
+    onnx_program.model = onnxscript_apis.convert_version(
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/thx01-m1/venv/lib/python3.12/site-packages/onnxscript/_framework_apis/torch_2_6.py", line 43, in convert_version
+    version_converter.convert_version(model, target_version, fallback=True)
+  File "/workspace/scratch/thx01-m1/venv/lib/python3.12/site-packages/onnxscript/version_converter/__init__.py", line 173, in convert_version
+    ConvertVersionPass(target_version=target_version, fallback=fallback)(model)
+  File "/workspace/scratch/thx01-m1/venv/lib/python3.12/site-packages/onnx_ir/passes/_pass_infra.py", line 127, in __call__
+    result = self.call(model)
+             ^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/thx01-m1/venv/lib/python3.12/site-packages/onnxscript/version_converter/__init__.py", line 52, in call
+    return self.convert_pass(model)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/thx01-m1/venv/lib/python3.12/site-packages/onnx_ir/passes/_pass_infra.py", line 127, in __call__
+    result = self.call(model)
+             ^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/thx01-m1/venv/lib/python3.12/site-packages/onnx_ir/passes/_pass_infra.py", line 254, in call
+    raise PassError(
+onnx_ir.passes.PassError: An error occurred when running the '<onnxscript.version_converter._ConvertVersionPassRequiresInline object at 0x7f8d4d58c9e0>' pass after the following passes: ['<onnx_ir.passes.common.inliner.InlinePass object at 0x7f8d4d4a2de0>']

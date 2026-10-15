@@ -1,0 +1,16 @@
+[package]
+name = "thx01-equivalence"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+modus-decision-runtime = { path = "../../../crates/decision-runtime" }
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["std", "ndarray", "load-dynamic"] }
+tokenizers = { version = "=0.22.2", default-features = false, features = ["onig"] }
+ndarray = "=0.16.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
