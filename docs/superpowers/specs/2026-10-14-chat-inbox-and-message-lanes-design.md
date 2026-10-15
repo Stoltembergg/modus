@@ -1,6 +1,6 @@
 # Chats Inbox and Message Lanes
 
-**Status:** Revised after review to match the approved sidebar hierarchy and preserve existing interactions; awaiting user review before further implementation.
+**Status:** Revised after review and approved in chat on 2026-10-15; implementation follows the plan.
 
 ## Goal
 
