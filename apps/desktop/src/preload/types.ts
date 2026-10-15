@@ -80,6 +80,7 @@ import type {
   ModelInfo,
   ModelProviderDetail,
   ModelSettingsState,
+  MoveAgentSessionInput,
   NewGroupAgentInput,
   PermissionAction,
   PermissionDecision,
@@ -402,6 +403,7 @@ export type ModusApi = {
      * from that message onward. Used by the timeline's "edit & resend".
      */
     rollback(input: { sessionId: string; userMessageId: string }): Promise<AgentRollbackResult>;
+    move(input: MoveAgentSessionInput): Promise<AgentSessionInfo>;
     pin(input: { id: string; pinned: boolean }): Promise<AgentSessionInfo | undefined>;
     /** Rename a chat session; returns the updated session. */
     rename(input: { id: string; title: string }): Promise<AgentSessionInfo | undefined>;

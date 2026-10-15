@@ -663,3 +663,40 @@ describe("reviewStart preserves the session model", () => {
     expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
   });
 });
+
+describe("agent workspace move IPC", () => {
+  const sender = { mainFrame: { url: "file:///app/index.html" } };
+  const trustedEvent = { sender, senderFrame: sender.mainFrame };
+  const moveSession = vi.fn(async (_window: unknown, input: unknown) => input);
+  beforeEach(() => {
+    mocks.handlers.clear();
+    moveSession.mockClear();
+    mocks.fromWebContents.mockReturnValue(mocks.senderWindow);
+    mocks.getAgentRuntime.mockReturnValue({ moveSession });
+    registerTrustedSender(sender, "file:///app/index.html");
+    registerAppIpc();
+  });
+  it("forwards a validated move with the trusted sender window", async () => {
+    const input = { id: "session", workspaceId: "target", pinned: false };
+    await expect(
+      mocks.handlers.get("agent:move")?.(trustedEvent as never, input as never),
+    ).resolves.toEqual(input);
+    expect(moveSession).toHaveBeenCalledWith(mocks.senderWindow, input);
+  });
+  it("rejects foreign senders and renderer-supplied paths before calling the runtime", async () => {
+    const handler = mocks.handlers.get("agent:move");
+    await expect(
+      handler?.(
+        { senderFrame: { url: "https://foreign.invalid" } } as never,
+        { id: "session", pinned: false } as never,
+      ),
+    ).rejects.toThrow();
+    await expect(
+      handler?.(
+        trustedEvent as never,
+        { id: "session", pinned: false, cwd: "/arbitrary" } as never,
+      ),
+    ).rejects.toThrow();
+    expect(moveSession).not.toHaveBeenCalled();
+  });
+});

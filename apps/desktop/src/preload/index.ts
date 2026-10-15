@@ -179,6 +179,7 @@ const api: ModusApi = {
     compact: (sessionId) => ipcRenderer.invoke("agent:compact", sessionId),
     abort: (sessionId) => ipcRenderer.invoke("agent:abort", sessionId),
     rollback: (input) => ipcRenderer.invoke("agent:rollback", input),
+    move: (input) => ipcRenderer.invoke("agent:move", input),
     pin: (input) => ipcRenderer.invoke("agent:pin", input),
     rename: (input) => ipcRenderer.invoke("agent:rename", input),
     archive: (sessionId) => ipcRenderer.invoke("agent:archive", sessionId),

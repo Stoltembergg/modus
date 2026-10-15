@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import {
   type AgentSession,
@@ -29,6 +29,7 @@ import type {
   HarnessTaskCheckKind,
   HarnessTaskState,
   ModelInfo,
+  MoveAgentSessionInput,
   PlanBuildStatus,
   PlanEvidenceRef,
   PlanRef,
@@ -93,6 +94,7 @@ import { killManagedProcess, listManagedProcesses } from "../process/managed-pro
 import { RULES_MAX_TOTAL_BYTES, resolveAlwaysRulesPrompt } from "../rules/rules-service";
 import { resolveSkillsPrompt } from "../skills/skills-service";
 import { summarizeTerminals } from "../terminal/terminal-service";
+import { getWorkspace } from "../workspace/workspace-store";
 import {
   getLatestCheckpointRestoreRowId,
   getLatestSessionTodos,
@@ -115,6 +117,8 @@ import {
   createAgentSessionRecord,
   getAgentSession,
   listSubagentSessions,
+  moveAgentSessionWorkspace,
+  setAgentSessionPinned,
   touchAgentSession,
   updateAgentSessionMetadata,
   updateAgentSessionStatus,
@@ -380,6 +384,8 @@ function lastCompactionEnd(
 ): SdkRuntimeSession["lastCompactionEnd"] {
   return runtimeSession.lastCompactionEnd;
 }
+
+const WORKSPACE_MOVE_RESERVATION = Symbol("workspace move");
 
 /**
  * After PI threshold compaction (willRetry=false), Modus re-prompts so long
@@ -2648,6 +2654,9 @@ export class PiSdkRuntime implements AgentRuntime {
     sessionId: string,
     requestedModelId?: string | null,
   ): Promise<SdkRuntimeSession | undefined> {
+    if (this.preflightReservations.get(sessionId) === WORKSPACE_MOVE_RESERVATION) {
+      throw new Error("This session is moving to another workspace; retry after it finishes.");
+    }
     const pending = this.resumePromises.get(sessionId);
     if (pending) {
       try {
@@ -2745,6 +2754,112 @@ export class PiSdkRuntime implements AgentRuntime {
       !this.pendingIntentGates.has(sessionId) &&
       !getActiveAgentRun(sessionId)
     );
+  }
+
+  async moveSession(
+    window: BrowserWindowType,
+    input: MoveAgentSessionInput,
+  ): Promise<AgentSessionInfo> {
+    const info = getAgentSession(input.id);
+    if (!info) throw new Error("Session not found.");
+    if (this.preflightReservations.get(info.id) === WORKSPACE_MOVE_RESERVATION)
+      throw new Error("This session is busy moving to another project.");
+    const targetId = input.workspaceId ?? info.workspaceId;
+    if (targetId === info.workspaceId) {
+      const pinned = setAgentSessionPinned(info.id, input.pinned);
+      if (!pinned) throw new Error("Session not found.");
+      return pinned;
+    }
+    const target = getWorkspace(targetId);
+    if (!target || !statSync(target.rootPath, { throwIfNoEntry: false })?.isDirectory()) {
+      throw new Error("Destination workspace is unavailable.");
+    }
+    requireSessionWritable(info.id);
+    if (
+      info.archivedAt ||
+      info.parentSessionId ||
+      info.kind === "group_member" ||
+      info.subagentWorktree ||
+      (info.agentId && getAgent(info.agentId)?.groupId)
+    ) {
+      throw new Error(
+        "Only independent active chats can move. Group-managed sessions and subagent worktrees cannot move independently.",
+      );
+    }
+    const queue = [info];
+    const seen = new Set<string>();
+    for (let index = 0; index < queue.length; index += 1) {
+      const current = queue[index];
+      if (!current || seen.has(current.id)) throw new Error("Invalid session tree.");
+      seen.add(current.id);
+      this.assertPlanBuildSessionAvailable(current.id);
+      if (
+        this.backgroundChildTasks.get(current.id)?.status === "running" ||
+        [...this.backgroundChildTasks.values()].some(
+          (task) => task.parentSessionId === current.id && task.status === "running",
+        )
+      ) {
+        throw new Error("Wait for background subagents to finish before moving this session.");
+      }
+      if (current.subagentWorktree && current.subagentWorktree.integrationStatus !== "cleaned") {
+        throw new Error("Clean up child worktrees before moving this session.");
+      }
+      if (
+        current.status === "starting" ||
+        current.status === "running" ||
+        current.status === "blocked" ||
+        this.resumePromises.has(current.id)
+      ) {
+        throw new Error("Finish active work before moving this session.");
+      }
+      if (
+        listManagedProcesses({ sessionId: current.id, origin: "agent" }).some(
+          (process) => process.status === "running",
+        )
+      ) {
+        throw new Error("Stop the session's running processes before moving it.");
+      }
+      queue.push(...listSubagentSessions(current.id));
+    }
+    for (const id of seen) this.preflightReservations.set(id, WORKSPACE_MOVE_RESERVATION);
+    try {
+      for (const id of seen) await this.releaseRuntime(id);
+      const current = getAgentSession(info.id);
+      if (
+        !current ||
+        current.archivedAt ||
+        current.workspaceId !== info.workspaceId ||
+        current.cwd !== info.cwd
+      ) {
+        throw new Error(
+          "Session changed or was archived while moving; retry from its current project.",
+        );
+      }
+      requireSessionWritable(info.id);
+      const currentTarget = getWorkspace(target.id);
+      if (
+        !currentTarget ||
+        !statSync(currentTarget.rootPath, { throwIfNoEntry: false })?.isDirectory()
+      ) {
+        throw new Error("Destination workspace is unavailable.");
+      }
+      const moved = moveAgentSessionWorkspace(info.id, target.id, input.pinned);
+      releaseAgentBrowserControl(info.workspaceId, info.id);
+      this.emitToWindow(window)({
+        type: "session.updated",
+        sessionId: info.id,
+        title: moved.title,
+        workspaceId: moved.workspaceId,
+        cwd: moved.cwd,
+        previousWorkspaceId: info.workspaceId,
+      });
+      return moved;
+    } finally {
+      for (const id of seen) {
+        if (this.preflightReservations.get(id) === WORKSPACE_MOVE_RESERVATION)
+          this.preflightReservations.delete(id);
+      }
+    }
   }
 
   async ensure(
@@ -5155,6 +5270,9 @@ export class PiSdkRuntime implements AgentRuntime {
     if (parent.parentSessionId) {
       throw new Error("Subagents cannot start nested subagents.");
     }
+    if (this.preflightReservations.get(parent.id) === WORKSPACE_MOVE_RESERVATION) {
+      throw new Error("This session is moving to another project; retry after it finishes.");
+    }
     if (
       listSubagentSessions(parent.id).filter((session) => isSubagentBusy(session.status)).length >=
       MAX_SUBAGENTS_PER_SESSION
@@ -5174,15 +5292,23 @@ export class PiSdkRuntime implements AgentRuntime {
         : (inheritedModel ?? undefined);
     if (childModel !== undefined) requireUsableSelectedModel(childModel);
     const childSessionId = randomUUID();
-    const worktree =
-      input.subagent && !input.subagent.readOnly && input.subagent.isolation === "worktree"
-        ? await createSubagentWorktree(parent.cwd, {
-            sessionId: childSessionId,
-            name: input.subagent.name || input.subagentType,
-          })
-        : undefined;
+    // Publish pending creation before its first await so relocation also sees children
+    // whose checkout/SDK session has not yet been persisted.
+    this.backgroundChildTasks.set(childSessionId, {
+      parentSessionId: parent.id,
+      task: input.task,
+      status: "running",
+    });
+    let worktree: Awaited<ReturnType<typeof createSubagentWorktree>> | undefined;
     let session: AgentSessionInfo;
     try {
+      worktree =
+        input.subagent && !input.subagent.readOnly && input.subagent.isolation === "worktree"
+          ? await createSubagentWorktree(parent.cwd, {
+              sessionId: childSessionId,
+              name: input.subagent.name || input.subagentType,
+            })
+          : undefined;
       session = await this.create(window, {
         id: childSessionId,
         workspaceId: parent.workspaceId,
@@ -5196,6 +5322,7 @@ export class PiSdkRuntime implements AgentRuntime {
         ...(worktree ? { subagentWorktree: worktree } : {}),
       });
     } catch (error) {
+      this.backgroundChildTasks.delete(childSessionId);
       if (worktree) {
         try {
           await cleanupSubagentWorktree(parent.cwd, worktree);
@@ -5216,11 +5343,6 @@ export class PiSdkRuntime implements AgentRuntime {
     });
 
     // Always spawn: join is waitBackground / the wait tool — never block the parent turn here.
-    this.backgroundChildTasks.set(session.id, {
-      parentSessionId: parent.id,
-      task: input.task,
-      status: "running",
-    });
     void this.finishBackgroundSubagent(window, session, input).catch((error) => {
       console.error("[modus] background subagent failed", session.id, error);
     });

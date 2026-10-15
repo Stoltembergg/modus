@@ -119,6 +119,13 @@ export type AgentSessionInfo = {
   updatedAt: string;
 };
 
+/** Sidebar relocation: the host resolves workspace IDs; callers never supply paths. */
+export type MoveAgentSessionInput = {
+  id: string;
+  workspaceId?: string | undefined;
+  pinned: boolean;
+};
+
 export type AgentRunStatus = "running" | "completed" | "failed" | "blocked" | "cancelled";
 
 /* ── Agent harness classification and evidence ────────────────────────── */

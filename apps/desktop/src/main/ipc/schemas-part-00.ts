@@ -81,6 +81,10 @@ export const workspaceIdSchema = z.object({
   id: nonEmptyString,
 });
 
+export const sessionMoveSchema = z
+  .object({ id: nonEmptyString, workspaceId: optionalNonEmptyString, pinned: z.boolean() })
+  .strict();
+
 export const sessionPinSchema = z.object({
   id: nonEmptyString,
   pinned: z.boolean(),

@@ -7,6 +7,7 @@ import type {
   CodeGraphDiscoveryRef,
   ContextItem,
   ModelInfo,
+  MoveAgentSessionInput,
   ProjectMemoryCategory,
   PromptDelivery,
   PromptImageAttachment,
@@ -159,6 +160,7 @@ export type AgentRuntime = {
    * rewriting DB status. Pane unmount / idle eviction — not delete/rollback.
    */
   releaseRuntime(sessionId: string): Promise<void>;
+  moveSession(window: BrowserWindowType, input: MoveAgentSessionInput): Promise<AgentSessionInfo>;
   setModel(
     window: BrowserWindowType,
     sessionId: string,

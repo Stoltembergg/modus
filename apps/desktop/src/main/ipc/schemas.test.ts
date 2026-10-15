@@ -11,9 +11,26 @@ import {
   parseIpcInput,
   permissionDecideSchema,
   providerAuthStartSchema,
+  sessionMoveSchema,
 } from "./schemas";
 
 describe("IPC schemas", () => {
+  it("accepts only host-resolvable IDs and pin state for sidebar moves", () => {
+    expect(
+      sessionMoveSchema.parse({ id: "session", workspaceId: "workspace", pinned: false }),
+    ).toEqual({ id: "session", workspaceId: "workspace", pinned: false });
+    expect(sessionMoveSchema.safeParse({ id: "session", pinned: true }).success).toBe(true);
+    for (const extra of [
+      { cwd: "/arbitrary" },
+      { model: "other/provider" },
+      { workspaceId: "" },
+      { pinned: "true" },
+    ]) {
+      expect(sessionMoveSchema.safeParse({ id: "session", pinned: true, ...extra }).success).toBe(
+        false,
+      );
+    }
+  });
   it("accepts Plan prompts and rejects the retired Spec execution mode", () => {
     expect(
       agentPromptSchema.safeParse({ sessionId: "session", message: "Plan this", mode: "plan" })
