@@ -11,7 +11,12 @@ import {
   MODEL_CHIP_INTERACTIVE,
   MODEL_CHIP_TONE,
 } from "../composer/modelChipStyle";
-import { BranchMenuGroups, branchMenuGroups, branchNameFromValue } from "./BranchSwitcher";
+import {
+  BRANCH_MENU_POPUP_CLASS,
+  BranchMenuGroups,
+  branchMenuGroups,
+  branchNameFromValue,
+} from "./BranchSwitcher";
 
 export const BRANCH_BUSY_TOOLTIP = "Disponível quando o agente terminar";
 
@@ -147,7 +152,7 @@ export function SessionBranchPicker({
       </span>
       <Menu.Portal>
         <Menu.Positioner align="start" side="top" sideOffset={6}>
-          <Menu.Popup className="origin-(--transform-origin) min-w-[260px] popup-chrome popup-motion p-2">
+          <Menu.Popup className={BRANCH_MENU_POPUP_CLASS}>
             {!summary ? (
               <div className="px-2.5 py-3 text-center text-2xs text-fg-faint">
                 <WorkingText>Loading…</WorkingText>

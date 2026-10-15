@@ -5,6 +5,9 @@ import type { GitBranchSummary } from "../../../../shared/contracts";
 import { WorkingText } from "../../components/ui/WorkingText";
 import { cn } from "../../lib/cn";
 
+export const BRANCH_MENU_POPUP_CLASS =
+  "scroll-thin max-h-[min(20rem,var(--available-height))] w-80 max-w-[min(var(--available-width),calc(100vw-1rem))] origin-(--transform-origin) overflow-x-hidden overflow-y-auto overscroll-contain popup-chrome popup-motion p-1.5";
+
 type BranchSwitcherProps = {
   /** Repo working dir whose branches are listed / checked out. Undefined → disabled. */
   cwd: string | undefined;
@@ -69,13 +72,13 @@ export function BranchSwitcher({
   }, [open, cwd, refreshBranches]);
 
   const switchTo = useCallback(
-    async (name: string): Promise<void> => {
+    async (name: string, remote: boolean): Promise<void> => {
       if (!cwd) {
         return;
       }
       setBusy(name);
       try {
-        const result = await window.modus.git.checkout({ cwd, name });
+        const result = await window.modus.git.checkout({ cwd, name, remote });
         if (result.kind === "worktree" && result.worktreePath) {
           onWorktreeBranch?.(result.worktreePath, result.branch ?? name);
           return;
@@ -107,7 +110,7 @@ export function BranchSwitcher({
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Positioner align={align} side="bottom" sideOffset={6}>
-          <Menu.Popup className="origin-(--transform-origin) min-w-[260px] popup-chrome popup-motion p-2">
+          <Menu.Popup className={BRANCH_MENU_POPUP_CLASS}>
             {!branches ? (
               <div className="px-2.5 py-3 text-center text-2xs text-fg-faint">
                 <WorkingText>Loading…</WorkingText>
@@ -120,7 +123,7 @@ export function BranchSwitcher({
                 onSelect={(value) => {
                   const name = branchNameFromValue(value);
                   if (!name || name === current) return;
-                  void switchTo(name);
+                  void switchTo(name, value.startsWith("remote:"));
                 }}
               />
             )}
@@ -211,25 +214,29 @@ export function BranchMenuGroups({
   onSelect: (value: string) => void;
 }) {
   return (
-    <div className="flex w-[248px] flex-col gap-1">
+    <div className="flex w-full min-w-0 flex-col gap-1">
       {groups.map((group) => (
-        <Menu.Group className="flex flex-col" key={group.label}>
-          <Menu.GroupLabel className="px-2 pt-1 pb-0.5 text-2xs font-medium text-fg-faint">
+        <Menu.Group
+          className="flex flex-col border-hairline-soft border-t pt-1 first:border-t-0 first:pt-0"
+          key={group.label}
+        >
+          <Menu.GroupLabel className="px-2.5 py-1.5 text-2xs font-medium text-fg-faint">
             {group.label}
           </Menu.GroupLabel>
           {group.items.map((item) => (
             <Menu.Item
               aria-checked={item.disabled ? undefined : Boolean(item.current)}
               className={cn(
-                "flex h-7 min-w-0 items-center gap-2 rounded-md px-2 text-xs outline-none",
+                "flex min-h-8 min-w-0 items-center gap-2 rounded-md px-2.5 py-1.5 text-xs outline-none transition-colors",
                 "data-[highlighted]:bg-hover data-[disabled]:cursor-default data-[disabled]:text-fg-faint",
-                item.current ? "text-fg" : "text-fg-muted",
+                item.current ? "font-medium text-accent" : "text-fg-muted",
               )}
               closeOnClick={false}
               data-value={item.value}
               disabled={Boolean(item.disabled)}
               key={item.value}
               label={item.label}
+              title={item.label}
               onClick={() => {
                 if (!item.disabled) onSelect(item.value);
               }}
