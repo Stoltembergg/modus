@@ -98,6 +98,7 @@ import type {
   QuestionAnswer,
   QuestionResponse,
   RawMcpEntry,
+  ReaIntegrationStatus,
   ResolvedContext,
   ResumeGroupExecutionInput,
   RuleFileInfo,
@@ -671,6 +672,11 @@ export type ModusApi = {
     delete(input: { cwd: string; name: string }): Promise<McpServerInfo[]>;
     setEnabled(input: { cwd: string; name: string; enabled: boolean }): Promise<McpServerInfo[]>;
     entry(input: { cwd: string; name: string }): Promise<RawMcpEntry | undefined>;
+  };
+  rea: {
+    getStatus(): Promise<ReaIntegrationStatus>;
+    setEnabled(enabled: boolean): Promise<ReaIntegrationStatus>;
+    retry(): Promise<ReaIntegrationStatus>;
   };
   composio: {
     getState(): Promise<ComposioSettingsState>;

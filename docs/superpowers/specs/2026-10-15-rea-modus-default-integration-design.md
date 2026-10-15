@@ -1,6 +1,6 @@
 # REA as a Default Modus Integration
 
-**Status:** Proposed design; conversational sections approved, written specification awaiting review
+**Status:** Approved design; phased implementation in progress
 **Date:** 2026-10-15
 
 ## Problem

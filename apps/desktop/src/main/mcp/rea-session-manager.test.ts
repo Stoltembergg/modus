@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +12,7 @@ import {
   ReaSessionManager,
   type ReaSessionOwner,
 } from "./rea-session-manager";
+import { ReaSettingsStore } from "./rea-settings";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -38,6 +39,7 @@ function setup(
     transportPid?: number;
     transportClose?: (index: number) => Promise<void>;
     platformProcessOps?: { killTree: (pid: number) => Promise<void> | void };
+    settingsStore?: ReaSettingsStore;
   } = {},
 ) {
   const calls: Array<{ name: string; arguments?: Record<string, unknown> }> = [];
@@ -64,6 +66,7 @@ function setup(
       ? { operationTimeoutMs: options.operationTimeoutMs }
       : {}),
     platform: options.platform ?? "win32",
+    ...(options.settingsStore ? { settingsStore: options.settingsStore } : {}),
     ...(options.platformProcessOps ? { platformProcessOps: options.platformProcessOps } : {}),
     clientFactory: () => {
       const client = {
@@ -117,6 +120,57 @@ afterEach(() => {
 const testDataDirectories: string[] = [];
 
 describe("ReaSessionManager", () => {
+  it("reports curated provider limitations from host platform and configuration presence only", async () => {
+    const environmentKeys = ["REA_IDA_MCP_CONFIG", "REA_JADX_MCP_JAR"] as const;
+    const previous = Object.fromEntries(environmentKeys.map((key) => [key, process.env[key]]));
+    try {
+      delete process.env.REA_IDA_MCP_CONFIG;
+      delete process.env.REA_JADX_MCP_JAR;
+      const windows = setup({ platform: "win32" });
+      const windowsStatus = windows.manager.getIntegrationStatus();
+      expect(windowsStatus.providerNotes).toEqual([
+        "Ghidra provider is unsupported on this host.",
+        "IDA provider requires a user installation and configuration.",
+        "JADX provider requires a user installation and configuration.",
+      ]);
+      expect(JSON.stringify(windowsStatus)).not.toContain(windows.userDataDirectory);
+      expect(windowsStatus.providerNotes.join(" ")).not.toMatch(/(?:[A-Z]:\\|\/home\/|\/Users\/)/);
+
+      const settingsHome = mkdtempSync(join(tmpdir(), "rea-provider-settings-"));
+      testDataDirectories.push(settingsHome);
+      const settingsStore = new ReaSettingsStore(settingsHome);
+      settingsStore.setEnabled(false);
+      const disabled = setup({ platform: "win32", settingsStore });
+      expect(disabled.manager.getIntegrationStatus()).toMatchObject({
+        enabled: false,
+        status: "disabled",
+        providerNotes: windowsStatus.providerNotes,
+      });
+      mkdirSync(join(settingsHome, ".modus"), { recursive: true });
+      writeFileSync(settingsStore.filePath, "{broken", "utf8");
+      expect(disabled.manager.getIntegrationStatus()).toMatchObject({
+        enabled: false,
+        status: "failed",
+        providerNotes: windowsStatus.providerNotes,
+      });
+
+      process.env.REA_IDA_MCP_CONFIG = "C:\\private\\ida-config.json";
+      process.env.REA_JADX_MCP_JAR = "C:\\private\\jadx.jar";
+      const configured = setup({ platform: "linux" });
+      expect(configured.manager.getIntegrationStatus().providerNotes).toEqual([]);
+      expect(JSON.stringify(configured.manager.getIntegrationStatus())).not.toContain(
+        "C:\\private",
+      );
+      expect(windows.clients).toHaveLength(0);
+      expect(configured.clients).toHaveLength(0);
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   it("starts lazily and gives the supervisor no redundant command arguments", async () => {
     const { manager, clients, transportParameters } = setup();
     expect(clients).toHaveLength(0);
@@ -130,6 +184,150 @@ describe("ReaSessionManager", () => {
       args: [],
     });
     await manager.disposeAll();
+  });
+
+  it("reports status without starting, disables existing workers, and keeps enable/retry lazy", async () => {
+    const userHome = mkdtempSync(join(tmpdir(), "rea-settings-manager-"));
+    testDataDirectories.push(userHome);
+    const settingsStore = new ReaSettingsStore(userHome);
+    const { manager, clients } = setup({ settingsStore });
+    expect(manager.getIntegrationStatus()).toMatchObject({ enabled: true, status: "not_started" });
+    expect(clients).toHaveLength(0);
+
+    await manager.listTools(owner("settings-lifecycle"), { offset: 0, limit: 10 });
+    await manager.listTools(owner("settings-lifecycle-second"), { offset: 0, limit: 10 });
+    expect(manager.getIntegrationStatus()).toMatchObject({ status: "ready" });
+    expect(clients).toHaveLength(2);
+    const disabled = await manager.setEnabled(false);
+    expect(disabled).toMatchObject({ enabled: false, status: "disabled" });
+    expect(clients.every((client) => Boolean(client.close?.mock.calls.length))).toBe(true);
+    await expect(
+      manager.listTools(owner("settings-lifecycle"), { offset: 0, limit: 10 }),
+    ).rejects.toThrow(/disabled/i);
+    expect(clients).toHaveLength(2);
+
+    expect(await manager.setEnabled(true)).toMatchObject({ enabled: true, status: "not_started" });
+    expect(manager.retry()).toMatchObject({ enabled: true, status: "not_started" });
+    expect(clients).toHaveLength(2);
+    await manager.listTools(owner("settings-lifecycle"), { offset: 0, limit: 10 });
+    expect(clients).toHaveLength(3);
+    await manager.disposeAll();
+  });
+
+  it("moves readiness to a sanitized failure snapshot after worker disconnect", async () => {
+    const { manager, transports } = setup();
+    await manager.listTools(owner("status-disconnect"), { offset: 0, limit: 10 });
+    expect(manager.getIntegrationStatus()).toMatchObject({ status: "ready" });
+    transports[0]?.emitClose();
+    await vi.waitFor(() => expect(manager.getIntegrationStatus().status).toBe("failed"));
+    expect(manager.getIntegrationStatus()).toMatchObject({
+      enabled: true,
+      status: "failed",
+      note: "REA connection was interrupted. Retry before the next approved call.",
+    });
+    await manager.disposeAll();
+  });
+
+  it("tracks ready workers through normal retirement and returns to not_started after the last closes", async () => {
+    const { manager } = setup();
+    const firstOwner = owner("status-retire-first");
+    const secondOwner = owner("status-retire-second");
+    await manager.listTools(firstOwner, { offset: 0, limit: 10 });
+    await manager.listTools(secondOwner, { offset: 0, limit: 10 });
+
+    await manager.disposeSession(firstOwner);
+    expect(manager.getIntegrationStatus()).toMatchObject({ status: "ready" });
+    await manager.disposeSession(secondOwner);
+    const afterLastDispose = manager.getIntegrationStatus();
+    expect(afterLastDispose).toMatchObject({ enabled: true, status: "not_started" });
+    expect(afterLastDispose.note).toBeUndefined();
+    await manager.disposeAll();
+  });
+
+  it("retains actionable failure status after uncertain cancellation and timeout until retry", async () => {
+    const activeCall = deferred<unknown>();
+    const { manager: cancelledManager, clients } = setup({ callTool: () => activeCall.promise });
+    const cancelledOwner = owner("status-cancelled");
+    await cancelledManager.listTools(cancelledOwner, { offset: 0, limit: 10 });
+    const pendingCancellation = cancelledManager.callTool(cancelledOwner, "echo", {});
+    void pendingCancellation.catch(() => {});
+    await vi.waitFor(() => expect(clients[0]?.callTool).toHaveBeenCalledTimes(1));
+    await cancelledManager.cancel(cancelledOwner);
+    await expect(pendingCancellation).rejects.toThrow(/cancel/i);
+    expect(cancelledManager.getIntegrationStatus()).toMatchObject({
+      status: "failed",
+      note: "REA connection was interrupted. Retry before the next approved call.",
+    });
+    expect(cancelledManager.retry()).toMatchObject({ status: "not_started" });
+    activeCall.resolve({ content: [{ type: "text", text: "late" }] });
+    await cancelledManager.disposeAll();
+
+    vi.useFakeTimers();
+    const operation = deferred<unknown>();
+    const { manager } = setup({ operationTimeoutMs: 100, callTool: () => operation.promise });
+    await manager.listTools(owner("status-timeout"), { offset: 0, limit: 10 });
+    const pending = manager.callTool(owner("status-timeout"), "echo", {});
+    void pending.catch(() => {});
+    const rejected = expect(pending).rejects.toThrow(/timed out/i);
+    await vi.waitFor(() =>
+      expect(manager.getIntegrationStatus()).toMatchObject({ status: "ready" }),
+    );
+    await vi.advanceTimersByTimeAsync(100);
+    await rejected;
+    expect(manager.getIntegrationStatus()).toMatchObject({
+      status: "failed",
+      note: "REA connection was interrupted. Retry before the next approved call.",
+    });
+    expect(manager.retry()).toMatchObject({ status: "not_started" });
+    operation.resolve({ content: [{ type: "text", text: "late" }] });
+    await manager.disposeAll();
+    vi.useRealTimers();
+  });
+
+  it("keeps disabled state and reports cleanup failure when worker retirement fails", async () => {
+    const userHome = mkdtempSync(join(tmpdir(), "rea-cleanup-disabled-"));
+    testDataDirectories.push(userHome);
+    const settingsStore = new ReaSettingsStore(userHome);
+    const closeFailure = new Error("private path C:\\secret\\worker");
+    const { manager } = setup({
+      settingsStore,
+      platform: "linux",
+      transportPid: 7890,
+      platformProcessOps: {
+        killTree: async () => {
+          throw closeFailure;
+        },
+      },
+    });
+    await manager.listTools(owner("disable-cleanup-failure"), { offset: 0, limit: 10 });
+
+    const status = await manager.setEnabled(false);
+
+    expect(status).toMatchObject({
+      enabled: false,
+      status: "failed",
+      note: "REA worker cleanup could not be confirmed.",
+    });
+    expect(JSON.stringify(status)).not.toContain("secret");
+    await manager.disposeAll().catch(() => {});
+  });
+
+  it("fails closed on malformed settings and exposes only a sanitized settings status", async () => {
+    const userHome = mkdtempSync(join(tmpdir(), "rea-settings-invalid-"));
+    testDataDirectories.push(userHome);
+    const settingsStore = new ReaSettingsStore(userHome);
+    const { manager, clients } = setup({ settingsStore });
+    mkdirSync(join(userHome, ".modus"), { recursive: true });
+    writeFileSync(settingsStore.filePath, "{secret", "utf8");
+    expect(manager.getIntegrationStatus()).toMatchObject({
+      enabled: false,
+      status: "failed",
+      note: expect.not.stringContaining(userHome),
+    });
+    await expect(
+      manager.listTools(owner("invalid-settings"), { offset: 0, limit: 10 }),
+    ).rejects.toThrow(/settings/i);
+    expect(clients).toHaveLength(0);
   });
 
   it("keeps per-session working directories and the shared npm cache under userData/rea", async () => {

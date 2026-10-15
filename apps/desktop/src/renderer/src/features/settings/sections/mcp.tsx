@@ -14,7 +14,11 @@ import {
 } from "@tabler/icons-react";
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { joinCommandLine, splitCommandLine } from "../../../../../shared/command-line";
-import type { McpServerInfo, WorkspaceInfo } from "../../../../../shared/contracts";
+import type {
+  McpServerInfo,
+  ReaIntegrationStatus,
+  WorkspaceInfo,
+} from "../../../../../shared/contracts";
 import { CollapsibleMotion } from "../../../components/ui/CollapsibleMotion";
 import { Tooltip } from "../../../components/ui/Tooltip";
 import { WorkingText } from "../../../components/ui/WorkingText";
@@ -168,6 +172,13 @@ export function McpSettingsPanel({
   const [mcpError, setMcpError] = useState<string | undefined>();
   const [form, setForm] = useState<McpFormState | undefined>();
   const [confirmingDelete, setConfirmingDelete] = useState<string | undefined>();
+  const [reaStatus, setReaStatus] = useState<ReaIntegrationStatus>({
+    enabled: true,
+    status: "not_started",
+    providerNotes: [],
+  });
+  const [reaBusy, setReaBusy] = useState(false);
+  const [reaError, setReaError] = useState<string | undefined>();
   const [activeScope, setActiveScope] = useState<McpScope>("user");
   const [selectedProjectCwd, setSelectedProjectCwd] = useState(cwd ?? "");
   const projectTabs = useMemo(() => settingsProjectTabs(cwd, workspaces), [cwd, workspaces]);
@@ -211,6 +222,47 @@ export function McpSettingsPanel({
   useEffect(() => {
     void refresh(effectiveProjectCwd);
   }, [effectiveProjectCwd]);
+
+  useEffect(() => {
+    let active = true;
+    void window.modus.rea
+      .getStatus()
+      .then((status: ReaIntegrationStatus) => {
+        if (active) setReaStatus(status);
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setReaError(error instanceof Error ? error.message : "Could not load REA settings.");
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function setReaEnabled(enabled: boolean): Promise<void> {
+    setReaBusy(true);
+    setReaError(undefined);
+    try {
+      setReaStatus(await window.modus.rea.setEnabled(enabled));
+    } catch (error) {
+      setReaError(error instanceof Error ? error.message : "Could not update REA settings.");
+    } finally {
+      setReaBusy(false);
+    }
+  }
+
+  async function retryRea(): Promise<void> {
+    setReaBusy(true);
+    setReaError(undefined);
+    try {
+      setReaStatus(await window.modus.rea.retry());
+    } catch (error) {
+      setReaError(error instanceof Error ? error.message : "Could not reset REA status.");
+    } finally {
+      setReaBusy(false);
+    }
+  }
 
   async function openEdit(server: McpServerInfo): Promise<void> {
     if (!effectiveProjectCwd) return;
@@ -364,6 +416,15 @@ export function McpSettingsPanel({
         title="Composio"
       >
         <IntegrationsSettingsPanel />
+      </SettingsSection>
+      <SettingsSection title="Built-in integration">
+        <ReaIntegrationRow
+          busy={reaBusy}
+          error={reaError}
+          onRetry={() => void retryRea()}
+          onToggle={(enabled) => void setReaEnabled(enabled)}
+          status={reaStatus}
+        />
       </SettingsSection>
       <div className="flex flex-wrap items-center gap-1">
         <button
@@ -561,6 +622,119 @@ export function McpSettingsPanel({
         </div>
       </SettingsSection>
     </>
+  );
+}
+
+const REA_STATUS: Record<ReaIntegrationStatus["status"], { label: string; dot: string }> = {
+  disabled: { label: "Disabled", dot: "bg-fg-faint" },
+  not_started: { label: "Ready when needed", dot: "bg-fg-faint" },
+  starting: { label: "Checking connection…", dot: "bg-focus-ring-soft" },
+  ready: { label: "Available", dot: "bg-success" },
+  needs_node: { label: "Node.js and npm are required.", dot: "bg-warning" },
+  network_error: { label: "Couldn’t download REA.", dot: "bg-warning" },
+  failed: { label: "REA couldn’t start.", dot: "bg-danger" },
+};
+
+export function ReaIntegrationRow({
+  busy,
+  error,
+  onRetry,
+  onToggle,
+  status,
+}: {
+  busy: boolean;
+  error?: string | undefined;
+  onRetry(): void;
+  onToggle(enabled: boolean): void;
+  status: ReaIntegrationStatus;
+}) {
+  const retryable = ["needs_node", "network_error", "failed"].includes(status.status);
+  const statusInfo = REA_STATUS[status.status];
+  const noteId = "rea-first-use-note";
+  const detailsId = "rea-status-details";
+
+  return (
+    <div className="flex flex-col gap-3 rounded-lg border border-hairline-soft bg-surface p-4 sm:flex-row sm:items-start sm:justify-between">
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="font-medium text-fg text-sm">REA</span>
+          <span className="flex items-center gap-1.5 text-xs text-fg-muted" aria-live="polite">
+            <span aria-hidden className={cn("size-2 rounded-full", statusInfo.dot)} />
+            {status.status === "starting" ? (
+              <WorkingText>{statusInfo.label}</WorkingText>
+            ) : (
+              statusInfo.label
+            )}
+          </span>
+        </div>
+        <p className="mt-1 text-xs leading-relaxed text-fg-muted">
+          Reverse-engineering tools for your Modus sessions.
+        </p>
+        <p className="mt-2 text-xs leading-relaxed text-fg-faint" id={noteId}>
+          The first approved REA tool call may use Node.js and npm to download the pinned package.
+          Enabling REA does not start it. REA uses your normal user access; it is not a sandbox.
+        </p>
+        {status.note ? (
+          <p
+            className={cn(
+              "mt-2 text-xs leading-relaxed",
+              retryable ? "text-warning" : "text-fg-muted",
+            )}
+            id={detailsId}
+            role={retryable ? "alert" : undefined}
+          >
+            {status.note}
+          </p>
+        ) : null}
+        {status.providerNotes.length > 0 ? (
+          <ul className="mt-2 grid list-disc gap-1 pl-4 text-xs leading-relaxed text-fg-muted">
+            {status.providerNotes.map((note) => (
+              <li key={note}>{note}</li>
+            ))}
+          </ul>
+        ) : null}
+        {retryable ? (
+          <p className="mt-2 text-xs leading-relaxed text-fg-faint">
+            Retry clears this error. REA starts only after the next approved tool call.
+          </p>
+        ) : null}
+        {status.settingsError ? (
+          <p className="mt-2 text-xs text-danger" role="alert">
+            Could not read the saved REA setting. The integration stays off until the setting is
+            available.
+          </p>
+        ) : null}
+        {error ? (
+          <p className="mt-2 text-xs text-danger" role="alert">
+            {error}
+          </p>
+        ) : null}
+      </div>
+      <div className="flex shrink-0 items-center justify-between gap-3 sm:justify-end">
+        {retryable ? (
+          <button
+            aria-describedby={status.note ? detailsId : undefined}
+            className="flex h-8 items-center gap-1.5 rounded-md border border-hairline bg-panel px-2.5 text-xs text-fg transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={busy}
+            onClick={onRetry}
+            type="button"
+          >
+            <IconRefresh size={13} stroke={1.8} />
+            {busy ? <WorkingText>Retrying…</WorkingText> : "Retry"}
+          </button>
+        ) : null}
+        <Switch.Root
+          aria-describedby={`${noteId}${status.note ? ` ${detailsId}` : ""}`}
+          aria-label="Enable REA"
+          checked={status.enabled}
+          className="flex h-5 w-9 shrink-0 cursor-pointer rounded-full bg-chip-strong p-0.5 transition-colors data-checked:bg-success/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={busy || status.settingsError}
+          onCheckedChange={(checked) => onToggle(checked === true)}
+        >
+          <Switch.Thumb className="size-4 rounded-full bg-fg transition-transform data-checked:translate-x-4" />
+        </Switch.Root>
+      </div>
+    </div>
   );
 }
 

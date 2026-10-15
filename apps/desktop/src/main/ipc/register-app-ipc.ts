@@ -12,7 +12,12 @@ import {
   nativeImage,
   shell,
 } from "electron";
-import type { DiffReview, DiffReviewReady, DiffTarget } from "../../shared/contracts";
+import type {
+  DiffReview,
+  DiffReviewReady,
+  DiffTarget,
+  ReaIntegrationStatus,
+} from "../../shared/contracts";
 import {
   getRunWorkspaceRevision,
   listAgentEventPage,
@@ -81,6 +86,7 @@ import {
   updateSubagent,
 } from "../agent/subagents-config";
 import { setGroupTaskWakeSink, setGroupWorktreeReadySink } from "../agent/tools/group-tools";
+import { getReaSessionManager } from "../agent/tools/rea-tools";
 import {
   resolveAgentTurnModel,
   resolveExplicitTurnModel,
@@ -321,6 +327,10 @@ import {
   providerAuthResponseSchema,
   providerAuthStartSchema,
   questionRespondSchema,
+  reaGetStatusSchema,
+  reaIntegrationStatusSchema,
+  reaRetrySchema,
+  reaSetEnabledSchema,
   reviewStartSchema,
   rulesSaveAgentsSchema,
   sessionIdSchema,
@@ -396,10 +406,21 @@ function getSenderWindow(event: IpcMainInvokeEvent): BrowserWindowType {
 export function registerAppIpc({
   startupTimeline,
   appearance,
+  reaIntegration,
 }: {
   startupTimeline?: StartupTimeline;
   appearance?: Pick<AppearanceController, "getState" | "set">;
+  reaIntegration?: {
+    getStatus: () => ReaIntegrationStatus;
+    setEnabled: (enabled: boolean) => Promise<ReaIntegrationStatus>;
+    retry: () => ReaIntegrationStatus;
+  };
 } = {}): void {
+  const rea = reaIntegration ?? {
+    getStatus: () => getReaSessionManager().getIntegrationStatus(),
+    setEnabled: (enabled: boolean) => getReaSessionManager().setEnabled(enabled),
+    retry: () => getReaSessionManager().retry(),
+  };
   if (appearance) registerAppearanceIpcHandlers(ipcMain, assertTrustedSender, appearance);
 
   // Validate explicit 1:1/group choices here. Agent App-default selection is sent as `null` so
@@ -1416,6 +1437,30 @@ export function registerAppIpc({
     assertTrustedSender(event);
     const parsed = parseIpcInput(mcpServerNameSchema, input, IPC_CHANNELS.mcpEntry);
     return getMcpServerEntry(parsed.cwd, parsed.name);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.reaGetStatus, (event, input) => {
+    assertTrustedSender(event);
+    parseIpcInput(reaGetStatusSchema, input, IPC_CHANNELS.reaGetStatus);
+    return reaIntegrationStatusSchema.parse(rea.getStatus());
+  });
+
+  ipcMain.handle(IPC_CHANNELS.reaSetEnabled, async (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(reaSetEnabledSchema, input, IPC_CHANNELS.reaSetEnabled);
+    let status: ReaIntegrationStatus;
+    try {
+      status = await rea.setEnabled(parsed.enabled);
+    } catch {
+      throw new Error("Unable to save REA settings.");
+    }
+    return reaIntegrationStatusSchema.parse(status);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.reaRetry, (event, input) => {
+    assertTrustedSender(event);
+    parseIpcInput(reaRetrySchema, input, IPC_CHANNELS.reaRetry);
+    return reaIntegrationStatusSchema.parse(rea.retry());
   });
 
   ipcMain.handle(IPC_CHANNELS.personalizationGet, (event) => {

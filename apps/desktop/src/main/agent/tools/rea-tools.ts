@@ -14,6 +14,7 @@ import {
   ReaSessionManager,
   type ReaSessionOwner,
 } from "../../mcp/rea-session-manager";
+import { getReaSettings, type ReaSettings } from "../../mcp/rea-settings";
 import { type ToolRegistry, toolRegistry } from "./registry";
 import { resolveAgentToolContext } from "./tool-context";
 
@@ -223,9 +224,18 @@ function validateArguments(schema: Record<string, unknown>, args: Record<string,
   throw new Error("REA arguments do not match the operation's advertised schema.");
 }
 
-export function createReaToolDefinitions(managerSource: ReaManagerSource): ToolDefinition[] {
+export function createReaToolDefinitions(
+  managerSource: ReaManagerSource,
+  settingsSource: () => ReaSettings = getReaSettings,
+): ToolDefinition[] {
   const manager = (): ReaSessionManager =>
     typeof managerSource === "function" ? managerSource() : managerSource;
+  const assertEnabled = (): void => {
+    const settings = settingsSource();
+    if (settings.settingsError)
+      throw new Error("REA settings are invalid; REA is unavailable until they are repaired.");
+    if (!settings.enabled) throw new Error("REA is disabled in Modus settings.");
+  };
   const reaTools = defineTool({
     name: REA_TOOLS_NAME,
     label: "REA tools",
@@ -241,6 +251,7 @@ export function createReaToolDefinitions(managerSource: ReaManagerSource): ToolD
     ),
     execute: async (_toolCallId, input, signal, _onUpdate, ctx) => {
       if (signal?.aborted) throw abortError();
+      assertEnabled();
       const owner = ownerForToolCall(ctx.cwd);
       const offset = input.offset ?? 0;
       const limit = Math.min(input.limit ?? MAX_REA_CATALOG_PAGE_SIZE, MAX_REA_CATALOG_PAGE_SIZE);
@@ -280,6 +291,7 @@ export function createReaToolDefinitions(managerSource: ReaManagerSource): ToolD
     ),
     execute: async (_toolCallId, input, signal, _onUpdate, ctx) => {
       if (signal?.aborted) throw abortError();
+      assertEnabled();
       const owner = ownerForToolCall(ctx.cwd);
       if (jsonByteLength(input.arguments) > MAX_REA_ARGUMENT_BYTES) {
         throw new Error("REA arguments are too large.");
@@ -319,11 +331,18 @@ export function createReaToolDefinitions(managerSource: ReaManagerSource): ToolD
 }
 
 export function registerReaTools(
-  options: { manager?: ReaSessionManager; registry?: ToolRegistry } = {},
+  options: {
+    manager?: ReaSessionManager;
+    registry?: ToolRegistry;
+    settingsSource?: () => ReaSettings;
+  } = {},
 ): void {
   const registry = options.registry ?? toolRegistry;
   if (registeredRegistries.has(registry)) return;
-  const definitions = createReaToolDefinitions(options.manager ?? getReaSessionManager);
+  const definitions = createReaToolDefinitions(
+    options.manager ?? getReaSessionManager,
+    options.settingsSource,
+  );
   for (const definition of definitions) {
     registry.registerTool({
       entry: {

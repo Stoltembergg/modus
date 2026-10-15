@@ -8,7 +8,9 @@ import {
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { app } from "electron";
+import type { ReaIntegrationState, ReaIntegrationStatus } from "../../shared/contracts";
 import { createPlatformProcessOps } from "../process/platform-process-ops";
+import { ReaSettingsStore } from "./rea-settings";
 import { resolveReaSupervisorPath } from "./rea-supervisor-path";
 
 export type ReaSessionOwner = { sessionId: string; generation: string };
@@ -86,6 +88,7 @@ export type ReaSessionManagerOptions = Partial<ReaClientTransportFactory> & {
   userDataDirectory?: string;
   /** Explicit REA root override for tests; defaults to `<userData>/rea`. */
   tempDirectory?: string;
+  settingsStore?: ReaSettingsStore;
 };
 
 export type PlatformProcessOps = {
@@ -267,6 +270,9 @@ export class ReaSessionManager {
   private readonly reaDirectory: string;
   private readonly workersDirectory: string;
   private readonly npmCacheDirectory: string;
+  private readonly settingsStore: ReaSettingsStore;
+  private lifecycleStatus: ReaIntegrationState = "not_started";
+  private lifecycleNote: string | undefined;
 
   constructor(options: ReaSessionManagerOptions = {}) {
     this.clientFactory =
@@ -288,12 +294,106 @@ export class ReaSessionManager {
       options.tempDirectory ?? join(options.userDataDirectory ?? app.getPath("userData"), "rea");
     this.workersDirectory = join(this.reaDirectory, "workers");
     this.npmCacheDirectory = join(this.reaDirectory, "npm-cache");
+    this.settingsStore = options.settingsStore ?? new ReaSettingsStore();
+  }
+
+  getIntegrationStatus(): ReaIntegrationStatus {
+    const settings = this.settingsStore.get();
+    const providerNotes = this.getProviderNotes();
+    if (settings.settingsError) {
+      return {
+        enabled: false,
+        status: "failed",
+        note: "REA settings could not be read. Check the user-level Modus settings file.",
+        providerNotes,
+        settingsError: true,
+      };
+    }
+    if (!settings.enabled) {
+      if (
+        this.lifecycleStatus === "failed" &&
+        this.lifecycleNote === "REA worker cleanup could not be confirmed."
+      ) {
+        return {
+          enabled: false,
+          status: "failed",
+          note: this.lifecycleNote,
+          providerNotes,
+        };
+      }
+      return {
+        enabled: false,
+        status: "disabled",
+        note: "REA is disabled in Modus settings.",
+        providerNotes,
+      };
+    }
+    if (this.hasReadyWorker()) {
+      return { enabled: true, status: "ready", providerNotes };
+    }
+    return {
+      enabled: true,
+      status: this.lifecycleStatus === "ready" ? "not_started" : this.lifecycleStatus,
+      ...(this.lifecycleStatus === "ready"
+        ? {}
+        : this.lifecycleNote
+          ? { note: this.lifecycleNote }
+          : {}),
+      providerNotes,
+    };
+  }
+
+  private hasReadyWorker(): boolean {
+    return [...this.workers.values()].some(
+      (worker) => !worker.retired && worker.tools !== undefined,
+    );
+  }
+
+  private getProviderNotes(): string[] {
+    const notes: string[] = [];
+    if (this.platform === "win32") notes.push("Ghidra provider is unsupported on this host.");
+    if (!process.env.REA_IDA_MCP_CONFIG?.trim()) {
+      notes.push("IDA provider requires a user installation and configuration.");
+    }
+    if (!process.env.REA_JADX_MCP_JAR?.trim()) {
+      notes.push("JADX provider requires a user installation and configuration.");
+    }
+    return notes;
+  }
+
+  async setEnabled(enabled: boolean): Promise<ReaIntegrationStatus> {
+    this.settingsStore.setEnabled(enabled);
+    if (!enabled) {
+      this.lifecycleStatus = "disabled";
+      this.lifecycleNote = "REA is disabled in Modus settings.";
+      const workers = [...this.workers.values()];
+      const results = await Promise.allSettled(workers.map((worker) => this.retireWorker(worker)));
+      if (results.some((result) => result.status === "rejected")) {
+        this.lifecycleStatus = "failed";
+        this.markCleanupFailure();
+      }
+    } else {
+      this.lifecycleStatus = "not_started";
+      this.lifecycleNote = undefined;
+    }
+    return this.getIntegrationStatus();
+  }
+
+  retry(): ReaIntegrationStatus {
+    const settings = this.settingsStore.get();
+    if (!settings.settingsError && settings.enabled) {
+      this.lifecycleStatus = "not_started";
+      this.lifecycleNote = undefined;
+    }
+    return this.getIntegrationStatus();
   }
 
   async listTools(owner: ReaSessionOwner, query: ReaCatalogQuery): Promise<ReaCatalogPage> {
+    this.assertEnabled();
     const worker = this.getWorker(owner);
     await this.ensureCatalog(worker);
     this.assertCurrent(owner, worker);
+    this.markReady();
     const search = query.query?.trim().toLocaleLowerCase();
     const filtered = (worker.tools ?? []).filter(
       (tool) =>
@@ -317,9 +417,11 @@ export class ReaSessionManager {
     operation: string,
     args: Record<string, unknown>,
   ): Promise<CallToolResult> {
+    this.assertEnabled();
     const worker = this.getWorker(owner);
     await this.ensureCatalog(worker);
     this.assertCurrent(owner, worker);
+    this.markReady();
     if (!(worker.tools ?? []).some((tool) => tool.name === operation)) {
       throw new Error(`Unknown REA operation: ${operation}`);
     }
@@ -345,7 +447,14 @@ export class ReaSessionManager {
   /** Retire the current worker after an uncertain operation without retiring its owner generation. */
   async cancel(owner: ReaSessionOwner): Promise<void> {
     const worker = this.workers.get(ownerKey(owner));
-    if (worker) await this.retireWorker(worker);
+    if (!worker) return;
+    this.markUncertainFailure();
+    try {
+      await this.retireWorker(worker);
+    } catch (error) {
+      this.markCleanupFailure();
+      throw error;
+    }
   }
 
   async disposeAll(): Promise<void> {
@@ -399,6 +508,18 @@ export class ReaSessionManager {
     if (!active) this.activeGenerations.set(owner.sessionId, owner.generation);
   }
 
+  private assertEnabled(): void {
+    const settings = this.settingsStore.get();
+    if (settings.settingsError)
+      throw new Error("REA settings are invalid; REA is unavailable until they are repaired.");
+    if (!settings.enabled) throw new Error("REA is disabled in Modus settings.");
+  }
+
+  private markReady(): void {
+    this.lifecycleStatus = "ready";
+    this.lifecycleNote = undefined;
+  }
+
   private assertCurrent(owner: ReaSessionOwner, worker: Worker): void {
     this.assertGeneration(owner);
     if (worker.retired || this.workers.get(worker.key) !== worker) {
@@ -408,6 +529,8 @@ export class ReaSessionManager {
 
   private ensureStarted(worker: Worker): Promise<void> {
     if (worker.startup) return worker.startup;
+    this.lifecycleStatus = "starting";
+    this.lifecycleNote = undefined;
     worker.startup = this.startWorker(worker);
     return worker.startup;
   }
@@ -453,8 +576,25 @@ export class ReaSessionManager {
       if (transport.pid && transport.pid > 0) worker.supervisorPid = transport.pid;
       this.assertCurrent(worker.owner, worker);
     } catch (error) {
+      this.setFailureStatus(error);
       await this.retireWorker(worker);
       throw error;
+    }
+  }
+
+  private setFailureStatus(error: unknown): void {
+    const message = error instanceof Error ? error.message.toLowerCase() : "";
+    if (/node|npx/.test(message)) {
+      this.lifecycleStatus = "needs_node";
+      this.lifecycleNote = "REA needs a supported Node.js and npm installation.";
+    } else if (/network|fetch|offline|econn|enotfound/.test(message)) {
+      this.lifecycleStatus = "network_error";
+      this.lifecycleNote =
+        "REA could not acquire or connect to its pinned package; check network access and retry.";
+    } else {
+      this.lifecycleStatus = "failed";
+      this.lifecycleNote =
+        "REA could not start. Retry after checking Node.js, npm, and network availability.";
     }
   }
 
@@ -470,6 +610,7 @@ export class ReaSessionManager {
       await catalog;
     } catch (error) {
       if (worker.catalog === catalog && !worker.retired) delete worker.catalog;
+      this.setFailureStatus(error);
       throw error;
     }
     this.assertCurrent(worker.owner, worker);
@@ -570,9 +711,11 @@ export class ReaSessionManager {
     } catch (error) {
       let rejection = error;
       if (error instanceof Error && /timed out/i.test(error.message)) {
+        this.markUncertainFailure();
         try {
           await this.retireWorker(worker);
         } catch {
+          this.markCleanupFailure();
           rejection = new Error(CLEANUP_FAILURE_MESSAGE);
         }
       }
@@ -620,10 +763,21 @@ export class ReaSessionManager {
     if (worker.transportCloseHandled) return;
     worker.transportCloseHandled = true;
     if (this.workers.get(worker.key) === worker && !worker.retired) {
+      this.markUncertainFailure();
       void this.retireWorker(worker).catch(() => {});
     } else {
       void this.cleanupProcessGroup(worker).catch(() => {});
     }
+  }
+
+  private markUncertainFailure(): void {
+    this.lifecycleStatus = "failed";
+    this.lifecycleNote = "REA connection was interrupted. Retry before the next approved call.";
+  }
+
+  private markCleanupFailure(): void {
+    this.lifecycleStatus = "failed";
+    this.lifecycleNote = "REA worker cleanup could not be confirmed.";
   }
 
   private cleanupProcessGroup(worker: Worker): Promise<void> {

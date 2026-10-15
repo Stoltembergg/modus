@@ -11,7 +11,7 @@ import {
   ReaSessionManager,
   type ReaSessionOwner,
 } from "../../mcp/rea-session-manager";
-import { disposeAllReaSessions, registerReaTools } from "./rea-tools";
+import { createReaToolDefinitions, disposeAllReaSessions, registerReaTools } from "./rea-tools";
 import { getToolTarget, ToolRegistry } from "./registry";
 import { type AgentToolContext, runWithAgentToolContext } from "./tool-context";
 
@@ -68,7 +68,11 @@ function createHarness() {
     disposeSession: vi.fn(async () => {}),
     disposeAll: vi.fn(async () => {}),
   } as unknown as ReaSessionManager;
-  registerReaTools({ registry, manager });
+  registerReaTools({
+    registry,
+    manager,
+    settingsSource: () => ({ enabled: true, settingsError: false }),
+  });
   const definitions = Object.fromEntries(
     registry.getCustomToolDefinitions("chat").map((definition) => [definition.name, definition]),
   ) as Record<string, ToolDefinition>;
@@ -114,7 +118,11 @@ describe("REA broker tools", () => {
     const { registry, manager, tools } = createHarness();
     const revision = registry.revision;
     const callTool = tools.rea_call;
-    registerReaTools({ registry, manager });
+    registerReaTools({
+      registry,
+      manager,
+      settingsSource: () => ({ enabled: true, settingsError: false }),
+    });
 
     expect(registry.revision).toBe(revision);
     expect(registry.getCustomToolDefinitions("chat").map((tool) => tool.name)).toEqual([
@@ -284,6 +292,22 @@ describe("REA broker tools", () => {
     expect(manager.callTool).not.toHaveBeenCalled();
   });
 
+  it("fails closed on invalid settings before resolving or accessing the manager", async () => {
+    const { manager } = createHarness();
+    const managerSource = vi.fn(() => manager);
+    const [reaTools] = createReaToolDefinitions(managerSource, () => ({
+      enabled: false,
+      settingsError: true,
+      error: "REA settings could not be read.",
+    }));
+    if (!reaTools) throw new Error("Expected rea_tools definition");
+    await expect(
+      executeTool(reaTools, {}, context("invalid-rea-settings", "g-invalid-settings")),
+    ).rejects.toThrow(/settings/i);
+    expect(managerSource).not.toHaveBeenCalled();
+    expect(manager.listTools).not.toHaveBeenCalled();
+  });
+
   it("does not call an operation when cancellation interrupts catalog discovery", async () => {
     const discovery = deferred<{
       offset: number;
@@ -403,7 +427,11 @@ describe("REA broker tools", () => {
       transportFactory: () => ({ close: async () => {}, pid: null }) as never,
     });
     const registry = new ToolRegistry();
-    registerReaTools({ registry, manager });
+    registerReaTools({
+      registry,
+      manager,
+      settingsSource: () => ({ enabled: true, settingsError: false }),
+    });
     const tool = registry.getCustomToolDefinitions("chat").find((item) => item.name === "rea_call");
     if (!tool) throw new Error("Expected rea_call to be registered");
     try {

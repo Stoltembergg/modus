@@ -30,9 +30,10 @@ export function resolveSkillsPrompt(
   cwd: string,
   selections: SkillSelection[],
   home?: string,
+  options: { includeManifest?: boolean } = {},
 ): string {
   const skills = loadWorkspaceSkills(cwd, home);
-  const manifest = renderSkillsManifest(skills);
+  const manifest = options.includeManifest === false ? "" : renderSkillsManifest(skills);
   const blocks: string[] = [];
   const selectedPaths = new Set(selections.map((selection) => selection.path));
   for (const path of selectedPaths) {

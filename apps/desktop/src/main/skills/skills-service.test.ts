@@ -141,4 +141,19 @@ describe("createSkill", () => {
     expect(prompt).toContain("MODUS BODY");
     expect(prompt).not.toContain("CURSOR BODY");
   });
+
+  it("can omit the passive manifest while retaining explicitly selected skill bodies", () => {
+    const skillDir = join(cwd, ".modus", "skills", "review");
+    const skillPath = join(skillDir, "SKILL.md");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(skillPath, "---\nname: review\n---\nSELECTED BODY", "utf8");
+
+    const prompt = resolveSkillsPrompt(cwd, [{ name: "review", path: skillPath }], home, {
+      includeManifest: false,
+    });
+
+    expect(prompt).not.toContain("## Skills");
+    expect(prompt).toContain(`<skill name="review" path="${skillPath}">`);
+    expect(prompt).toContain("SELECTED BODY");
+  });
 });
