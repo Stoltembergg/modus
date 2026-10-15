@@ -619,14 +619,58 @@ describe("ReaSessionManager", () => {
 
   it("reports starting while the initial catalog request is pending", async () => {
     const catalogPage = deferred<{ tools: Array<{ name: string }> }>();
-    const { manager } = setup({ listTools: () => catalogPage.promise as never });
+    const { manager, clients } = setup({ listTools: () => catalogPage.promise as never });
     const pending = manager.listTools(owner("catalog-pending"), { offset: 0, limit: 10 });
 
-    await vi.waitFor(() => expect(manager.getIntegrationStatus().status).toBe("starting"));
+    await vi.waitFor(() => expect(clients[0]?.listTools).toHaveBeenCalledTimes(1));
+    expect(manager.getIntegrationStatus().status).toBe("starting");
 
     catalogPage.resolve({ tools: [{ name: "echo" }] });
     await expect(pending).resolves.toMatchObject({ tools: [{ name: "echo" }] });
     expect(manager.getIntegrationStatus().status).toBe("ready");
+    await manager.disposeAll();
+  });
+
+  it("reports starting when catalog discovery retries after a failure", async () => {
+    const attempts: Array<{
+      resolve: (value: { tools: Array<{ name: string }> }) => void;
+      reject: (error: unknown) => void;
+    }> = [];
+    const { manager } = setup({
+      listTools: () => {
+        const attempt = deferred<{ tools: Array<{ name: string }> }>();
+        attempts.push(attempt);
+        return attempt.promise as never;
+      },
+    });
+    const first = manager.listTools(owner("catalog-retry"), { offset: 0, limit: 10 });
+    await vi.waitFor(() => expect(attempts).toHaveLength(1));
+    attempts[0]?.reject(new Error("catalog unavailable"));
+    await expect(first).rejects.toThrow(/catalog unavailable/);
+    expect(manager.getIntegrationStatus().status).toBe("failed");
+
+    manager.retry();
+    const second = manager.listTools(owner("catalog-retry"), { offset: 0, limit: 10 });
+    await vi.waitFor(() => expect(attempts).toHaveLength(2));
+    expect(manager.getIntegrationStatus().status).toBe("starting");
+
+    attempts[1]?.resolve({ tools: [{ name: "echo" }] });
+    await expect(second).resolves.toMatchObject({ tools: [{ name: "echo" }] });
+    expect(manager.getIntegrationStatus().status).toBe("ready");
+    await manager.disposeAll();
+  });
+
+  it("suppresses the readiness failure when a worker is disposed mid-catalog", async () => {
+    const catalogPage = deferred<{ tools: Array<{ name: string }> }>();
+    const { manager, clients } = setup({ listTools: () => catalogPage.promise as never });
+    const pending = manager.listTools(owner("catalog-dispose"), { offset: 0, limit: 10 });
+    void pending.catch(() => {});
+
+    await vi.waitFor(() => expect(clients[0]?.listTools).toHaveBeenCalledTimes(1));
+    await manager.disposeSession(owner("catalog-dispose"));
+    catalogPage.reject(new Error("catalog aborted"));
+    await expect(pending).rejects.toThrow();
+    expect(manager.getIntegrationStatus().status).not.toBe("failed");
     await manager.disposeAll();
   });
 
