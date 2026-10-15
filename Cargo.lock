@@ -126,6 +126,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "modus-rea-process-supervisor"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "windows-sys",
+]
+
+[[package]]
 name = "nix"
 version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
