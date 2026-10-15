@@ -30,9 +30,10 @@ const SCENE = `
     <div class="pdf-page-chrome"></div>
     <div class="dialog-scrim"></div>
     <div class="composer-glass"></div>
-    <div class="message-card-slot flex w-full min-w-0 items-start justify-end gap-2"><div class="chat-message-bubble chat-message-surface" data-message-role="user" data-message-card>Oi</div><span class="size-[24px] shrink-0" data-user-avatar></span></div>
-    <div class="flex w-full min-w-0 items-start gap-2"><span class="size-[24px] shrink-0" data-assistant-avatar></span><div class="chat-message-bubble chat-message-surface" data-message-role="assistant" data-assistant-card>Reply</div></div>
-    <div class="flex w-full min-w-0 items-start gap-2"><span class="size-[24px] shrink-0" data-technical-avatar></span><div class="chat-message-bubble chat-message-surface" data-message-role="assistant" data-technical-card><pre><code>+kept line</code></pre></div></div>
+    <div class="message-card-slot message-role-row flex min-w-0 items-start justify-end gap-2 ml-auto" data-message-row="user"><div class="chat-message-bubble chat-message-surface" data-message-role="user" data-message-card>Oi</div><span class="size-[24px] shrink-0" data-user-avatar></span></div>
+    <div class="message-role-row flex min-w-0 items-start gap-2" data-message-row="assistant"><span class="size-[24px] shrink-0" data-assistant-avatar></span><div class="chat-message-bubble chat-message-surface" data-message-role="assistant" data-assistant-card>Reply</div></div>
+    <div class="message-role-row flex min-w-0 items-start gap-2" data-message-row="assistant"><span class="size-[24px] shrink-0" data-technical-avatar></span><div class="chat-message-bubble chat-message-surface" data-message-role="assistant" data-technical-card><pre><code>+kept line</code></pre><table><tr><td>a very wide table</td></tr></table></div></div>
+    <div class="chat-message-bubble chat-message-surface" data-table-menu-card><div class="modus-markdown"><div data-streamdown="table-wrapper"><div><button type="button">Copy table</button></div><div data-table-frame><table style="width:1200px"><thead><tr>${Array.from({ length: 12 }, (_, i) => `<th>Column ${i}</th>`).join("")}</tr></thead><tbody><tr>${Array.from({ length: 12 }, (_, i) => `<td>Wide table cell ${i}</td>`).join("")}</tr></tbody></table></div><div class="top-full" data-table-menu><button type="button">Markdown</button><button type="button">CSV</button><button type="button">TSV</button></div></div></div></div>
     <div class="chat-message-surface bg-card"></div>
     <div class="chat-run-status"></div>
   </main>
@@ -40,9 +41,11 @@ const SCENE = `
 const CANDIDATES = [
   "flex",
   "w-full",
+  "w-1/2",
   "min-w-0",
   "items-start",
   "justify-end",
+  "ml-auto",
   "gap-2",
   "size-[24px]",
   "shrink-0",
@@ -74,11 +77,20 @@ type Probe = {
   effective: number;
   backdrop: string;
   width: number;
+  top: number;
+  bottom: number;
   left: number;
   right: number;
   innerWidth: number;
   innerLeft: number;
   innerRight: number;
+  paddingTop: number;
+  paddingBottom: number;
+  paddingLeft: number;
+  paddingRight: number;
+  overflowX: string;
+  scrollWidth: number;
+  clientWidth: number;
 };
 type Edge = { alpha: number; width: number };
 type Measured = Record<string, Probe> & {
@@ -109,11 +121,20 @@ const MEASURE = `(${(selectors: string[]) => {
     const insetRight = parseFloat(style.borderRightWidth) + parseFloat(style.paddingRight);
     out[selector] = {
       width: rect.width,
+      top: rect.top,
+      bottom: rect.bottom,
       left: rect.left,
       right: rect.right,
       innerWidth: rect.width - insetLeft - insetRight,
       innerLeft: rect.left + insetLeft,
       innerRight: rect.right - insetRight,
+      paddingTop: Number.parseFloat(style.paddingTop),
+      paddingBottom: Number.parseFloat(style.paddingBottom),
+      paddingLeft: Number.parseFloat(style.paddingLeft),
+      paddingRight: Number.parseFloat(style.paddingRight),
+      overflowX: style.overflowX,
+      scrollWidth: (element as HTMLElement).scrollWidth,
+      clientWidth: (element as HTMLElement).clientWidth,
       alpha: alphaOf(style.backgroundColor),
       effective: 1 - through,
       // Chrome aliases -webkit-backdrop-filter to this; glassTokens (e) checks
@@ -166,7 +187,14 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
     glass: boolean,
     transparency: "full" | "sidebar" | "off",
     os?: Os,
+    mainWidth = 600,
   ): Promise<Measured> {
+    await send("Emulation.setDeviceMetricsOverride", {
+      width: mainWidth === 360 ? 360 : 800,
+      height: 900,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
     // Pin every accessibility feature (the host's own settings must not leak in).
     await send("Emulation.setEmulatedMedia", {
       features: [
@@ -182,14 +210,14 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
       theme,
       nativeGlass: String(glass),
       transparency,
-    })});`;
+    })}); document.querySelector('.surface-main').style.width = '${mainWidth}px';`;
     const response = await send("Runtime.evaluate", {
       expression: `(async () => {
         ${root}
         // Measure the settled palette, including the Composer's existing transition.
         getComputedStyle(document.querySelector('.composer-glass')).backgroundColor;
         await Promise.allSettled(document.getAnimations().map(animation => animation.finished));
-        return ${MEASURE}(${JSON.stringify([...PANELS, ...OVERLAYS, ...CHAT_SURFACES, ...CHAT_AVATARS, ".chat-run-status", ".app-shell", "html"])});
+        return ${MEASURE}(${JSON.stringify([...PANELS, ...OVERLAYS, ...CHAT_SURFACES, ...CHAT_AVATARS, "[data-table-menu-card]", '[data-streamdown="table-wrapper"]', "[data-table-frame]", "[data-table-menu]", ".chat-run-status", ".app-shell", "html"])});
       })()`,
       awaitPromise: true,
       returnByValue: true,
@@ -358,24 +386,45 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
     }
   });
 
-  it("short cards fit their text and align by author; technical output takes the full column", async () => {
+  it("keeps each complete message row within its role lane at desktop and narrow widths", async () => {
     for (const theme of THEMES) {
-      const m = await measure(theme, true, "full");
-      const main = m[".surface-main"] as Probe;
-      const user = m["[data-message-card]"] as Probe;
-      const assistant = m["[data-assistant-card]"] as Probe;
-      const technical = m["[data-technical-card]"] as Probe;
-      expect(user.width).toBeLessThan(main.innerWidth * 0.5);
-      expect(m["[data-user-avatar]"]?.right).toBeCloseTo(main.innerRight, 0);
-      expect(user.right).toBeLessThan(m["[data-user-avatar]"]?.left ?? 0);
-      expect(assistant.width).toBeLessThan(main.innerWidth * 0.5);
-      expect(m["[data-assistant-avatar]"]?.left).toBeCloseTo(main.innerLeft, 0);
-      expect(assistant.left).toBeGreaterThan(m["[data-assistant-avatar]"]?.right ?? 0);
-      expect(technical.left).toBeCloseTo(assistant.left, 0);
-      expect(technical.width).toBeCloseTo(main.innerRight - technical.left, 0);
-      expect(technical.right).toBeCloseTo(main.innerRight, 0);
-      for (const selector of CHAT_AVATARS) expect(m[selector]?.width).toBe(24);
+      for (const width of [600, 360]) {
+        const m = await measure(theme, true, "full", undefined, width);
+        const main = m[".surface-main"] as Probe;
+        const split = main.innerLeft + main.innerWidth / 2;
+        const user = m["[data-message-card]"] as Probe;
+        const assistant = m["[data-assistant-card]"] as Probe;
+        const technical = m["[data-technical-card]"] as Probe;
+        const assistantAvatar = m["[data-assistant-avatar]"] as Probe;
+        const userAvatar = m["[data-user-avatar]"] as Probe;
+        expect(assistantAvatar.left).toBeCloseTo(main.innerLeft, 0);
+        expect(assistant.right).toBeLessThanOrEqual(split);
+        expect(technical.right).toBeLessThanOrEqual(split);
+        expect(user.left).toBeGreaterThanOrEqual(split);
+        expect(userAvatar.right).toBeCloseTo(main.innerRight, 0);
+        expect(user.left - assistant.right).toBeGreaterThanOrEqual(8);
+        expect(assistant.paddingTop).toBe(8);
+        expect(assistant.paddingBottom).toBe(8);
+        expect(assistant.paddingLeft).toBe(16);
+        expect(assistant.paddingRight).toBe(16);
+        for (const selector of CHAT_AVATARS) expect(m[selector]?.width).toBe(24);
+      }
     }
+  });
+
+  it("keeps the open table copy menu visible while the genuinely wide inner table scrolls", async () => {
+    const m = await measure("dark", true, "full");
+    const wrapper = m['[data-streamdown="table-wrapper"]'] as Probe;
+    const frame = m["[data-table-frame]"] as Probe;
+    const menu = m["[data-table-menu]"] as Probe;
+    expect(wrapper.overflowX).toBe("visible");
+    expect(frame.overflowX).toBe("auto");
+    expect(frame.scrollWidth).toBeGreaterThan(frame.clientWidth);
+    expect(menu.width).toBeGreaterThan(0);
+    expect(menu.top).toBeGreaterThanOrEqual(frame.bottom);
+    expect(menu.bottom).toBeLessThan(900);
+    expect(menu.left).toBeGreaterThanOrEqual(wrapper.left);
+    expect(menu.right).toBeLessThanOrEqual(wrapper.right);
   });
 
   it("Off (also what main resolves OS accessibility to): opaque, today's dividers, no CSS blur", async () => {

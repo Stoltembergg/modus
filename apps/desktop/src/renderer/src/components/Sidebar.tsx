@@ -37,6 +37,7 @@ import type {
   MoveAgentSessionInput,
   WorkspaceInfo,
 } from "../../../shared/contracts";
+import { CHATS_WORKSPACE_ID } from "../../../shared/contracts";
 import type { SessionActivity } from "../features/agent/agentEventHub";
 import { SessionStatusDot } from "../features/agent/SessionStatusDot";
 import { AgentAvatar } from "../features/agents/AgentAvatar";
@@ -100,7 +101,11 @@ type SidebarProps = {
   workspaces: WorkspaceInfo[];
   agentSessions: AgentSessionInfo[];
   agents?: readonly AgentInfo[];
+  chatsExpanded?: boolean;
+  onToggleChats?: () => void;
+  onExpandChats?: () => void;
   projectsExpanded?: boolean;
+  onToggleProjects?: () => void;
   /** Optional target for pinned items above the Projects control. */
   pinnedContainer?: HTMLElement | null;
   activeSessionId?: string | undefined;
@@ -143,7 +148,11 @@ export function Sidebar({
   workspaces,
   agentSessions,
   agents = NO_AGENTS,
+  chatsExpanded: controlledChatsExpanded,
+  onToggleChats,
+  onExpandChats,
   projectsExpanded: controlledProjectsExpanded,
+  onToggleProjects,
   pinnedContainer,
   activeSessionId,
   activityBySession,
@@ -176,6 +185,8 @@ export function Sidebar({
   const t = useShellText();
   const [localProjectsExpanded, setProjectsExpanded] = useState(false);
   const projectsExpanded = controlledProjectsExpanded ?? localProjectsExpanded;
+  const [localChatsExpanded, setChatsExpanded] = useState(true);
+  const chatsExpanded = controlledChatsExpanded ?? localChatsExpanded;
   const agentsById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents]);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [pinnedExpanded, setPinnedExpanded] = useState(true);
@@ -201,6 +212,10 @@ export function Sidebar({
     () => new Set(workspaces.map((workspace) => workspace.id)),
     [workspaces],
   );
+  const isInboxWorkspace = (workspace: WorkspaceInfo) =>
+    workspace.inbox === true || workspace.id === CHATS_WORKSPACE_ID;
+  const inboxWorkspace = workspaces.find(isInboxWorkspace);
+  const projectWorkspaces = workspaces.filter((workspace) => !isInboxWorkspace(workspace));
   const sessionsByWorkspace = groupSessionsByWorkspace(
     // Agent (profile) chats are listed in their project like any chat.
     ungroupedSessions.filter((session) => !session.pinnedAt),
@@ -455,6 +470,41 @@ export function Sidebar({
     </div>
   );
 
+  const renderWorkspaceItem = (workspace: WorkspaceInfo) => (
+    <WorkspaceItem
+      activityBySession={activityBySession}
+      agentsById={agentsById}
+      onArchiveSession={onArchiveSession}
+      onDeleteSession={onDeleteSession}
+      onListArchivedSessions={onListArchivedSessions}
+      onNewSession={() => onNewWorkspaceSession(workspace)}
+      onPinSession={onPinSession}
+      onRenameSession={(id, title) => onRenameSession?.(id, title)}
+      onEditAgentProfile={onEditAgentProfile}
+      onRestoreSession={onRestoreSession}
+      onSelectSession={onSelectSession}
+      activeSessionId={activeSessionId}
+      sessions={sessionsByWorkspace.get(workspace.id) ?? []}
+      workspace={workspace}
+      renaming={renamingId === workspace.id}
+      onStartRename={() => setRenamingId(workspace.id)}
+      onCommitRename={(name) => {
+        setRenamingId(null);
+        const next = name.trim();
+        if (next && next !== workspace.displayName) {
+          onRenameProject(workspace.id, next);
+        }
+      }}
+      onCancelRename={() => setRenamingId(null)}
+      onPin={() => onPinProject(workspace.id, !workspace.pinned)}
+      onReveal={() => onRevealProject(workspace.id)}
+      onArchiveChats={() => onArchiveProjectChats(workspace.id)}
+      onDeleteChats={() => onDeleteProjectChats(workspace.id)}
+      onRemove={() => onRemoveProject(workspace.id)}
+      groupNames={NO_NAMES}
+    />
+  );
+
   const list = (
     <SessionMovement.Provider
       value={
@@ -497,11 +547,49 @@ export function Sidebar({
               : null}
 
           {section === "direct-messages" ? (
-            <div data-testid="sidebar-projects">
-              {!embedded ? (
+            <>
+              {inboxWorkspace ? (
+                <div
+                  className={cn(
+                    "rounded-md",
+                    dropTarget?.dataset.workspaceDrop === CHATS_WORKSPACE_ID && "bg-hover",
+                  )}
+                  data-testid="sidebar-chats"
+                  data-workspace-drop={CHATS_WORKSPACE_ID}
+                >
+                  <InboxChatsSection
+                    activeSessionId={activeSessionId}
+                    activityBySession={activityBySession}
+                    agentsById={agentsById}
+                    expanded={chatsExpanded}
+                    onExpand={() => {
+                      if (onExpandChats) onExpandChats();
+                      else setChatsExpanded(true);
+                    }}
+                    onArchiveSession={onArchiveSession}
+                    onDeleteSession={onDeleteSession}
+                    onEditAgentProfile={onEditAgentProfile}
+                    onListArchivedSessions={onListArchivedSessions}
+                    onPinSession={onPinSession}
+                    onRenameSession={(id, title) => onRenameSession?.(id, title)}
+                    onRestoreSession={onRestoreSession}
+                    onSelectSession={onSelectSession}
+                    onToggle={() => {
+                      if (onToggleChats) onToggleChats();
+                      else setChatsExpanded((expanded) => !expanded);
+                    }}
+                    sessions={sessionsByWorkspace.get(inboxWorkspace.id) ?? []}
+                    workspaceId={inboxWorkspace.id}
+                  />
+                </div>
+              ) : null}
+              <div data-testid="sidebar-projects">
                 <SectionHeader
                   expanded={projectsExpanded}
-                  onToggle={() => setProjectsExpanded((expanded) => !expanded)}
+                  onToggle={() => {
+                    if (onToggleProjects) onToggleProjects();
+                    else setProjectsExpanded((expanded) => !expanded);
+                  }}
                   action={
                     <IconButton label="Open workspace" onClick={onOpenWorkspace}>
                       <IconPlus aria-hidden size={SB_ACTION} stroke={SB_ACTION_STROKE} />
@@ -510,98 +598,67 @@ export function Sidebar({
                 >
                   {t("shell.projects")}
                 </SectionHeader>
-              ) : null}
 
-              <CollapsibleMotion open={projectsExpanded} preset="default">
-                <AnimatePresence initial={false}>
-                  {workspaces.map((workspace) => (
-                    <m.div
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={reduceMotion ? { opacity: 1 } : { opacity: 0, y: -4 }}
-                      initial={reduceMotion ? false : { opacity: 0, y: 4 }}
-                      key={workspace.id}
-                      data-workspace-drop={workspace.id}
-                      className={cn(
-                        "rounded-md",
-                        dropTarget?.dataset.workspaceDrop === workspace.id && "bg-hover",
-                      )}
-                      layout
-                      transition={{
-                        duration: reduceMotion ? 0 : LIST_MOTION.duration,
-                        ease: LIST_MOTION.ease,
-                      }}
-                    >
-                      <WorkspaceItem
-                        activityBySession={activityBySession}
-                        agentsById={agentsById}
-                        onArchiveSession={onArchiveSession}
-                        onDeleteSession={onDeleteSession}
-                        onListArchivedSessions={onListArchivedSessions}
-                        onNewSession={() => onNewWorkspaceSession(workspace)}
-                        onPinSession={onPinSession}
-                        onRenameSession={(id, title) => onRenameSession?.(id, title)}
-                        onEditAgentProfile={onEditAgentProfile}
-                        onRestoreSession={onRestoreSession}
-                        onSelectSession={onSelectSession}
-                        activeSessionId={activeSessionId}
-                        sessions={sessionsByWorkspace.get(workspace.id) ?? []}
-                        workspace={workspace}
-                        renaming={renamingId === workspace.id}
-                        onStartRename={() => setRenamingId(workspace.id)}
-                        onCommitRename={(name) => {
-                          setRenamingId(null);
-                          const next = name.trim();
-                          if (next && next !== workspace.displayName) {
-                            onRenameProject(workspace.id, next);
+                <CollapsibleMotion open={projectsExpanded} preset="default">
+                  <AnimatePresence initial={false}>
+                    {projectWorkspaces.map((workspace) => (
+                      <m.div
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={reduceMotion ? { opacity: 1 } : { opacity: 0, y: -4 }}
+                        initial={reduceMotion ? false : { opacity: 0, y: 4 }}
+                        key={workspace.id}
+                        data-workspace-drop={workspace.id}
+                        className={cn(
+                          "rounded-md",
+                          dropTarget?.dataset.workspaceDrop === workspace.id && "bg-hover",
+                        )}
+                        layout
+                        transition={{
+                          duration: reduceMotion ? 0 : LIST_MOTION.duration,
+                          ease: LIST_MOTION.ease,
+                        }}
+                      >
+                        {renderWorkspaceItem(workspace)}
+                      </m.div>
+                    ))}
+                  </AnimatePresence>
+                  {unavailableProjectSessions.length > 0
+                    ? unavailableProjectSessions.map((session) => (
+                        <SessionRow
+                          sessionId={session.id}
+                          agent={session.agentId ? agentsById.get(session.agentId) : undefined}
+                          agentId={session.agentId}
+                          key={session.id}
+                          activity={activityBySession[session.id]}
+                          isActive={activeSessionId === session.id}
+                          onArchive={(event) => {
+                            event.stopPropagation();
+                            onArchiveSession(session);
+                          }}
+                          onDelete={(event) => {
+                            event.stopPropagation();
+                            onDeleteSession(session);
+                          }}
+                          onPin={(event) => {
+                            event.stopPropagation();
+                            onPinSession(session, !session.pinnedAt);
+                          }}
+                          onEditProfile={
+                            session.agentId && onEditAgentProfile
+                              ? () => onEditAgentProfile(session.agentId as string)
+                              : undefined
                           }
-                        }}
-                        onCancelRename={() => setRenamingId(null)}
-                        onPin={() => onPinProject(workspace.id, !workspace.pinned)}
-                        onReveal={() => onRevealProject(workspace.id)}
-                        onArchiveChats={() => onArchiveProjectChats(workspace.id)}
-                        onDeleteChats={() => onDeleteProjectChats(workspace.id)}
-                        onRemove={() => onRemoveProject(workspace.id)}
-                        groupNames={NO_NAMES}
-                      />
-                    </m.div>
-                  ))}
-                </AnimatePresence>
-                {unavailableProjectSessions.length > 0
-                  ? unavailableProjectSessions.map((session) => (
-                      <SessionRow
-                        sessionId={session.id}
-                        agent={session.agentId ? agentsById.get(session.agentId) : undefined}
-                        agentId={session.agentId}
-                        key={session.id}
-                        activity={activityBySession[session.id]}
-                        isActive={activeSessionId === session.id}
-                        onArchive={(event) => {
-                          event.stopPropagation();
-                          onArchiveSession(session);
-                        }}
-                        onDelete={(event) => {
-                          event.stopPropagation();
-                          onDeleteSession(session);
-                        }}
-                        onPin={(event) => {
-                          event.stopPropagation();
-                          onPinSession(session, !session.pinnedAt);
-                        }}
-                        onEditProfile={
-                          session.agentId && onEditAgentProfile
-                            ? () => onEditAgentProfile(session.agentId as string)
-                            : undefined
-                        }
-                        onRename={(title) => onRenameSession?.(session.id, title)}
-                        onSelect={() => onSelectSession(session)}
-                        pinned={Boolean(session.pinnedAt)}
-                        title={session.title}
-                        updatedAt={session.updatedAt}
-                      />
-                    ))
-                  : null}
-              </CollapsibleMotion>
-            </div>
+                          onRename={(title) => onRenameSession?.(session.id, title)}
+                          onSelect={() => onSelectSession(session)}
+                          pinned={Boolean(session.pinnedAt)}
+                          title={session.title}
+                          updatedAt={session.updatedAt}
+                        />
+                      ))
+                    : null}
+                </CollapsibleMotion>
+              </div>
+            </>
           ) : null}
         </div>
       </section>
@@ -663,6 +720,135 @@ export function Sidebar({
         />
       ) : null}
     </m.aside>
+  );
+}
+
+function InboxChatsSection({
+  workspaceId,
+  sessions,
+  expanded,
+  activeSessionId,
+  activityBySession,
+  agentsById,
+  onToggle,
+  onExpand,
+  onSelectSession,
+  onPinSession,
+  onRenameSession,
+  onEditAgentProfile,
+  onArchiveSession,
+  onDeleteSession,
+  onListArchivedSessions,
+  onRestoreSession,
+}: {
+  workspaceId: string;
+  sessions: AgentSessionInfo[];
+  expanded: boolean;
+  activeSessionId?: string | undefined;
+  activityBySession: Record<string, SessionActivity>;
+  agentsById: ReadonlyMap<string, AgentInfo>;
+  onToggle(): void;
+  onExpand(): void;
+  onSelectSession(session: AgentSessionInfo): void;
+  onPinSession(session: AgentSessionInfo, pinned: boolean): void;
+  onRenameSession(id: string, title: string): void;
+  onEditAgentProfile?: ((agentId: string) => void) | undefined;
+  onArchiveSession(session: AgentSessionInfo): void;
+  onDeleteSession(session: AgentSessionInfo): void;
+  onListArchivedSessions(workspaceId: string): Promise<AgentSessionInfo[]>;
+  onRestoreSession(session: AgentSessionInfo): void;
+}) {
+  const [archivedOpen, setArchivedOpen] = useState(false);
+  const [archivedSessions, setArchivedSessions] = useState<AgentSessionInfo[] | undefined>();
+
+  const toggleArchived = (): void => {
+    const nextOpen = !archivedOpen;
+    setArchivedOpen(nextOpen);
+    if (nextOpen) onExpand();
+    if (nextOpen && !archivedSessions) {
+      void onListArchivedSessions(workspaceId).then(setArchivedSessions);
+    }
+  };
+
+  return (
+    <>
+      <SectionHeader
+        expanded={expanded}
+        onToggle={onToggle}
+        action={
+          <IconButton
+            ariaExpanded={archivedOpen}
+            label="Archived chats"
+            onClick={toggleArchived}
+          >
+            <IconArchiveOff size={SB_ACTION} stroke={SB_ACTION_STROKE} />
+          </IconButton>
+        }
+      >
+        Chats
+      </SectionHeader>
+      <CollapsibleMotion className={SB_NEST} open={expanded} preset="default">
+        {sessions.map((session) => (
+          <SessionRow
+            sessionId={session.id}
+            agent={session.agentId ? agentsById.get(session.agentId) : undefined}
+            agentId={session.agentId}
+            key={session.id}
+            activity={activityBySession[session.id]}
+            isActive={activeSessionId === session.id}
+            onArchive={(event) => {
+              event.stopPropagation();
+              onArchiveSession(session);
+            }}
+            onDelete={(event) => {
+              event.stopPropagation();
+              onDeleteSession(session);
+            }}
+            onPin={(event) => {
+              event.stopPropagation();
+              onPinSession(session, !session.pinnedAt);
+            }}
+            onEditProfile={
+              session.agentId && onEditAgentProfile
+                ? () => onEditAgentProfile(session.agentId as string)
+                : undefined
+            }
+            onRename={(title) => onRenameSession(session.id, title)}
+            onSelect={() => onSelectSession(session)}
+            pinned={Boolean(session.pinnedAt)}
+            title={session.title}
+            updatedAt={session.updatedAt}
+          />
+        ))}
+        <CollapsibleMotion open={archivedOpen} preset="default">
+          <div className={cn("mt-1 space-y-0.5", SB_NEST)}>
+            {archivedSessions === undefined ? (
+              archivedOpen ? (
+                <div className="px-2 py-1 text-2xs text-fg-faint">Loading archived chats…</div>
+              ) : null
+            ) : archivedSessions.length === 0 ? (
+              <div className="px-2 py-1 text-2xs text-fg-faint">No archived chats</div>
+            ) : (
+              <AnimatePresence initial={false}>
+                {archivedSessions.map((session) => (
+                  <ArchivedSessionRow
+                    key={session.id}
+                    onOpen={() => onSelectSession(session)}
+                    onRestore={() => {
+                      setArchivedSessions((current) =>
+                        current?.filter((item) => item.id !== session.id),
+                      );
+                      onRestoreSession(session);
+                    }}
+                    session={session}
+                  />
+                ))}
+              </AnimatePresence>
+            )}
+          </div>
+        </CollapsibleMotion>
+      </CollapsibleMotion>
+    </>
   );
 }
 
@@ -1521,14 +1707,17 @@ function IconButton({
   children,
   label,
   onClick,
+  ariaExpanded,
 }: {
   children: ReactNode;
   label: string;
   onClick?: (event: MouseEvent<HTMLButtonElement>) => void;
+  ariaExpanded?: boolean;
 }) {
   return (
     <m.button
       aria-label={label}
+      aria-expanded={ariaExpanded}
       className="flex size-6 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-active hover:text-fg-muted"
       onClick={onClick}
       type="button"

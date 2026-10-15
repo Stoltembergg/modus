@@ -152,9 +152,10 @@ export const MessageBlock = memo(function MessageBlock({
     return (
       <div
         className={cn(
-          "message-card-slot flex w-full min-w-0 items-start justify-end gap-2",
+          "message-card-slot message-role-row message-user-row ml-auto flex w-1/2 min-w-0 items-start justify-end gap-2",
           compactClip && cn("sticky top-0 z-10 bg-elevated", COMPOSER_RADIUS_CLASS),
         )}
+        data-message-row="user"
       >
         {showEditor && onEditResend ? (
           <InlineEditComposer
@@ -226,7 +227,10 @@ export const MessageBlock = memo(function MessageBlock({
   if (!content && (streaming || (!sources?.length && !sourceStatus))) return null;
 
   return (
-    <div className="flex w-full min-w-0 items-start gap-2" data-message-row="assistant">
+    <div
+      className="message-role-row message-assistant-row flex w-1/2 min-w-0 items-start gap-2"
+      data-message-row="assistant"
+    >
       <AssistantAvatar agent={assistantAgent} agentId={assistantAgentId} streaming={streaming} />
       <div
         className="chat-message-bubble chat-message-surface text-xs leading-relaxed"

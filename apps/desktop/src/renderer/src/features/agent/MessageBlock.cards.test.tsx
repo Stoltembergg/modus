@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AgentInfo, ModelInfo } from "../../../../shared/contracts";
 import { MessageBlock } from "./MessageBlock";
@@ -73,6 +73,33 @@ describe("message cards", () => {
     expect(avatar.parentElement).toBe(bubble?.parentElement);
     expect((bubble as Element).compareDocumentPosition(avatar) & 4).toBe(4);
     expect(bubble?.contains(avatar)).toBe(false);
+  });
+
+  it("marks each role row and keeps long message content in its own row", () => {
+    const { container } = render(
+      <>
+        <MessageBlock
+          content={`Assistant ${"long content ".repeat(20)}\n\n| A | B |\n| - | - |\n| 1 | 2 |`}
+          messageId="a"
+          messageRole="assistant"
+        />
+        <MessageBlock
+          content={`User ${"long content ".repeat(20)}`}
+          messageId="u"
+          messageRole="user"
+        />
+      </>,
+    );
+    expect(container.querySelector('[data-message-row="assistant"]')).toBeTruthy();
+    expect(container.querySelector('[data-message-row="user"]')).toBeTruthy();
+    expect(
+      container.querySelector(
+        '[data-message-row="assistant"] [data-message-role="assistant"] table',
+      ),
+    ).toBeTruthy();
+    expect(
+      container.querySelector('[data-message-row="user"] [data-message-role="user"]'),
+    ).toBeTruthy();
   });
 
   it("uses Modus for a normal chat and an id-derived Agent avatar when the profile is unavailable", () => {
@@ -216,6 +243,40 @@ describe("message cards", () => {
     await waitFor(() => expect(container.querySelector(selector)?.textContent).toContain(text));
     const card = container.querySelector('[data-message-role="assistant"]');
     expect(card?.className).not.toMatch(/max-h-|overflow-hidden/);
+  });
+
+  it("keeps the open copy menu available beside a genuinely wide table", async () => {
+    const columns = Array.from({ length: 12 }, (_, index) => `Column ${index}`);
+    const content = [
+      `| ${columns.join(" | ")} |`,
+      `| ${columns.map(() => "---").join(" | ")} |`,
+      `| ${columns.map((_, index) => `wide-cell-${index}-${"x".repeat(24)}`).join(" | ")} |`,
+    ].join("\n");
+    const { container } = render(
+      <MessageBlock content={content} messageId="wide-table" messageRole="assistant" />,
+    );
+    const wrapper = await waitFor(() => {
+      const element = container.querySelector('[data-streamdown="table-wrapper"]');
+      expect(element?.querySelector("table th")).toBeTruthy();
+      return element as HTMLElement;
+    });
+    const copyMenuTrigger = wrapper.querySelector("button");
+    expect(copyMenuTrigger).toBeTruthy();
+    fireEvent.click(copyMenuTrigger as HTMLButtonElement);
+    const menu = await waitFor(() => {
+      const element = wrapper.querySelector('[class~="top-full"]');
+      expect(element).toBeTruthy();
+      return element as HTMLElement;
+    });
+    expect(menu.textContent).toMatch(/Markdown/);
+    expect(menu.textContent).toMatch(/CSV/);
+    expect(menu.textContent).toMatch(/TSV/);
+    for (const format of ["Markdown", "CSV", "TSV"]) {
+      const option = within(menu).getByRole("button", { name: format });
+      expect((option as HTMLButtonElement).disabled).toBe(false);
+      option.focus();
+      expect(document.activeElement).toBe(option);
+    }
   });
 
   it("shows final source evidence only after streaming ends", async () => {
