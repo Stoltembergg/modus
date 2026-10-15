@@ -617,6 +617,19 @@ describe("ReaSessionManager", () => {
     await manager.disposeAll();
   });
 
+  it("reports starting while the initial catalog request is pending", async () => {
+    const catalogPage = deferred<{ tools: Array<{ name: string }> }>();
+    const { manager } = setup({ listTools: () => catalogPage.promise as never });
+    const pending = manager.listTools(owner("catalog-pending"), { offset: 0, limit: 10 });
+
+    await vi.waitFor(() => expect(manager.getIntegrationStatus().status).toBe("starting"));
+
+    catalogPage.resolve({ tools: [{ name: "echo" }] });
+    await expect(pending).resolves.toMatchObject({ tools: [{ name: "echo" }] });
+    expect(manager.getIntegrationStatus().status).toBe("ready");
+    await manager.disposeAll();
+  });
+
   it("forwards only the documented OS and REA provider environment allowlist", async () => {
     const providerEnvironment = {
       GHIDRA_INSTALL_DIR: "C:\\configured\\ghidra",

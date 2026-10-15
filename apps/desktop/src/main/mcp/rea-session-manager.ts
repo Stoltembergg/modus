@@ -55,7 +55,7 @@ const MAX_REA_DIAGNOSTIC_BYTES = 8 * 1024;
 const REA_NETWORK_FAILURE_PATTERN =
   /enotfound|etimedout|econnrefused|econnreset|eai_again|getaddrinfo|fetch failed|network|offline|registry/;
 const REA_MISSING_RUNTIME_PATTERN =
-  /spawn (?:npx|node)(?:\.cmd|\.exe)? enoent|npx(?:\.cmd)?: command not found|node(?:\.exe)?: command not found|'npx' is not recognized|'node' is not recognized|is not recognized as an internal or external command|ebadengine|unsupported engine/;
+  /spawn (?:npx|node)(?:\.cmd|\.exe)? enoent|npx(?:\.cmd)?: command not found|node(?:\.exe)?: command not found|'(?:npx|node)(?:\.cmd|\.exe)?' is not recognized|ebadengine|unsupported engine/;
 const CLEANUP_FAILURE_MESSAGE =
   "REA worker cleanup failed; the worker remains quarantined until cleanup is confirmed.";
 const REA_PROVIDER_ENV = [
@@ -673,8 +673,6 @@ export class ReaSessionManager {
       }
       await this.retireWorker(worker);
       throw error;
-    } finally {
-      worker.starting = false;
     }
   }
 
@@ -716,21 +714,27 @@ export class ReaSessionManager {
   }
 
   private async ensureCatalog(worker: Worker): Promise<void> {
-    this.assertCurrent(worker.owner, worker);
-    await this.ensureStarted(worker);
-    this.assertCurrent(worker.owner, worker);
-    if (!worker.catalog) {
-      worker.catalog = this.loadCatalog(worker);
-    }
-    const catalog = worker.catalog;
+    // `starting` covers the whole path to readiness (connect + initial catalog), not just
+    // connect, so an in-flight initial catalog never reports `not_started`.
     try {
-      await catalog;
-    } catch (error) {
-      if (worker.catalog === catalog && !worker.retired) delete worker.catalog;
-      this.setFailureStatus(error);
-      throw error;
+      this.assertCurrent(worker.owner, worker);
+      await this.ensureStarted(worker);
+      this.assertCurrent(worker.owner, worker);
+      if (!worker.catalog) {
+        worker.catalog = this.loadCatalog(worker);
+      }
+      const catalog = worker.catalog;
+      try {
+        await catalog;
+      } catch (error) {
+        if (worker.catalog === catalog && !worker.retired) delete worker.catalog;
+        this.setFailureStatus(error);
+        throw error;
+      }
+      this.assertCurrent(worker.owner, worker);
+    } finally {
+      worker.starting = false;
     }
-    this.assertCurrent(worker.owner, worker);
   }
 
   private async loadCatalog(worker: Worker): Promise<ReaCatalogEntry[]> {
