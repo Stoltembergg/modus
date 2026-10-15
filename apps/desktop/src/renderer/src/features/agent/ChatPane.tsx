@@ -1335,7 +1335,9 @@ export function ChatPane({
           <Timeline
             assistantAgent={assistantAgent}
             assistantAgentId={session.agentId}
-            blocks={transcriptBlocks}
+            // Subagent previews/details have no separate Activity tab. Render
+            // their existing live work projection as well as the final answer.
+            blocks={session.parentSessionId ? visibleBlocks : transcriptBlocks}
             cwd={activeCwd}
             {...(isLite ? { embedded: true } : {})}
             model={paneModel}
