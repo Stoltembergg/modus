@@ -10,7 +10,11 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { app } from "electron";
 import type { ReaIntegrationState, ReaIntegrationStatus } from "../../shared/contracts";
 import { createPlatformProcessOps } from "../process/platform-process-ops";
-import { checkReaPrerequisites, type ReaPrerequisiteResult } from "./rea-prerequisites";
+import {
+  checkReaPrerequisites,
+  REA_SUPPORTED_NODE_RANGE,
+  type ReaPrerequisiteResult,
+} from "./rea-prerequisites";
 import { ReaSettingsStore } from "./rea-settings";
 import { resolveReaSupervisorPath } from "./rea-supervisor-path";
 
@@ -44,7 +48,14 @@ const SERVER_VERSION = "0.1.0";
 const RESULT_TRUNCATION_MARKER = "\n[REA result truncated]";
 const MAX_REA_METADATA_BYTES = 16 * 1024;
 const MAX_REA_DIAGNOSTIC_BYTES = 8 * 1024;
-const MAX_REA_DIAGNOSTIC_NOTE_CHARS = 240;
+/**
+ * Curated, path-free classification patterns for captured worker stderr. Stderr is untrusted
+ * data and is used only to pick a readiness state, never published in status notes.
+ */
+const REA_NETWORK_FAILURE_PATTERN =
+  /enotfound|etimedout|econnrefused|econnreset|eai_again|getaddrinfo|fetch failed|network|offline|registry/;
+const REA_MISSING_RUNTIME_PATTERN =
+  /enoent|ebadengine|unsupported engine|npx|node\.exe|is not recognized as an internal or external command|command not found/;
 const CLEANUP_FAILURE_MESSAGE =
   "REA worker cleanup failed; the worker remains quarantined until cleanup is confirmed.";
 const REA_PROVIDER_ENV = [
@@ -272,20 +283,6 @@ function jsonByteLength(value: unknown): number {
 function ensurePrivateDirectory(directory: string): void {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   if (process.platform !== "win32") chmodSync(directory, 0o700);
-}
-
-/**
- * Collapses and redacts a bounded child-stderr excerpt so it can inform readiness
- * classification without leaking host paths. Child diagnostics are untrusted data.
- */
-function redactReaDiagnostics(text: string): string {
-  return text
-    .replace(/\r/g, "")
-    .replace(/[A-Za-z]:\\[^\s"']*/g, "<path>")
-    .replace(/\/(?:home|Users|root|tmp|private|var)\/[^\s"']*/g, "<path>")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, MAX_REA_DIAGNOSTIC_NOTE_CHARS);
 }
 
 export class ReaSessionManager {
@@ -603,6 +600,10 @@ export class ReaSessionManager {
   private async startWorker(worker: Worker): Promise<void> {
     try {
       const prerequisite = await this.checkPrerequisites();
+      // The probe is an await point: a disposal, disable, or generation change may have
+      // retired this worker while it ran. Bail out before allocating anything so a
+      // cancelled startup can never leave an orphan worker behind.
+      this.assertCurrent(worker.owner, worker);
       if (!prerequisite.ok) {
         throw new ReaStartupError(prerequisite.status, prerequisite.note);
       }
@@ -647,7 +648,13 @@ export class ReaSessionManager {
       if (transport.pid && transport.pid > 0) worker.supervisorPid = transport.pid;
       this.assertCurrent(worker.owner, worker);
     } catch (error) {
-      this.setFailureStatus(error, worker);
+      if (!worker.retired && this.workers.get(worker.key) === worker) {
+        this.setFailureStatus(error, worker);
+      } else if (this.lifecycleStatus === "starting") {
+        // A disposal/disable cancelled this startup; return to the lazy baseline.
+        this.lifecycleStatus = "not_started";
+        this.lifecycleNote = undefined;
+      }
       await this.retireWorker(worker);
       throw error;
     }
@@ -660,11 +667,10 @@ export class ReaSessionManager {
     worker.diagnostics = diagnostics;
     stream.on("data", (chunk: unknown) => {
       if (diagnostics.bytes >= MAX_REA_DIAGNOSTIC_BYTES) return;
-      const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
-      const remaining = MAX_REA_DIAGNOSTIC_BYTES - diagnostics.bytes;
-      const bounded = text.slice(0, remaining);
-      diagnostics.chunks.push(bounded);
-      diagnostics.bytes += Buffer.byteLength(bounded, "utf8");
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
+      const bounded = buffer.subarray(0, MAX_REA_DIAGNOSTIC_BYTES - diagnostics.bytes);
+      diagnostics.chunks.push(bounded.toString("utf8"));
+      diagnostics.bytes += bounded.byteLength;
     });
     stream.on("error", () => {});
   }
@@ -675,22 +681,19 @@ export class ReaSessionManager {
       this.lifecycleNote = error.note;
       return;
     }
-    const diagnostic = worker?.diagnostics
-      ? redactReaDiagnostics(worker.diagnostics.chunks.join(""))
-      : "";
+    const diagnostic = worker?.diagnostics ? worker.diagnostics.chunks.join("").toLowerCase() : "";
     const message = `${error instanceof Error ? error.message : ""} ${diagnostic}`.toLowerCase();
-    if (/network|fetch|offline|econn|enotfound|etimedout|eai_again|registry|proxy/.test(message)) {
+    if (REA_NETWORK_FAILURE_PATTERN.test(message)) {
       this.lifecycleStatus = "network_error";
       this.lifecycleNote =
         "REA could not acquire or connect to its pinned package; check network access and retry.";
-    } else if (/\bnode\b|npx|not recognized|not found|unsupported/.test(message)) {
+    } else if (REA_MISSING_RUNTIME_PATTERN.test(message)) {
       this.lifecycleStatus = "needs_node";
-      this.lifecycleNote = "REA needs a supported Node.js and npm installation.";
+      this.lifecycleNote = `REA needs Node.js ${REA_SUPPORTED_NODE_RANGE} and npm. Install a supported runtime and retry.`;
     } else {
       this.lifecycleStatus = "failed";
-      this.lifecycleNote = diagnostic
-        ? `REA could not start (${diagnostic}). Retry after checking Node.js, npm, and network availability.`
-        : "REA could not start. Retry after checking Node.js, npm, and network availability.";
+      this.lifecycleNote =
+        "REA could not start. Retry after checking Node.js, npm, and network availability.";
     }
   }
 

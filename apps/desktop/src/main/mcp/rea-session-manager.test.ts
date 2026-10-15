@@ -464,25 +464,80 @@ describe("ReaSessionManager", () => {
     await harness.manager.disposeAll();
   });
 
-  it("redacts host paths from captured stderr diagnostics", async () => {
+  it("never publishes captured stderr in a status note", async () => {
     let feedStderr: ((text: string) => void) | undefined;
     const harness = setup({
       transportStderr: true,
       connect: async () => {
-        feedStderr?.("worker crashed at C:\\Users\\secret\\rea\\worker\\log.txt");
+        feedStderr?.("npm ERR! path D:/SensitiveClient/Modus/rea/workers/worker-abc/_logs/x.log");
         throw new Error("MCP error -32000: Connection closed");
       },
     });
     feedStderr = (text) => harness.emitStderr(0, text);
 
     await expect(
-      harness.manager.listTools(owner("stderr-redaction"), { offset: 0, limit: 10 }),
+      harness.manager.listTools(owner("stderr-note"), { offset: 0, limit: 10 }),
     ).rejects.toThrow();
     const status = harness.manager.getIntegrationStatus();
-    expect(status).toMatchObject({ enabled: true, status: "failed" });
-    expect(status.note).toContain("<path>");
-    expect(JSON.stringify(status)).not.toContain("secret");
+    expect(status.status).toBe("failed");
+    expect(status.note).toBe(
+      "REA could not start. Retry after checking Node.js, npm, and network availability.",
+    );
+    expect(JSON.stringify(status)).not.toContain("SensitiveClient");
     await harness.manager.disposeAll();
+  });
+
+  it("classifies an offline failure even behind a long stderr prefix", async () => {
+    let feedStderr: ((text: string) => void) | undefined;
+    const harness = setup({
+      transportStderr: true,
+      connect: async () => {
+        feedStderr?.(`${"banner ".repeat(80)}npm ERR! code ENOTFOUND registry.npmjs.org`);
+        throw new Error("MCP error -32000: Connection closed");
+      },
+    });
+    feedStderr = (text) => harness.emitStderr(0, text);
+
+    await expect(
+      harness.manager.listTools(owner("offline-long-prefix"), { offset: 0, limit: 10 }),
+    ).rejects.toThrow();
+    expect(harness.manager.getIntegrationStatus().status).toBe("network_error");
+    await harness.manager.disposeAll();
+  });
+
+  it("does not treat a node runtime trace as a missing Node install", async () => {
+    let feedStderr: ((text: string) => void) | undefined;
+    const harness = setup({
+      transportStderr: true,
+      connect: async () => {
+        feedStderr?.("Error at node:internal/process/task_queues:104:5 processTicksAndRejections");
+        throw new Error("MCP error -32000: Connection closed");
+      },
+    });
+    feedStderr = (text) => harness.emitStderr(0, text);
+
+    await expect(
+      harness.manager.listTools(owner("node-trace"), { offset: 0, limit: 10 }),
+    ).rejects.toThrow();
+    expect(harness.manager.getIntegrationStatus().status).toBe("failed");
+    await harness.manager.disposeAll();
+  });
+
+  it("does not launch a worker when the session is disposed during the prerequisite probe", async () => {
+    const probe = deferred<ReaPrerequisiteResult>();
+    const checkPrerequisites = vi.fn(() => probe.promise);
+    const { manager, clients } = setup({ checkPrerequisites });
+    const pending = manager.listTools(owner("disposed-during-probe"), { offset: 0, limit: 10 });
+    void pending.catch(() => {});
+
+    await vi.waitFor(() => expect(checkPrerequisites).toHaveBeenCalledTimes(1));
+    await manager.disposeSession(owner("disposed-during-probe"));
+    probe.resolve({ ok: true });
+
+    await expect(pending).rejects.toThrow(/stale|disposed/i);
+    expect(clients).toHaveLength(0);
+    expect(manager.getIntegrationStatus().status).not.toBe("failed");
+    await manager.disposeAll();
   });
 
   it("forwards only the documented OS and REA provider environment allowlist", async () => {
