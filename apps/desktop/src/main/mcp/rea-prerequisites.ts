@@ -42,8 +42,8 @@ function defaultRunCommand(platform: NodeJS.Platform): ReaCommandRunner {
       maxBuffer: 1024 * 1024,
       env: process.env,
     };
-    // On Windows `npx` is a `.cmd` shim, so it must be invoked through `cmd.exe`, matching
-    // the supervisor's launch path. `node` runs directly on every platform.
+    // `npx` is a `.cmd` shim on Windows, so on win32 both commands are invoked through
+    // `cmd.exe`, matching the supervisor's launch path.
     const invocation =
       platform === "win32"
         ? execFileAsync("cmd", ["/d", "/s", "/c", `${command} ${args.join(" ")}`], options)
