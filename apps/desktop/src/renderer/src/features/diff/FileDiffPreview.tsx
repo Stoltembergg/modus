@@ -2,6 +2,7 @@ import { IconFileUnknown } from "@tabler/icons-react";
 import { type CSSProperties, useState } from "react";
 import type { DiffFilePatch, DiffTarget } from "../../../../shared/contracts";
 import { useEffectiveTheme } from "../../lib/theme";
+import { formatUiNumber } from "../../lib/uiIntl";
 
 export type DiffPreviewRequest = {
   cwd: string;
@@ -79,7 +80,7 @@ export function FileDiffPreview({
     return (
       <LargeNotice
         busy={preparingLarge}
-        detail={`${changedLines.toLocaleString()} changed lines`}
+        detail={`${formatUiNumber(changedLines)} changed lines`}
         onOpen={() => void prepareLarge()}
       />
     );

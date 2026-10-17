@@ -2,6 +2,7 @@ import { IconRefresh } from "@tabler/icons-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FailureBlacklistEntry } from "../../../../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../../../../shared/contracts";
+import { uiIntlLocale } from "../../../lib/uiIntl";
 import { SettingsPageHeader } from "../settings-layout";
 
 export function failureBlacklistAvailable(workspaceId: string | undefined): boolean {
@@ -48,7 +49,7 @@ export function formatBlacklistTtlRemaining(expiresAt: string, now: Date = new D
 export function formatBlacklistExpiryDate(expiresAt: string): string {
   const date = new Date(expiresAt);
   if (!Number.isFinite(date.getTime())) return "Date unavailable";
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(uiIntlLocale(), {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -60,7 +61,7 @@ export function formatBlacklistExpiryDate(expiresAt: string): string {
 export function formatBlacklistSeenDate(iso: string): string {
   const date = new Date(iso);
   if (!Number.isFinite(date.getTime())) return "Date unavailable";
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(uiIntlLocale(), {
     month: "short",
     day: "numeric",
     year: "numeric",

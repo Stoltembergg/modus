@@ -8,8 +8,10 @@ import {
   IconSun,
 } from "@tabler/icons-react";
 import type { AppearanceState, TransparencyPreference } from "../../../../../shared/appearance";
+import type { SettingsTextKey } from "../../../../../shared/settings-text";
 import { setTransparency, useAppearanceState } from "../../../lib/appearance";
 import { cn } from "../../../lib/cn";
+import { type SettingsTextFn, settingsTextFor, useSettingsText } from "../../../lib/settingsText";
 import { type ThemeMode, useTheme } from "../../../lib/theme";
 import { Disclosure } from "../form-controls";
 import {
@@ -21,6 +23,7 @@ import {
 } from "../settings-layout";
 
 export function AppearanceSettingsPanel() {
+  const t = useSettingsText();
   const [theme, setTheme] = useTheme();
   const appearance = useAppearanceState();
   // Eye-care Dark belonged to the removed classic look; a stored one shows as Dark.
@@ -29,13 +32,13 @@ export function AppearanceSettingsPanel() {
 
   return (
     <>
-      <SettingsPageHeader title="Appearance" />
-      <SettingsSection title="Theme">
+      <SettingsPageHeader title={t("settings.appearance.title")} />
+      <SettingsSection title={t("settings.appearance.theme")}>
         <SettingsList>
           <SettingsRow
             control={
               <Segmented
-                label="theme"
+                label={t("settings.appearance.theme")}
                 onChange={(next) => {
                   // Under New a stored Eye-care Dark shows as Dark: re-picking it must not erase it.
                   if (next !== themeValue) setTheme(next);
@@ -44,29 +47,29 @@ export function AppearanceSettingsPanel() {
                 value={themeValue}
               />
             }
-            title="Color scheme"
+            title={t("settings.appearance.colorScheme")}
           />
           <SettingsRow
             control={
               <Segmented
                 disabled={!appearance || appearance.blockedBy === "platform"}
-                label="transparency"
+                label={t("settings.appearance.transparency")}
                 onChange={setTransparency}
                 options={TRANSPARENCY_OPTIONS}
                 value={appearance?.transparency ?? "sidebar"}
               />
             }
-            description={transparencyDescription(appearance)}
-            title="Transparency"
+            description={transparencyDescription(appearance, t)}
+            title={t("settings.appearance.transparency")}
           />
         </SettingsList>
       </SettingsSection>
-      <Disclosure label="Font details">
+      <Disclosure label={t("settings.appearance.fontDetails")}>
         <SettingsList>
           <SettingsRow
-            control={<ReadOnlyPill>Inter + Noto SC</ReadOnlyPill>}
-            description="Inter Variable for Latin, Noto Sans SC for CJK; bundled with Modus."
-            title="Font family"
+            control={<ReadOnlyPill>{t("settings.appearance.fontFamilyValue")}</ReadOnlyPill>}
+            description={t("settings.appearance.fontFamilyDescription")}
+            title={t("settings.appearance.fontFamily")}
           />
         </SettingsList>
       </Disclosure>
@@ -75,48 +78,92 @@ export function AppearanceSettingsPanel() {
 }
 
 /** Row description: why the app is solid despite Full/Sidebar, or what the modes do. */
-export function transparencyDescription(appearance: AppearanceState | null): string {
+export function transparencyDescription(
+  appearance: AppearanceState | null,
+  t: SettingsTextFn = settingsTextFor(),
+): string {
   switch (appearance?.blockedBy) {
     case undefined:
     case "platform":
-      return "Translucent window materials are not available on this system.";
+      return t("settings.appearance.transparencyPlatformBlocked");
     case "os-reduced-transparency":
-      return "Solid while Reduce transparency is on in your system settings.";
+      return t("settings.appearance.transparencyBlockedReducedTransparency");
     case "os-high-contrast":
-      return "Solid while a high-contrast system setting is on.";
+      return t("settings.appearance.transparencyBlockedHighContrast");
     default:
-      return "Choose where the desktop shows through.";
+      return t("settings.appearance.transparencyDescription");
   }
 }
 
-type SegmentOption<T extends string> = { value: T; label: string; icon: typeof IconSun };
+type SegmentOption<T extends string> = {
+  value: T;
+  labelKey: SettingsTextKey;
+  titleKey: SettingsTextKey;
+  icon: typeof IconSun;
+};
 
 const THEME_OPTIONS: ReadonlyArray<SegmentOption<ThemeMode>> = [
-  { value: "system", label: "System", icon: IconDeviceDesktop },
-  { value: "light", label: "Light", icon: IconSun },
-  { value: "dark", label: "Dark", icon: IconMoon },
-  { value: "dark-plus", label: "Eye-care Dark", icon: IconMoonStars },
+  {
+    value: "system",
+    labelKey: "settings.appearance.themeSystem",
+    titleKey: "settings.appearance.themeSystemTitle",
+    icon: IconDeviceDesktop,
+  },
+  {
+    value: "light",
+    labelKey: "settings.appearance.themeLight",
+    titleKey: "settings.appearance.themeLightTitle",
+    icon: IconSun,
+  },
+  {
+    value: "dark",
+    labelKey: "settings.appearance.themeDark",
+    titleKey: "settings.appearance.themeDarkTitle",
+    icon: IconMoon,
+  },
+  {
+    value: "dark-plus",
+    labelKey: "settings.appearance.themeEyeCare",
+    titleKey: "settings.appearance.themeEyeCareTitle",
+    icon: IconMoonStars,
+  },
 ];
 
 const TRANSPARENCY_OPTIONS: ReadonlyArray<SegmentOption<TransparencyPreference>> = [
-  { value: "full", label: "Full", icon: IconBlur },
-  { value: "sidebar", label: "Sidebar", icon: IconLayoutSidebar },
-  { value: "off", label: "Off", icon: IconSquare },
+  {
+    value: "full",
+    labelKey: "settings.appearance.transparencyFull",
+    titleKey: "settings.appearance.transparencyFullTitle",
+    icon: IconBlur,
+  },
+  {
+    value: "sidebar",
+    labelKey: "settings.appearance.transparencySidebar",
+    titleKey: "settings.appearance.transparencySidebarTitle",
+    icon: IconLayoutSidebar,
+  },
+  {
+    value: "off",
+    labelKey: "settings.appearance.transparencyOff",
+    titleKey: "settings.appearance.transparencyOffTitle",
+    icon: IconSquare,
+  },
 ];
 
 function Segmented<T extends string>({
   value,
   onChange,
   options,
-  label,
+  label: _label,
   disabled = false,
 }: {
   value: T;
   onChange: (value: T) => void;
   options: ReadonlyArray<SegmentOption<T>>;
-  label: string;
+  label?: string;
   disabled?: boolean;
 }) {
+  const t = useSettingsText();
   return (
     <div
       className={cn(
@@ -124,8 +171,9 @@ function Segmented<T extends string>({
         disabled && "opacity-50",
       )}
     >
-      {options.map(({ value: option, label: optionLabel, icon: Icon }) => {
+      {options.map(({ value: option, labelKey, titleKey, icon: Icon }) => {
         const active = option === value;
+        const optionLabel = t(labelKey);
         return (
           <button
             aria-pressed={active}
@@ -136,7 +184,7 @@ function Segmented<T extends string>({
             disabled={disabled}
             key={option}
             onClick={() => onChange(option)}
-            title={`${optionLabel} ${label}`}
+            title={t(titleKey)}
             type="button"
           >
             <Icon size={14} stroke={1.8} />

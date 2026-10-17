@@ -45,6 +45,7 @@ import { cn } from "../lib/cn";
 import { beginResizeGesture, endResizeGesture } from "../lib/resizeGesture";
 import { useShellText } from "../lib/shellText";
 import { ICON, ICON_STROKE } from "../lib/uiDensity";
+import { formatUiCompactAge } from "../lib/uiIntl";
 import { useScrollFade } from "../lib/useScrollFade";
 import {
   moveSessionBefore,
@@ -1757,29 +1758,13 @@ function SectionHeader({
   );
 }
 
+/** Compact session age in the app language ("5m" / "5 min"). */
 function formatRelativeTime(value: string): string {
   const timestamp = Date.parse(value);
   if (Number.isNaN(timestamp)) {
     return "";
   }
-
-  const diffMs = Date.now() - timestamp;
-  const minutes = Math.max(1, Math.floor(diffMs / 60_000));
-  if (minutes < 60) {
-    return `${minutes}m`;
-  }
-
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) {
-    return `${hours}h`;
-  }
-
-  const days = Math.floor(hours / 24);
-  if (days < 14) {
-    return `${days}d`;
-  }
-
-  return `${Math.floor(days / 7)}w`;
+  return formatUiCompactAge(Date.now() - timestamp);
 }
 
 function groupSessionsByWorkspace(sessions: AgentSessionInfo[]): Map<string, AgentSessionInfo[]> {

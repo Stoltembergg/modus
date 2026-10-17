@@ -6,10 +6,12 @@ import {
   groupPluralText,
   groupText,
 } from "../../../../shared/group-room-locale";
+import { useUiLocale } from "../../lib/uiLocale";
 
 /**
- * Room locale for everything under `GroupRoom` (C6). `undefined` = English
- * text (C6.2, `resolveGroupRoomLocale`) with system-locale dates and clocks.
+ * Room locale for everything under `GroupRoom` (C6). Unset = the app
+ * language (`<html lang>`, Settings > General > Language); nothing set at all
+ * = English text with system-hour-cycle clocks (tests, pre-boot).
  * A component's own `locale` prop still wins.
  */
 const GroupRoomLocaleContext = createContext<string | null | undefined>(undefined);
@@ -31,7 +33,8 @@ export function GroupRoomLocaleProvider({
 /** `override` (a component prop) → the room provider → the renderer locale. */
 export function useGroupRoomLocale(override?: string | null): string | undefined {
   const fromRoom = useContext(GroupRoomLocaleContext);
-  return override ?? fromRoom ?? undefined;
+  const uiLocale = useUiLocale();
+  return override ?? fromRoom ?? uiLocale;
 }
 
 export type GroupTextFn = {

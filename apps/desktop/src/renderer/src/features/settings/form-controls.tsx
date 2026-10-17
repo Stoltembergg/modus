@@ -11,6 +11,7 @@ import { AnimatePresence, m } from "motion/react";
 import { type ReactNode, useState } from "react";
 import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
 import { cn } from "../../lib/cn";
+import { useSettingsText } from "../../lib/settingsText";
 import type { KeyValueRow } from "./provider-form-mapping";
 
 /**
@@ -78,24 +79,31 @@ export function Field({
 
 export function SelectField<T extends string>({
   label,
+  labelHidden = false,
   value,
   options,
   onChange,
+  disabled = false,
 }: {
   label: string;
+  /** Keep the label for screen readers only (the row title already shows it). */
+  labelHidden?: boolean;
   value: T;
-  options: readonly { label: string; value: T }[];
+  /** `lang` marks an option written in another language (native language names). */
+  options: readonly { label: string; value: T; lang?: string }[];
   onChange(value: T): void;
+  disabled?: boolean;
 }) {
   return (
     <div className="grid gap-2">
-      <span className="text-xs text-fg-muted">{label}</span>
+      <span className={labelHidden ? "sr-only" : "text-xs text-fg-muted"}>{label}</span>
       <Select.Root
         onValueChange={(next) => {
           if (typeof next === "string") {
             onChange(next as T);
           }
         }}
+        disabled={disabled}
         value={value}
       >
         <Select.Trigger
@@ -122,7 +130,9 @@ export function SelectField<T extends string>({
                   key={option.value}
                   value={option.value}
                 >
-                  <Select.ItemText className="min-w-0 truncate">{option.label}</Select.ItemText>
+                  <Select.ItemText className="min-w-0 truncate" lang={option.lang}>
+                    {option.label}
+                  </Select.ItemText>
                   <span className="flex justify-center text-fg">
                     <Select.ItemIndicator>
                       <IconCheck size={13} stroke={2} />
@@ -253,6 +263,7 @@ export function KeyValueEditor({
   onChange(rowId: string, patch: Partial<KeyValueRow>): void;
   onRemove(rowId: string): void;
 }) {
+  const t = useSettingsText();
   return (
     <section className="grid gap-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -282,21 +293,21 @@ export function KeyValueEditor({
               transition={{ duration: 0.14, ease: "easeOut" }}
             >
               <input
-                aria-label={`${title} key`}
+                aria-label={t("settings.window.keyValueKeyAriaLabel", { title })}
                 className="h-9 rounded-md border border-hairline bg-canvas px-3 font-mono text-xs text-fg outline-none placeholder:text-fg-faint transition-colors hover:border-hairline-strong focus:border-hairline-strong"
                 onChange={(event) => onChange(row.rowId, { key: event.target.value })}
                 placeholder={keyPlaceholder}
                 value={row.key}
               />
               <input
-                aria-label={`${title} value`}
+                aria-label={t("settings.window.keyValueValueAriaLabel", { title })}
                 className="h-9 rounded-md border border-hairline bg-canvas px-3 font-mono text-xs text-fg outline-none placeholder:text-fg-faint transition-colors hover:border-hairline-strong focus:border-hairline-strong"
                 onChange={(event) => onChange(row.rowId, { value: event.target.value })}
                 placeholder={valuePlaceholder}
                 value={row.value}
               />
               <button
-                aria-label="Remove row"
+                aria-label={t("settings.window.removeRow")}
                 className="flex size-7 items-center justify-center self-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg"
                 onClick={() => onRemove(row.rowId)}
                 type="button"

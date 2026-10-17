@@ -1,6 +1,7 @@
 import { IconAlertTriangle } from "@tabler/icons-react";
 import { type ReactNode, useState } from "react";
 import { cn } from "../../lib/cn";
+import { useSettingsText } from "../../lib/settingsText";
 
 /**
  * Compact, in-detail reminder that stays visible while Antigravity is
@@ -8,9 +9,10 @@ import { cn } from "../../lib/cn";
  * does not promise safety, legality, or support.
  */
 export function UnofficialProviderNotice({ className }: { className?: string }) {
+  const t = useSettingsText();
   return (
     <section
-      aria-label="Unofficial provider warning"
+      aria-label={t("settings.providers.unofficialProviderWarningAria")}
       className={cn(
         "flex flex-col gap-2 rounded-lg border border-warning/35 bg-warning/8 px-3 py-3",
         className,
@@ -18,16 +20,15 @@ export function UnofficialProviderNotice({ className }: { className?: string }) 
     >
       <div className="flex items-center gap-2 text-warning">
         <IconAlertTriangle aria-hidden size={14} stroke={1.8} />
-        <span className="font-medium text-xs uppercase tracking-wide">Unofficial provider</span>
+        <span className="font-medium text-xs uppercase tracking-wide">
+          {t("settings.providers.unofficialProvider")}
+        </span>
       </div>
       <p className="text-xs leading-5 text-warning/95">
-        Antigravity reaches Google through unofficial internal Cloud Code Assist endpoints,
-        including undocumented methods that can change without notice.
+        {t("settings.providers.unofficialEndpointsNotice")}
       </p>
       <p className="text-xs leading-5 text-fg-muted">
-        The upstream README warns that use may violate Google’s terms and that Google may warn,
-        restrict, or suspend the linked account. Modus cannot guarantee an outcome or make this
-        integration supported, legal, or safe to use.
+        {t("settings.providers.upstreamWarningNotice")}
       </p>
     </section>
   );
@@ -53,6 +54,7 @@ export function UnofficialProviderRiskInterstitial({
   onConfirm(): void;
   onCancel(): void;
 }) {
+  const t = useSettingsText();
   // Defensive local state ensures checkbox behaviour even when the parent
   // does not bounce state back through this render path.
   const [localChecked, setLocalChecked] = useState(checked);
@@ -65,31 +67,27 @@ export function UnofficialProviderRiskInterstitial({
   return (
     <div className="flex flex-col gap-5">
       <header className="grid gap-1.5">
-        <h3 className="text-md font-normal text-fg">Antigravity risk acknowledgement</h3>
-        <p className="text-xs text-fg-faint">
-          Review what Antigravity does and what it does not promise before starting sign-in.
-        </p>
+        <h3 className="text-md font-normal text-fg">
+          {t("settings.providers.antigravityRiskAcknowledgement")}
+        </h3>
+        <p className="text-xs text-fg-faint">{t("settings.providers.antigravityRiskReview")}</p>
       </header>
 
       <section className="grid gap-3 rounded-lg border border-hairline bg-surface/45 p-3">
         <p className="text-sm text-fg">
-          Antigravity reaches Google through unofficial internal Cloud Code Assist endpoints,
-          including undocumented methods that the upstream plugin has to reverse engineer.
+          {t("settings.providers.antigravityEndpointsReverseEngineer")}
         </p>
         <p className="text-xs leading-5 text-fg-muted">
-          The upstream README warns that use may violate Google’s terms of service and that Google
-          may warn, restrict, or suspend the linked account. Endpoint behaviour and quotas can
-          change without notice.
+          {t("settings.providers.upstreamWarningTerms")}
         </p>
         <p className="text-xs leading-5 text-fg-muted">
-          Modus cannot guarantee an outcome or make this integration supported, legal, or safe to
-          use.
+          {t("settings.providers.modusGuaranteeDisclaimer")}
         </p>
       </section>
 
       <label className="flex min-h-[44px] cursor-pointer items-start gap-3 rounded-md border border-hairline bg-canvas/70 px-3 py-2.5 text-sm text-fg transition-colors hover:border-hairline-strong">
         <input
-          aria-label="Acknowledge Antigravity risk"
+          aria-label={t("settings.providers.acknowledgeAntigravityRiskAria")}
           checked={value}
           className="mt-0.5 size-4 cursor-pointer accent-fg"
           data-testid="unofficial-provider-acknowledge"
@@ -98,32 +96,31 @@ export function UnofficialProviderRiskInterstitial({
           type="checkbox"
         />
         <span className="grid gap-1">
-          <span>I understand this is unofficial and may violate Google’s terms.</span>
+          <span>{t("settings.providers.acknowledgeTermsLabel")}</span>
           <span className="text-2xs text-fg-faint">
-            Modus cannot guarantee that Google will not warn, restrict, or suspend the linked
-            account.
+            {t("settings.providers.modusGuaranteeAccountWarning")}
           </span>
         </span>
       </label>
 
       <div className="flex flex-wrap items-center justify-end gap-2">
         <button
-          aria-label="Cancel Antigravity sign-in"
+          aria-label={t("settings.providers.cancelAntigravitySignIn")}
           className="h-9 rounded-md px-3 text-sm text-fg-faint transition-colors hover:bg-hover hover:text-fg"
           disabled={busy}
           onClick={onCancel}
           type="button"
         >
-          Cancel
+          {t("settings.providers.cancel")}
         </button>
         <button
-          aria-label="Start Antigravity OAuth with acknowledgement"
+          aria-label={t("settings.providers.startAntigravityOAuthAria")}
           className="flex h-9 items-center justify-center rounded-md bg-fg px-3 text-sm text-canvas transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
           disabled={busy || !value}
           onClick={onConfirm}
           type="button"
         >
-          Continue to sign-in
+          {t("settings.providers.continueToSignIn")}
         </button>
       </div>
     </div>
@@ -136,15 +133,16 @@ export function UnofficialProviderRiskInterstitial({
  * to the row while configured.
  */
 export function UnofficialProviderMark({ children }: { children: ReactNode }) {
+  const t = useSettingsText();
   return (
     <span
-      aria-label="Unofficial provider"
+      aria-label={t("settings.providers.unofficialProvider")}
       className="ml-1 inline-flex items-center gap-1 rounded-full bg-warning/15 px-1.5 py-0.5 text-2xs font-medium text-warning"
       role="img"
-      title="Uses unofficial Google internal endpoints. See the risk notice in Configure."
+      title={t("settings.providers.unofficialEndpointsTooltip")}
     >
       <IconAlertTriangle aria-hidden size={11} stroke={1.8} />
-      {children ?? "Unofficial"}
+      {children ?? t("settings.providers.unofficial")}
     </span>
   );
 }

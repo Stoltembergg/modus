@@ -13,6 +13,7 @@ import type {
 } from "../../../../shared/contracts";
 import { ContentTransition } from "../../components/ui/ContentTransition";
 import { cn } from "../../lib/cn";
+import { useSettingsText } from "../../lib/settingsText";
 import { AccountSettingsPanel } from "./sections/account";
 import { AppearanceSettingsPanel } from "./sections/appearance";
 import { GeneralSettingsPanel } from "./sections/general";
@@ -85,6 +86,7 @@ export function SettingsPanel({
   initialSection = "model-provider",
   navContainer,
 }: SettingsPanelProps) {
+  const t = useSettingsText();
   const reduceMotion = useReducedMotion();
   const closeStartedRef = useRef(false);
   const [isClosing, setIsClosing] = useState(false);
@@ -275,7 +277,7 @@ export function SettingsPanel({
 
   async function deleteProvider(provider: ModelProviderInfo): Promise<void> {
     const confirmed = window.confirm(
-      `Remove "${provider.name}"? This deletes its local configuration and models from Modus.`,
+      t("settings.window.removeProviderConfirm", { name: provider.name }),
     );
     if (!confirmed) {
       return;
@@ -300,12 +302,10 @@ export function SettingsPanel({
   }
 
   async function disconnectProvider(provider: ModelProviderInfo): Promise<void> {
-    const keepsDefinition =
-      provider.source === "custom"
-        ? " Its endpoint and model definition will remain for reconnection."
-        : " Any Modus base URL override will also be removed.";
     const confirmed = window.confirm(
-      `Disconnect "${provider.name}"? This removes saved credentials and enabled models from Modus.${keepsDefinition}`,
+      provider.source === "custom"
+        ? t("settings.window.disconnectProviderConfirmCustom", { name: provider.name })
+        : t("settings.window.disconnectProviderConfirmStandard", { name: provider.name }),
     );
     if (!confirmed) {
       return;
@@ -476,7 +476,7 @@ export function SettingsPanel({
             return;
           }
           if (next.status === "error") {
-            setError(next.message ?? "Provider sign-in failed.");
+            setError(next.message ?? t("settings.window.providerSignInFailed"));
             setAuthOperation(undefined);
             return;
           }
@@ -499,7 +499,7 @@ export function SettingsPanel({
       alive = false;
       window.clearInterval(timer);
     };
-  }, [authOperation?.id, onRefresh]);
+  }, [authOperation?.id, onRefresh, t]);
 
   return (
     <m.div

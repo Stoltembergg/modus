@@ -7,6 +7,7 @@ import type {
   HarnessInsightsResult,
 } from "../../../../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../../../../shared/contracts";
+import { uiIntlLocale } from "../../../lib/uiIntl";
 import { SettingsPageHeader } from "../settings-layout";
 
 const HARNESS_INSIGHTS_WINDOW_DAYS = 30;
@@ -45,7 +46,7 @@ function harnessInsightKindLabel(kind: HarnessInsight["kind"]): string {
 function harnessInsightDate(iso: string): string {
   const date = new Date(iso);
   return Number.isFinite(date.getTime())
-    ? new Intl.DateTimeFormat(undefined, {
+    ? new Intl.DateTimeFormat(uiIntlLocale(), {
         month: "short",
         day: "numeric",
         year: "numeric",

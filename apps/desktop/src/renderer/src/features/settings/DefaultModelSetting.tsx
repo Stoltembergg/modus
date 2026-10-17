@@ -1,5 +1,6 @@
 import type { ModelInfo } from "../../../../shared/contracts";
 import { ModelOptions, selectableModels } from "../../lib/modusModels";
+import { useSettingsText } from "../../lib/settingsText";
 import { SettingsList, SettingsRow } from "./settings-layout";
 
 /**
@@ -19,6 +20,7 @@ export function DefaultModelSetting({
   busy?: boolean;
   onSetDefaultModel(modelId: string): void;
 }) {
+  const t = useSettingsText();
   const pickable = models.map((model) => ({
     id: model.id,
     name: model.name,
@@ -32,7 +34,7 @@ export function DefaultModelSetting({
       <SettingsRow
         control={
           <select
-            aria-label="Default model"
+            aria-label={t("settings.providers.defaultModel")}
             className="h-8 max-w-[320px] rounded-md border border-hairline bg-canvas px-2 text-sm text-fg outline-none focus:border-hairline-strong"
             disabled={busy || selectable.length === 0}
             onChange={(event) => onSetDefaultModel(event.target.value)}
@@ -40,14 +42,16 @@ export function DefaultModelSetting({
           >
             {defaultModel ? null : (
               <option disabled value="">
-                {selectable.length === 0 ? "No model configured" : "Choose a model"}
+                {selectable.length === 0
+                  ? t("settings.providers.noModelConfigured")
+                  : t("settings.providers.chooseModel")}
               </option>
             )}
             <ModelOptions models={pickable} savedModelId={defaultModel} />
           </select>
         }
-        description="Every new message runs on this model."
-        title="Default model"
+        description={t("settings.providers.defaultModelDescription")}
+        title={t("settings.providers.defaultModel")}
       />
     </SettingsList>
   );

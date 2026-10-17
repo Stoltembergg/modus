@@ -1,7 +1,9 @@
 import { dialog, shell } from "electron";
 import type { WorkspaceInfo } from "../../shared/contracts";
+import { mainText } from "../../shared/main-text";
 import { archiveWorkspaceSessions, deleteWorkspaceSessions } from "../agent/session-lifecycle";
 import { isGitRepository } from "../git/git-service";
+import { currentUiLocale } from "../locale/ui-language-controller";
 import {
   ensureChatsWorkspace,
   getWorkspace,
@@ -14,7 +16,7 @@ import {
 
 export async function openWorkspace(): Promise<WorkspaceInfo | undefined> {
   const result = await dialog.showOpenDialog({
-    title: "Open Modus Workspace",
+    title: mainText("main.dialog.openWorkspaceTitle", currentUiLocale()),
     properties: ["openDirectory"],
   });
   const rootPath = result.filePaths[0];

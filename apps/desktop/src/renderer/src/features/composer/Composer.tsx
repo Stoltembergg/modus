@@ -35,6 +35,7 @@ import { SendStopIcon } from "../../components/ui/SendStopIcon";
 import { cn } from "../../lib/cn";
 import { ContextUsageRing, contextUsagePercent, formatUsagePercent } from "../../lib/contextUsage";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
+import { formatUiNumber, useUiIntlLocale } from "../../lib/uiIntl";
 import { useWidthTier } from "../../lib/useWidthTier";
 import { ContextMentionMenu } from "./ContextMentionMenu";
 import { contextItemKey } from "./composerTokens";
@@ -868,11 +869,12 @@ function ContextUsageTooltip({
   contextWindow?: number;
   usage?: ContextUsageInfo;
 }) {
+  const locale = useUiIntlLocale();
   const total = contextUsagePercent(usage);
   const usageWindow = usage?.contextWindow ?? contextWindow;
   const tokenLine =
     usage?.tokens !== null && usage?.tokens !== undefined && usageWindow
-      ? `${usage.tokens.toLocaleString()} / ${usageWindow.toLocaleString()} tokens`
+      ? `${formatUiNumber(usage.tokens, undefined, locale)} / ${formatUiNumber(usageWindow, undefined, locale)} tokens`
       : undefined;
 
   if (total === undefined && !tokenLine) {
@@ -882,7 +884,7 @@ function ContextUsageTooltip({
         <div className="text-fg-muted text-xs">No context usage yet.</div>
         {usageWindow ? (
           <div className="mt-2 text-2xs text-fg-muted">
-            Context window {usageWindow.toLocaleString()} tokens
+            Context window {formatUiNumber(usageWindow, undefined, locale)} tokens
           </div>
         ) : null}
       </div>

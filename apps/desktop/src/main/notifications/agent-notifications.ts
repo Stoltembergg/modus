@@ -1,7 +1,9 @@
 import { type BrowserWindow as BrowserWindowType, Notification } from "electron";
 import type { AgentEvent } from "../../shared/contracts";
+import { mainText } from "../../shared/main-text";
 import { getAgentSession } from "../agent/agent-store";
 import { IPC_CHANNELS } from "../ipc/channels";
+import { currentUiLocale } from "../locale/ui-language-controller";
 
 /**
  * Background-completion notifications for agent sessions. Notify when a task
@@ -44,20 +46,29 @@ export function maybeNotifyAgentEvent(window: BrowserWindowType, event: AgentEve
     return;
   }
 
-  const title = getAgentSession(event.sessionId)?.title ?? "Modus agent";
+  const locale = currentUiLocale();
+  const title =
+    getAgentSession(event.sessionId)?.title ?? mainText("main.notification.defaultTitle", locale);
   if (event.type === "run.completed") {
-    notify(window, event.sessionId, title, "Agent finished its task.");
+    notify(window, event.sessionId, title, mainText("main.notification.finished", locale));
     return;
   }
   if (event.type === "run.failed") {
-    notify(window, event.sessionId, title, `Agent run failed: ${truncate(event.message, 120)}`);
+    notify(
+      window,
+      event.sessionId,
+      title,
+      mainText("main.notification.failed", locale, { message: truncate(event.message, 120) }),
+    );
     return;
   }
   notify(
     window,
     event.sessionId,
     title,
-    `Agent needs permission: ${truncate(event.request.reason || event.request.target, 120)}`,
+    mainText("main.notification.permission", locale, {
+      reason: truncate(event.request.reason || event.request.target, 120),
+    }),
   );
 }
 

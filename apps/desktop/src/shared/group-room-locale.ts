@@ -1,7 +1,8 @@
 /**
  * Locale-aware Group Room UI strings (Thinking…, Queued…, Ready…).
- * English unless an explicit locale tag is passed (C6.2); the system locale
- * only drives `Intl` date / time formatting (see `groupRoomIntlLocale`).
+ * The locale comes from the UI language preference (Settings › General ›
+ * Language). With "System" (the default) it follows the OS locale; unknown
+ * locales fall back to English. `Intl` formatting uses the chosen locale.
  */
 
 import {
@@ -101,9 +102,9 @@ const LABELS: Record<GroupRoomLocale, Record<GroupThinkingStateKey, string>> = {
 };
 
 /**
- * Normalize a BCP-47 locale tag into a Group Room catalog key. No tag means
- * `en` (C6.2): UI text never follows the system locale on its own; pt / zh
- * only come from an explicit locale (e.g. a future language selector).
+ * Normalize a BCP-47 locale tag into a Group Room catalog key. The caller
+ * passes the resolved UI language (the "System" preference maps the OS locale
+ * through `ui-language.ts`); no tag or an unknown tag means `en`.
  */
 export function resolveGroupRoomLocale(tag?: string | null): GroupRoomLocale {
   const raw = (tag ?? "").trim().toLowerCase().replace(/_/g, "-");
