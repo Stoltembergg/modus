@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { SETTINGS_TEXT_EN as EN } from "../../../shared/settings-text";
 import { evaluateIntentGate, type IntentGateInput } from "./intent-gate";
 
 const input = (text: string, contextPaths: string[] = []) => ({
@@ -45,6 +46,36 @@ describe("evaluateIntentGate", () => {
       question: { header: "Confirm consequential action", multiSelect: false },
     });
     expect(JSON.stringify(result)).not.toContain("production database");
+  });
+
+  it("sends the exact English prompts the renderer's translated cards are keyed on", () => {
+    // The card translates these prompts by id + English text; the answer it
+    // returns still carries the English option label compared below by the
+    // runtime. If this fails, update shared/settings-text/question.ts too.
+    expect(evaluateIntentGate(input("Fix it"))).toMatchObject({
+      action: "clarify",
+      question: {
+        id: "intent-clarification",
+        header: EN["settings.question.clarify.header"],
+        detail: EN["settings.question.clarify.detail"],
+        options: [
+          { label: EN["settings.question.clarify.useDefault"], recommended: true },
+          { label: EN["settings.question.clarify.cancelTurn"] },
+        ],
+      },
+    });
+    expect(evaluateIntentGate(input("Delete the production database"))).toMatchObject({
+      action: "confirm",
+      question: {
+        id: "intent-confirmation",
+        header: EN["settings.question.confirm.header"],
+        detail: EN["settings.question.confirm.detail"],
+        options: [
+          { label: EN["settings.question.confirm.proceed"] },
+          { label: EN["settings.question.confirm.cancel"], recommended: true },
+        ],
+      },
+    });
   });
 
   it("does not confirm read-only security review or Plan Mode migration discussion", () => {

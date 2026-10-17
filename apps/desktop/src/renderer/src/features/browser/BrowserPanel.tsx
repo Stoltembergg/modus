@@ -31,6 +31,7 @@ import { useNativeSurfaceSuppressed } from "../../components/ui/nativeSurface";
 import { EmptyState } from "../../components/ui/Panel";
 import { Tooltip } from "../../components/ui/Tooltip";
 import { cn } from "../../lib/cn";
+import { formatUiDate } from "../../lib/uiIntl";
 import { computeBrowserViewBounds, sameBrowserBounds } from "./browserBounds";
 import { DesignModeToggle } from "./DesignModeToggle";
 
@@ -748,7 +749,7 @@ function formatRecentTime(value: string): string {
   if (Number.isNaN(date.getTime())) {
     return "";
   }
-  return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(date);
+  return formatUiDate(date, { hour: "2-digit", minute: "2-digit" });
 }
 
 function BrowserIconButton({

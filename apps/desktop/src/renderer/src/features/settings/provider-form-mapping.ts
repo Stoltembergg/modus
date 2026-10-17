@@ -4,6 +4,8 @@ import type {
   ModelInputKind,
   ThinkingLevel,
 } from "../../../../shared/contracts";
+import type { SettingsTextKey } from "../../../../shared/settings-text";
+import { type SettingsTextFn, settingsTextFor } from "../../lib/settingsText";
 
 /**
  * Pure state/mapping layer for the custom provider form: protocol metadata,
@@ -50,13 +52,16 @@ export function parsePositiveInteger(value: string | undefined): number | undefi
   return Number.isInteger(next) && next > 0 ? next : undefined;
 }
 
-export function parseOptionalNumber(value: string): number | undefined {
+export function parseOptionalNumber(
+  value: string,
+  t: SettingsTextFn = settingsTextFor(),
+): number | undefined {
   if (!value.trim()) {
     return undefined;
   }
   const next = Number(value.replaceAll(",", ""));
   if (!Number.isFinite(next) || next < 0) {
-    throw new Error(`Invalid number: ${value}`);
+    throw new Error(t("settings.providers.invalidNumber", { value }));
   }
   return next;
 }
@@ -72,11 +77,11 @@ export type ProtocolValue =
 export type Protocol = {
   value: ProtocolValue;
   label: string;
-  /** One-line hint shown under the picker while selected. */
-  hint: string;
+  /** One-line hint shown under the picker while selected (settings catalog key). */
+  hintKey: SettingsTextKey;
   urlPlaceholder: string;
-  urlHint: string;
-  keyHint: string;
+  urlHintKey: SettingsTextKey;
+  keyHintKey: SettingsTextKey;
   /** Whether the Authorization-bearer toggle should default on. */
   bearerByDefault: boolean;
 };
@@ -85,38 +90,37 @@ export const PROTOCOLS: readonly Protocol[] = [
   {
     value: "openai-completions",
     label: "OpenAI",
-    hint: "Chat Completions protocol — OpenAI, most relays, vLLM, Ollama, LM Studio.",
+    hintKey: "settings.providers.protocolOpenAiHint",
     urlPlaceholder: "https://api.example.com/v1",
-    urlHint: "OpenAI-compatible endpoint, including the version path when required.",
-    keyHint: "Sent as Authorization: Bearer.",
+    urlHintKey: "settings.providers.protocolOpenAiUrlHint",
+    keyHintKey: "settings.providers.protocolBearerKeyHint",
     bearerByDefault: true,
   },
   {
     value: "openai-responses",
     label: "Responses",
-    hint: "OpenAI Responses protocol — newer relays and gateways exposing /responses.",
+    hintKey: "settings.providers.protocolResponsesHint",
     urlPlaceholder: "https://api.example.com/v1",
-    urlHint: "Responses-compatible endpoint, including the version path when required.",
-    keyHint: "Sent as Authorization: Bearer.",
+    urlHintKey: "settings.providers.protocolResponsesUrlHint",
+    keyHintKey: "settings.providers.protocolBearerKeyHint",
     bearerByDefault: true,
   },
   {
     value: "anthropic-messages",
     label: "Anthropic",
-    hint: "Messages protocol — Claude relays and coding-plan endpoints.",
+    hintKey: "settings.providers.protocolAnthropicHint",
     urlPlaceholder: "https://api.anthropic.com",
-    urlHint: "Messages-compatible endpoint; Modus appends /v1/messages.",
-    keyHint:
-      "Sent as x-api-key. Enable the bearer header below if your relay expects Authorization.",
+    urlHintKey: "settings.providers.protocolAnthropicUrlHint",
+    keyHintKey: "settings.providers.protocolAnthropicKeyHint",
     bearerByDefault: false,
   },
   {
     value: "google-generative-ai",
     label: "Gemini",
-    hint: "Google Generative Language protocol — Gemini-compatible endpoints.",
+    hintKey: "settings.providers.protocolGeminiHint",
     urlPlaceholder: "https://generativelanguage.googleapis.com/v1beta",
-    urlHint: "Gemini-compatible endpoint, including the version path when required.",
-    keyHint: "Sent as the Google API key header.",
+    urlHintKey: "settings.providers.protocolGeminiUrlHint",
+    keyHintKey: "settings.providers.protocolGeminiKeyHint",
     bearerByDefault: false,
   },
 ];
@@ -126,11 +130,23 @@ export function protocolFor(api: string): Protocol | undefined {
 }
 
 export const MODEL_API_OPTIONS = [
-  { label: "Provider protocol", value: "" },
-  { label: "OpenAI chat completions", value: "openai-completions" },
-  { label: "OpenAI responses", value: "openai-responses" },
-  { label: "Anthropic messages", value: "anthropic-messages" },
-  { label: "Google Gemini", value: "google-generative-ai" },
+  { label: "settings.providers.modelApiProviderProtocol" as SettingsTextKey, value: "" },
+  {
+    label: "settings.providers.modelApiOpenAiChatCompletions" as SettingsTextKey,
+    value: "openai-completions",
+  },
+  {
+    label: "settings.providers.modelApiOpenAiResponses" as SettingsTextKey,
+    value: "openai-responses",
+  },
+  {
+    label: "settings.providers.modelApiAnthropicMessages" as SettingsTextKey,
+    value: "anthropic-messages",
+  },
+  {
+    label: "settings.providers.modelApiGoogleGemini" as SettingsTextKey,
+    value: "google-generative-ai",
+  },
 ] as const;
 
 /* ── Thinking presets ───────────────────────────────────────────────────
@@ -168,21 +184,27 @@ export const OPENAI_EFFORT_MAP: Partial<Record<ThinkingLevel, string | null>> = 
 };
 
 export const THINKING_PRESET_OPTIONS = [
-  { label: "Provider default", value: "default" },
-  { label: "Claude effort (low – max)", value: "claude" },
-  { label: "OpenAI effort (low – xhigh)", value: "openai" },
-  { label: "Custom mapping", value: "custom" },
+  { label: "settings.providers.thinkingPresetDefault" as SettingsTextKey, value: "default" },
+  { label: "settings.providers.thinkingPresetClaude" as SettingsTextKey, value: "claude" },
+  { label: "settings.providers.thinkingPresetOpenAi" as SettingsTextKey, value: "openai" },
+  { label: "settings.providers.thinkingPresetCustom" as SettingsTextKey, value: "custom" },
 ] as const;
 
 export const THINKING_FORMAT_OPTIONS = [
-  { label: "OpenAI reasoning effort", value: "openai" },
-  { label: "OpenRouter reasoning", value: "openrouter" },
-  { label: "DeepSeek thinking", value: "deepseek" },
-  { label: "Together reasoning", value: "together" },
-  { label: "zAI enable thinking", value: "zai" },
-  { label: "Qwen enable thinking", value: "qwen" },
-  { label: "Qwen chat template", value: "qwen-chat-template" },
-  { label: "String thinking", value: "string-thinking" },
+  { label: "settings.providers.thinkingFormatOpenAi" as SettingsTextKey, value: "openai" },
+  { label: "settings.providers.thinkingFormatOpenRouter" as SettingsTextKey, value: "openrouter" },
+  { label: "settings.providers.thinkingFormatDeepSeek" as SettingsTextKey, value: "deepseek" },
+  { label: "settings.providers.thinkingFormatTogether" as SettingsTextKey, value: "together" },
+  { label: "settings.providers.thinkingFormatZai" as SettingsTextKey, value: "zai" },
+  { label: "settings.providers.thinkingFormatQwen" as SettingsTextKey, value: "qwen" },
+  {
+    label: "settings.providers.thinkingFormatQwenChatTemplate" as SettingsTextKey,
+    value: "qwen-chat-template",
+  },
+  {
+    label: "settings.providers.thinkingFormatStringThinking" as SettingsTextKey,
+    value: "string-thinking",
+  },
 ] as const;
 
 export type ModelThinkingFormat = (typeof THINKING_FORMAT_OPTIONS)[number]["value"] | "none";
@@ -352,10 +374,11 @@ function hasDefinedCost(cost: {
 export function rowToModelInput(
   row: CustomModelRow,
   providerApi: string,
+  t: SettingsTextFn = settingsTextFor(),
 ): CustomProviderModelInput {
   const id = row.id.trim();
   if (!id) {
-    throw new Error("Every model needs a model id.");
+    throw new Error(t("settings.providers.modelIdRequired"));
   }
 
   const protocol = rowProtocol(row, providerApi);
@@ -364,10 +387,10 @@ export function rowToModelInput(
   const input: ModelInputKind[] = row.imageInput ? ["text", "image"] : ["text"];
   const thinkingLevelMap = rowThinkingLevelMap(row);
   const cost = {
-    input: parseOptionalNumber(row.costInput),
-    output: parseOptionalNumber(row.costOutput),
-    cacheRead: parseOptionalNumber(row.costCacheRead),
-    cacheWrite: parseOptionalNumber(row.costCacheWrite),
+    input: parseOptionalNumber(row.costInput, t),
+    output: parseOptionalNumber(row.costOutput, t),
+    cacheRead: parseOptionalNumber(row.costCacheRead, t),
+    cacheWrite: parseOptionalNumber(row.costCacheWrite, t),
   };
 
   return {

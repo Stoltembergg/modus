@@ -1,12 +1,9 @@
 import { IconAlertCircle, IconCheck, IconHandStop, IconShieldCheck } from "@tabler/icons-react";
 import { useEffect, useMemo, useState } from "react";
-import {
-  APPROVAL_MODE_BY_ID,
-  APPROVAL_MODES,
-  DEFAULT_APPROVAL_MODE,
-} from "../../../../shared/approval";
+import { APPROVAL_MODES, DEFAULT_APPROVAL_MODE } from "../../../../shared/approval";
 import type { ApprovalMode, ApprovalModeState, WorkspaceInfo } from "../../../../shared/contracts";
 import { cn } from "../../lib/cn";
+import { type SettingsTextFn, settingsTextFor, useSettingsText } from "../../lib/settingsText";
 
 const MODE_ICONS: Record<ApprovalMode, typeof IconHandStop> = {
   "request-approval": IconHandStop,
@@ -21,24 +18,47 @@ type ApprovalModeSettingsProps = {
   workspaces?: WorkspaceInfo[] | undefined;
 };
 
-function projectLabel(rootPath: string): string {
-  return rootPath.split(/[\\/]/).filter(Boolean).at(-1) ?? "Project";
+function projectLabel(rootPath: string, t: SettingsTextFn = settingsTextFor()): string {
+  return rootPath.split(/[\\/]/).filter(Boolean).at(-1) ?? t("settings.general.projectFallback");
 }
 
 function settingsProjectTabs(
   cwd: string | undefined,
   workspaces: WorkspaceInfo[],
+  t: SettingsTextFn = settingsTextFor(),
 ): Array<{ rootPath: string; displayName: string }> {
   const seen = new Set<string>();
   const tabs: Array<{ rootPath: string; displayName: string }> = [];
   const push = (rootPath: string, displayName: string): void => {
     if (!rootPath || seen.has(rootPath)) return;
     seen.add(rootPath);
-    tabs.push({ rootPath, displayName: displayName || projectLabel(rootPath) });
+    tabs.push({ rootPath, displayName: displayName || projectLabel(rootPath, t) });
   };
   if (cwd) push(cwd, workspaces.find((workspace) => workspace.rootPath === cwd)?.displayName ?? "");
   for (const workspace of workspaces) push(workspace.rootPath, workspace.displayName);
   return tabs;
+}
+
+function modeLabel(mode: ApprovalMode, t: SettingsTextFn = settingsTextFor()): string {
+  switch (mode) {
+    case "request-approval":
+      return t("settings.general.modeRequestApproval");
+    case "auto":
+      return t("settings.general.modeAuto");
+    case "full-access":
+      return t("settings.general.modeFullAccess");
+  }
+}
+
+function modeDescription(mode: ApprovalMode, t: SettingsTextFn = settingsTextFor()): string {
+  switch (mode) {
+    case "request-approval":
+      return t("settings.general.modeRequestApprovalDesc");
+    case "auto":
+      return t("settings.general.modeAutoDesc");
+    case "full-access":
+      return t("settings.general.modeFullAccessDesc");
+  }
 }
 
 /**
@@ -46,7 +66,8 @@ function settingsProjectTabs(
  * Home = global default; project tabs = optional override. One mode list at a time.
  */
 export function ApprovalModeSettings({ cwd, workspaces = [] }: ApprovalModeSettingsProps) {
-  const projectTabs = useMemo(() => settingsProjectTabs(cwd, workspaces), [cwd, workspaces]);
+  const t = useSettingsText();
+  const projectTabs = useMemo(() => settingsProjectTabs(cwd, workspaces, t), [cwd, workspaces, t]);
   const [activeScope, setActiveScope] = useState<Scope>("user");
   const [selectedProjectCwd, setSelectedProjectCwd] = useState(cwd ?? "");
   const [state, setState] = useState<ApprovalModeState>({
@@ -95,7 +116,7 @@ export function ApprovalModeSettings({ cwd, workspaces = [] }: ApprovalModeSetti
         return;
       }
       if (!effectiveProjectCwd) {
-        setError("Open a workspace to set a project override.");
+        setError(t("settings.general.openWorkspaceError"));
         return;
       }
       setState(await window.modus.permission.setMode({ mode, cwd: effectiveProjectCwd }));
@@ -131,7 +152,7 @@ export function ApprovalModeSettings({ cwd, workspaces = [] }: ApprovalModeSetti
           onClick={() => setActiveScope("user")}
           type="button"
         >
-          Home
+          {t("settings.general.tabHome")}
         </button>
         {projectTabs.map((project) => {
           const active = !isHome && project.rootPath === effectiveProjectCwd;
@@ -161,26 +182,32 @@ export function ApprovalModeSettings({ cwd, workspaces = [] }: ApprovalModeSetti
         <div>
           <h3 className="text-md font-normal text-fg">
             {isHome
-              ? "Global approval mode"
-              : `${selectedProject?.displayName ?? "Project"} approval mode`}
+              ? t("settings.general.approvalModeGlobalTitle")
+              : t("settings.general.approvalModeProjectTitle", {
+                  project: selectedProject?.displayName ?? t("settings.general.projectFallback"),
+                })}
           </h3>
           <p className="mt-1 text-xs text-fg-muted">
             {isHome
-              ? "Default for every workspace that does not set an override."
+              ? t("settings.general.approvalModeGlobalDesc")
               : followsGlobal
-                ? `Following global default (${APPROVAL_MODE_BY_ID[state.global].label}). Pick a mode to override.`
-                : "Override active for this workspace. Use global to clear it."}
+                ? t("settings.general.approvalModeFollowingGlobal", {
+                    mode: modeLabel(state.global, t),
+                  })
+                : t("settings.general.approvalModeOverrideActiveWorkspace")}
           </p>
         </div>
 
         {!isHome ? (
           <div className="flex items-center justify-between gap-3 rounded-lg border border-hairline-soft bg-panel px-4 py-3">
             <div className="min-w-0">
-              <div className="text-sm text-fg">Follow global default</div>
+              <div className="text-sm text-fg">{t("settings.general.followGlobalDefault")}</div>
               <div className="mt-0.5 truncate text-xs text-fg-muted">
                 {followsGlobal
-                  ? `Using ${APPROVAL_MODE_BY_ID[state.global].label}`
-                  : "Override active for this project"}
+                  ? t("settings.general.usingGlobalMode", {
+                      mode: modeLabel(state.global, t),
+                    })
+                  : t("settings.general.overrideActiveProject")}
               </div>
             </div>
             <button
@@ -194,7 +221,7 @@ export function ApprovalModeSettings({ cwd, workspaces = [] }: ApprovalModeSetti
               onClick={() => void followGlobal()}
               type="button"
             >
-              {followsGlobal ? "Following" : "Use global"}
+              {followsGlobal ? t("settings.general.following") : t("settings.general.useGlobal")}
             </button>
           </div>
         ) : null}
@@ -206,10 +233,7 @@ export function ApprovalModeSettings({ cwd, workspaces = [] }: ApprovalModeSetti
         />
       </section>
 
-      <p className="text-xs text-fg-faint">
-        Home sets the app-wide default. Project tabs optionally override that default for one
-        workspace.
-      </p>
+      <p className="text-xs text-fg-faint">{t("settings.general.scopeHint")}</p>
     </div>
   );
 }
@@ -223,6 +247,7 @@ function ModeOptionList({
   onSelect(mode: ApprovalMode): void;
   disabled?: boolean;
 }) {
+  const t = useSettingsText();
   return (
     <div className="overflow-hidden rounded-lg border border-hairline-soft bg-panel">
       {APPROVAL_MODES.map((item) => {
@@ -248,10 +273,10 @@ function ModeOptionList({
             />
             <span className="min-w-0 flex-1">
               <span className={cn("block text-sm", danger ? "text-accent" : "text-fg")}>
-                {item.label}
+                {modeLabel(item.id, t)}
               </span>
               <span className="mt-0.5 block text-xs leading-snug text-fg-faint">
-                {item.description}
+                {modeDescription(item.id, t)}
               </span>
             </span>
             <span className="mt-0.5 flex w-4 shrink-0 justify-center text-fg">

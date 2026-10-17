@@ -47,6 +47,12 @@ import {
 import { disposeGroupRuntime } from "./groups/group-runtime-service";
 import { IPC_CHANNELS } from "./ipc/channels";
 import { registerAppIpc } from "./ipc/register-app-ipc";
+import {
+  createUiLanguageController,
+  setCurrentUiLanguageSource,
+  type UiLanguageController,
+} from "./locale/ui-language-controller";
+import { createUiLanguageStore } from "./locale/ui-language-store";
 import { disposeAllMcp } from "./mcp/mcp-service";
 import { createStartupTimeline } from "./startup/startup-timeline";
 import { shutdownTerminals } from "./terminal/terminal-service";
@@ -70,6 +76,7 @@ try {
 let mainWindow: BrowserWindowType | null = null;
 let ipcRegistered = false;
 let appearance: AppearanceController | null = null;
+let uiLanguage: UiLanguageController | null = null;
 const startupTimeline = createStartupTimeline();
 const SHUTDOWN_DRAIN_TIMEOUT_MS = 5_000;
 
@@ -96,19 +103,44 @@ function getAppearance(): AppearanceController {
   return appearance;
 }
 
+/**
+ * App language (Settings > General > Language). Created after `ready`
+ * (app.getPreferredSystemLanguages needs it); every change rebuilds the native
+ * menu and is pushed to the windows.
+ */
+function getUiLanguage(): UiLanguageController {
+  if (!uiLanguage) {
+    const controller = createUiLanguageController({
+      store: createUiLanguageStore(app.getPath("userData")),
+      systemLocales: () => {
+        const preferred = app.getPreferredSystemLanguages?.() ?? [];
+        return preferred.length > 0 ? preferred : [app.getLocale()];
+      },
+    });
+    controller.onChange((state) => installApplicationMenu(state.intlLocale));
+    setCurrentUiLanguageSource(() => controller.getState());
+    uiLanguage = controller;
+  }
+  return uiLanguage;
+}
+
 function ensureAppIpcRegistered(): void {
   if (ipcRegistered) {
     return;
   }
 
-  registerAppIpc({ startupTimeline, appearance: getAppearance() });
+  registerAppIpc({ startupTimeline, appearance: getAppearance(), uiLanguage: getUiLanguage() });
   ipcRegistered = true;
 }
 
 function openMainWindow(): void {
   ensureAppIpcRegistered();
 
-  mainWindow = createMainWindow({ startupTimeline, appearance: getAppearance() });
+  mainWindow = createMainWindow({
+    startupTimeline,
+    appearance: getAppearance(),
+    uiLanguage: getUiLanguage(),
+  });
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -205,7 +237,7 @@ if (!app.requestSingleInstanceLock()) {
         splash?.destroy();
         return;
       }
-      installApplicationMenu();
+      installApplicationMenu(getUiLanguage().getState().intlLocale);
       // Before the window asks for it and before the update service cleans its dir.
       takeRestoreSnapshotAtStartup();
       const notifyModelCatalogChanged = () => {

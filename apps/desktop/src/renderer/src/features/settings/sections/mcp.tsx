@@ -19,31 +19,48 @@ import type {
   ReaIntegrationStatus,
   WorkspaceInfo,
 } from "../../../../../shared/contracts";
+import type { SettingsTextKey } from "../../../../../shared/settings-text";
 import { CollapsibleMotion } from "../../../components/ui/CollapsibleMotion";
 import { Tooltip } from "../../../components/ui/Tooltip";
 import { WorkingText } from "../../../components/ui/WorkingText";
 import { cn } from "../../../lib/cn";
+import { type SettingsTextFn, settingsTextFor, useSettingsText } from "../../../lib/settingsText";
 import { SelectField } from "../form-controls";
 import { SettingsList, SettingsPageHeader, SettingsSection } from "../settings-layout";
 import { McpTypeCard, type SettingsProjectTab, settingsProjectTabs } from "../settings-provider-ui";
 import { IntegrationsSettingsPanel } from "./integrations";
 
-const MCP_STATUS_STYLE: Record<McpServerInfo["status"], { dot: string; label: string }> = {
-  connected: { dot: "bg-success", label: "Connected" },
-  connecting: { dot: "bg-focus-ring-soft", label: "Connecting" },
-  failed: { dot: "bg-danger", label: "Failed" },
-  disabled: { dot: "bg-fg-faint", label: "Disabled" },
+const REA_LABEL = "REA";
+const DEFAULT_COMMAND_PLACEHOLDER = "npx -y @modelcontextprotocol/server-filesystem .";
+const DEFAULT_URL_PLACEHOLDER = "https://example.com/mcp";
+
+const MCP_STATUS_STYLE: Record<
+  McpServerInfo["status"],
+  { dot: string; labelKey: SettingsTextKey }
+> = {
+  connected: { dot: "bg-success", labelKey: "settings.mcp.statusConnected" },
+  connecting: { dot: "bg-focus-ring-soft", labelKey: "settings.mcp.statusConnecting" },
+  failed: { dot: "bg-danger", labelKey: "settings.mcp.statusFailed" },
+  disabled: { dot: "bg-fg-faint", labelKey: "settings.mcp.statusDisabled" },
 };
 
 /** One-click starting points so first-time users never face an empty form. */
-const MCP_PRESETS: ReadonlyArray<{ label: string; name: string; command: string }> = [
+const MCP_PRESETS: ReadonlyArray<{ labelKey: SettingsTextKey; name: string; command: string }> = [
   {
-    label: "Filesystem",
+    labelKey: "settings.mcp.presetFilesystem",
     name: "filesystem",
     command: "npx -y @modelcontextprotocol/server-filesystem .",
   },
-  { label: "Fetch", name: "fetch", command: "npx -y @modelcontextprotocol/server-fetch" },
-  { label: "Memory", name: "memory", command: "npx -y @modelcontextprotocol/server-memory" },
+  {
+    labelKey: "settings.mcp.presetFetch",
+    name: "fetch",
+    command: "npx -y @modelcontextprotocol/server-fetch",
+  },
+  {
+    labelKey: "settings.mcp.presetMemory",
+    name: "memory",
+    command: "npx -y @modelcontextprotocol/server-memory",
+  },
 ];
 
 type KeyValuePair = { id: string; key: string; value: string };
@@ -141,17 +158,21 @@ const recordToPairs = (record: unknown): KeyValuePair[] =>
 
 const mcpInitial = (name: string): string => name.trim().slice(0, 1).toUpperCase() || "?";
 
-function mcpCount(count: number, label: string): string {
-  return `${count} ${label}${count === 1 ? "" : "s"} enabled`;
+function mcpCount(count: number, t: SettingsTextFn = settingsTextFor()): string {
+  return t.plural("settings.mcp.toolsEnabled", count);
 }
 
-function mcpServerSummary(server: McpServerInfo): string {
-  if (server.status === "disabled") return "Disabled";
-  if (server.status === "connecting") return "Connecting";
+function mcpServerSummary(server: McpServerInfo, t: SettingsTextFn = settingsTextFor()): string {
+  if (server.status === "disabled") return t("settings.mcp.statusDisabled");
+  if (server.status === "connecting") return t("settings.mcp.statusConnecting");
   if (server.status === "failed") {
-    return server.error?.toLowerCase().includes("auth") ? "Needs authentication" : "Failed";
+    return server.error?.toLowerCase().includes("auth")
+      ? t("settings.mcp.statusNeedsAuth")
+      : t("settings.mcp.statusFailed");
   }
-  return server.tools.length > 0 ? mcpCount(server.tools.length, "tool") : "Connected";
+  return server.tools.length > 0
+    ? mcpCount(server.tools.length, t)
+    : t("settings.mcp.statusConnected");
 }
 
 /**
@@ -166,6 +187,7 @@ export function McpSettingsPanel({
   cwd: string | undefined;
   workspaces: WorkspaceInfo[];
 }) {
+  const t = useSettingsText();
   const [serverList, setServerList] = useState<McpServerInfo[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -232,13 +254,13 @@ export function McpSettingsPanel({
       })
       .catch((error: unknown) => {
         if (active) {
-          setReaError(error instanceof Error ? error.message : "Could not load REA settings.");
+          setReaError(error instanceof Error ? error.message : t("settings.mcp.reaLoadError"));
         }
       });
     return () => {
       active = false;
     };
-  }, []);
+  }, [t]);
 
   async function setReaEnabled(enabled: boolean): Promise<void> {
     setReaBusy(true);
@@ -246,7 +268,7 @@ export function McpSettingsPanel({
     try {
       setReaStatus(await window.modus.rea.setEnabled(enabled));
     } catch (error) {
-      setReaError(error instanceof Error ? error.message : "Could not update REA settings.");
+      setReaError(error instanceof Error ? error.message : t("settings.mcp.reaUpdateError"));
     } finally {
       setReaBusy(false);
     }
@@ -258,7 +280,7 @@ export function McpSettingsPanel({
     try {
       setReaStatus(await window.modus.rea.retry());
     } catch (error) {
-      setReaError(error instanceof Error ? error.message : "Could not reset REA status.");
+      setReaError(error instanceof Error ? error.message : t("settings.mcp.reaResetError"));
     } finally {
       setReaBusy(false);
     }
@@ -311,7 +333,7 @@ export function McpSettingsPanel({
       current.discoveredTools.length > 0,
     );
     if (readOnlyToolAllowlist === undefined) {
-      setMcpError("Confirm that every selected MCP tool is read-only before saving.");
+      setMcpError(t("settings.mcp.confirmReadOnlyBeforeSave"));
       return;
     }
     setSaving(true);
@@ -367,9 +389,9 @@ export function McpSettingsPanel({
 
   function sourceBadge(source: string): string {
     if (effectiveProjectCwd && source.startsWith(effectiveProjectCwd)) {
-      return "Project";
+      return t("settings.mcp.badgeProject");
     }
-    return "Global";
+    return t("settings.mcp.badgeGlobal");
   }
 
   function startCreate(scope: McpScope): void {
@@ -390,7 +412,11 @@ export function McpSettingsPanel({
               type="button"
             >
               <IconRefresh size={14} stroke={1.7} />
-              {syncing ? <WorkingText>Connecting…</WorkingText> : "Reload"}
+              {syncing ? (
+                <WorkingText>{t("settings.mcp.connectingWorking")}</WorkingText>
+              ) : (
+                t("settings.mcp.reload")
+              )}
             </button>
             <button
               className="flex h-8 items-center gap-1.5 rounded-md bg-fg px-2.5 text-canvas text-xs transition-colors hover:bg-fg-muted disabled:opacity-40"
@@ -403,16 +429,16 @@ export function McpSettingsPanel({
               type="button"
             >
               <IconPlus size={14} stroke={2} />
-              Add server
+              {t("settings.mcp.addServer")}
             </button>
           </>
         }
-        description="Tools and connections available to your agents."
-        title="MCP"
+        description={t("settings.mcp.pageDescription")}
+        title={t("settings.mcp.pageTitle")}
       />
 
       <IntegrationsSettingsPanel />
-      <SettingsSection title="Built-in integration">
+      <SettingsSection title={t("settings.mcp.builtinIntegrationSection")}>
         <ReaIntegrationRow
           busy={reaBusy}
           error={reaError}
@@ -435,7 +461,7 @@ export function McpSettingsPanel({
           }}
           type="button"
         >
-          Home
+          {t("settings.mcp.scopeHome")}
         </button>
         {projectTabs.map((project) => {
           const active = activeScope === "project" && project.rootPath === effectiveProjectCwd;
@@ -479,8 +505,10 @@ export function McpSettingsPanel({
       <SettingsSection
         title={
           activeScope === "project"
-            ? `${selectedProject?.displayName ?? "Project"} MCP Servers`
-            : "Global MCP Servers"
+            ? selectedProject?.displayName
+              ? t("settings.mcp.projectServersTitle", { name: selectedProject.displayName })
+              : t("settings.mcp.projectServersTitleFallback")
+            : t("settings.mcp.globalServersTitle")
         }
       >
         <SettingsList>
@@ -520,7 +548,7 @@ export function McpSettingsPanel({
                         server.status === "failed" ? "text-danger" : "text-fg-muted",
                       )}
                     >
-                      <span>{mcpServerSummary(server)}</span>
+                      <span>{mcpServerSummary(server, t)}</span>
                       {server.tools.length > 0 ? <IconChevronRight size={12} stroke={1.8} /> : null}
                     </div>
                   </button>
@@ -532,13 +560,19 @@ export function McpSettingsPanel({
                         type="button"
                       >
                         <IconTrash size={13} stroke={1.9} />
-                        Delete
+                        {t("settings.mcp.deleteServer")}
                       </button>
                     ) : (
                       <>
-                        <Tooltip content="Edit server" side="bottom" sideOffset={6}>
+                        <Tooltip
+                          content={t("settings.mcp.editServerTooltip")}
+                          side="bottom"
+                          sideOffset={6}
+                        >
                           <button
-                            aria-label={`Edit ${server.name}`}
+                            aria-label={t("settings.mcp.editServerAriaLabel", {
+                              name: server.name,
+                            })}
                             className="flex size-7 items-center justify-center rounded-md text-fg-faint opacity-0 transition-all hover:bg-hover hover:text-fg-muted group-hover/mcp:opacity-100"
                             onClick={() => void openEdit(server)}
                             type="button"
@@ -546,9 +580,15 @@ export function McpSettingsPanel({
                             <IconEdit size={14} stroke={1.8} />
                           </button>
                         </Tooltip>
-                        <Tooltip content="Remove server" side="bottom" sideOffset={6}>
+                        <Tooltip
+                          content={t("settings.mcp.removeServerTooltip")}
+                          side="bottom"
+                          sideOffset={6}
+                        >
                           <button
-                            aria-label={`Remove ${server.name}`}
+                            aria-label={t("settings.mcp.removeServerAriaLabel", {
+                              name: server.name,
+                            })}
                             className="flex size-7 items-center justify-center rounded-md text-fg-faint opacity-0 transition-all hover:bg-danger/10 hover:text-danger group-hover/mcp:opacity-100"
                             onClick={() => setConfirmingDelete(server.name)}
                             type="button"
@@ -572,8 +612,8 @@ export function McpSettingsPanel({
           ) : (
             <div className="px-4 py-5 text-fg-muted text-sm">
               {activeScope === "project"
-                ? "No project MCP servers yet."
-                : "No global MCP servers yet."}
+                ? t("settings.mcp.emptyProjectServers")
+                : t("settings.mcp.emptyGlobalServers")}
             </div>
           )}
           <button
@@ -586,32 +626,33 @@ export function McpSettingsPanel({
               <IconPlus size={18} stroke={1.8} />
             </span>
             <span className="min-w-0">
-              <span className="block text-fg text-sm">New MCP Server</span>
+              <span className="block text-fg text-sm">{t("settings.mcp.newServerButton")}</span>
               <span className="block text-fg-muted text-xs">
                 {effectiveProjectCwd
                   ? activeScope === "project"
-                    ? `Save to ${selectedProject?.displayName ?? "this project"}`
-                    : "Save globally for every workspace"
-                  : "Open a workspace to configure MCP servers"}
+                    ? selectedProject?.displayName
+                      ? t("settings.mcp.saveToProject", { name: selectedProject.displayName })
+                      : t("settings.mcp.saveToThisProject")
+                    : t("settings.mcp.saveGlobally")
+                  : t("settings.mcp.openWorkspaceToConfigure")}
               </span>
             </span>
           </button>
         </SettingsList>
         <div className="flex items-center justify-between">
           <p className="text-fg-faint text-xs leading-relaxed">
-            Global servers are available in every workspace. Project servers live in the selected
-            workspace. “Always allow” trusts a tool for this workspace.
+            {t("settings.mcp.serversFooterHint")}
           </p>
           {activeScope === "project" ? (
             <button
               className="flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-fg-faint text-xs transition-colors hover:bg-hover hover:text-fg-subtle disabled:opacity-40"
               disabled={!effectiveProjectCwd}
               onClick={() => void window.modus.mcp.openConfig(effectiveProjectCwd)}
-              title="Advanced: edit the underlying project mcp.json directly"
+              title={t("settings.mcp.editJsonTitle")}
               type="button"
             >
               <IconCodeDots size={13} stroke={1.7} />
-              Edit JSON
+              {t("settings.mcp.editJsonButton")}
             </button>
           ) : null}
         </div>
@@ -620,14 +661,17 @@ export function McpSettingsPanel({
   );
 }
 
-const REA_STATUS: Record<ReaIntegrationStatus["status"], { label: string; dot: string }> = {
-  disabled: { label: "Disabled", dot: "bg-fg-faint" },
-  not_started: { label: "Ready when needed", dot: "bg-fg-faint" },
-  starting: { label: "Checking connection…", dot: "bg-focus-ring-soft" },
-  ready: { label: "Available", dot: "bg-success" },
-  needs_node: { label: "Node.js and npm are required.", dot: "bg-warning" },
-  network_error: { label: "Couldn’t download REA.", dot: "bg-warning" },
-  failed: { label: "REA couldn’t start.", dot: "bg-danger" },
+const REA_STATUS: Record<
+  ReaIntegrationStatus["status"],
+  { labelKey: SettingsTextKey; dot: string }
+> = {
+  disabled: { labelKey: "settings.mcp.reaStatusDisabled", dot: "bg-fg-faint" },
+  not_started: { labelKey: "settings.mcp.reaStatusNotStarted", dot: "bg-fg-faint" },
+  starting: { labelKey: "settings.mcp.reaStatusStarting", dot: "bg-focus-ring-soft" },
+  ready: { labelKey: "settings.mcp.reaStatusReady", dot: "bg-success" },
+  needs_node: { labelKey: "settings.mcp.reaStatusNeedsNode", dot: "bg-warning" },
+  network_error: { labelKey: "settings.mcp.reaStatusNetworkError", dot: "bg-warning" },
+  failed: { labelKey: "settings.mcp.reaStatusFailed", dot: "bg-danger" },
 };
 
 export function ReaIntegrationRow({
@@ -643,8 +687,10 @@ export function ReaIntegrationRow({
   onToggle(enabled: boolean): void;
   status: ReaIntegrationStatus;
 }) {
+  const t = useSettingsText();
   const retryable = ["needs_node", "network_error", "failed"].includes(status.status);
   const statusInfo = REA_STATUS[status.status];
+  const statusLabel = t(statusInfo.labelKey);
   const noteId = "rea-first-use-note";
   const detailsId = "rea-status-details";
 
@@ -652,22 +698,17 @@ export function ReaIntegrationRow({
     <div className="flex flex-col gap-3 rounded-lg border border-hairline-soft bg-surface p-4 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="font-medium text-fg text-sm">REA</span>
+          <span className="font-medium text-fg text-sm">{REA_LABEL}</span>
           <span className="flex items-center gap-1.5 text-xs text-fg-muted" aria-live="polite">
             <span aria-hidden className={cn("size-2 rounded-full", statusInfo.dot)} />
-            {status.status === "starting" ? (
-              <WorkingText>{statusInfo.label}</WorkingText>
-            ) : (
-              statusInfo.label
-            )}
+            {status.status === "starting" ? <WorkingText>{statusLabel}</WorkingText> : statusLabel}
           </span>
         </div>
         <p className="mt-1 text-xs leading-relaxed text-fg-muted">
-          Reverse-engineering tools for your Modus sessions.
+          {t("settings.mcp.reaDescription")}
         </p>
         <p className="mt-2 text-xs leading-relaxed text-fg-faint" id={noteId}>
-          The first approved REA tool call may use Node.js and npm to download the pinned package.
-          Enabling REA does not start it. REA uses your normal user access; it is not a sandbox.
+          {t("settings.mcp.reaNote")}
         </p>
         {status.note ? (
           <p
@@ -690,13 +731,12 @@ export function ReaIntegrationRow({
         ) : null}
         {retryable ? (
           <p className="mt-2 text-xs leading-relaxed text-fg-faint">
-            Retry clears this error. REA starts only after the next approved tool call.
+            {t("settings.mcp.reaRetryHint")}
           </p>
         ) : null}
         {status.settingsError ? (
           <p className="mt-2 text-xs text-danger" role="alert">
-            Could not read the saved REA setting. The integration stays off until the setting is
-            available.
+            {t("settings.mcp.reaReadSettingError")}
           </p>
         ) : null}
         {error ? (
@@ -715,12 +755,16 @@ export function ReaIntegrationRow({
             type="button"
           >
             <IconRefresh size={13} stroke={1.8} />
-            {busy ? <WorkingText>Retrying…</WorkingText> : "Retry"}
+            {busy ? (
+              <WorkingText>{t("settings.mcp.reaRetrying")}</WorkingText>
+            ) : (
+              t("settings.mcp.reaRetry")
+            )}
           </button>
         ) : null}
         <Switch.Root
           aria-describedby={`${noteId}${status.note ? ` ${detailsId}` : ""}`}
-          aria-label="Enable REA"
+          aria-label={t("settings.mcp.reaEnableAriaLabel")}
           checked={status.enabled}
           className="flex h-5 w-9 shrink-0 cursor-pointer rounded-full bg-chip-strong p-0.5 transition-colors data-checked:bg-success/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
           disabled={busy || status.settingsError}
@@ -751,6 +795,7 @@ export function McpServerForm({
   projectOptions: SettingsProjectTab[];
   onSubmit(state: McpFormState): void;
 }) {
+  const t = useSettingsText();
   const projectSelectOptions = projectOptions.map((project) => ({
     label: project.displayName,
     value: project.rootPath,
@@ -780,7 +825,9 @@ export function McpServerForm({
     >
       <div className="flex items-center justify-between">
         <h4 className="text-md text-fg">
-          {isNew ? "Add MCP server" : `Edit “${form.originalName}”`}
+          {isNew
+            ? t("settings.mcp.formTitleAdd")
+            : t("settings.mcp.formTitleEdit", { name: form.originalName ?? "" })}
         </h4>
         {isNew ? (
           <div className="flex gap-1">
@@ -797,7 +844,7 @@ export function McpServerForm({
                 }
                 type="button"
               >
-                {preset.label}
+                {t(preset.labelKey)}
               </button>
             ))}
           </div>
@@ -809,16 +856,16 @@ export function McpServerForm({
           <div className="grid grid-cols-2 gap-2">
             <McpTypeCard
               active={form.scope === "user"}
-              description="Available in every workspace."
+              description={t("settings.mcp.scopeHomeDescription")}
               icon={<IconUser size={16} stroke={1.7} />}
-              label="Home"
+              label={t("settings.mcp.scopeHome")}
               onClick={() => set({ scope: "user" })}
             />
             <McpTypeCard
               active={form.scope === "project"}
-              description="Stored in one workspace."
+              description={t("settings.mcp.scopeProjectDescription")}
               icon={<IconCube size={16} stroke={1.7} />}
-              label="Project"
+              label={t("settings.mcp.scopeProject")}
               onClick={() =>
                 set({
                   scope: "project",
@@ -829,7 +876,7 @@ export function McpServerForm({
           </div>
           {form.scope === "project" && projectSelectOptions.length > 1 ? (
             <SelectField
-              label="Project"
+              label={t("settings.mcp.scopeProject")}
               onChange={(projectCwd) => set({ projectCwd })}
               options={projectSelectOptions}
               value={form.projectCwd}
@@ -838,32 +885,37 @@ export function McpServerForm({
         </div>
       ) : (
         <div className="rounded-md border border-hairline-soft bg-surface px-3 py-2 text-fg-muted text-xs">
-          Location: {form.scope === "project" ? "Project" : "Home"}
+          {t("settings.mcp.locationLabel", {
+            location:
+              form.scope === "project"
+                ? t("settings.mcp.scopeProject")
+                : t("settings.mcp.scopeHome"),
+          })}
         </div>
       )}
 
       <div className="grid grid-cols-2 gap-2">
         <McpTypeCard
           active={form.transport === "stdio"}
-          description="Runs a command on this machine. Most servers from npm work this way."
+          description={t("settings.mcp.transportLocalCommandDescription")}
           icon={<IconTerminal2 size={16} stroke={1.7} />}
-          label="Local command"
+          label={t("settings.mcp.transportLocalCommand")}
           onClick={() => set({ transport: "stdio" })}
         />
         <McpTypeCard
           active={form.transport === "http"}
-          description="Connects to a hosted MCP endpoint over HTTP or SSE."
+          description={t("settings.mcp.transportRemoteUrlDescription")}
           icon={<IconWorld size={16} stroke={1.7} />}
-          label="Remote URL"
+          label={t("settings.mcp.transportRemoteUrl")}
           onClick={() => set({ transport: "http" })}
         />
       </div>
 
-      <McpField hint="Shown in tool calls, e.g. “linear”. Letters, numbers, - _ ." label="Name">
+      <McpField hint={t("settings.mcp.fieldNameHint")} label={t("settings.mcp.fieldName")}>
         <input
           className="h-9 w-full rounded-md border border-hairline-soft bg-surface px-3 font-mono text-sm text-fg outline-none placeholder:text-fg-faint focus:border-focus-ring"
           onChange={(event) => set({ name: event.target.value })}
-          placeholder="my-server"
+          placeholder={t("settings.mcp.namePlaceholder")}
           value={form.name}
         />
       </McpField>
@@ -871,40 +923,40 @@ export function McpServerForm({
       {form.transport === "stdio" ? (
         <>
           <McpField
-            hint="Paste the full command from the server's README — Modus splits it for you."
-            label="Command"
+            hint={t("settings.mcp.fieldCommandHint")}
+            label={t("settings.mcp.fieldCommand")}
           >
             <input
               className="h-9 w-full rounded-md border border-hairline-soft bg-surface px-3 font-mono text-sm text-fg outline-none placeholder:text-fg-faint focus:border-focus-ring"
               onChange={(event) => set({ commandLine: event.target.value })}
-              placeholder="npx -y @modelcontextprotocol/server-filesystem ."
+              placeholder={DEFAULT_COMMAND_PLACEHOLDER}
               value={form.commandLine}
             />
           </McpField>
           <McpKeyValueRows
-            addLabel="Add variable"
-            hint="Secrets the server needs. Use ${env:NAME} to reference your system environment."
-            label="Environment variables"
+            addLabel={t("settings.mcp.addVariable")}
+            hint={t("settings.mcp.envVariablesHint")}
+            label={t("settings.mcp.fieldEnvVariables")}
             onChange={(env) => set({ env })}
             pairs={form.env}
             placeholderKey="API_KEY"
-            placeholderValue="value or ${env:MY_KEY}"
+            placeholderValue={t("settings.mcp.envValuePlaceholder")}
           />
         </>
       ) : (
         <>
-          <McpField hint="The server's MCP endpoint." label="URL">
+          <McpField hint={t("settings.mcp.fieldUrlHint")} label={t("settings.mcp.fieldUrl")}>
             <input
               className="h-9 w-full rounded-md border border-hairline-soft bg-surface px-3 font-mono text-sm text-fg outline-none placeholder:text-fg-faint focus:border-focus-ring"
               onChange={(event) => set({ url: event.target.value })}
-              placeholder="https://example.com/mcp"
+              placeholder={DEFAULT_URL_PLACEHOLDER}
               value={form.url}
             />
           </McpField>
           <McpKeyValueRows
-            addLabel="Add header"
-            hint="Sent with every request — auth tokens usually go here."
-            label="Headers"
+            addLabel={t("settings.mcp.addHeader")}
+            hint={t("settings.mcp.headersHint")}
+            label={t("settings.mcp.fieldHeaders")}
             onChange={(headers) => set({ headers })}
             pairs={form.headers}
             placeholderKey="Authorization"
@@ -914,9 +966,11 @@ export function McpServerForm({
       )}
 
       <fieldset className="min-w-0 rounded-lg border border-hairline-soft p-3">
-        <legend className="px-1 font-medium text-fg text-sm">Read-only tools</legend>
+        <legend className="px-1 font-medium text-fg text-sm">
+          {t("settings.mcp.readOnlyToolsLegend")}
+        </legend>
         <p className="mb-2 text-xs leading-relaxed text-fg-muted">
-          Only checked raw tool names are saved. Check each tool before marking it read-only.
+          {t("settings.mcp.readOnlyToolsHint")}
         </p>
         {form.discoveredTools.length > 0 ? (
           <ul className="grid min-w-0 gap-1.5 sm:grid-cols-2">
@@ -924,7 +978,7 @@ export function McpServerForm({
               <li key={toolName}>
                 <label className="flex min-w-0 cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-xs text-fg-subtle transition-colors hover:bg-hover">
                   <input
-                    aria-label={`Allow ${toolName} as read-only`}
+                    aria-label={t("settings.mcp.allowToolReadOnlyAriaLabel", { tool: toolName })}
                     checked={form.readOnlyToolAllowlist.includes(toolName)}
                     className="mt-0.5 size-3.5 shrink-0 accent-[var(--color-accent)]"
                     onChange={(event) =>
@@ -947,19 +1001,19 @@ export function McpServerForm({
           </ul>
         ) : (
           <p className="rounded-md bg-surface px-2.5 py-2 text-xs text-fg-faint" role="status">
-            Tool list unavailable. No tools are allowed by default.
+            {t("settings.mcp.toolListUnavailable")}
           </p>
         )}
         {form.readOnlyToolAllowlist.length > 0 ? (
           <label className="mt-3 flex cursor-pointer items-start gap-2 border-hairline-soft border-t pt-3 text-xs text-warning">
             <input
-              aria-label="Confirm selected tools are read-only"
+              aria-label={t("settings.mcp.confirmReadOnlyAriaLabel")}
               checked={form.confirmReadOnlyToolAllowlist}
               className="mt-0.5 size-3.5 shrink-0 accent-[var(--color-warning)]"
               onChange={(event) => set({ confirmReadOnlyToolAllowlist: event.target.checked })}
               type="checkbox"
             />
-            <span>I confirm that each selected tool is read-only.</span>
+            <span>{t("settings.mcp.confirmReadOnlyLabel")}</span>
           </label>
         ) : null}
       </fieldset>
@@ -967,14 +1021,14 @@ export function McpServerForm({
       <div className="flex items-center justify-between border-hairline-soft border-t pt-4">
         <div className="flex items-center gap-2 text-fg-muted text-xs">
           <Switch.Root
-            aria-label="Connect automatically"
+            aria-label={t("settings.mcp.connectAutomatically")}
             checked={form.enabled}
             className="flex h-4.5 w-8 shrink-0 cursor-pointer rounded-full bg-chip-strong p-0.5 transition-colors data-checked:bg-success/70"
             onCheckedChange={(enabled) => set({ enabled })}
           >
             <Switch.Thumb className="size-3.5 rounded-full bg-fg transition-transform data-checked:translate-x-3.5" />
           </Switch.Root>
-          Connect automatically
+          {t("settings.mcp.connectAutomatically")}
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -982,7 +1036,7 @@ export function McpServerForm({
             onClick={onCancel}
             type="button"
           >
-            Cancel
+            {t("settings.mcp.cancel")}
           </button>
           <button
             className="flex h-8 items-center gap-1.5 rounded-md bg-fg px-3 text-canvas text-xs transition-colors hover:bg-fg-muted disabled:opacity-40"
@@ -990,11 +1044,13 @@ export function McpServerForm({
             type="submit"
           >
             {busy ? (
-              <WorkingText className="text-canvas">Connecting…</WorkingText>
+              <WorkingText className="text-canvas">
+                {t("settings.mcp.connectingWorking")}
+              </WorkingText>
             ) : isNew ? (
-              "Add server"
+              t("settings.mcp.addServer")
             ) : (
-              "Save changes"
+              t("settings.mcp.saveChanges")
             )}
           </button>
         </div>
@@ -1038,6 +1094,7 @@ function McpKeyValueRows({
   placeholderKey: string;
   placeholderValue: string;
 }) {
+  const t = useSettingsText();
   return (
     <div className="flex flex-col gap-1.5">
       <span className="text-fg-muted text-xs">{label}</span>
@@ -1068,7 +1125,7 @@ function McpKeyValueRows({
             value={item.value}
           />
           <button
-            aria-label="Remove row"
+            aria-label={t("settings.mcp.removeRowAriaLabel")}
             className="flex size-7 shrink-0 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg-muted"
             onClick={() => onChange(pairs.filter((existing) => existing.id !== item.id))}
             type="button"

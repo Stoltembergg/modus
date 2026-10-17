@@ -1,7 +1,9 @@
 import { IconCheck, IconFileText } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
 import type { PersonalizationState } from "../../../../../shared/contracts";
+import type { SettingsTextKey } from "../../../../../shared/settings-text";
 import { WorkingText } from "../../../components/ui/WorkingText";
+import { useSettingsText } from "../../../lib/settingsText";
 import { Disclosure } from "../form-controls";
 import {
   ReadOnlyPill,
@@ -12,11 +14,12 @@ import {
 } from "../settings-layout";
 
 export function PersonalizationSettingsPanel() {
+  const t = useSettingsText();
   const [state, setState] = useState<PersonalizationState | undefined>();
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState<string | undefined>();
+  const [message, setMessage] = useState<SettingsTextKey | undefined>();
   const [error, setError] = useState<string | undefined>();
 
   async function refresh(): Promise<void> {
@@ -46,7 +49,7 @@ export function PersonalizationSettingsPanel() {
       const next = await window.modus.personalization.save({ content: draft });
       setState(next);
       setDraft(next.content);
-      setMessage("Saved");
+      setMessage("settings.appearance.saved");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -78,7 +81,7 @@ export function PersonalizationSettingsPanel() {
               type="button"
             >
               <IconFileText size={14} stroke={1.7} />
-              Open file
+              {t("settings.appearance.openFile")}
             </button>
             <button
               className="flex h-8 items-center gap-1.5 rounded-md bg-fg px-2.5 text-canvas text-xs transition-colors hover:bg-fg-muted disabled:opacity-40"
@@ -87,17 +90,21 @@ export function PersonalizationSettingsPanel() {
               type="button"
             >
               <IconCheck size={13} stroke={2} />
-              {saving ? <WorkingText className="text-canvas">Saving…</WorkingText> : "Save"}
+              {saving ? (
+                <WorkingText className="text-canvas">{t("settings.appearance.saving")}</WorkingText>
+              ) : (
+                t("settings.appearance.save")
+              )}
             </button>
           </>
         }
-        title="Personalization"
+        title={t("settings.appearance.personalizationTitle")}
       />
 
       {error ? <p className="-mt-4 text-danger text-xs">{error}</p> : null}
-      {message ? <p className="-mt-4 text-success text-xs">{message}</p> : null}
+      {message ? <p className="-mt-4 text-success text-xs">{t(message)}</p> : null}
 
-      <SettingsSection title="Custom instructions">
+      <SettingsSection title={t("settings.appearance.customInstructions")}>
         <textarea
           className="scroll-thin min-h-[320px] resize-y rounded-lg border border-hairline-soft bg-panel px-4 py-3 font-mono text-sm text-fg leading-6 outline-none placeholder:text-fg-faint focus:border-focus-ring disabled:opacity-60"
           disabled={loading}
@@ -105,23 +112,35 @@ export function PersonalizationSettingsPanel() {
             setDraft(event.target.value);
             setMessage(undefined);
           }}
-          placeholder="Add custom instructions..."
+          placeholder={t("settings.appearance.customInstructionsPlaceholder")}
           value={loading ? "" : draft}
         />
       </SettingsSection>
 
       {state ? (
-        <Disclosure label="Instruction files">
+        <Disclosure label={t("settings.appearance.instructionFiles")}>
           <SettingsList>
             <SettingsRow
-              control={<ReadOnlyPill>{state.overrideActive ? "Override" : "Base"}</ReadOnlyPill>}
+              control={
+                <ReadOnlyPill>
+                  {state.overrideActive
+                    ? t("settings.appearance.fileOverride")
+                    : t("settings.appearance.fileBase")}
+                </ReadOnlyPill>
+              }
               description={state.activePath}
-              title="Active file"
+              title={t("settings.appearance.activeFile")}
             />
             <SettingsRow
-              control={<ReadOnlyPill>{state.overrideActive ? "Active" : "Inactive"}</ReadOnlyPill>}
+              control={
+                <ReadOnlyPill>
+                  {state.overrideActive
+                    ? t("settings.appearance.statusActive")
+                    : t("settings.appearance.statusInactive")}
+                </ReadOnlyPill>
+              }
               description={state.overridePath}
-              title="AGENTS.override.md"
+              title={t("settings.appearance.agentsOverrideTitle")}
             />
           </SettingsList>
         </Disclosure>

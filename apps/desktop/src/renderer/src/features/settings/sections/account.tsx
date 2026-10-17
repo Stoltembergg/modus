@@ -9,6 +9,7 @@ import {
 import type { ModusModelsStatus } from "../../../../../shared/contracts";
 import { modusText } from "../../../../../shared/modus-text";
 import { WorkingText } from "../../../components/ui/WorkingText";
+import { type SettingsTextFn, settingsTextFor, useSettingsText } from "../../../lib/settingsText";
 import { Field } from "../form-controls";
 import {
   ReadOnlyPill,
@@ -33,32 +34,38 @@ const OAUTH_ICONS: Record<AuthOAuthProviderId, ReactNode> = {
 
 type Mode = "sign-in" | "sign-up";
 
-export function accountStatusLabel(state: AuthState): string {
+export function accountStatusLabel(
+  state: AuthState,
+  t: SettingsTextFn = settingsTextFor(),
+): string {
   switch (state.status) {
     case "unconfigured":
-      return "Unavailable";
+      return t("settings.account.statusUnavailable");
     case "restoring":
-      return "Restoring…";
+      return t("settings.account.statusRestoring");
     case "awaiting-oauth":
-      return "Waiting for browser";
+      return t("settings.account.statusAwaitingOauth");
     case "signed-in":
-      return "Signed in";
+      return t("settings.account.statusSignedIn");
     default:
-      return "Signed out";
+      return t("settings.account.statusSignedOut");
   }
 }
 
 /** L3b0: the Modus provider state the main process publishes (ModelSettingsState.modus). */
-export function modusStatusText(status: ModusModelsStatus): { label: string; detail: string } {
+export function modusStatusText(
+  status: ModusModelsStatus,
+  locale?: string | null,
+): { label: string; detail: string } {
   switch (status) {
     case "ready":
-      return { label: modusText("modus.status.ready"), detail: "" };
+      return { label: modusText("modus.status.ready", locale), detail: "" };
     case "loading":
-      return { label: modusText("modus.status.loading"), detail: "" };
+      return { label: modusText("modus.status.loading", locale), detail: "" };
     case "unavailable":
       return {
-        label: modusText("modus.status.unavailable"),
-        detail: modusText("modus.status.unavailableDetail"),
+        label: modusText("modus.status.unavailable", locale),
+        detail: modusText("modus.status.unavailableDetail", locale),
       };
     default:
       return { label: "", detail: "" };
@@ -74,6 +81,7 @@ export function AccountSettingsPanel({
   /** The plan the Modus router grants now (/v1/models `plan`); absent until Modus is ready. */
   modusPlan?: string | undefined;
 } = {}) {
+  const t = useSettingsText();
   const [state, setState] = useState<AuthState | undefined>();
   const [mode, setMode] = useState<Mode>("sign-in");
   const [email, setEmail] = useState("");
@@ -106,7 +114,7 @@ export function AccountSettingsPanel({
       setState(next);
       if (next.status === "signed-in" || next.notice === "confirm-email") setPassword("");
     } catch {
-      setError("Check the email and use a password with at least 8 characters.");
+      setError(t("settings.account.authErrorCheckEmailPassword"));
     } finally {
       setBusy(false);
     }
@@ -137,14 +145,14 @@ export function AccountSettingsPanel({
               type="button"
             >
               <IconLogout size={14} stroke={1.7} />
-              Sign out
+              {t("settings.account.signOut")}
             </button>
           ) : state ? (
             <span
               className={state.status === "signed-out" ? "sr-only" : "text-xs text-fg-muted"}
               aria-live="polite"
             >
-              {accountStatusLabel(state)}
+              {accountStatusLabel(state, t)}
             </span>
           ) : null
         }
@@ -152,60 +160,72 @@ export function AccountSettingsPanel({
           signedIn
             ? ""
             : unavailable
-              ? "Account sign-in is not configured in this build."
+              ? t("settings.account.unconfiguredDescription")
               : mode === "sign-up"
-                ? `Use at least ${AUTH_PASSWORD_MIN_LENGTH} characters.`
+                ? t("settings.account.passwordMinLength", { min: AUTH_PASSWORD_MIN_LENGTH })
                 : ""
         }
-        title={signedIn ? "Account" : mode === "sign-in" ? "Sign in to Modus" : "Create account"}
+        title={
+          signedIn
+            ? t("settings.account.title")
+            : mode === "sign-in"
+              ? t("settings.account.signInToModus")
+              : t("settings.account.createAccount")
+        }
       />
 
       {shownError ? <p className="text-danger text-xs">{shownError}</p> : null}
       {state?.notice === "session-expired" ? (
         <p className="text-danger text-xs" role="status">
-          {modusText("modus.sessionExpired")}
+          {modusText("modus.sessionExpired", t.locale)}
         </p>
       ) : null}
       {state?.notice === "confirm-email" ? (
-        <p className="text-success text-xs">
-          Check your inbox to confirm your email, then sign in.
-        </p>
+        <p className="text-success text-xs">{t("settings.account.confirmEmailNotice")}</p>
       ) : null}
 
       {state?.status === "signed-in" && state.user ? (
         <>
-          <SettingsSection title="Profile">
+          <SettingsSection title={t("settings.account.profileSectionTitle")}>
             <SettingsList>
               <SettingsRow
                 control={<ReadOnlyPill>{state.user.provider}</ReadOnlyPill>}
-                description={state.user.email ?? "No email"}
-                title={state.user.displayName ?? "Signed in"}
-              />
-              <SettingsRow
-                control={
-                  <ReadOnlyPill>{state.user.emailConfirmed ? "Confirmed" : "Pending"}</ReadOnlyPill>
-                }
-                description="Free credits are granted once the email is confirmed."
-                title="Email confirmation"
+                description={state.user.email ?? t("settings.account.noEmail")}
+                title={state.user.displayName ?? t("settings.account.profileSignedIn")}
               />
               <SettingsRow
                 control={
                   <ReadOnlyPill>
-                    {state.persistence === "encrypted" ? "Encrypted" : "This session only"}
+                    {state.user.emailConfirmed
+                      ? t("settings.account.emailConfirmed")
+                      : t("settings.account.emailPending")}
+                  </ReadOnlyPill>
+                }
+                description={t("settings.account.emailConfirmationDescription")}
+                title={t("settings.account.emailConfirmationTitle")}
+              />
+              <SettingsRow
+                control={
+                  <ReadOnlyPill>
+                    {state.persistence === "encrypted"
+                      ? t("settings.account.persistenceEncrypted")
+                      : t("settings.account.persistenceSessionOnly")}
                   </ReadOnlyPill>
                 }
                 description={
                   state.persistence === "encrypted"
-                    ? "The session is stored encrypted by your operating system."
-                    : "No secure OS storage was found, so you will sign in again after restarting."
+                    ? t("settings.account.persistenceEncryptedDescription")
+                    : t("settings.account.persistenceSessionOnlyDescription")
                 }
-                title="Remember me"
+                title={t("settings.account.rememberMeTitle")}
               />
               {modusStatus && modusStatus !== "off" ? (
                 <SettingsRow
-                  control={<ReadOnlyPill>{modusStatusText(modusStatus).label}</ReadOnlyPill>}
-                  description={modusStatusText(modusStatus).detail}
-                  title={modusText("modus.status.title")}
+                  control={
+                    <ReadOnlyPill>{modusStatusText(modusStatus, t.locale).label}</ReadOnlyPill>
+                  }
+                  description={modusStatusText(modusStatus, t.locale).detail}
+                  title={modusText("modus.status.title", t.locale)}
                 />
               ) : null}
             </SettingsList>
@@ -223,17 +243,17 @@ export function AccountSettingsPanel({
           >
             <Field
               autoComplete="email"
-              label="Email"
+              label={t("settings.account.emailLabel")}
               onChange={setEmail}
-              placeholder="you@example.com"
+              placeholder={t("settings.account.emailPlaceholder")}
               type="email"
               value={email}
             />
             <Field
               autoComplete={mode === "sign-in" ? "current-password" : "new-password"}
-              label="Password"
+              label={t("settings.account.passwordLabel")}
               onChange={setPassword}
-              placeholder="Password"
+              placeholder={t("settings.account.passwordPlaceholder")}
               type="password"
               value={password}
             />
@@ -245,11 +265,11 @@ export function AccountSettingsPanel({
               >
                 <IconMail size={13} stroke={2} />
                 {busy ? (
-                  <WorkingText className="text-canvas">Working…</WorkingText>
+                  <WorkingText className="text-canvas">{t("settings.account.working")}</WorkingText>
                 ) : mode === "sign-in" ? (
-                  "Sign in"
+                  t("settings.account.signIn")
                 ) : (
-                  "Create account"
+                  t("settings.account.createAccount")
                 )}
               </button>
               <button
@@ -258,18 +278,20 @@ export function AccountSettingsPanel({
                 onClick={() => setMode(mode === "sign-in" ? "sign-up" : "sign-in")}
                 type="button"
               >
-                {mode === "sign-in" ? "Create account" : "Back to sign in"}
+                {mode === "sign-in"
+                  ? t("settings.account.createAccount")
+                  : t("settings.account.backToSignIn")}
               </button>
             </div>
           </form>
           <div className="space-y-4">
             <div className="flex items-center gap-3" aria-hidden="true">
               <span className="h-px flex-1 bg-hairline" />
-              <span className="text-xs text-fg-faint">or</span>
+              <span className="text-xs text-fg-faint">{t("settings.account.orDivider")}</span>
               <span className="h-px flex-1 bg-hairline" />
             </div>
             <fieldset className="grid min-w-0 grid-cols-1 gap-2">
-              <legend className="sr-only">Other ways to sign in</legend>
+              <legend className="sr-only">{t("settings.account.otherSignInMethods")}</legend>
               {AUTH_PROVIDERS.flatMap((provider) =>
                 provider.kind === "oauth" ? [provider] : [],
               ).map((provider) => {
@@ -282,11 +304,11 @@ export function AccountSettingsPanel({
                     onClick={() =>
                       void run(() => window.modus.auth.signInWithOAuth({ provider: provider.id }))
                     }
-                    title={enabled ? undefined : "Not available yet"}
+                    title={enabled ? undefined : t("settings.account.oauthNotAvailableYet")}
                     type="button"
                   >
                     {OAUTH_ICONS[provider.id]}
-                    Continue with {provider.label}
+                    {t("settings.account.continueWith", { provider: provider.label })}
                   </button>
                 );
               })}
@@ -296,7 +318,7 @@ export function AccountSettingsPanel({
                   onClick={() => void window.modus.auth.cancelOAuth().then(setState)}
                   type="button"
                 >
-                  Cancel
+                  {t("settings.account.cancel")}
                 </button>
               ) : null}
             </fieldset>

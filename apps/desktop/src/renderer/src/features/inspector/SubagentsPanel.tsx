@@ -15,6 +15,7 @@ import { EmptyState } from "../../components/ui/Panel";
 import { VortexMark } from "../../components/ui/VortexMark";
 import { lookupModel, modelIdentityLabel } from "../../lib/modelIdentity";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
+import { formatUiRelativeTime } from "../../lib/uiIntl";
 import type { AgentEventHub } from "../agent/agentEventHub";
 import { ChatPane } from "../agent/ChatPane";
 import { LineDelta } from "../agent/changes/ChangeStats";
@@ -722,13 +723,7 @@ function subagentMeta(session: AgentSessionInfo, models: ModelInfo[]): string {
 function relativeTime(value: string): string {
   const time = Date.parse(value);
   if (!Number.isFinite(time)) return "";
-  const seconds = Math.max(0, Math.floor((Date.now() - time) / 1000));
-  if (seconds < 60) return "now";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
+  return formatUiRelativeTime(Date.now() - time, { maxUnit: "day" });
 }
 
 function normalizePath(path: string | undefined): string {
