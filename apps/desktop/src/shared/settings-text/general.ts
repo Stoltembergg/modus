@@ -70,7 +70,8 @@ export const GENERAL_TEXT_PT: Record<keyof typeof GENERAL_TEXT_EN, string> = {
     "Perguntar apenas para ações de alto risco, como exclusões e git push.",
   "settings.general.modeFullAccess": "Acesso total",
   "settings.general.modeFullAccessDesc": "Nunca perguntar. Acesso irrestrito aos seus arquivos.",
-  "settings.general.askMissingTargetTitle": "Perguntar antes de agir quando não estiver claro o que alterar",
+  "settings.general.askMissingTargetTitle":
+    "Perguntar antes de agir quando não estiver claro o que alterar",
   "settings.general.askMissingTargetDesc":
     'No modo Build, faz uma pergunta quando um pedido como "corrige isso" não diz o que mudar. Desativado: o agente prossegue diretamente. Ações destrutivas são sempre confirmadas.',
 };
