@@ -1,6 +1,11 @@
-/** Settings → General (approval mode, ask-before-acting). */
+/** Settings → General (language, approval mode, ask-before-acting). */
 export const GENERAL_TEXT_EN = {
   "settings.general.title": "General",
+  "settings.general.languageTitle": "Language",
+  "settings.general.languageDesc":
+    "Applies right away, including the app menu. System follows your computer's language.",
+  "settings.general.languageSystem": "System",
+  "settings.general.languageSystemResolved": "System ({language})",
   "settings.general.projectFallback": "Project",
   "settings.general.openWorkspaceError": "Open a workspace to set a project override.",
   "settings.general.tabHome": "Home",
@@ -33,6 +38,11 @@ export const GENERAL_TEXT_EN = {
 
 export const GENERAL_TEXT_PT: Record<keyof typeof GENERAL_TEXT_EN, string> = {
   "settings.general.title": "Geral",
+  "settings.general.languageTitle": "Idioma",
+  "settings.general.languageDesc":
+    "Muda na hora, inclusive o menu do app. Sistema segue o idioma do computador.",
+  "settings.general.languageSystem": "Sistema",
+  "settings.general.languageSystemResolved": "Sistema ({language})",
   "settings.general.projectFallback": "Projeto",
   "settings.general.openWorkspaceError":
     "Abra um workspace para definir uma substituição do projeto.",

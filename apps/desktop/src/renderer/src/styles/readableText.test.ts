@@ -24,7 +24,7 @@ const SITES: Record<string, { anchors: string[]; count?: [string, number] }> = {
   },
   "../features/groups/GroupComposer.tsx": { anchors: ['{t("composer.kickoffHint")}'] },
   "../features/composer/Composer.tsx": {
-    anchors: ["No context usage yet.", "Context window {usageWindow", ">{tokenLine}</div>"],
+    anchors: ["No context usage yet.", "Context window {formatUiNumber(usageWindow", ">{tokenLine}</div>"],
   },
 };
 

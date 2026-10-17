@@ -10,6 +10,7 @@ import type {
 } from "../../../../../shared/billing";
 import type { SettingsTextKey } from "../../../../../shared/settings-text";
 import { type SettingsTextFn, settingsTextFor, useSettingsText } from "../../../lib/settingsText";
+import { uiIntlLocale } from "../../../lib/uiIntl";
 import { ReadOnlyPill, SettingsList, SettingsRow, SettingsSection } from "../settings-layout";
 
 const SECONDARY_BUTTON =
@@ -49,10 +50,10 @@ const RETURN_NOTICES: Record<string, SettingsTextKey> = {
 };
 
 /**
- * Numbers and money follow the user's system locale (`locale` undefined); tests pass one.
+ * Numbers and money follow the app language (`<html lang>`, `uiIntlLocale`); tests pass one.
  * "5.000" / "R$ 36,90" in pt-BR, "5,000" / "R$36.90" in en-US.
  */
-export function formatCredits(value: number, locale?: string): string {
+export function formatCredits(value: number, locale: string = uiIntlLocale()): string {
   return new Intl.NumberFormat(locale).format(value);
 }
 
@@ -68,7 +69,11 @@ export function creditCount(
 }
 
 /** Minor units → money in the user's locale (Intl only; an unknown currency code shows the code). */
-export function formatMoney(amountMinor: number, currency: string, locale?: string): string {
+export function formatMoney(
+  amountMinor: number,
+  currency: string,
+  locale: string = uiIntlLocale(),
+): string {
   try {
     return new Intl.NumberFormat(locale, { style: "currency", currency }).format(amountMinor / 100);
   } catch {
@@ -196,7 +201,7 @@ export function groupCatalog(catalog: BillingCatalogEntry[]): CatalogPlan[] {
 function formatDate(value: string | null): string | null {
   if (!value) return null;
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date.toLocaleDateString();
+  return Number.isNaN(date.getTime()) ? null : date.toLocaleDateString(uiIntlLocale());
 }
 
 type ViewProps = {

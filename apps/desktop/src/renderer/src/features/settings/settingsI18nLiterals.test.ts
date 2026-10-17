@@ -21,6 +21,7 @@ const FILES = [
   "features/settings/sections/general.tsx",
   "features/settings/ApprovalModeSettings.tsx",
   "features/settings/AskMissingTargetSetting.tsx",
+  "features/settings/LanguageSetting.tsx",
   "features/settings/sections/account.tsx",
   "features/settings/sections/account-billing.tsx",
   "features/settings/sections/model-provider.tsx",

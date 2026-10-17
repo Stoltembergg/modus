@@ -14,6 +14,7 @@ import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
 import { WorkingText } from "../../components/ui/WorkingText";
 import { cn } from "../../lib/cn";
 import { type SettingsTextFn, settingsTextFor, useSettingsText } from "../../lib/settingsText";
+import { formatUiNumber, uiIntlLocale } from "../../lib/uiIntl";
 import {
   Disclosure,
   Field,
@@ -505,10 +506,10 @@ function ConnectionTestStatus({
       <span className="min-w-0 truncate">
         {result.sawThinking
           ? t("settings.customProvider.testConnectedThinking", {
-              latency: result.latencyMs.toLocaleString(),
+              latency: formatUiNumber(result.latencyMs, undefined, uiIntlLocale(t.locale)),
             })
           : t("settings.customProvider.testConnected", {
-              latency: result.latencyMs.toLocaleString(),
+              latency: formatUiNumber(result.latencyMs, undefined, uiIntlLocale(t.locale)),
             })}
       </span>
     </span>

@@ -3,10 +3,12 @@
  * Same pattern as `shell-text.ts`: each area fragment under `settings-text/`
  * has an en table that defines its keys and a pt table typed against it, and
  * the parity test checks them. The locale resolves like the other catalogs
- * (`resolveGroupRoomLocale`): no locale means English (C6.2). zh has no
- * Settings copy yet and falls back to English.
+ * (`resolveGroupRoomLocale`): no locale means English. A key missing from the
+ * active table falls back to English for that key only; zh has no Settings
+ * copy yet and so reads English.
  */
 import { type GroupRoomLocale, resolveGroupRoomLocale } from "./group-room-locale";
+import { lookupCatalogText } from "./i18n-catalog";
 import { ACCOUNT_TEXT_EN, ACCOUNT_TEXT_PT } from "./settings-text/account";
 import { APPEARANCE_TEXT_EN, APPEARANCE_TEXT_PT } from "./settings-text/appearance";
 import { CUSTOM_PROVIDER_TEXT_EN, CUSTOM_PROVIDER_TEXT_PT } from "./settings-text/custom-provider";
@@ -49,7 +51,8 @@ export const SETTINGS_TEXT_PT: Record<SettingsTextKey, string> = {
   ...QUESTION_TEXT_PT,
 };
 
-const SETTINGS_TEXT: Record<GroupRoomLocale, Record<SettingsTextKey, string>> = {
+/** Tables per catalog locale. Partial at lookup time: a missing key falls back to English alone. */
+const SETTINGS_TEXT: Record<GroupRoomLocale, Partial<Record<SettingsTextKey, string>>> = {
   en: SETTINGS_TEXT_EN,
   pt: SETTINGS_TEXT_PT,
   zh: SETTINGS_TEXT_EN,
@@ -74,7 +77,10 @@ export function settingsText(
   locale?: string | null,
   vars?: SettingsTextVars,
 ): string {
-  return fillSettingsText(SETTINGS_TEXT[resolveGroupRoomLocale(locale)][key], vars);
+  return fillSettingsText(
+    lookupCatalogText(SETTINGS_TEXT_EN, SETTINGS_TEXT[resolveGroupRoomLocale(locale)], key),
+    vars,
+  );
 }
 
 /** Plural copy: `{base}_one` when count is 1, else `{base}_other`; `{count}` is filled. */

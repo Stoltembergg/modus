@@ -2,8 +2,8 @@ import { useSyncExternalStore } from "react";
 
 /**
  * UI text locale = the document language (`<html lang>`). index.html ships
- * `lang="en"` and nothing changes it yet, so the UI stays English (C6.2); a
- * future language selector only has to set `document.documentElement.lang`
+ * `lang="en"`; at boot and on every change of Settings > General > Language,
+ * `uiLanguage.ts` sets it to the resolved language ("System" follows the OS),
  * and every component that reads this hook re-renders in that language.
  */
 export function readUiLocale(): string | undefined {

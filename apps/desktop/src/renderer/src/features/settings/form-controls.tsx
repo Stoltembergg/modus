@@ -79,24 +79,31 @@ export function Field({
 
 export function SelectField<T extends string>({
   label,
+  labelHidden = false,
   value,
   options,
   onChange,
+  disabled = false,
 }: {
   label: string;
+  /** Keep the label for screen readers only (the row title already shows it). */
+  labelHidden?: boolean;
   value: T;
-  options: readonly { label: string; value: T }[];
+  /** `lang` marks an option written in another language (native language names). */
+  options: readonly { label: string; value: T; lang?: string }[];
   onChange(value: T): void;
+  disabled?: boolean;
 }) {
   return (
     <div className="grid gap-2">
-      <span className="text-xs text-fg-muted">{label}</span>
+      <span className={labelHidden ? "sr-only" : "text-xs text-fg-muted"}>{label}</span>
       <Select.Root
         onValueChange={(next) => {
           if (typeof next === "string") {
             onChange(next as T);
           }
         }}
+        disabled={disabled}
         value={value}
       >
         <Select.Trigger
@@ -123,7 +130,9 @@ export function SelectField<T extends string>({
                   key={option.value}
                   value={option.value}
                 >
-                  <Select.ItemText className="min-w-0 truncate">{option.label}</Select.ItemText>
+                  <Select.ItemText className="min-w-0 truncate" lang={option.lang}>
+                    {option.label}
+                  </Select.ItemText>
                   <span className="flex justify-center text-fg">
                     <Select.ItemIndicator>
                       <IconCheck size={13} stroke={2} />

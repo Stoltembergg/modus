@@ -2,6 +2,7 @@ import type { WorkspaceInfo } from "../../../../../shared/contracts";
 import { useSettingsText } from "../../../lib/settingsText";
 import { ApprovalModeSettings } from "../ApprovalModeSettings";
 import { AskMissingTargetSetting } from "../AskMissingTargetSetting";
+import { LanguageSetting } from "../LanguageSetting";
 import { SettingsPageHeader } from "../settings-layout";
 
 export function GeneralSettingsPanel({
@@ -15,6 +16,7 @@ export function GeneralSettingsPanel({
   return (
     <>
       <SettingsPageHeader title={t("settings.general.title")} />
+      <LanguageSetting />
       <ApprovalModeSettings {...(cwd ? { cwd } : {})} workspaces={workspaces} />
       <AskMissingTargetSetting />
     </>

@@ -29,6 +29,7 @@ import {
   selectedThinkingOption,
 } from "../../lib/modelThinking";
 import { type SettingsTextFn, settingsTextFor, useSettingsText } from "../../lib/settingsText";
+import { formatUiNumber, uiIntlLocale } from "../../lib/uiIntl";
 import { Field, parsePositiveInteger, SelectField, SwitchControl } from "./form-controls";
 import { groupProviderModels, modelResultLabel } from "./modelListUtils";
 import { ProviderLogo } from "./ProviderLogo";
@@ -676,14 +677,14 @@ export function ModelRow({
             {model.contextWindow ? (
               <span>
                 {t("settings.providerUi.contextTokens", {
-                  count: model.contextWindow.toLocaleString(),
+                  count: formatUiNumber(model.contextWindow, undefined, uiIntlLocale(t.locale)),
                 })}
               </span>
             ) : null}
             {model.maxTokens ? (
               <span>
                 {t("settings.providerUi.maxOutputTokensShort", {
-                  count: model.maxTokens.toLocaleString(),
+                  count: formatUiNumber(model.maxTokens, undefined, uiIntlLocale(t.locale)),
                 })}
               </span>
             ) : null}
