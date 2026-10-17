@@ -926,6 +926,26 @@ export function growOnlyToolNames(
   return [...previous, ...allowed.filter((name) => !seen.has(name))];
 }
 
+/** What the current turn may call; see disallowedToolReason. */
+export type TurnToolLimits = {
+  profile: ToolProfileName;
+  allowed: ReadonlySet<string>;
+  /** Tools this session could call in a non-Plan turn (group/subagent limits still applied). */
+  allowedOutsidePlan: ReadonlySet<string>;
+};
+
+/**
+ * Refusal text for a tool that is exposed (grow-only set) but not allowed this
+ * turn. The Plan Mode explanation is used only when Plan Mode is the actual
+ * cause; group, subagent and any other limits keep the generic message.
+ */
+export function disallowedToolReason(toolName: string, limits: TurnToolLimits): string {
+  if (limits.profile === "plan" && limits.allowedOutsidePlan.has(toolName)) {
+    return `Blocked ${toolName}: Plan Mode is read-only. Use ${[...limits.allowed].join(", ")} to research and write the plan, or ask the user to switch to Build mode.`;
+  }
+  return `${toolName} is not available in this turn (for example in Plan Mode). Use the tools this turn allows.`;
+}
+
 function isGroupMailboxToolName(name: string): boolean {
   return (
     name === GROUP_MAILBOX_SEND_TOOL ||
@@ -986,7 +1006,7 @@ export class PiSdkRuntime implements AgentRuntime {
   /** Grow-only tool names exposed to the model, per session (see growOnlyToolNames). */
   private exposedToolNames = new Map<string, string[]>();
   /** Tools the current turn may actually call (mode, group membership, subagent limits). */
-  private turnAllowedToolNames = new Map<string, Set<string>>();
+  private turnToolLimits = new Map<string, TurnToolLimits>();
   private turnSettledListeners = new Set<(event: TurnSettledEvent) => void>();
   private eventListeners = new Set<(event: AgentEvent) => void>();
   private questionPendingListeners = new Set<(sessionId: string) => void>();
@@ -1946,12 +1966,9 @@ export class PiSdkRuntime implements AgentRuntime {
     input: ToolCallInput,
     promptLifecycleToken: symbol,
   ): Promise<{ block?: boolean | undefined; reason?: string | undefined } | undefined> {
-    const allowed = this.turnAllowedToolNames.get(sessionId);
-    if (allowed && !allowed.has(input.toolName)) {
-      return {
-        block: true,
-        reason: `${input.toolName} is not available in this turn (for example in Plan Mode). Use the tools this turn allows.`,
-      };
+    const limits = this.turnToolLimits.get(sessionId);
+    if (limits && !limits.allowed.has(input.toolName)) {
+      return { block: true, reason: disallowedToolReason(input.toolName, limits) };
     }
     this.cancelPendingSpillToolCall(sessionId, input.toolCallId);
     this.recordPendingSpillToolCall(sessionId, input, promptLifecycleToken);
@@ -5292,7 +5309,14 @@ export class PiSdkRuntime implements AgentRuntime {
     const allowed = activeToolNamesForSession(runtimeSession.info, profile);
     const exposed = growOnlyToolNames(this.exposedToolNames.get(sessionId), allowed);
     this.exposedToolNames.set(sessionId, exposed);
-    this.turnAllowedToolNames.set(sessionId, new Set(allowed));
+    this.turnToolLimits.set(sessionId, {
+      profile,
+      allowed: new Set(allowed),
+      // Only computed for Plan turns: what the same session could call outside Plan Mode.
+      allowedOutsidePlan: new Set(
+        profile === "plan" ? activeToolNamesForSession(runtimeSession.info, "chat") : allowed,
+      ),
+    });
     runtimeSession.session.setActiveToolsByName(exposed);
   }
 
@@ -5912,7 +5936,7 @@ export class PiSdkRuntime implements AgentRuntime {
     this.parentSessionByChild.delete(sessionId);
     this.personaPrompts.delete(sessionId);
     this.stablePromptSections.delete(sessionId);
-    this.turnAllowedToolNames.delete(sessionId);
+    this.turnToolLimits.delete(sessionId);
     if (!runtimeSession) {
       HarnessObserver.getInstance().releaseSession(sessionId);
       this.clearRepeatGuardSession(sessionId);

@@ -13,6 +13,7 @@ import type { ToolProfileName } from "../../shared/tools";
 const PLAN_MODE_INSTRUCTION = [
   "<plan_mode>",
   "You are in PLAN MODE. Do not implement anything: research and write ONE plan via plan_write.",
+  "Plan Mode is read-only: edit, write, bash, terminal and other mutating tools are blocked in this mode and any call to them is refused, even if they appear in your tool list.",
   "",
   "## Explore first, ask second",
   "- Ground the plan in how this project ACTUALLY works: read/grep/find/ls to discover facts before planning.",

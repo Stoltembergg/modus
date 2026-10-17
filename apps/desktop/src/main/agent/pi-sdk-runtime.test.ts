@@ -17,7 +17,12 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { BrowserWindow as BrowserWindowType } from "electron";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentEvent, PlanRef, SubagentWorktreeInfo } from "../../shared/contracts";
+import type {
+  AgentEvent,
+  AgentSessionInfo,
+  PlanRef,
+  SubagentWorktreeInfo,
+} from "../../shared/contracts";
 import type {
   HarnessContext,
   HarnessHook,
@@ -171,6 +176,7 @@ const { getDatabase } = await import("../db/database");
 const {
   PiSdkRuntime,
   activeToolNamesForSession,
+  disallowedToolReason,
   growOnlyToolNames,
   removeRunOutputTrackerIfOwned,
 } = await import("./pi-sdk-runtime");
@@ -13183,10 +13189,70 @@ describe("PiSdkRuntime per-request token stability", () => {
       .messagesFor(harness.sessionAt())
       .findLast((message) => message.role === "toolResult");
     expect(result?.role === "toolResult" && result.isError).toBe(true);
-    expect(JSON.stringify(result)).toContain("write is not available in this turn");
+    expect(result?.role === "toolResult" ? result.content : []).toEqual([
+      {
+        type: "text",
+        text: "Blocked write: Plan Mode is read-only. Use read, grep, find, ls, web_search, web_fetch, fast_codebase, plan_write, ask_user to research and write the plan, or ask the user to switch to Build mode.",
+      },
+    ]);
     expect(existsSync(target)).toBe(false);
     await runtime.releaseRuntime(sessionId);
   }, 30_000);
+
+  describe("refusal text for exposed-but-disallowed tools", () => {
+    const sessionInfo = (overrides: Partial<AgentSessionInfo> = {}): AgentSessionInfo => ({
+      id: `limits-${crypto.randomUUID()}`,
+      workspaceId: `workspace-${crypto.randomUUID()}`,
+      title: "chat",
+      cwd,
+      status: "idle",
+      createdAt: "",
+      updatedAt: "",
+      ...overrides,
+    });
+    const limitsFor = (info: AgentSessionInfo, profile: "chat" | "plan") => ({
+      profile,
+      allowed: new Set(activeToolNamesForSession(info, profile)),
+      allowedOutsidePlan: new Set(activeToolNamesForSession(info, "chat")),
+    });
+    const GENERIC =
+      "is not available in this turn (for example in Plan Mode). Use the tools this turn allows.";
+
+    it("explains Plan Mode only when Plan Mode is the cause", () => {
+      new PiSdkRuntime(); // registers the process-wide tools
+      const reason = disallowedToolReason("edit", limitsFor(sessionInfo(), "plan"));
+      expect(reason).toBe(
+        "Blocked edit: Plan Mode is read-only. Use read, grep, find, ls, web_search, web_fetch, fast_codebase, plan_write, ask_user to research and write the plan, or ask the user to switch to Build mode.",
+      );
+    });
+
+    it("keeps the generic message for a group limit, in Build and in Plan turns", async () => {
+      const { GROUP_TOOL_NAMES } = await import("./tools/group-tools");
+      new PiSdkRuntime();
+      const notAMember = sessionInfo();
+      const groupTool = GROUP_TOOL_NAMES[0] as string;
+      expect(activeToolNamesForSession(notAMember, "chat")).not.toContain(groupTool);
+      for (const profile of ["chat", "plan"] as const) {
+        expect(disallowedToolReason(groupTool, limitsFor(notAMember, profile))).toBe(
+          `${groupTool} ${GENERIC}`,
+        );
+      }
+    });
+
+    it("keeps the generic message for a subagent limit, even in a Plan turn", () => {
+      new PiSdkRuntime();
+      const readOnlyChild = sessionInfo({
+        parentSessionId: `parent-${crypto.randomUUID()}`,
+        subagentReadOnly: true,
+      });
+      expect(activeToolNamesForSession(readOnlyChild, "chat")).not.toContain("edit");
+      for (const profile of ["chat", "plan"] as const) {
+        expect(disallowedToolReason("edit", limitsFor(readOnlyChild, profile))).toBe(
+          `edit ${GENERIC}`,
+        );
+      }
+    });
+  });
 
   it("rebuilds the idle session's system prompt when the subagent catalog changes", async () => {
     const agentsDir = join(cwd, ".modus", "agents");
