@@ -24,6 +24,7 @@ const FLAG_ENVIRONMENT_KEYS = [
   "MODUS_PLUGIN_DEPENDENCY_INTELLIGENCE",
   "MODUS_PLUGIN_ROLLBACK_SAFE_MODE",
   "MODUS_PLUGIN_WASM_SANDBOX",
+  "MODUS_LOCAL_TOOL_FILTER",
 ] as const;
 
 describe("Harness feature flag validation", () => {
@@ -43,6 +44,7 @@ describe("Harness feature flag validation", () => {
       MODUS_REPEAT_GUARDS: false,
       MODUS_OBSERVABILITY: false,
       MODUS_PLUGINS: false,
+      MODUS_LOCAL_TOOL_FILTER: false,
     });
   });
 

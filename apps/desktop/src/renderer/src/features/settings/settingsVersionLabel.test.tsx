@@ -53,4 +53,13 @@ describe("Settings sidebar version label", () => {
     expect(screen.queryByText("Modus")).toBeNull();
     expect(screen.queryByText(/^v\d/)).toBeNull();
   });
+
+  it("shows the RERANK-03 model attribution (Apache-2.0, IBM) in the About area", () => {
+    setBridge(undefined);
+    renderSidebar();
+    const attribution = screen.getByTestId("model-attribution").textContent ?? "";
+    expect(attribution).toContain("IBM Granite Embedding");
+    expect(attribution).toContain("Apache License 2.0");
+    expect(attribution).toContain("LICENSE and NOTICE");
+  });
 });

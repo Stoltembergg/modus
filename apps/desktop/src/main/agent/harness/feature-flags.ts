@@ -15,6 +15,8 @@ export type HarnessFeatureFlags = {
   MODUS_PLUGIN_DEPENDENCY_INTELLIGENCE: boolean;
   MODUS_PLUGIN_ROLLBACK_SAFE_MODE: boolean;
   MODUS_PLUGIN_WASM_SANDBOX: boolean;
+  /** tool_filter.enabled: RERANK-03 local tool filter (local-models/). Off by default. */
+  MODUS_LOCAL_TOOL_FILTER: boolean;
 };
 
 let overrides: Partial<HarnessFeatureFlags> = {};
@@ -36,6 +38,7 @@ const FEATURE_FLAG_ENVIRONMENT_KEYS: readonly (keyof HarnessFeatureFlags)[] = [
   "MODUS_PLUGIN_DEPENDENCY_INTELLIGENCE",
   "MODUS_PLUGIN_ROLLBACK_SAFE_MODE",
   "MODUS_PLUGIN_WASM_SANDBOX",
+  "MODUS_LOCAL_TOOL_FILTER",
 ];
 
 const FEATURE_FLAG_DEPENDENCIES: Partial<
@@ -109,6 +112,8 @@ function getConfiguredFeatureFlags(): HarnessFeatureFlags {
     MODUS_PLUGIN_WASM_SANDBOX:
       overrides.MODUS_PLUGIN_WASM_SANDBOX ??
       parseEnvBool(process.env.MODUS_PLUGIN_WASM_SANDBOX, false),
+    MODUS_LOCAL_TOOL_FILTER:
+      overrides.MODUS_LOCAL_TOOL_FILTER ?? parseEnvBool(process.env.MODUS_LOCAL_TOOL_FILTER, false),
   };
 }
 

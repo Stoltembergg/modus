@@ -1,5 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { basename, join } from "node:path";
 import type { Configuration } from "electron-builder";
 import { RELEASE_REPO } from "./src/shared/release-repo";
 
@@ -22,6 +23,75 @@ const reaSupervisorBinary =
 const appVersion: string = JSON.parse(readFileSync("package.json", "utf8")).version;
 const updateChannel = /-beta\.(0|[1-9]\d*)$/.test(appVersion) ? "beta" : "latest";
 
+/**
+ * onnxruntime-node (local-models/, RERANK-03) ships every platform's binary in one
+ * npm tarball (~290 MB). Each installer keeps only its own platform/arch. Packaging
+ * always runs on the target OS (macOS x64 is cross-packaged on arm64, hence the
+ * `${arch}` macro). Also dropped:
+ * - darwin: libonnxruntime.1.30.0.dylib, a byte-identical copy of libonnxruntime.1.dylib
+ *   (npm does not keep the symlink; the binding links @rpath/libonnxruntime.1.dylib).
+ * - win32: DirectML.dll / dxcompiler.dll / dxil.dll, only used by the DirectML/WebGPU
+ *   execution providers (delay-loaded); Modus runs the models on CPU.
+ * 1.30 has no darwin x64 binary: Intel Macs ship none and fall back (all tools).
+ * scripts/verify-packaged-onnxruntime.cjs checks the result in the Package workflows.
+ */
+const ORT_BIN = "**/node_modules/onnxruntime-node/bin/napi-v6";
+// biome-ignore lint/suspicious/noTemplateCurlyInString: electron-builder file-pattern macro
+const ARCH_MACRO = "${arch}";
+const ORT_PLATFORMS = ["darwin", "linux", "win32"] as const;
+const onnxRuntimeFiles = [
+  ...ORT_PLATFORMS.filter((platform) => platform !== process.platform).map(
+    (platform) => `!${ORT_BIN}/${platform}/**`,
+  ),
+  // `${arch}` is expanded by electron-builder, not by JS.
+  `!${ORT_BIN}/${process.platform}/!(${ARCH_MACRO})/**`,
+  `!${ORT_BIN}/darwin/*/libonnxruntime.*.*.*.dylib`,
+  `!${ORT_BIN}/win32/*/{DirectML,dxcompiler,dxil}.dll`,
+];
+
+/**
+ * After each pack: scripts/verify-packaged-onnxruntime.cjs checks that only this
+ * target's onnxruntime-node binary is unpacked and, when the host can run the packed
+ * Electron (same arch), that it loads and runs a graph under ELECTRON_RUN_AS_NODE
+ * with no rebuild (N-API). Cross-arch packs (macOS x64 on an arm64 runner) run the
+ * file checks only, under the build's Node. A failure fails the package build.
+ */
+const LINUX_EXECUTABLE = "modus";
+const ELECTRON_ARCH = ["ia32", "x64", "armv7l", "arm64", "universal"] as const;
+const afterPack: NonNullable<Configuration["afterPack"]> = async (context) => {
+  const platform = context.electronPlatformName;
+  const arch = ELECTRON_ARCH[context.arch] ?? String(context.arch);
+  const product = context.packager.appInfo.productFilename;
+  const resources =
+    platform === "darwin"
+      ? join(context.appOutDir, `${product}.app`, "Contents", "Resources")
+      : join(context.appOutDir, "resources");
+  const executable =
+    platform === "darwin"
+      ? join(context.appOutDir, `${product}.app`, "Contents", "MacOS", product)
+      : platform === "win32"
+        ? join(context.appOutDir, `${product}.exe`)
+        : join(context.appOutDir, LINUX_EXECUTABLE);
+  const script = join("scripts", "verify-packaged-onnxruntime.cjs");
+  const sameHost = platform === process.platform && arch === process.arch;
+  execFileSync(sameHost ? executable : process.execPath, [script, resources, platform, arch], {
+    stdio: "inherit",
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+  });
+};
+
+/** Logs exact installer sizes (bytes) so installer growth can be compared per OS. */
+const afterAllArtifactBuild: NonNullable<Configuration["afterAllArtifactBuild"]> = async (
+  result,
+) => {
+  for (const file of result.artifactPaths) {
+    if (/\.(dmg|zip|exe|AppImage|deb)$/.test(file)) {
+      console.log(`installer-size ${basename(file)} ${statSync(file).size}`);
+    }
+  }
+  return [];
+};
+
 const config: Configuration = {
   appId: "dev.modus.desktop",
   productName: "Modus",
@@ -36,7 +106,9 @@ const config: Configuration = {
     output: "dist",
     buildResources: "resources",
   },
-  files: ["out/**/*", "package.json"],
+  files: ["out/**/*", "package.json", ...onnxRuntimeFiles],
+  // Native addon + its shared library must be real files on disk (dlopen cannot read asar).
+  asarUnpack: ["**/node_modules/onnxruntime-node/**"],
   extraResources: [
     {
       from: "resources/icon.png",
@@ -90,6 +162,8 @@ const config: Configuration = {
       : []),
   ],
   asar: true,
+  afterPack,
+  afterAllArtifactBuild,
   icon: "resources/icon.png",
   /**
    * Release metadata target. Configuring a provider is what makes electron-builder
@@ -140,7 +214,7 @@ const config: Configuration = {
   },
   linux: {
     // The scoped npm package name produces an invalid Linux executable name by default.
-    executableName: "modus",
+    executableName: LINUX_EXECUTABLE,
     category: "Development",
     icon: "resources/icon.png",
     target: ["AppImage", "deb"],
