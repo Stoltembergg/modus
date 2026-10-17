@@ -151,7 +151,7 @@ describe("new look tokens: values", () => {
       "--color-panel": "#0b1018",
       "--color-surface": "#151d2a",
       "--color-elevated": "#1a2333",
-      "--color-fg": "#f1f3f7",
+      "--color-fg": "#f2f4f8",
       "--color-fg-muted": "#a9b2c0",
       "--color-fg-subtle": "#939dac",
       "--color-fg-faint": "#7d8797",
@@ -390,6 +390,26 @@ describe("new look tokens: contrast gate", () => {
   it("(a) the dialog warning is the only warning colour key: no --color-warning theme token", () => {
     expect(appCss).not.toMatch(/^\s*--color-warning:/m);
     expect(css).not.toMatch(/^\s*--color-warning:/m);
+  });
+
+  it("(c) faint stays clearly apart from fg: >= 3:1 between the two colours and >= 3x on every solid surface, both themes", () => {
+    for (const theme of THEMES) {
+      const fg = color(theme, "--color-fg");
+      const faint = color(theme, "--color-fg-faint");
+      expect(contrast(fg, faint), `${theme} fg vs faint`).toBeGreaterThanOrEqual(3);
+      for (const base of [
+        "--color-canvas",
+        "--color-panel",
+        "--color-surface",
+        "--color-elevated",
+      ]) {
+        const bg = color(theme, base);
+        expect(
+          contrast(fg, bg) / contrast(faint, bg),
+          `${theme} ${base} fg/faint`,
+        ).toBeGreaterThanOrEqual(3);
+      }
+    }
   });
 
   it("(c) text hierarchy: fg > muted > subtle > faint, each step >= 1.2x contrast, on every solid surface, both themes", () => {
