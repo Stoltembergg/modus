@@ -192,7 +192,7 @@ describe("new look tokens: values", () => {
       saturateLight: decl(light, "--glass-saturate"),
       radii: ["xs", "sm", "md", "lg", "xl", "2xl"].map((r) => decl(dark, `--radius-${r}`)),
     }).toEqual({
-      chrome: "63%",
+      chrome: "60%",
       overlay: "86%",
       blur: "24px",
       saturateDark: "1.3",
@@ -255,7 +255,7 @@ describe("new look tokens: contrast gate", () => {
           `${at} muted`,
         ).toBeGreaterThanOrEqual(4.5);
         // TODO(redesign shell PR): subtle carries text-2xs labels and should reach
-        // 4.5:1 here (today ~4.20 dark / ~3.93 light over window glass on grey);
+        // 4.5:1 here (today ~3.99 dark / ~3.79 light over window glass on grey);
         // see "Redesign pending" item 1 in HANDOFF.md.
         expect(
           worst(color(theme, "--color-fg-subtle"), surface, [GREY]),
