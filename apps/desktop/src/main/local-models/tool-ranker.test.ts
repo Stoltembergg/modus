@@ -1,288 +1,359 @@
-import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { LocalEmbedder } from "./embedder";
 import { LocalModelError } from "./errors";
-import type { LocalModelManifest } from "./manifest";
-import { RERANK03_MODEL } from "./manifest";
-import { ensureModelFiles, verifyModelFiles } from "./model-download";
-import { onnxRuntimeLoaded, onnxRuntimeSupported } from "./onnx-runtime";
+import { manifestBytes } from "./manifest";
 import {
   createLocalToolRanker,
-  getLocalToolRanker,
+  type EnsureFiles,
   type LocalToolRankerDeps,
-  localToolFilterEnabled,
+  type RankerBackend,
+  TOOL_SELECTION_DEADLINE_MS,
   TOOL_SELECTION_TIMEOUT_MS,
 } from "./tool-ranker";
+import type { SelectReply } from "./worker-protocol";
 
-const dirs: string[] = [];
-const tempDir = () => {
-  const dir = mkdtempSync(join(tmpdir(), "modus-local-models-"));
-  dirs.push(dir);
-  return dir;
-};
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
 const TOOLS = [
-  { name: "read_file", doc: "Read a file" },
-  { name: "web_search", doc: "Search the web" },
-  { name: "terminal_run", doc: "Run a shell command" },
-  { name: "browser_open", doc: "Open a web page" },
+  { name: "read", doc: "read: Read a file." },
+  { name: "web_search", doc: "web_search: Search the web." },
+  { name: "terminal_run", doc: "terminal_run: Run a shell command." },
+  { name: "browser_open", doc: "browser_open: Open a web page." },
 ];
 const ALL = TOOLS.map((tool) => tool.name);
 
-/** Deterministic fake embedder: 2-d vectors, "web" texts point one way, others the other. */
-function fakeEmbedder(delayMs = 0): LocalEmbedder {
-  return {
-    async embed(text) {
-      if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
-      return /web/i.test(text) ? Float32Array.from([1, 0]) : Float32Array.from([0, 1]);
+type Reply = SelectReply & { rssBytes: number };
+
+function fakeBackend(overrides: Partial<RankerBackend> = {}) {
+  let running = false;
+  let selecting = 0;
+  const backend = {
+    running: vi.fn(() => running),
+    busy: vi.fn(() => selecting > 0),
+    load: vi.fn(async () => {
+      running = true;
+      return { rssBytes: 700e6, loadMs: 2000 };
+    }),
+    warm: vi.fn(async () => undefined),
+    select: vi.fn(async (): Promise<Reply> => {
+      selecting++;
+      try {
+        return { status: "ok", names: ["web_search"], inProcessMs: 4, rssBytes: 700e6 };
+      } finally {
+        selecting--;
+      }
+    }),
+    release: vi.fn(() => {
+      running = false;
+    }),
+    ...overrides,
+    /** Test helpers. */
+    die: () => {
+      running = false;
     },
-    release: vi.fn(async () => undefined),
   };
+  return backend;
 }
 
 function ranker(overrides: Partial<LocalToolRankerDeps> = {}) {
-  const deps = {
+  const backend = (overrides.backend as ReturnType<typeof fakeBackend>) ?? fakeBackend();
+  const ensureFiles = vi.fn<EnsureFiles>(async () => undefined);
+  const deps: LocalToolRankerDeps = {
     isEnabled: () => true,
-    dir: tempDir(),
+    dir: "/tmp/modus-models-test",
     baseUrl: "http://127.0.0.1:9/",
-    ensureFiles: vi.fn(async () => undefined),
-    verifyFiles: vi.fn(async () => undefined),
-    loadRuntime: vi.fn(async () => ({}) as never),
-    loadEmbedder: vi.fn(async () => fakeEmbedder()),
+    ensureFiles,
     log: () => undefined,
     ...overrides,
+    backend,
   };
-  return { deps, ranker: createLocalToolRanker(deps) };
+  return { ranker: createLocalToolRanker(deps), backend, ensureFiles: deps.ensureFiles };
 }
 
-async function warm(r: ReturnType<typeof createLocalToolRanker>) {
-  await r.prepare();
-  // First call embeds the tool docs in the background and falls back.
-  await r.select({ query: "warm", tools: TOOLS, k: 1 });
-  await new Promise((resolve) => setTimeout(resolve, 0));
-}
+const select = (r: ReturnType<typeof createLocalToolRanker>) =>
+  r.select({ query: "search the web", tools: TOOLS, k: 1, core: ["read"] });
 
-describe("flag off (default): no behaviour change", () => {
-  it("tool_filter.enabled (MODUS_LOCAL_TOOL_FILTER) is off unless set", () => {
-    vi.stubEnv("MODUS_LOCAL_TOOL_FILTER", "");
-    expect(localToolFilterEnabled()).toBe(false);
-    vi.stubEnv("MODUS_LOCAL_TOOL_FILTER", "0");
-    expect(localToolFilterEnabled()).toBe(false);
-    vi.stubEnv("MODUS_LOCAL_TOOL_FILTER", "1");
-    expect(localToolFilterEnabled()).toBe(true);
-    vi.unstubAllEnvs();
+describe("local tool ranker (main orchestrator)", () => {
+  it("defaults: 50 ms in the model process; the main deadline adds IPC headroom", () => {
+    expect(TOOL_SELECTION_TIMEOUT_MS).toBe(50);
+    expect(TOOL_SELECTION_DEADLINE_MS).toBeGreaterThan(TOOL_SELECTION_TIMEOUT_MS);
   });
 
-  it("nothing is downloaded or loaded, and every tool is returned", async () => {
-    const { deps, ranker: r } = ranker({ isEnabled: () => false });
-    expect(await r.prepare()).toEqual({ state: "idle" });
-    expect(await r.select({ query: "search the web", tools: TOOLS, k: 1 })).toEqual({
-      tools: ALL,
-      filtered: false,
-      fallback: "disabled",
-    });
-    expect(deps.ensureFiles).not.toHaveBeenCalled();
-    expect(deps.verifyFiles).not.toHaveBeenCalled();
-    expect(deps.loadRuntime).not.toHaveBeenCalled();
-    expect(deps.loadEmbedder).not.toHaveBeenCalled();
-  });
-
-  it("the real app ranker with the flag off: no fetch, no model dir, onnxruntime never imported", async () => {
-    vi.stubEnv("MODUS_LOCAL_TOOL_FILTER", "");
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    const userData = tempDir();
-    const r = getLocalToolRanker(userData);
+  it("off: never downloads, loads, or filters", async () => {
+    const { ranker: r, backend, ensureFiles } = ranker({ isEnabled: () => false });
     await r.prepare();
-    const selection = await r.select({ query: "anything", tools: TOOLS, k: 1 });
-    expect(selection.tools).toEqual(ALL);
-    expect(fetchSpy).not.toHaveBeenCalled();
-    expect(existsSync(join(userData, "models"))).toBe(false);
-    expect(onnxRuntimeLoaded()).toBe(false);
-    vi.unstubAllEnvs();
-  });
-});
-
-describe("every failure falls back to all tools", () => {
-  it("missing model (nothing downloaded, offline): fallback 'missing', runtime never loaded", async () => {
-    const dir = tempDir();
-    const { deps, ranker: r } = ranker({
-      dir,
-      verifyFiles: (target) => verifyModelFiles(RERANK03_MODEL, target),
-    });
-    expect(await r.prepare()).toMatchObject({ state: "failed", failure: "missing" });
-    expect(await r.select({ query: "q", tools: TOOLS, k: 1 })).toMatchObject({
-      tools: ALL,
-      fallback: "missing",
-    });
-    expect(deps.loadRuntime).not.toHaveBeenCalled();
+    expect(ensureFiles).not.toHaveBeenCalled();
+    expect(backend.load).not.toHaveBeenCalled();
+    expect(await select(r)).toMatchObject({ tools: ALL, filtered: false, fallback: "disabled" });
   });
 
-  it("download failure: fallback 'download-failed'", async () => {
-    const { ranker: r } = ranker({
-      ensureFiles: async () => {
-        throw new LocalModelError("download-failed", "offline");
-      },
-    });
+  it("before ready: all tools, and the first call starts preparing", async () => {
+    const { ranker: r, backend } = ranker();
+    expect(await select(r)).toMatchObject({ tools: ALL, filtered: false, fallback: "not-ready" });
     await r.prepare();
-    expect((await r.select({ query: "q", tools: TOOLS, k: 1 })).fallback).toBe("download-failed");
+    expect(backend.load).toHaveBeenCalledTimes(1);
+    expect(r.status()).toMatchObject({ state: "ready", loadMs: 2000 });
   });
 
-  describe("hash mismatch, one file at a time", () => {
-    const names = RERANK03_MODEL.files.map((file) => file.name);
-    it.each(
-      names,
-    )("%s corrupted: fallback 'hash-mismatch', the bad file is deleted, nothing loads", async (bad) => {
-      const dir = tempDir();
-      const files = names.map((name) => {
-        const content = `content of ${name}`;
-        writeFileSync(join(dir, name), name === bad ? "tampered" : content);
-        return {
-          name,
-          sha256: createHash("sha256").update(content).digest("hex"),
-          role: "model" as const,
-        };
+  it("ready: core + top-k in input order, reports main and in-process time apart", async () => {
+    const { ranker: r, backend } = ranker();
+    await r.prepare();
+    const result = await select(r);
+    expect(result).toMatchObject({ tools: ["read", "web_search"], filtered: true, inProcessMs: 4 });
+    expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(backend.select).toHaveBeenCalledWith(
+      expect.objectContaining({ k: 1, budgetMs: 50, docs: TOOLS.slice(1) }),
+    );
+  });
+
+  it("the model process missing its in-process budget falls back", async () => {
+    const backend = fakeBackend({
+      select: vi.fn(async () => ({ status: "timeout" as const, inProcessMs: 61, rssBytes: 1 })),
+    });
+    const { ranker: r } = ranker({ backend });
+    await r.prepare();
+    expect(await select(r)).toMatchObject({ tools: ALL, fallback: "timeout", inProcessMs: 61 });
+  });
+
+  it("a model process error falls back with its code", async () => {
+    const backend = fakeBackend({
+      select: vi.fn(async () => {
+        throw new LocalModelError("crashed", "gone");
+      }),
+    });
+    const { ranker: r } = ranker({ backend });
+    await r.prepare();
+    expect(await select(r)).toMatchObject({ tools: ALL, filtered: false, fallback: "crashed" });
+  });
+
+  describe("Debbie 3: the deadline is measured in main and includes IPC", () => {
+    it("a slow/hung model process never holds the turn past deadlineMs", async () => {
+      const backend = fakeBackend({ select: vi.fn(() => new Promise<Reply>(() => undefined)) });
+      const { ranker: r } = ranker({ backend, deadlineMs: 30 });
+      await r.prepare();
+      const started = performance.now();
+      const result = await select(r);
+      const waited = performance.now() - started;
+      expect(result).toMatchObject({ tools: ALL, filtered: false, fallback: "timeout" });
+      expect(result.elapsedMs).toBeGreaterThanOrEqual(25);
+      expect(waited).toBeLessThan(500);
+    });
+
+    it("an in-budget model answer that arrives late in main (IPC) still falls back", async () => {
+      let clock = 0;
+      const backend = fakeBackend({
+        select: vi.fn(async () => {
+          clock += 80; // 80 ms of main wall time, e.g. a congested IPC channel
+          return { status: "ok" as const, names: ["web_search"], inProcessMs: 3, rssBytes: 1 };
+        }),
       });
-      const manifest: LocalModelManifest = { id: "test", files };
-      const { deps, ranker: r } = ranker({
-        dir,
-        verifyFiles: (target) => verifyModelFiles(manifest, target),
-      });
-      expect(await r.prepare()).toMatchObject({ state: "failed", failure: "hash-mismatch" });
-      expect(await r.select({ query: "q", tools: TOOLS, k: 1 })).toMatchObject({
+      const { ranker: r } = ranker({ backend, deadlineMs: 75, now: () => clock });
+      await r.prepare();
+      expect(await select(r)).toMatchObject({
         tools: ALL,
-        filtered: false,
-        fallback: "hash-mismatch",
+        fallback: "timeout",
+        elapsedMs: 80,
+        inProcessMs: 3,
       });
-      expect(existsSync(join(dir, bad))).toBe(false);
-      expect(deps.loadRuntime).not.toHaveBeenCalled();
-    });
-
-    it.each(
-      names,
-    )("server serves a wrong %s: the download is rejected before anything loads", async (bad) => {
-      const dir = tempDir();
-      const files = names.map((name) => ({
-        name,
-        sha256: createHash("sha256").update(`content of ${name}`).digest("hex"),
-        role: "model" as const,
-      }));
-      const manifest: LocalModelManifest = { id: "test", files };
-      const fetchImpl = (async (url: string | URL | Request) => {
-        const name = String(url).split("/").pop() as string;
-        return new Response(name === bad ? "evil" : `content of ${name}`, { status: 200 });
-      }) as typeof fetch;
-      const { deps, ranker: r } = ranker({
-        dir,
-        ensureFiles: (target, baseUrl) =>
-          ensureModelFiles({
-            manifest,
-            dir: target,
-            baseUrl,
-            fetchImpl,
-            sleep: async () => undefined,
-          }),
-        verifyFiles: (target) => verifyModelFiles(manifest, target),
-      });
-      expect(await r.prepare()).toMatchObject({ state: "failed", failure: "hash-mismatch" });
-      expect((await r.select({ query: "q", tools: TOOLS, k: 1 })).tools).toEqual(ALL);
-      expect(existsSync(join(dir, bad))).toBe(false);
-      expect(existsSync(join(dir, `${bad}.partial`))).toBe(false);
-      expect(deps.loadRuntime).not.toHaveBeenCalled();
     });
   });
 
-  it("onnxruntime fails to load: fallback 'load-failed'", async () => {
-    const { ranker: r } = ranker({
-      loadRuntime: async () => {
-        throw new LocalModelError("load-failed", "dlopen failed");
-      },
+  describe("Debbie 2: no overlapping selections", () => {
+    it("while one selection runs in the model process, the next falls back at once without starting another", async () => {
+      let release: (reply: Reply) => void = () => undefined;
+      const backend = fakeBackend({
+        select: vi.fn(
+          () =>
+            new Promise<Reply>((resolve) => {
+              release = resolve;
+            }),
+        ),
+      });
+      const { ranker: r } = ranker({ backend, deadlineMs: 20 });
+      await r.prepare();
+      // First one misses the main deadline but keeps running in the model process.
+      expect(await select(r)).toMatchObject({ fallback: "timeout" });
+      expect(await select(r)).toMatchObject({ tools: ALL, filtered: false, fallback: "busy" });
+      expect(await select(r)).toMatchObject({ fallback: "busy" });
+      expect(backend.select).toHaveBeenCalledTimes(1);
+      release({ status: "ok", names: ["web_search"], inProcessMs: 5, rssBytes: 1 });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      vi.mocked(backend.select).mockResolvedValueOnce({
+        status: "ok",
+        names: ["web_search"],
+        inProcessMs: 5,
+        rssBytes: 1,
+      });
+      expect(await select(r)).toMatchObject({ filtered: true });
+      expect(backend.select).toHaveBeenCalledTimes(2);
     });
-    expect(await r.prepare()).toMatchObject({ state: "failed", failure: "load-failed" });
-    expect(await r.select({ query: "q", tools: TOOLS, k: 1 })).toMatchObject({
-      tools: ALL,
-      fallback: "load-failed",
+
+    it("a selection the host still counts as running (backend.busy) also falls back", async () => {
+      const backend = fakeBackend({ busy: vi.fn(() => true) });
+      const { ranker: r } = ranker({ backend });
+      await r.prepare();
+      expect(await select(r)).toMatchObject({ fallback: "busy" });
+      expect(backend.select).not.toHaveBeenCalled();
     });
   });
 
-  it("the model fails to load (bad graph, out of memory…): fallback 'load-failed'", async () => {
-    const { ranker: r } = ranker({
-      loadEmbedder: async () => {
-        throw new Error("Protobuf parsing failed");
-      },
+  describe("Debbie 1: failed recovers, hash-mismatch stays terminal", () => {
+    it("download-failed (app opened offline) retries with backoff until it succeeds", async () => {
+      vi.useFakeTimers();
+      let clock = 0;
+      const ensureFiles = vi
+        .fn<EnsureFiles>()
+        .mockRejectedValueOnce(new LocalModelError("download-failed", "offline"))
+        .mockRejectedValueOnce(new LocalModelError("download-failed", "offline"))
+        .mockResolvedValue(undefined);
+      const { ranker: r, backend } = ranker({
+        ensureFiles,
+        retryDelaysMs: [1000, 5000],
+        now: () => clock,
+      });
+      await r.prepare();
+      expect(r.status()).toMatchObject({
+        state: "failed",
+        failure: "download-failed",
+        retryAt: 1000,
+      });
+      // A turn during backoff: all tools, no extra attempt before retryAt.
+      expect(await select(r)).toMatchObject({ fallback: "download-failed" });
+      expect(ensureFiles).toHaveBeenCalledTimes(1);
+      clock = 1000;
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(ensureFiles).toHaveBeenCalledTimes(2);
+      expect(r.status()).toMatchObject({ state: "failed", retryAt: 6000 });
+      clock = 6000;
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(ensureFiles).toHaveBeenCalledTimes(3);
+      expect(r.status()).toMatchObject({ state: "ready" });
+      expect(backend.load).toHaveBeenCalledTimes(1);
     });
+
+    it("load-failed also retries", async () => {
+      vi.useFakeTimers();
+      let clock = 0;
+      const backend = fakeBackend();
+      vi.mocked(backend.load).mockRejectedValueOnce(new LocalModelError("load-failed", "bad"));
+      const { ranker: r } = ranker({ backend, retryDelaysMs: [100], now: () => clock });
+      await r.prepare();
+      expect(r.status()).toMatchObject({ state: "failed", failure: "load-failed", retryAt: 100 });
+      clock = 100;
+      await vi.advanceTimersByTimeAsync(100);
+      expect(r.status()).toMatchObject({ state: "ready" });
+    });
+
+    it("hash-mismatch is terminal: no timer, no retry from turns, until the user turns it on again", async () => {
+      vi.useFakeTimers();
+      let clock = 0;
+      const ensureFiles = vi
+        .fn<EnsureFiles>()
+        .mockRejectedValueOnce(new LocalModelError("hash-mismatch", "sha256 differs"))
+        .mockResolvedValue(undefined);
+      const { ranker: r } = ranker({ ensureFiles, retryDelaysMs: [10], now: () => clock });
+      await r.prepare();
+      expect(r.status()).toEqual({
+        state: "failed",
+        failure: "hash-mismatch",
+        message: "sha256 differs",
+      });
+      clock = 3_600_000;
+      await vi.advanceTimersByTimeAsync(3_600_000);
+      expect(await select(r)).toMatchObject({ fallback: "hash-mismatch" });
+      await r.prepare();
+      expect(ensureFiles).toHaveBeenCalledTimes(1);
+      r.reset();
+      await r.prepare();
+      expect(ensureFiles).toHaveBeenCalledTimes(2);
+      expect(r.status()).toMatchObject({ state: "ready" });
+    });
+  });
+
+  it("verifies the 390 MB once: a respawn after an idle shutdown reloads without re-hashing", async () => {
+    const { ranker: r, backend, ensureFiles } = ranker();
     await r.prepare();
-    expect((await r.select({ query: "q", tools: TOOLS, k: 1 })).fallback).toBe("load-failed");
+    backend.die();
+    r.onBackendExit("idle");
+    expect(r.status()).toEqual({ state: "stopped" });
+    expect(await select(r)).toMatchObject({ fallback: "not-ready" });
+    await r.prepare();
+    expect(ensureFiles).toHaveBeenCalledTimes(1);
+    expect(backend.load).toHaveBeenCalledTimes(2);
+    expect(await select(r)).toMatchObject({ filtered: true });
   });
 
-  it(`selection over ${TOOL_SELECTION_TIMEOUT_MS} ms: fallback 'timeout'`, async () => {
-    let slow = false;
-    const model = fakeEmbedder();
-    const embed = model.embed;
-    model.embed = async (text, max) => {
-      if (slow) await new Promise((resolve) => setTimeout(resolve, TOOL_SELECTION_TIMEOUT_MS + 40));
-      return embed(text, max);
-    };
-    const { ranker: r } = ranker({ loadEmbedder: async () => model });
-    await warm(r);
-    slow = true;
-    const selection = await r.select({ query: "search the web", tools: TOOLS, k: 1 });
-    expect(selection).toMatchObject({ tools: ALL, filtered: false, fallback: "timeout" });
-  });
-
-  it("a selection that returns late by the clock (event loop stall) also counts as a timeout", async () => {
+  it("crash/hang: respawn on the next use; three inside the window back off", async () => {
+    vi.useFakeTimers();
     let clock = 0;
-    const { ranker: r } = ranker({ now: () => clock });
-    await warm(r);
-    clock = 0;
-    const pending = r.select({ query: "search the web", tools: TOOLS, k: 1 });
-    clock = TOOL_SELECTION_TIMEOUT_MS + 1;
-    expect((await pending).fallback).toBe("timeout");
-  });
-
-  it("an inference error: fallback, never a throw", async () => {
-    const model = fakeEmbedder();
-    const { ranker: r } = ranker({ loadEmbedder: async () => model });
-    await warm(r);
-    model.embed = async () => {
-      throw new LocalModelError("inference-failed", "boom");
-    };
-    expect((await r.select({ query: "q", tools: TOOLS, k: 1 })).fallback).toBe("inference-failed");
-  });
-
-  it("not ready yet (first call, model loading): fallback and load in the background", async () => {
-    const { deps, ranker: r } = ranker();
-    expect((await r.select({ query: "q", tools: TOOLS, k: 1 })).fallback).toBe("not-ready");
+    const { ranker: r, backend } = ranker({ retryDelaysMs: [1000], now: () => clock });
     await r.prepare();
-    expect(deps.loadEmbedder).toHaveBeenCalledTimes(1);
-  });
-
-  it("Intel macs have no onnxruntime binary: unsupported, nothing to load", () => {
-    expect(onnxRuntimeSupported("darwin", "x64")).toBe(false);
-    expect(onnxRuntimeSupported("darwin", "arm64")).toBe(true);
-    expect(onnxRuntimeSupported("win32", "x64")).toBe(true);
-    expect(onnxRuntimeSupported("linux", "x64")).toBe(true);
-  });
-});
-
-describe("ready", () => {
-  it("core tools + top-k by cosine, in the input order", async () => {
-    const { ranker: r } = ranker();
-    await warm(r);
-    const selection = await r.select({
-      query: "search the web for news",
-      tools: TOOLS,
-      k: 2,
-      core: ["read_file"],
-    });
-    expect(selection.filtered).toBe(true);
-    expect(selection.tools).toEqual(["read_file", "web_search", "browser_open"]);
+    for (const reason of ["crashed", "hung"] as const) {
+      backend.die();
+      r.onBackendExit(reason);
+      expect(r.status()).toEqual({ state: "stopped" });
+      await r.prepare();
+      expect(r.status()).toMatchObject({ state: "ready" });
+    }
+    backend.die();
+    r.onBackendExit("crashed");
+    expect(r.status()).toMatchObject({ state: "failed", failure: "crashed", retryAt: 1000 });
+    expect(await select(r)).toMatchObject({ fallback: "crashed" });
+    clock = 1000;
+    await vi.advanceTimersByTimeAsync(1000);
     expect(r.status()).toMatchObject({ state: "ready" });
+    expect(backend.load).toHaveBeenCalledTimes(4);
+  });
+
+  it("progress: verifying first, downloading once bytes move; cancel keeps the partial and returns to idle", async () => {
+    const states: string[] = [];
+    let seen: AbortSignal | undefined;
+    const ensureFiles: EnsureFiles = (_dir, _url, { signal, onProgress }) =>
+      new Promise((_resolve, reject) => {
+        seen = signal;
+        onProgress(1000, manifestBytes());
+        signal.addEventListener("abort", () => reject(signal.reason));
+      });
+    const { ranker: r, backend } = ranker({
+      ensureFiles,
+      onChange: (status) => states.push(status.state),
+    });
+    const pending = r.prepare();
+    await Promise.resolve();
+    expect(r.status()).toEqual({
+      state: "downloading",
+      receivedBytes: 1000,
+      totalBytes: manifestBytes(),
+    });
+    r.cancel();
+    await pending;
+    expect(seen?.aborted).toBe(true);
+    expect(r.status()).toEqual({ state: "idle" });
+    expect(states).toEqual(["verifying", "downloading", "idle"]);
+    expect(backend.load).not.toHaveBeenCalled();
+  });
+
+  it("warm: docs are embedded once loaded, and again after a respawn", async () => {
+    const { ranker: r, backend } = ranker();
+    r.warm(TOOLS);
+    expect(backend.warm).not.toHaveBeenCalled();
+    await r.prepare();
+    expect(backend.warm).toHaveBeenCalledWith(TOOLS);
+    backend.die();
+    r.onBackendExit("idle");
+    await r.prepare();
+    expect(backend.warm).toHaveBeenCalledTimes(2);
+  });
+
+  it("release stops the model process and leaves verified files reusable", async () => {
+    const { ranker: r, backend, ensureFiles } = ranker();
+    await r.prepare();
+    r.release();
+    expect(backend.release).toHaveBeenCalled();
+    expect(r.status()).toEqual({ state: "stopped" });
+    await r.prepare();
+    expect(ensureFiles).toHaveBeenCalledTimes(1);
   });
 });

@@ -183,6 +183,8 @@ const {
 const agentEventStore = await import("./agent-event-store");
 const modelService = await import("./model-service");
 const { toolRegistry } = await import("./tools/registry");
+const { setTurnToolFilter, CORE_TOOL_NAMES } = await import("../local-models/turn-tool-filter");
+const { TOOLS_EXPAND_TOOL_NAME } = await import("../../shared/tools");
 const { registerSpillTools, RETRIEVE_SPILL_TOOL_NAME } = await import("./tools/spill-tools");
 const { deleteAgentSessionTree, setAgentSessionArchivedTree } = await import("./session-lifecycle");
 const contextPlanner = await import("../context/context-planner");
@@ -599,7 +601,8 @@ function insertWorkspace(workspaceId: string): void {
   getDatabase()
     .prepare(
       `insert into workspaces (id, root_path, display_name, is_git_repository, last_opened_at, created_at)
-       values (?, ?, ?, ?, ?, ?)`,
+       values (?, ?, ?, ?, ?, ?)
+       on conflict(id) do nothing`,
     )
     .run(workspaceId, cwd, "repo", 1, now, now);
 }
@@ -13093,7 +13096,15 @@ describe("PiSdkRuntime per-request token stability", () => {
     });
     const runtime = new PiSdkRuntime();
     const sessionId = `token-stability-${crypto.randomUUID()}`;
-    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    // A second run in the same test reuses the workspace (one row per root path).
+    const existing = getDatabase()
+      .prepare("select id from workspaces where root_path = ?")
+      .get(cwd) as { id: string } | undefined;
+    insertSession(
+      sessionId,
+      existing?.id ?? `workspace-${crypto.randomUUID()}`,
+      join(userData, "missing.jsonl"),
+    );
     const lastRequestOfTurn: Request[] = [];
     for (const [index, mode] of modes.entries()) {
       beforeTurn?.(index + 1, harness);
@@ -13272,4 +13283,160 @@ describe("PiSdkRuntime per-request token stability", () => {
     }
     await runtime.releaseRuntime(sessionId);
   }, 30_000);
+
+  describe("local tool filter (RERANK-03), synthetic sessions", () => {
+    type FakeSelect = (input: {
+      query: string;
+      tools: readonly { name: string; doc: string }[];
+      k: number;
+    }) => Promise<{ tools: string[]; filtered: boolean; fallback?: "timeout" }>;
+    const pools: Array<readonly { name: string; doc: string }[]> = [];
+    const warmed: Array<readonly { name: string; doc: string }[]> = [];
+    function installFilter(select: FakeSelect, enabled = true) {
+      setTurnToolFilter({
+        enabled: () => enabled,
+        select: vi.fn(async (input) => {
+          pools.push(input.tools);
+          return select(input);
+        }),
+        warm: (tools) => warmed.push(tools),
+      });
+    }
+    /** The ranker's job, faked: the last 8 tools of the pool (deterministic, never core). */
+    const lastEight: FakeSelect = async ({ tools, k }) => ({
+      tools: tools.slice(-k).map((tool) => tool.name),
+      filtered: true,
+    });
+    const names = (request?: Request) =>
+      (request?.toolsJson ?? []).map((json) => (JSON.parse(json) as { name: string }).name);
+    const bytes = (request?: Request) =>
+      (request?.toolsJson ?? []).reduce((sum, json) => sum + json.length, 0);
+
+    afterEach(() => {
+      setTurnToolFilter(null);
+      pools.length = 0;
+      warmed.length = 0;
+    });
+
+    it("off (default): the tools array is exactly today's, with no tools_expand", async () => {
+      const baseline = await runTurns(["build", "build"]);
+      installFilter(lastEight, false);
+      const off = await runTurns(["build", "build"]);
+      expect(names(off.lastRequestOfTurn[0])).not.toContain(TOOLS_EXPAND_TOOL_NAME);
+      expect(off.lastRequestOfTurn[0]?.toolsJson).toEqual(baseline.lastRequestOfTurn[0]?.toolsJson);
+      expect(off.lastRequestOfTurn[1]?.toolsJson).toEqual(baseline.lastRequestOfTurn[1]?.toolsJson);
+      expect(pools).toHaveLength(0);
+      await baseline.runtime.releaseRuntime(baseline.sessionId);
+      await off.runtime.releaseRuntime(off.sessionId);
+    }, 30_000);
+
+    it("on: sends core + tools_expand + the top 8 only, and far fewer tool bytes", async () => {
+      const baseline = await runTurns(["build"]);
+      installFilter(lastEight);
+      const on = await runTurns(["build"]);
+      const all = names(baseline.lastRequestOfTurn[0]);
+      const sent = names(on.lastRequestOfTurn[0]);
+      const pool = pools[0] ?? [];
+      const core = CORE_TOOL_NAMES.filter((name) => all.includes(name));
+      expect(sent).toContain(TOOLS_EXPAND_TOOL_NAME);
+      expect(new Set(sent)).toEqual(
+        new Set([...core, TOOLS_EXPAND_TOOL_NAME, ...pool.slice(-8).map((tool) => tool.name)]),
+      );
+      expect(sent).toHaveLength(core.length + 1 + 8);
+      // The ranked pool is every allowed non-core tool, as doc_short ("name: first sentence").
+      expect(pool.map((tool) => tool.name).sort()).toEqual(
+        all.filter((name) => !core.includes(name as never)).sort(),
+      );
+      for (const tool of pool) {
+        expect(tool.doc.startsWith(`${tool.name}: `)).toBe(true);
+        expect(tool.doc.length).toBeLessThanOrEqual(tool.name.length + 2 + 200);
+      }
+      expect(bytes(on.lastRequestOfTurn[0])).toBeLessThan(
+        bytes(baseline.lastRequestOfTurn[0]) * 0.6,
+      );
+      // Docs were warmed at session creation, ahead of the first turn.
+      expect(warmed.length).toBeGreaterThan(0);
+      await baseline.runtime.releaseRuntime(baseline.sessionId);
+      await on.runtime.releaseRuntime(on.sessionId);
+    }, 30_000);
+
+    it("grow-only: later turns keep the first turn's array byte-stable and do not rank again", async () => {
+      installFilter(lastEight);
+      const { lastRequestOfTurn, runtime, sessionId } = await runTurns(["build", "build", "build"]);
+      expect(pools).toHaveLength(1);
+      expect(lastRequestOfTurn[1]?.toolsJson).toEqual(lastRequestOfTurn[0]?.toolsJson);
+      expect(lastRequestOfTurn[2]?.toolsJson).toEqual(lastRequestOfTurn[0]?.toolsJson);
+      await runtime.releaseRuntime(sessionId);
+    }, 30_000);
+
+    it("tools_expand: the next step of the same turn sees every tool, appended after the narrowed set", async () => {
+      const baseline = await runTurns(["build"]);
+      const all = names(baseline.lastRequestOfTurn[0]).filter(
+        (name) => name !== TOOLS_EXPAND_TOOL_NAME,
+      );
+      installFilter(lastEight);
+      const {
+        lastRequestOfTurn,
+        requests: captured,
+        runtime,
+        sessionId,
+      } = await runTurns(["build", "build"], (turn, offline) => {
+        if (turn === 1)
+          offline.requestToolSequence([
+            { name: TOOLS_EXPAND_TOOL_NAME, input: { reason: "need git" } },
+          ]);
+        else offline.requestToolSequence([]);
+      });
+      const first = captured[0];
+      const afterExpand = captured[1];
+      expect(names(first)).toHaveLength(CORE_TOOL_NAMES.length + 1 + 8);
+      // Prefix kept (prompt cache), everything else appended.
+      expect(afterExpand?.toolsJson.slice(0, first?.toolsJson.length)).toEqual(first?.toolsJson);
+      expect(new Set(names(afterExpand))).toEqual(new Set([...all, TOOLS_EXPAND_TOOL_NAME]));
+      expect(lastRequestOfTurn[1]?.toolsJson).toEqual(afterExpand?.toolsJson);
+      await baseline.runtime.releaseRuntime(baseline.sessionId);
+      await runtime.releaseRuntime(sessionId);
+    }, 30_000);
+
+    it("fallback (selection late or failed): every tool, tools_expand included", async () => {
+      const baseline = await runTurns(["build"]);
+      for (const select of [
+        async ({ tools }: { tools: readonly { name: string }[] }) => ({
+          tools: tools.map((tool) => tool.name),
+          filtered: false,
+          fallback: "timeout" as const,
+        }),
+        async () => {
+          throw new Error("model process gone");
+        },
+      ] as FakeSelect[]) {
+        installFilter(select);
+        const run = await runTurns(["build"]);
+        expect(new Set(names(run.lastRequestOfTurn[0]))).toEqual(
+          new Set([...names(baseline.lastRequestOfTurn[0]), TOOLS_EXPAND_TOOL_NAME]),
+        );
+        await run.runtime.releaseRuntime(run.sessionId);
+        setTurnToolFilter(null);
+      }
+      await baseline.runtime.releaseRuntime(baseline.sessionId);
+    }, 30_000);
+
+    it("subagents are never filtered and never get tools_expand", () => {
+      installFilter(lastEight);
+      new PiSdkRuntime();
+      const base = {
+        id: `child-${crypto.randomUUID()}`,
+        workspaceId: "w",
+        title: "child",
+        cwd,
+        status: "idle" as const,
+        createdAt: "",
+        updatedAt: "",
+      };
+      expect(activeToolNamesForSession(base, "chat")).toContain(TOOLS_EXPAND_TOOL_NAME);
+      expect(
+        activeToolNamesForSession({ ...base, parentSessionId: "parent" }, "chat"),
+      ).not.toContain(TOOLS_EXPAND_TOOL_NAME);
+    });
+  });
 });

@@ -19,6 +19,7 @@ import { PROVIDER_UI_TEXT_EN, PROVIDER_UI_TEXT_PT } from "./settings-text/provid
 import { PROVIDERS_TEXT_EN, PROVIDERS_TEXT_PT } from "./settings-text/providers";
 import { QUESTION_TEXT_EN, QUESTION_TEXT_PT } from "./settings-text/question";
 import { SKILLS_RULES_TEXT_EN, SKILLS_RULES_TEXT_PT } from "./settings-text/skills-rules";
+import { TOOL_FILTER_TEXT_EN, TOOL_FILTER_TEXT_PT } from "./settings-text/tool-filter";
 import { WINDOW_TEXT_EN, WINDOW_TEXT_PT } from "./settings-text/window";
 
 export const SETTINGS_TEXT_EN = {
@@ -33,6 +34,7 @@ export const SETTINGS_TEXT_EN = {
   ...INTEGRATIONS_TEXT_EN,
   ...SKILLS_RULES_TEXT_EN,
   ...QUESTION_TEXT_EN,
+  ...TOOL_FILTER_TEXT_EN,
 } as const;
 
 export type SettingsTextKey = keyof typeof SETTINGS_TEXT_EN;
@@ -49,6 +51,7 @@ export const SETTINGS_TEXT_PT: Record<SettingsTextKey, string> = {
   ...INTEGRATIONS_TEXT_PT,
   ...SKILLS_RULES_TEXT_PT,
   ...QUESTION_TEXT_PT,
+  ...TOOL_FILTER_TEXT_PT,
 };
 
 /** Tables per catalog locale. Partial at lookup time: a missing key falls back to English alone. */

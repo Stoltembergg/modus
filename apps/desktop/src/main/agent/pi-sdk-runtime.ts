@@ -37,7 +37,12 @@ import type {
 } from "../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
 import { buildPlanMessage } from "../../shared/plan-message";
-import { SUBAGENT_TOOL_NAMES, type ToolProfileName, WAIT_TOOL_NAME } from "../../shared/tools";
+import {
+  SUBAGENT_TOOL_NAMES,
+  TOOLS_EXPAND_TOOL_NAME,
+  type ToolProfileName,
+  WAIT_TOOL_NAME,
+} from "../../shared/tools";
 import {
   agentChatPersonaPrompt,
   getAgent,
@@ -69,6 +74,14 @@ import {
   requestQuestions,
 } from "../interaction/question-broker";
 import { IPC_CHANNELS } from "../ipc/channels";
+import type { ToolSelection } from "../local-models/tool-ranker";
+import {
+  CORE_TOOL_NAMES,
+  getTurnToolFilter,
+  TOOL_FILTER_TOP_K,
+  toolDocShort,
+  turnToolFilterEnabled,
+} from "../local-models/turn-tool-filter";
 import { listAllowlistedMcpToolNames } from "../mcp/mcp-service";
 import {
   finalizeProjectMemoryRun,
@@ -301,6 +314,7 @@ import {
   runWithAgentToolContext,
   setAgentToolContext,
 } from "./tools/tool-context";
+import { registerToolsExpandTool } from "./tools/tools-expand-tool";
 import { registerVisualTools, VISUAL_AUTHORING_GUIDELINES } from "./tools/visual-tools";
 import { formatWaitedDuration, registerWaitTools } from "./tools/wait-tools";
 import { registerWebTools } from "./tools/web-tools";
@@ -888,6 +902,9 @@ export function activeToolNamesForSession(
       if (isGroupMailboxToolName(name)) disabled.add(name);
     }
   }
+  // RERANK-03: the meta-tool exists only while the local tool filter is on, and
+  // only for top-level sessions (subagents are not filtered).
+  if (info.parentSessionId || !turnToolFilterEnabled()) disabled.add(TOOLS_EXPAND_TOOL_NAME);
   if (info.parentSessionId) {
     // Parent-only orchestration: children neither spawn peers nor wait on them.
     for (const name of SUBAGENT_TOOL_NAMES) disabled.add(name);
@@ -924,6 +941,27 @@ export function growOnlyToolNames(
   if (!previous) return [...allowed];
   const seen = new Set(previous);
   return [...previous, ...allowed.filter((name) => !seen.has(name))];
+}
+
+/**
+ * RERANK-03 local tool filter decision for one turn. "off": the filter is off
+ * (today's behaviour, every allowed tool). "fallback": on, but the selection
+ * failed or was late, so every allowed tool. "on": core tools + tools_expand +
+ * `selected` (the ranked top-k, only on the session's first turn).
+ */
+export type TurnToolDecision =
+  | { mode: "off" }
+  | { mode: "fallback"; selection?: ToolSelection }
+  | { mode: "on"; selected: readonly string[]; selection?: ToolSelection };
+
+/** Tools a turn proposes to expose (before growOnlyToolNames). */
+export function filteredTurnToolNames(
+  allowed: readonly string[],
+  decision: TurnToolDecision,
+): string[] {
+  if (decision.mode !== "on") return [...allowed];
+  const keep = new Set<string>([...CORE_TOOL_NAMES, TOOLS_EXPAND_TOOL_NAME, ...decision.selected]);
+  return allowed.filter((name) => keep.has(name));
 }
 
 /** What the current turn may call; see disallowedToolReason. */
@@ -1005,6 +1043,8 @@ export class PiSdkRuntime implements AgentRuntime {
   private stablePromptSections = new Map<string, string>();
   /** Grow-only tool names exposed to the model, per session (see growOnlyToolNames). */
   private exposedToolNames = new Map<string, string[]>();
+  /** RERANK-03: the first-turn selection per session (diagnostics and tests). */
+  private toolFilterSelections = new Map<string, ToolSelection>();
   /** Tools the current turn may actually call (mode, group membership, subagent limits). */
   private turnToolLimits = new Map<string, TurnToolLimits>();
   private turnSettledListeners = new Set<(event: TurnSettledEvent) => void>();
@@ -1075,6 +1115,9 @@ export class PiSdkRuntime implements AgentRuntime {
     registerSpillTools();
     registerSubagentTools(this);
     registerWaitTools(this);
+    registerToolsExpandTool({
+      expandSessionTools: (sessionId) => this.expandSessionTools(sessionId),
+    });
     registerGroupTools();
     registerGroupMailboxTools();
 
@@ -3667,6 +3710,7 @@ export class PiSdkRuntime implements AgentRuntime {
       manualCompactionInProgress: false,
     };
     this.sessions.set(params.info.id, runtimeSession);
+    this.warmToolFilter(runtimeSession);
     publishContextUsage();
     return runtimeSession;
   }
@@ -4143,7 +4187,9 @@ export class PiSdkRuntime implements AgentRuntime {
       // Per-turn mode decides what the turn may call (plan = read-only research +
       // plan artifacts; build = full chat tools). The exposed set is grow-only so
       // the prompt cache survives mode switches; disallowed calls are refused.
-      this.applyTurnToolSet(runtimeSession, profile);
+      // RERANK-03: with the local tool filter on, the first turn narrows it.
+      const toolDecision = await this.decideTurnToolFilter(runtimeSession, profile, input.message);
+      this.applyTurnToolSet(runtimeSession, profile, toolDecision);
 
       // Per-turn model + thinking: the composer's current selection travels with
       // the prompt and is applied authoritatively here, so the turn never runs
@@ -5304,10 +5350,17 @@ export class PiSdkRuntime implements AgentRuntime {
    * record which of those tools this turn may call. setActiveToolsByName also
    * rebuilds the system prompt, which stays byte-identical while the set does.
    */
-  private applyTurnToolSet(runtimeSession: SdkRuntimeSession, profile: ToolProfileName): void {
+  private applyTurnToolSet(
+    runtimeSession: SdkRuntimeSession,
+    profile: ToolProfileName,
+    decision: TurnToolDecision = this.laterTurnToolDecision(runtimeSession),
+  ): void {
     const sessionId = runtimeSession.info.id;
     const allowed = activeToolNamesForSession(runtimeSession.info, profile);
-    const exposed = growOnlyToolNames(this.exposedToolNames.get(sessionId), allowed);
+    const exposed = growOnlyToolNames(
+      this.exposedToolNames.get(sessionId),
+      filteredTurnToolNames(allowed, decision),
+    );
     this.exposedToolNames.set(sessionId, exposed);
     this.turnToolLimits.set(sessionId, {
       profile,
@@ -5318,6 +5371,86 @@ export class PiSdkRuntime implements AgentRuntime {
       ),
     });
     runtimeSession.session.setActiveToolsByName(exposed);
+  }
+
+  /** RERANK-03: embed this session's tool docs ahead of its first turn (no-op when off). */
+  private warmToolFilter(runtimeSession: SdkRuntimeSession): void {
+    const filter = getTurnToolFilter();
+    if (!filter?.enabled() || runtimeSession.info.parentSessionId) return;
+    try {
+      const core = new Set<string>([...CORE_TOOL_NAMES, TOOLS_EXPAND_TOOL_NAME]);
+      const allowed = new Set(
+        activeToolNamesForSession(runtimeSession.info, runtimeSession.profile),
+      );
+      filter.warm(
+        runtimeSession.session
+          .getAllTools()
+          .filter((tool) => allowed.has(tool.name) && !core.has(tool.name))
+          .map((tool) => ({ name: tool.name, doc: toolDocShort(tool.name, tool.description) })),
+      );
+    } catch {
+      // warming is best-effort
+    }
+  }
+
+  /** A turn after the first: the filter adds no new ranked tools (core may still grow). */
+  private laterTurnToolDecision(runtimeSession: SdkRuntimeSession): TurnToolDecision {
+    return turnToolFilterEnabled() && !runtimeSession.info.parentSessionId
+      ? { mode: "on", selected: [] }
+      : { mode: "off" };
+  }
+
+  /**
+   * RERANK-03: on a top-level session's first turn with the filter on, rank the
+   * non-core tools for the user's message in the model process. Never throws
+   * and never waits past the main-side deadline: any failure is "fallback"
+   * (every tool). Later turns keep the first decision (grow-only).
+   */
+  private async decideTurnToolFilter(
+    runtimeSession: SdkRuntimeSession,
+    profile: ToolProfileName,
+    message: string,
+  ): Promise<TurnToolDecision> {
+    const filter = getTurnToolFilter();
+    if (!filter?.enabled() || runtimeSession.info.parentSessionId) return { mode: "off" };
+    const sessionId = runtimeSession.info.id;
+    if (this.exposedToolNames.has(sessionId)) return { mode: "on", selected: [] };
+    try {
+      const allowed = activeToolNamesForSession(runtimeSession.info, profile);
+      const core = new Set<string>([...CORE_TOOL_NAMES, TOOLS_EXPAND_TOOL_NAME]);
+      const described = new Map(
+        runtimeSession.session.getAllTools().map((tool) => [tool.name, tool.description]),
+      );
+      const pool = allowed
+        .filter((name) => !core.has(name))
+        .map((name) => ({ name, doc: toolDocShort(name, described.get(name)) }));
+      const selection = await filter.select({ query: message, tools: pool, k: TOOL_FILTER_TOP_K });
+      this.toolFilterSelections.set(sessionId, selection);
+      return selection.filtered
+        ? { mode: "on", selected: selection.tools, selection }
+        : { mode: "fallback", selection };
+    } catch {
+      return { mode: "fallback" };
+    }
+  }
+
+  /** tools_expand: expose every tool the current turn allows, for the rest of the session. */
+  expandSessionTools(sessionId: string): string[] {
+    const runtimeSession = this.sessions.get(sessionId);
+    const limits = this.turnToolLimits.get(sessionId);
+    if (!runtimeSession || !limits) return [];
+    const previous = this.exposedToolNames.get(sessionId) ?? [];
+    const exposed = growOnlyToolNames(previous, [...limits.allowed]);
+    const added = exposed.slice(previous.length);
+    if (added.length === 0) return [];
+    this.exposedToolNames.set(sessionId, exposed);
+    runtimeSession.session.setActiveToolsByName(exposed);
+    return added;
+  }
+
+  /** Test/diagnostic hook: the RERANK-03 first-turn selection of a session. */
+  toolFilterSelectionFor(sessionId: string): ToolSelection | undefined {
+    return this.toolFilterSelections.get(sessionId);
   }
 
   /**
@@ -5886,6 +6019,7 @@ export class PiSdkRuntime implements AgentRuntime {
     await this.disposeReaWorker(sessionId, generation);
     await this.disposeSessionOnly(sessionId);
     this.exposedToolNames.delete(sessionId);
+    this.toolFilterSelections.delete(sessionId);
   }
 
   async releaseRuntime(sessionId: string): Promise<void> {

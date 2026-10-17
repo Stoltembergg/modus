@@ -124,6 +124,7 @@ import type {
   WorkspaceInfo,
 } from "../shared/contracts";
 import type { StartupMetricInput } from "../shared/startup";
+import type { ToolFilterApi } from "../shared/tool-filter";
 import type { UiLanguagePreference, UiLanguageState } from "../shared/ui-language";
 import type { WindowChromeMode } from "../shared/window-appearance";
 
@@ -185,6 +186,8 @@ export type ModusApi = {
       set(preference: UiLanguagePreference): Promise<UiLanguageState>;
       onChange(handler: (state: UiLanguageState) => void): () => void;
     };
+    /** Local tool filter (RERANK-03). Optional chaining safe: renderer must handle it being undefined. */
+    toolFilter?: ToolFilterApi;
     version(): Promise<string>;
     securityState(): Promise<SecurityState>;
     startupMetric(input: StartupMetricInput): Promise<void>;

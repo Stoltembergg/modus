@@ -14,6 +14,7 @@ import type {
   UpdateRestoreUiState,
   UpdateState,
 } from "../shared/contracts";
+import type { ToolFilterState } from "../shared/tool-filter";
 import type { UiLanguageState } from "../shared/ui-language";
 import { resolveWindowAppearance } from "../shared/window-appearance";
 import type { ModusApi, SecurityState } from "./types";
@@ -57,6 +58,13 @@ ipcRenderer.on("ui-language:event", (_event: IpcRendererEvent, state: UiLanguage
   if (typeof state?.intlLocale !== "string") return;
   for (const listener of uiLanguageListeners) listener(state);
 });
+
+const toolFilterListeners = new Set<(state: ToolFilterState) => void>();
+
+ipcRenderer.on("tool-filter:event", (_event: IpcRendererEvent, state: ToolFilterState) => {
+  if (!state || typeof state !== "object") return;
+  for (const listener of toolFilterListeners) listener(state);
+});
 let nativeGlassAvailable = initialAppearance?.glass ?? windowAppearance.glass === "native";
 const nativeGlassListeners = new Set<(available: boolean) => void>();
 const appearanceListeners = new Set<(state: AppearanceState) => void>();
@@ -96,6 +104,17 @@ const api: ModusApi = {
       onChange(handler) {
         uiLanguageListeners.add(handler);
         return () => uiLanguageListeners.delete(handler);
+      },
+    },
+    toolFilter: {
+      get: () => ipcRenderer.invoke("tool-filter:get") as Promise<ToolFilterState>,
+      enable: () => ipcRenderer.invoke("tool-filter:enable") as Promise<ToolFilterState>,
+      disable: () => ipcRenderer.invoke("tool-filter:disable") as Promise<ToolFilterState>,
+      cancelDownload: () =>
+        ipcRenderer.invoke("tool-filter:cancel-download") as Promise<ToolFilterState>,
+      onChange(handler) {
+        toolFilterListeners.add(handler);
+        return () => toolFilterListeners.delete(handler);
       },
     },
     version: () => ipcRenderer.invoke("app:version") as Promise<string>,

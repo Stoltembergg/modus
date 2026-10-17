@@ -361,6 +361,7 @@ import {
   workspacePinSchema,
   workspaceRenameSchema,
 } from "./schemas";
+import { registerToolFilterIpcHandlers, type ToolFilterIpcController } from "./tool-filter-ipc";
 import { assertTrustedSender } from "./trusted-sender";
 import { registerUiLanguageIpcHandlers } from "./ui-language-ipc";
 import { registerUpdateIpcHandlers } from "./update-ipc";
@@ -413,11 +414,13 @@ export function registerAppIpc({
   startupTimeline,
   appearance,
   uiLanguage,
+  toolFilter,
   reaIntegration,
 }: {
   startupTimeline?: StartupTimeline;
   appearance?: Pick<AppearanceController, "getState" | "set">;
   uiLanguage?: Pick<UiLanguageController, "getState" | "set">;
+  toolFilter?: ToolFilterIpcController;
   reaIntegration?: {
     getStatus: () => ReaIntegrationStatus;
     setEnabled: (enabled: boolean) => Promise<ReaIntegrationStatus>;
@@ -431,6 +434,7 @@ export function registerAppIpc({
   };
   if (appearance) registerAppearanceIpcHandlers(ipcMain, assertTrustedSender, appearance);
   if (uiLanguage) registerUiLanguageIpcHandlers(ipcMain, assertTrustedSender, uiLanguage);
+  if (toolFilter) registerToolFilterIpcHandlers(ipcMain, assertTrustedSender, toolFilter);
 
   // Validate explicit 1:1/group choices here. Agent App-default selection is sent as `null` so
   // the runtime can bypass stale hot/PI branch models; unlinked legacy rows stay unset to restore.

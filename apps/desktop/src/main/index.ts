@@ -47,7 +47,7 @@ import {
 import { disposeGroupRuntime } from "./groups/group-runtime-service";
 import { IPC_CHANNELS } from "./ipc/channels";
 import { registerAppIpc } from "./ipc/register-app-ipc";
-import { startLocalModels } from "./local-models/startup";
+import { getToolFilterController, startLocalModels, stopLocalModels } from "./local-models/startup";
 import {
   createUiLanguageController,
   setCurrentUiLanguageSource,
@@ -130,7 +130,12 @@ function ensureAppIpcRegistered(): void {
     return;
   }
 
-  registerAppIpc({ startupTimeline, appearance: getAppearance(), uiLanguage: getUiLanguage() });
+  registerAppIpc({
+    startupTimeline,
+    appearance: getAppearance(),
+    uiLanguage: getUiLanguage(),
+    toolFilter: getToolFilterController(app.getPath("userData")),
+  });
   ipcRegistered = true;
 }
 
@@ -250,8 +255,8 @@ if (!app.requestSingleInstanceLock()) {
       // B4b: the Modus provider follows the account session (registered only when signed in).
       startModusProvider(notifyModelCatalogChanged);
       openMainWindow();
-      // RERANK-03 runtime: no-op unless tool_filter.enabled (MODUS_LOCAL_TOOL_FILTER) is on.
-      void startLocalModels(app.getPath("userData"));
+      // RERANK-03 tool filter: no-op unless tool_filter.enabled is on (the model runs in a utilityProcess).
+      startLocalModels(app.getPath("userData"));
       if (splash) {
         const close = () => {
           if (!splash.isDestroyed()) splash.destroy();
@@ -301,6 +306,8 @@ if (!app.requestSingleInstanceLock()) {
     // Close MCP transports on quit so stdio servers never outlive the app.
     // Also runs for update installs: quitAndInstall and the mac installer both go through app.quit().
     stopUpdateService();
+    // The tool-filter model process (utilityProcess) never outlives the app.
+    stopLocalModels();
     stopRemoteModelCatalog();
     stopModusProvider();
     shutdownTerminals();

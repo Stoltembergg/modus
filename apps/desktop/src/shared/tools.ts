@@ -324,6 +324,14 @@ export const SUBAGENT_TOOL_UI: Record<SubagentToolName, ToolUiMeta> = {
  */
 export const WAIT_TOOL_NAME = "wait";
 
+/** RERANK-03 tool filter meta-tool: always exposed while the local tool filter is on. */
+export const TOOLS_EXPAND_TOOL_NAME = "tools_expand";
+
+export const TOOLS_EXPAND_TOOL_UI: ToolUiMeta = {
+  verb: "Expanded tools",
+  primaryArgKey: "reason",
+};
+
 export const WAIT_TOOL_UI: ToolUiMeta = {
   verb: "Waited",
   primaryArgKey: "timeout_ms",
