@@ -81,7 +81,23 @@ const over = (a: number, top: Rgb, bottom: Rgb): Rgb =>
 const WHITE: Rgb = [255, 255, 255];
 const GREY: Rgb = [128, 128, 128];
 const BLACK: Rgb = [0, 0, 0];
+const LIGHT_GREY: Rgb = [0xcc, 0xcc, 0xcc];
+const DARK_GREY: Rgb = [0x33, 0x33, 0x33];
 const THEMES: Theme[] = ["dark", "light"];
+/**
+ * v0.1.11 opacity floor (glass-floor/REPORT.md). The window glass can sit over any
+ * wallpaper, so every backdrop from white to black counts, including the opposite
+ * brightness (a light wallpaper behind the dark theme, a dark one behind light).
+ * Real wallpapers blurred 24px (macOS Sequoia, Windows 11 Bloom, a photo) stay inside
+ * this range at P5, so the plain extremes bound them.
+ */
+const ANY_DESKTOP: Rgb[] = [WHITE, LIGHT_GREY, GREY, DARK_GREY, BLACK];
+const DESKTOP_GATE: Record<string, number> = {
+  "--color-fg": 4.5,
+  "--color-fg-muted": 4.5,
+  "--color-fg-subtle": 3,
+  "--color-fg-faint": 3,
+};
 
 /** Glass tier → [base colour, alpha]. Strip alpha is shared with classic (app.css). */
 function tiers(theme: Theme): Record<string, [Rgb, number]> {
@@ -192,8 +208,8 @@ describe("new look tokens: values", () => {
       saturateLight: decl(light, "--glass-saturate"),
       radii: ["xs", "sm", "md", "lg", "xl", "2xl"].map((r) => decl(dark, `--radius-${r}`)),
     }).toEqual({
-      chrome: "60%",
-      overlay: "86%",
+      chrome: "82%",
+      overlay: "89%",
       blur: "24px",
       saturateDark: "1.3",
       saturateLight: "1.6",
@@ -201,8 +217,8 @@ describe("new look tokens: values", () => {
     });
   });
 
-  it("(b) glass ruling (Gabriel 2026-10-13): more transparent than 64% / 90%, blur not lowered", () => {
-    expect(pct(decl(dark, "--glass-alpha-chrome"))).toBeLessThan(0.64);
+  it("(b) glass ruling (Gabriel 2026-10-13): overlay more transparent than 90%, blur not lowered", () => {
+    // The chrome tier is pinned by the v0.1.11 opacity floor below, not by the ruling.
     expect(pct(decl(dark, "--glass-alpha-overlay"))).toBeLessThan(0.9);
     const blur = Number(decl(dark, "--glass-blur")?.match(/^(\d+)px$/)?.[1]);
     expect(blur).toBeGreaterThanOrEqual(20);
@@ -475,6 +491,69 @@ describe("new look tokens: contrast gate", () => {
         `${theme} pressed`,
       ).toBeGreaterThanOrEqual(4.5);
     }
+  });
+});
+
+describe("new look tokens: opacity floor over any desktop (v0.1.11)", () => {
+  const chrome = () => pct(decl(dark, "--glass-alpha-chrome"));
+  const overlay = () => pct(decl(dark, "--glass-alpha-overlay"));
+  const chat = () => pct(decl(appStrip, "--glass-alpha-chat"));
+  type Surface = (bg: Rgb) => Rgb;
+  const surfaces = (
+    theme: Theme,
+    c: number,
+    o: number,
+  ): { window: Surface; overlay: Surface; "#245 tint on window": Surface } => {
+    const panel = color(theme, "--color-panel");
+    const elevated = color(theme, "--color-elevated");
+    return {
+      window: (bg) => over(c, panel, bg),
+      overlay: (bg) => over(o, elevated, bg),
+      "#245 tint on window": (bg) => over(chat(), elevated, over(c, panel, bg)),
+    };
+  };
+  const ratio = (theme: Theme, text: string, surface: (bg: Rgb) => Rgb, backdrops: Rgb[]) =>
+    Math.min(...backdrops.map((bg) => contrast(color(theme, text), surface(bg))));
+
+  it("(c) fg / muted >= 4.5:1 and subtle / faint >= 3:1 on the window, the overlay and the #245 tint, white to black, both themes", () => {
+    let checked = 0;
+    for (const theme of THEMES) {
+      for (const [name, surface] of Object.entries(surfaces(theme, chrome(), overlay()))) {
+        for (const [text, gate] of Object.entries(DESKTOP_GATE)) {
+          expect(
+            ratio(theme, text, surface, ANY_DESKTOP),
+            `${theme} ${name} ${text}`,
+          ).toBeGreaterThanOrEqual(gate);
+          checked += 1;
+        }
+      }
+    }
+    expect(checked).toBe(2 * 3 * 4);
+  });
+
+  it("(c) the opposite desktop is the binding case: main's 60% / 86% failed it, the floor is tight", () => {
+    // What main shipped (#254): muted fell to 2.34:1 (dark over white) and 2.87:1 (light over black).
+    expect(
+      ratio("dark", "--color-fg-muted", surfaces("dark", 0.6, 0.86).window, [WHITE]),
+    ).toBeLessThan(2.4);
+    expect(
+      ratio("light", "--color-fg-muted", surfaces("light", 0.6, 0.86).window, [BLACK]),
+    ).toBeLessThan(2.9);
+    expect(
+      ratio("dark", "--color-fg-faint", surfaces("dark", 0.82, 0.86).overlay, [WHITE]),
+    ).toBeLessThan(3);
+    // Tight: one point less on either tier fails somewhere.
+    const fails = (c: number, o: number) =>
+      THEMES.some((theme) =>
+        Object.values(surfaces(theme, c, o)).some((surface) =>
+          Object.entries(DESKTOP_GATE).some(
+            ([text, gate]) => ratio(theme, text, surface, ANY_DESKTOP) < gate,
+          ),
+        ),
+      );
+    expect(fails(chrome(), overlay())).toBe(false);
+    expect(fails(chrome() - 0.01, overlay())).toBe(true);
+    expect(fails(chrome(), overlay() - 0.01)).toBe(true);
   });
 });
 
