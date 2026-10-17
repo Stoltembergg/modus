@@ -101,8 +101,9 @@
   --overlay-scrim-color: rgba(3, 6, 12, 0.42);
 
   /* Glass. Gabriel 2026-10-13 asked for more transparency than 64% / 90% with legible
-     text. v0.1.11 opacity floor (glass-floor/REPORT.md): the window glass can sit over
-     any wallpaper, including one of the opposite brightness (white behind dark, black
+     text. v0.1.11 opacity floor (PR #257; data in branch
+     pr-assets/glass-opacity-floor, free/): the window glass can sit over any
+     wallpaper, including one of the opposite brightness (white behind dark, black
      behind light). On the gate model (no OS material), the smallest alphas that keep fg
      and fg-muted >= 4.5:1 and subtle / faint >= 3:1 there are chrome 81.5% (dark faint
      over white; light needs 81%) and overlay 88.5% (dark faint over white). The values

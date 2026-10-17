@@ -85,9 +85,10 @@ const LIGHT_GREY: Rgb = [0xcc, 0xcc, 0xcc];
 const DARK_GREY: Rgb = [0x33, 0x33, 0x33];
 const THEMES: Theme[] = ["dark", "light"];
 /**
- * v0.1.11 opacity floor (glass-floor/REPORT.md). The window glass can sit over any
- * wallpaper, so every backdrop from white to black counts, including the opposite
- * brightness (a light wallpaper behind the dark theme, a dark one behind light).
+ * v0.1.11 opacity floor (PR #257; data in branch pr-assets/glass-opacity-floor,
+ * free/). The window glass can sit over any wallpaper, so every backdrop from
+ * white to black counts, including the opposite brightness (a light wallpaper
+ * behind the dark theme, a dark one behind light).
  * Real wallpapers blurred 24px (macOS Sequoia, Windows 11 Bloom, a photo) stay inside
  * this range at P5, so the plain extremes bound them.
  */
