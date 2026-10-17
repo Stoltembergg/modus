@@ -9,7 +9,8 @@ export type WorkerDoc = { name: string; doc: string };
 export type MainToWorker =
   /** Load onnxruntime-node and run a tiny in-memory graph: the real availability probe. */
   | { type: "probe"; id: number }
-  | { type: "load"; id: number; dir: string }
+  /** `cacheDir`: the on-disk doc-embedding cache (embed-cache.ts); absent = memory only. */
+  | { type: "load"; id: number; dir: string; cacheDir?: string }
   /** Embed tool docs ahead of time so a selection only embeds the query. */
   | { type: "warm"; id: number; docs: WorkerDoc[] }
   /**
@@ -27,7 +28,15 @@ export type SelectReply =
   | { status: "timeout"; inProcessMs: number };
 
 export type WorkerToMain =
-  | { type: "ok"; id: number; rssBytes: number; loadMs?: number }
+  | {
+      type: "ok";
+      id: number;
+      rssBytes: number;
+      loadMs?: number;
+      /** load: doc vectors read from the disk cache; warm: docs embedded / served from it. */
+      cachedDocs?: number;
+      embeddedDocs?: number;
+    }
   | ({ type: "select"; id: number; rssBytes: number } & SelectReply)
   | { type: "pong"; id: number }
   | { type: "error"; id: number; code: LocalModelFailure; message: string };

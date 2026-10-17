@@ -5,6 +5,7 @@
  * crash stay out of the main process. One request at a time is the main side's
  * contract; this side still answers every message it gets.
  */
+import { EmbedCache, rerank03CacheIdentity } from "./embed-cache";
 import { cosine, type LocalEmbedder, loadLocalEmbedder } from "./embedder";
 import { LocalModelError, localModelFailureOf } from "./errors";
 import { RERANK03_MODEL } from "./manifest";
@@ -46,20 +47,43 @@ function resolvePort(): Port {
   throw new Error("tool-filter-worker must run as a utility or forked process");
 }
 
-export function createWorkerHandler(post: (message: WorkerToMain) => void) {
+export type WorkerHandlerDeps = {
+  /** Tests: a fake embedder instead of onnxruntime + the weights in `dir`. */
+  loadEmbedder?: (dir: string) => Promise<LocalEmbedder>;
+  /** Tests: the cache identity (default: the RERANK-03 manifest's). */
+  cacheIdentity?: string;
+};
+
+export function createWorkerHandler(
+  post: (message: WorkerToMain) => void,
+  deps: WorkerHandlerDeps = {},
+) {
   let embedder: LocalEmbedder | null = null;
+  let cache: EmbedCache | null = null;
+  let cachedOnLoad = 0;
   const docVectors = new Map<string, Float32Array>();
   const rss = () => process.memoryUsage().rss;
+  const loadEmbedder =
+    deps.loadEmbedder ?? (async (dir: string) => loadLocalEmbedder(await loadOnnxRuntime(), dir));
 
+  /** Vectors for `docs`: memory, then the disk cache, then the model (only what changed). */
   async function embedDocs(docs: readonly WorkerDoc[]): Promise<number> {
     const model = embedder;
     if (!model) throw new LocalModelError("not-ready", "Model not loaded");
     let added = 0;
     for (const { doc } of docs) {
       if (docVectors.has(doc)) continue;
-      docVectors.set(doc, await model.embed(doc, RERANK03_MODEL.docMaxLength));
+      const cached = cache?.get(doc);
+      if (cached) {
+        docVectors.set(doc, cached);
+        continue;
+      }
+      const vector = await model.embed(doc, RERANK03_MODEL.docMaxLength);
+      docVectors.set(doc, vector);
+      cache?.set(doc, vector);
       added++;
     }
+    cache?.flush();
     return added;
   }
 
@@ -98,33 +122,58 @@ export function createWorkerHandler(post: (message: WorkerToMain) => void) {
         case "load": {
           const started = performance.now();
           if (!embedder) {
-            const ort = await loadOnnxRuntime();
             try {
-              embedder = await loadLocalEmbedder(ort, message.dir);
+              embedder = await loadEmbedder(message.dir);
             } catch (error) {
               throw error instanceof LocalModelError
                 ? error
                 : new LocalModelError("load-failed", "RERANK-03 failed to load", { cause: error });
             }
-            await embedder.embed("warm-up: list the files in src", RERANK03_MODEL.queryMaxLength);
+            const probe = await embedder.embed(
+              "warm-up: list the files in src",
+              RERANK03_MODEL.queryMaxLength,
+            );
+            if (message.cacheDir) {
+              // The dimension comes from the model itself: a cache written for
+              // another size is discarded, never used.
+              cache = new EmbedCache(
+                message.cacheDir,
+                deps.cacheIdentity ?? rerank03CacheIdentity(),
+                probe.length,
+              );
+              cachedOnLoad = cache.load().entries;
+            }
           }
           post({
             type: "ok",
             id: message.id,
             rssBytes: rss(),
             loadMs: Math.round(performance.now() - started),
+            cachedDocs: cachedOnLoad,
           });
           return;
         }
-        case "warm":
-          await embedDocs(message.docs);
-          post({ type: "ok", id: message.id, rssBytes: rss() });
+        case "warm": {
+          const embeddedDocs = await embedDocs(message.docs);
+          post({
+            type: "ok",
+            id: message.id,
+            rssBytes: rss(),
+            embeddedDocs,
+            cachedDocs: message.docs.length - embeddedDocs,
+          });
           return;
+        }
         case "select": {
           const started = performance.now();
           const model = embedder;
           if (!model) throw new LocalModelError("not-ready", "Model not loaded");
-          const missing = message.docs.filter(({ doc }) => !docVectors.has(doc));
+          const missing = message.docs.filter(({ doc }) => {
+            if (docVectors.has(doc)) return false;
+            const cached = cache?.get(doc);
+            if (cached) docVectors.set(doc, cached);
+            return !cached;
+          });
           if (missing.length > 0) {
             post({
               type: "select",

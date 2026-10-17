@@ -347,6 +347,15 @@ describe("local tool ranker (main orchestrator)", () => {
     expect(backend.warm).toHaveBeenCalledTimes(2);
   });
 
+  it("hands the disk embedding cache dir to the model process on load", async () => {
+    const { ranker: r, backend } = ranker({ cacheDir: "/u/local-models/tool-embed-cache" });
+    await r.prepare();
+    expect(backend.load).toHaveBeenCalledWith(
+      "/tmp/modus-models-test",
+      "/u/local-models/tool-embed-cache",
+    );
+  });
+
   it("release stops the model process and leaves verified files reusable", async () => {
     const { ranker: r, backend, ensureFiles } = ranker();
     await r.prepare();
