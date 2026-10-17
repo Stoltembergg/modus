@@ -14,7 +14,11 @@ export class LocalModelError extends Error {
   readonly code: LocalModelFailure;
   readonly file: string | undefined;
 
-  constructor(code: LocalModelFailure, message: string, options?: { file?: string; cause?: unknown }) {
+  constructor(
+    code: LocalModelFailure,
+    message: string,
+    options?: { file?: string; cause?: unknown },
+  ) {
     super(message, options?.cause === undefined ? undefined : { cause: options.cause });
     this.name = "LocalModelError";
     this.code = code;

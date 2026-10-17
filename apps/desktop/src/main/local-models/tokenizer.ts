@@ -18,7 +18,10 @@ export type LocalTokenizer = {
   encode(text: string, maxLength: number): number[];
 };
 
-export function createLocalTokenizer(tokenizerJson: unknown, tokenizerConfig: unknown): LocalTokenizer {
+export function createLocalTokenizer(
+  tokenizerJson: unknown,
+  tokenizerConfig: unknown,
+): LocalTokenizer {
   const tokenizer = new Tokenizer(tokenizerJson as object, tokenizerConfig as object);
   return {
     encode(text, maxLength) {

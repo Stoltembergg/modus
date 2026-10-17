@@ -44,6 +44,8 @@ export const MAIN_TEXT_EN = {
   "main.notification.finished": "Agent finished its task.",
   "main.notification.failed": "Agent run failed: {message}",
   "main.notification.permission": "Agent needs permission: {reason}",
+  "main.about.modelAttribution":
+    "Tool search model: RERANK-03 weights, modified from IBM Granite Embedding (ibm-granite/granite-embedding-97m-multilingual-r2, Copyright IBM), Apache License 2.0. Downloaded on demand with its LICENSE and NOTICE.",
 } as const;
 
 export type MainTextKey = keyof typeof MAIN_TEXT_EN;
@@ -85,6 +87,8 @@ export const MAIN_TEXT_PT: Record<MainTextKey, string> = {
   "main.notification.finished": "O agente terminou a tarefa.",
   "main.notification.failed": "A execução do agente falhou: {message}",
   "main.notification.permission": "O agente precisa de permissão: {reason}",
+  "main.about.modelAttribution":
+    "Modelo de busca de ferramentas: pesos RERANK-03, modificados a partir do IBM Granite Embedding (ibm-granite/granite-embedding-97m-multilingual-r2, Copyright IBM), Licença Apache 2.0. Baixado sob demanda com seus arquivos LICENSE e NOTICE.",
 };
 
 const MAIN_TEXT: Record<GroupRoomLocale, Partial<Record<MainTextKey, string>>> = {

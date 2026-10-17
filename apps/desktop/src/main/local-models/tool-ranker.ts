@@ -1,5 +1,6 @@
 import { join } from "node:path";
-import { type LocalEmbedder, cosine, loadLocalEmbedder } from "./embedder";
+import { isFeatureFlagEnabled } from "../agent/harness/feature-flags";
+import { cosine, type LocalEmbedder, loadLocalEmbedder } from "./embedder";
 import { LocalModelError, type LocalModelFailure, localModelFailureOf } from "./errors";
 import { RERANK03_MODEL, resolveLocalModelsBaseUrl } from "./manifest";
 import { ensureModelFiles, verifyModelFiles } from "./model-download";
@@ -13,11 +14,11 @@ import { loadOnnxRuntime, type OnnxRuntime } from "./onnx-runtime";
  * platform, missing model, wrong hash, load error, inference error, selection
  * slower than `timeoutMs`) returns all tools, i.e. today's behaviour.
  */
-export const TOOL_FILTER_FLAG_ENV = "MODUS_LOCAL_TOOL_FILTER";
 export const TOOL_SELECTION_TIMEOUT_MS = 50;
 
-export function localToolFilterEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env[TOOL_FILTER_FLAG_ENV] === "1";
+/** tool_filter.enabled: the Harness flag MODUS_LOCAL_TOOL_FILTER, false by default. */
+export function localToolFilterEnabled(): boolean {
+  return isFeatureFlagEnabled("MODUS_LOCAL_TOOL_FILTER");
 }
 
 export type RankableTool = { name: string; doc: string };
@@ -79,7 +80,8 @@ export function createLocalToolRanker(deps: LocalToolRankerDeps): LocalToolRanke
   const timeoutMs = deps.timeoutMs ?? TOOL_SELECTION_TIMEOUT_MS;
   const ensureFiles =
     deps.ensureFiles ??
-    ((dir: string, url: string) => ensureModelFiles({ manifest: RERANK03_MODEL, dir, baseUrl: url }));
+    ((dir: string, url: string) =>
+      ensureModelFiles({ manifest: RERANK03_MODEL, dir, baseUrl: url }));
   const verifyFiles = deps.verifyFiles ?? ((dir: string) => verifyModelFiles(RERANK03_MODEL, dir));
   const loadRuntime = deps.loadRuntime ?? (() => loadOnnxRuntime());
   const loadEmbedder = deps.loadEmbedder ?? loadLocalEmbedder;

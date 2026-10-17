@@ -103,6 +103,12 @@ export function buildApplicationMenuTemplate({
 }
 
 export function installApplicationMenu(locale?: string): void {
+  // About panel (macOS / Linux): RERANK-03 weights attribution (Apache-2.0, IBM).
+  app.setAboutPanelOptions({
+    applicationName: app.name,
+    applicationVersion: app.getVersion(),
+    credits: mainText("main.about.modelAttribution", locale),
+  });
   Menu.setApplicationMenu(
     Menu.buildFromTemplate(buildApplicationMenuTemplate({ locale, appName: app.name })),
   );

@@ -78,7 +78,8 @@ export function resolveLocalModelsBaseUrl(
     if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
       return DEFAULT_LOCAL_MODELS_BASE_URL;
     }
-    if (url.username || url.password || url.search || url.hash) return DEFAULT_LOCAL_MODELS_BASE_URL;
+    if (url.username || url.password || url.search || url.hash)
+      return DEFAULT_LOCAL_MODELS_BASE_URL;
     return url.href.endsWith("/") ? url.href : `${url.href}/`;
   } catch {
     return DEFAULT_LOCAL_MODELS_BASE_URL;

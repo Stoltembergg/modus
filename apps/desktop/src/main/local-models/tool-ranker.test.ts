@@ -70,10 +70,14 @@ async function warm(r: ReturnType<typeof createLocalToolRanker>) {
 }
 
 describe("flag off (default): no behaviour change", () => {
-  it("the flag is off unless MODUS_LOCAL_TOOL_FILTER=1", () => {
-    expect(localToolFilterEnabled({})).toBe(false);
-    expect(localToolFilterEnabled({ MODUS_LOCAL_TOOL_FILTER: "0" })).toBe(false);
-    expect(localToolFilterEnabled({ MODUS_LOCAL_TOOL_FILTER: "1" })).toBe(true);
+  it("tool_filter.enabled (MODUS_LOCAL_TOOL_FILTER) is off unless set", () => {
+    vi.stubEnv("MODUS_LOCAL_TOOL_FILTER", "");
+    expect(localToolFilterEnabled()).toBe(false);
+    vi.stubEnv("MODUS_LOCAL_TOOL_FILTER", "0");
+    expect(localToolFilterEnabled()).toBe(false);
+    vi.stubEnv("MODUS_LOCAL_TOOL_FILTER", "1");
+    expect(localToolFilterEnabled()).toBe(true);
+    vi.unstubAllEnvs();
   });
 
   it("nothing is downloaded or loaded, and every tool is returned", async () => {
@@ -132,12 +136,18 @@ describe("every failure falls back to all tools", () => {
 
   describe("hash mismatch, one file at a time", () => {
     const names = RERANK03_MODEL.files.map((file) => file.name);
-    it.each(names)("%s corrupted: fallback 'hash-mismatch', the bad file is deleted, nothing loads", async (bad) => {
+    it.each(
+      names,
+    )("%s corrupted: fallback 'hash-mismatch', the bad file is deleted, nothing loads", async (bad) => {
       const dir = tempDir();
       const files = names.map((name) => {
         const content = `content of ${name}`;
         writeFileSync(join(dir, name), name === bad ? "tampered" : content);
-        return { name, sha256: createHash("sha256").update(content).digest("hex"), role: "model" as const };
+        return {
+          name,
+          sha256: createHash("sha256").update(content).digest("hex"),
+          role: "model" as const,
+        };
       });
       const manifest: LocalModelManifest = { id: "test", files };
       const { deps, ranker: r } = ranker({
@@ -154,7 +164,9 @@ describe("every failure falls back to all tools", () => {
       expect(deps.loadRuntime).not.toHaveBeenCalled();
     });
 
-    it.each(names)("server serves a wrong %s: the download is rejected before anything loads", async (bad) => {
+    it.each(
+      names,
+    )("server serves a wrong %s: the download is rejected before anything loads", async (bad) => {
       const dir = tempDir();
       const files = names.map((name) => ({
         name,
@@ -169,7 +181,13 @@ describe("every failure falls back to all tools", () => {
       const { deps, ranker: r } = ranker({
         dir,
         ensureFiles: (target, baseUrl) =>
-          ensureModelFiles({ manifest, dir: target, baseUrl, fetchImpl, sleep: async () => undefined }),
+          ensureModelFiles({
+            manifest,
+            dir: target,
+            baseUrl,
+            fetchImpl,
+            sleep: async () => undefined,
+          }),
         verifyFiles: (target) => verifyModelFiles(manifest, target),
       });
       expect(await r.prepare()).toMatchObject({ state: "failed", failure: "hash-mismatch" });

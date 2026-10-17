@@ -41,7 +41,8 @@ export function createLocalEmbedder(
       let norm = 0;
       for (const value of vector) norm += value * value;
       norm = Math.sqrt(norm) || 1;
-      for (let index = 0; index < vector.length; index++) vector[index] = (vector[index] ?? 0) / norm;
+      for (let index = 0; index < vector.length; index++)
+        vector[index] = (vector[index] ?? 0) / norm;
       return vector;
     },
     release: () => session.release(),

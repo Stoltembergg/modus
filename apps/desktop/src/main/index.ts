@@ -47,6 +47,7 @@ import {
 import { disposeGroupRuntime } from "./groups/group-runtime-service";
 import { IPC_CHANNELS } from "./ipc/channels";
 import { registerAppIpc } from "./ipc/register-app-ipc";
+import { startLocalModels } from "./local-models/startup";
 import {
   createUiLanguageController,
   setCurrentUiLanguageSource,
@@ -249,6 +250,8 @@ if (!app.requestSingleInstanceLock()) {
       // B4b: the Modus provider follows the account session (registered only when signed in).
       startModusProvider(notifyModelCatalogChanged);
       openMainWindow();
+      // RERANK-03 runtime: no-op unless tool_filter.enabled (MODUS_LOCAL_TOOL_FILTER) is on.
+      void startLocalModels(app.getPath("userData"));
       if (splash) {
         const close = () => {
           if (!splash.isDestroyed()) splash.destroy();

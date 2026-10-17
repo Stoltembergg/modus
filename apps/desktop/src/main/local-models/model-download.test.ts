@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -53,11 +53,7 @@ describe("model-download", () => {
   ): typeof fetch {
     return async (input, init) => {
       const url =
-        typeof input === "string"
-          ? input
-          : input instanceof URL
-            ? input.toString()
-            : input.url;
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       const range = init?.headers ? new Headers(init.headers).get("range") : null;
       requests.push({ url, range });
 
@@ -236,11 +232,7 @@ describe("model-download", () => {
     const requests: RecordedRequest[] = [];
     const fetchImpl: typeof fetch = async (input, init) => {
       const url =
-        typeof input === "string"
-          ? input
-          : input instanceof URL
-            ? input.toString()
-            : input.url;
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       const range = init?.headers ? new Headers(init.headers).get("range") : null;
       requests.push({ url, range });
       return new Response("unexpected bytes from server that do not match pinned hash", {
@@ -345,11 +337,7 @@ describe("model-download", () => {
     const midStreamFetch: typeof fetch = async (input, init) => {
       attemptCount++;
       const url =
-        typeof input === "string"
-          ? input
-          : input instanceof URL
-            ? input.toString()
-            : input.url;
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       const range = init?.headers ? new Headers(init.headers).get("range") : null;
       requests.push({ url, range });
 
@@ -498,8 +486,11 @@ describe("model-download", () => {
   });
 
   it("calls onProgress callback with receivedBytes and totalBytes", async () => {
-    const progressEvents: { file: string; receivedBytes: number; totalBytes: number | undefined }[] =
-      [];
+    const progressEvents: {
+      file: string;
+      receivedBytes: number;
+      totalBytes: number | undefined;
+    }[] = [];
     const requests: RecordedRequest[] = [];
     const fetchImpl = createFakeFetch(defaultFiles, requests);
 

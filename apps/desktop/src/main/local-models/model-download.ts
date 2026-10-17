@@ -90,7 +90,11 @@ export type EnsureModelFilesOptions = {
   retryDelayMs?: (attempt: number) => number;
   sleep?: (ms: number) => Promise<void>;
   signal?: AbortSignal;
-  onProgress?: (event: { file: string; receivedBytes: number; totalBytes: number | undefined }) => void;
+  onProgress?: (event: {
+    file: string;
+    receivedBytes: number;
+    totalBytes: number | undefined;
+  }) => void;
 };
 
 /**
@@ -159,7 +163,7 @@ export async function ensureModelFiles(options: EnsureModelFilesOptions): Promis
     const fileUrl = new URL(file.name, normalizedBaseUrl).toString();
 
     let attempt = 0;
-    let lastError: unknown = undefined;
+    let lastError: unknown;
     let downloaded = false;
 
     while (attempt < retries) {
@@ -195,10 +199,7 @@ export async function ensureModelFiles(options: EnsureModelFilesOptions): Promis
 
       let response: Response;
       try {
-        response = await fetchImpl(fileUrl, {
-          headers,
-          signal,
-        });
+        response = await fetchImpl(fileUrl, { headers, signal: signal ?? null });
       } catch (err: unknown) {
         if (signal?.aborted || (err as { name?: string })?.name === "AbortError") {
           const abortOptions: { file?: string; cause?: unknown } = { file: file.name };
@@ -277,9 +278,7 @@ export async function ensureModelFiles(options: EnsureModelFilesOptions): Promis
       const contentLengthHeader = response.headers.get("content-length");
       const parsedCl = contentLengthHeader ? Number.parseInt(contentLengthHeader, 10) : undefined;
       const totalBytes =
-        parsedCl !== undefined && !Number.isNaN(parsedCl)
-          ? resumeOffset + parsedCl
-          : undefined;
+        parsedCl !== undefined && !Number.isNaN(parsedCl) ? resumeOffset + parsedCl : undefined;
 
       const progressTransform = new Transform({
         transform(chunk: Buffer | Uint8Array, _encoding, callback) {
