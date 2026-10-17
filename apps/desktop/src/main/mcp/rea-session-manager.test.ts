@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } f
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ReaPrerequisiteResult } from "./rea-prerequisites";
+import { REA_NPM_NOT_FOUND_NOTE, type ReaPrerequisiteResult } from "./rea-prerequisites";
 import {
   MAX_REA_CATALOG_PAGE_SIZE,
   MAX_REA_RESULT_BYTES,
@@ -606,7 +606,7 @@ describe("ReaSessionManager", () => {
   it.each([
     "failed to install the locked REA runtime: spawn npm ENOENT: No such file or directory (os error 2)",
     "'npm' is not recognized as an internal or external command",
-  ])("classifies a missing npm for the locked install as needs_node: %s", async (stderr) => {
+  ])("reports a missing npm for the locked install with a clear note: %s", async (stderr) => {
     let feedStderr: ((text: string) => void) | undefined;
     const harness = setup({
       transportStderr: true,
@@ -619,9 +619,31 @@ describe("ReaSessionManager", () => {
 
     await expect(
       harness.manager.listTools(owner("missing-npm"), { offset: 0, limit: 10 }),
-    ).rejects.toThrow();
-    expect(harness.manager.getIntegrationStatus().status).toBe("needs_node");
+    ).rejects.toThrow(REA_NPM_NOT_FOUND_NOTE);
+    expect(harness.manager.getIntegrationStatus()).toMatchObject({
+      status: "needs_node",
+      note: REA_NPM_NOT_FOUND_NOTE,
+    });
     await harness.manager.disposeAll();
+  });
+
+  it("surfaces the prerequisite npm-not-found note without starting a worker", async () => {
+    const { manager, clients } = setup({
+      checkPrerequisites: async () => ({
+        ok: false,
+        status: "needs_node",
+        note: REA_NPM_NOT_FOUND_NOTE,
+      }),
+    });
+    await expect(manager.listTools(owner("no-npm-probe"), { offset: 0, limit: 10 })).rejects.toThrow(
+      REA_NPM_NOT_FOUND_NOTE,
+    );
+    expect(clients).toHaveLength(0);
+    expect(manager.getIntegrationStatus()).toMatchObject({
+      status: "needs_node",
+      note: REA_NPM_NOT_FOUND_NOTE,
+    });
+    await manager.disposeAll();
   });
 
   it("does not launch a worker when the session is disposed during the prerequisite probe", async () => {
