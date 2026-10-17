@@ -1,0 +1,74 @@
+[
+ {
+  "variant": "before",
+  "theme": "dark",
+  "wall": "sequoia-light",
+  "fg": 7.35,
+  "muted": 3.78,
+  "subtle": 2.95,
+  "faint": 2.23
+ },
+ {
+  "variant": "before",
+  "theme": "dark",
+  "wall": "bloom-dark",
+  "fg": 17.25,
+  "muted": 8.88,
+  "subtle": 6.93,
+  "faint": 5.23
+ },
+ {
+  "variant": "before",
+  "theme": "light",
+  "wall": "bloom-dark",
+  "fg": 5.74,
+  "muted": 3.06,
+  "subtle": 2.23,
+  "faint": 1.78
+ },
+ {
+  "variant": "before",
+  "theme": "light",
+  "wall": "sequoia-light",
+  "fg": 9.53,
+  "muted": 5.08,
+  "subtle": 3.71,
+  "faint": 2.96
+ },
+ {
+  "variant": "after",
+  "theme": "dark",
+  "wall": "sequoia-light",
+  "fg": 12.68,
+  "muted": 6.53,
+  "subtle": 5.09,
+  "faint": 3.85
+ },
+ {
+  "variant": "after",
+  "theme": "dark",
+  "wall": "bloom-dark",
+  "fg": 17.3,
+  "muted": 8.9,
+  "subtle": 6.95,
+  "faint": 5.25
+ },
+ {
+  "variant": "after",
+  "theme": "light",
+  "wall": "bloom-dark",
+  "fg": 10.17,
+  "muted": 5.42,
+  "subtle": 3.95,
+  "faint": 3.15
+ },
+ {
+  "variant": "after",
+  "theme": "light",
+  "wall": "sequoia-light",
+  "fg": 12.37,
+  "muted": 6.59,
+  "subtle": 4.81,
+  "faint": 3.84
+ }
+]
