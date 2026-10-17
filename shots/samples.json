@@ -1,0 +1,794 @@
+[
+ {
+  "variant": "before",
+  "name": "dark-over-white-home-composer",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/before-dark-over-white-home-composer.png",
+  "ui": "new",
+  "theme": "dark",
+  "chrome": "60%",
+  "overlay": "86%",
+  "probes": []
+ },
+ {
+  "variant": "before",
+  "name": "dark-over-white-chat",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/before-dark-over-white-chat.png",
+  "ui": "new",
+  "theme": "dark",
+  "chrome": "60%",
+  "overlay": "86%",
+  "probes": [
+   {
+    "text": "Why does the billing webhook retry twice",
+    "color": "rgb(169, 178, 192)",
+    "x": 214,
+    "y": 18,
+    "box": [
+     82,
+     9,
+     200,
+     27
+    ]
+   }
+  ]
+ },
+ {
+  "variant": "before",
+  "name": "dark-over-white-settings",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/before-dark-over-white-settings.png",
+  "ui": "new",
+  "theme": "dark",
+  "chrome": "60%",
+  "overlay": "86%",
+  "probes": []
+ },
+ {
+  "variant": "before",
+  "name": "dark-over-white-settings-custom-provider",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/before-dark-over-white-settings-custom-provider.png",
+  "ui": "new",
+  "theme": "dark",
+  "chrome": "60%",
+  "overlay": "86%",
+  "probes": [
+   {
+    "text": "One endpoint, any protocol — OpenAI, Ant",
+    "color": "rgb(169, 178, 192)",
+    "x": 1049,
+    "y": 124,
+    "box": [
+     395,
+     106,
+     1035,
+     142
+    ]
+   }
+  ]
+ },
+ {
+  "variant": "before",
+  "name": "light-over-black-home-composer",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/before-light-over-black-home-composer.png",
+  "ui": "new",
+  "theme": "light",
+  "chrome": "60%",
+  "overlay": "86%",
+  "probes": []
+ },
+ {
+  "variant": "before",
+  "name": "light-over-black-chat",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/before-light-over-black-chat.png",
+  "ui": "new",
+  "theme": "light",
+  "chrome": "60%",
+  "overlay": "86%",
+  "probes": [
+   {
+    "text": "Why does the billing webhook retry twice",
+    "color": "rgb(63, 73, 89)",
+    "x": 214,
+    "y": 18,
+    "box": [
+     82,
+     9,
+     200,
+     27
+    ]
+   }
+  ]
+ },
+ {
+  "variant": "before",
+  "name": "light-over-black-settings",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/before-light-over-black-settings.png",
+  "ui": "new",
+  "theme": "light",
+  "chrome": "60%",
+  "overlay": "86%",
+  "probes": []
+ },
+ {
+  "variant": "before",
+  "name": "light-over-black-settings-custom-provider",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/before-light-over-black-settings-custom-provider.png",
+  "ui": "new",
+  "theme": "light",
+  "chrome": "60%",
+  "overlay": "86%",
+  "probes": [
+   {
+    "text": "One endpoint, any protocol — OpenAI, Ant",
+    "color": "rgb(63, 73, 89)",
+    "x": 1049,
+    "y": 124,
+    "box": [
+     395,
+     106,
+     1035,
+     142
+    ]
+   }
+  ]
+ },
+ {
+  "variant": "after",
+  "name": "dark-over-white-home-composer",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-dark-over-white-home-composer.png",
+  "ui": "new",
+  "theme": "dark",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": []
+ },
+ {
+  "variant": "after",
+  "name": "dark-over-white-chat",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-dark-over-white-chat.png",
+  "ui": "new",
+  "theme": "dark",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": [
+   {
+    "text": "Why does the billing webhook retry twice",
+    "color": "rgb(169, 178, 192)",
+    "x": 214,
+    "y": 18,
+    "box": [
+     82,
+     9,
+     200,
+     27
+    ]
+   }
+  ]
+ },
+ {
+  "variant": "after",
+  "name": "dark-over-white-settings",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-dark-over-white-settings.png",
+  "ui": "new",
+  "theme": "dark",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": []
+ },
+ {
+  "variant": "after",
+  "name": "dark-over-white-settings-custom-provider",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-dark-over-white-settings-custom-provider.png",
+  "ui": "new",
+  "theme": "dark",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": [
+   {
+    "text": "One endpoint, any protocol — OpenAI, Ant",
+    "color": "rgb(169, 178, 192)",
+    "x": 1049,
+    "y": 124,
+    "box": [
+     395,
+     106,
+     1035,
+     142
+    ]
+   }
+  ]
+ },
+ {
+  "variant": "after",
+  "name": "dark-over-cccccc-home-composer",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-dark-over-cccccc-home-composer.png",
+  "ui": "new",
+  "theme": "dark",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": []
+ },
+ {
+  "variant": "after",
+  "name": "dark-over-cccccc-chat",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-dark-over-cccccc-chat.png",
+  "ui": "new",
+  "theme": "dark",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": [
+   {
+    "text": "Why does the billing webhook retry twice",
+    "color": "rgb(169, 178, 192)",
+    "x": 214,
+    "y": 18,
+    "box": [
+     82,
+     9,
+     200,
+     27
+    ]
+   }
+  ]
+ },
+ {
+  "variant": "after",
+  "name": "dark-over-cccccc-settings",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-dark-over-cccccc-settings.png",
+  "ui": "new",
+  "theme": "dark",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": []
+ },
+ {
+  "variant": "after",
+  "name": "dark-over-cccccc-settings-custom-provider",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-dark-over-cccccc-settings-custom-provider.png",
+  "ui": "new",
+  "theme": "dark",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": [
+   {
+    "text": "One endpoint, any protocol — OpenAI, Ant",
+    "color": "rgb(169, 178, 192)",
+    "x": 1049,
+    "y": 124,
+    "box": [
+     395,
+     106,
+     1035,
+     142
+    ]
+   }
+  ]
+ },
+ {
+  "variant": "after",
+  "name": "dark-over-city-rush-home-composer",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-dark-over-city-rush-home-composer.png",
+  "ui": "new",
+  "theme": "dark",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": []
+ },
+ {
+  "variant": "after",
+  "name": "dark-over-city-rush-chat",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-dark-over-city-rush-chat.png",
+  "ui": "new",
+  "theme": "dark",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": [
+   {
+    "text": "Why does the billing webhook retry twice",
+    "color": "rgb(169, 178, 192)",
+    "x": 214,
+    "y": 18,
+    "box": [
+     82,
+     9,
+     200,
+     27
+    ]
+   }
+  ]
+ },
+ {
+  "variant": "after",
+  "name": "dark-over-city-rush-settings",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-dark-over-city-rush-settings.png",
+  "ui": "new",
+  "theme": "dark",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": []
+ },
+ {
+  "variant": "after",
+  "name": "dark-over-city-rush-settings-custom-provider",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-dark-over-city-rush-settings-custom-provider.png",
+  "ui": "new",
+  "theme": "dark",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": [
+   {
+    "text": "One endpoint, any protocol — OpenAI, Ant",
+    "color": "rgb(169, 178, 192)",
+    "x": 1049,
+    "y": 124,
+    "box": [
+     395,
+     106,
+     1035,
+     142
+    ]
+   }
+  ]
+ },
+ {
+  "variant": "after",
+  "name": "dark-over-333333-home-composer",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-dark-over-333333-home-composer.png",
+  "ui": "new",
+  "theme": "dark",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": []
+ },
+ {
+  "variant": "after",
+  "name": "dark-over-333333-chat",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-dark-over-333333-chat.png",
+  "ui": "new",
+  "theme": "dark",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": [
+   {
+    "text": "Why does the billing webhook retry twice",
+    "color": "rgb(169, 178, 192)",
+    "x": 214,
+    "y": 18,
+    "box": [
+     82,
+     9,
+     200,
+     27
+    ]
+   }
+  ]
+ },
+ {
+  "variant": "after",
+  "name": "dark-over-333333-settings",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-dark-over-333333-settings.png",
+  "ui": "new",
+  "theme": "dark",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": []
+ },
+ {
+  "variant": "after",
+  "name": "dark-over-333333-settings-custom-provider",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-dark-over-333333-settings-custom-provider.png",
+  "ui": "new",
+  "theme": "dark",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": [
+   {
+    "text": "One endpoint, any protocol — OpenAI, Ant",
+    "color": "rgb(169, 178, 192)",
+    "x": 1049,
+    "y": 124,
+    "box": [
+     395,
+     106,
+     1035,
+     142
+    ]
+   }
+  ]
+ },
+ {
+  "variant": "after",
+  "name": "dark-over-black-home-composer",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-dark-over-black-home-composer.png",
+  "ui": "new",
+  "theme": "dark",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": []
+ },
+ {
+  "variant": "after",
+  "name": "dark-over-black-chat",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-dark-over-black-chat.png",
+  "ui": "new",
+  "theme": "dark",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": [
+   {
+    "text": "Why does the billing webhook retry twice",
+    "color": "rgb(169, 178, 192)",
+    "x": 214,
+    "y": 18,
+    "box": [
+     82,
+     9,
+     200,
+     27
+    ]
+   }
+  ]
+ },
+ {
+  "variant": "after",
+  "name": "dark-over-black-settings",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-dark-over-black-settings.png",
+  "ui": "new",
+  "theme": "dark",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": []
+ },
+ {
+  "variant": "after",
+  "name": "dark-over-black-settings-custom-provider",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-dark-over-black-settings-custom-provider.png",
+  "ui": "new",
+  "theme": "dark",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": [
+   {
+    "text": "One endpoint, any protocol — OpenAI, Ant",
+    "color": "rgb(169, 178, 192)",
+    "x": 1049,
+    "y": 124,
+    "box": [
+     395,
+     106,
+     1035,
+     142
+    ]
+   }
+  ]
+ },
+ {
+  "variant": "after",
+  "name": "light-over-black-home-composer",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-light-over-black-home-composer.png",
+  "ui": "new",
+  "theme": "light",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": []
+ },
+ {
+  "variant": "after",
+  "name": "light-over-black-chat",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-light-over-black-chat.png",
+  "ui": "new",
+  "theme": "light",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": [
+   {
+    "text": "Why does the billing webhook retry twice",
+    "color": "rgb(63, 73, 89)",
+    "x": 214,
+    "y": 18,
+    "box": [
+     82,
+     9,
+     200,
+     27
+    ]
+   }
+  ]
+ },
+ {
+  "variant": "after",
+  "name": "light-over-black-settings",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-light-over-black-settings.png",
+  "ui": "new",
+  "theme": "light",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": []
+ },
+ {
+  "variant": "after",
+  "name": "light-over-black-settings-custom-provider",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-light-over-black-settings-custom-provider.png",
+  "ui": "new",
+  "theme": "light",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": [
+   {
+    "text": "One endpoint, any protocol — OpenAI, Ant",
+    "color": "rgb(63, 73, 89)",
+    "x": 1049,
+    "y": 124,
+    "box": [
+     395,
+     106,
+     1035,
+     142
+    ]
+   }
+  ]
+ },
+ {
+  "variant": "after",
+  "name": "light-over-333333-home-composer",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-light-over-333333-home-composer.png",
+  "ui": "new",
+  "theme": "light",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": []
+ },
+ {
+  "variant": "after",
+  "name": "light-over-333333-chat",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-light-over-333333-chat.png",
+  "ui": "new",
+  "theme": "light",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": [
+   {
+    "text": "Why does the billing webhook retry twice",
+    "color": "rgb(63, 73, 89)",
+    "x": 214,
+    "y": 18,
+    "box": [
+     82,
+     9,
+     200,
+     27
+    ]
+   }
+  ]
+ },
+ {
+  "variant": "after",
+  "name": "light-over-333333-settings",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-light-over-333333-settings.png",
+  "ui": "new",
+  "theme": "light",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": []
+ },
+ {
+  "variant": "after",
+  "name": "light-over-333333-settings-custom-provider",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-light-over-333333-settings-custom-provider.png",
+  "ui": "new",
+  "theme": "light",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": [
+   {
+    "text": "One endpoint, any protocol — OpenAI, Ant",
+    "color": "rgb(63, 73, 89)",
+    "x": 1049,
+    "y": 124,
+    "box": [
+     395,
+     106,
+     1035,
+     142
+    ]
+   }
+  ]
+ },
+ {
+  "variant": "after",
+  "name": "light-over-city-rush-home-composer",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-light-over-city-rush-home-composer.png",
+  "ui": "new",
+  "theme": "light",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": []
+ },
+ {
+  "variant": "after",
+  "name": "light-over-city-rush-chat",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-light-over-city-rush-chat.png",
+  "ui": "new",
+  "theme": "light",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": [
+   {
+    "text": "Why does the billing webhook retry twice",
+    "color": "rgb(63, 73, 89)",
+    "x": 214,
+    "y": 18,
+    "box": [
+     82,
+     9,
+     200,
+     27
+    ]
+   }
+  ]
+ },
+ {
+  "variant": "after",
+  "name": "light-over-city-rush-settings",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-light-over-city-rush-settings.png",
+  "ui": "new",
+  "theme": "light",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": []
+ },
+ {
+  "variant": "after",
+  "name": "light-over-city-rush-settings-custom-provider",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-light-over-city-rush-settings-custom-provider.png",
+  "ui": "new",
+  "theme": "light",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": [
+   {
+    "text": "One endpoint, any protocol — OpenAI, Ant",
+    "color": "rgb(63, 73, 89)",
+    "x": 1049,
+    "y": 124,
+    "box": [
+     395,
+     106,
+     1035,
+     142
+    ]
+   }
+  ]
+ },
+ {
+  "variant": "after",
+  "name": "light-over-cccccc-home-composer",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-light-over-cccccc-home-composer.png",
+  "ui": "new",
+  "theme": "light",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": []
+ },
+ {
+  "variant": "after",
+  "name": "light-over-cccccc-chat",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-light-over-cccccc-chat.png",
+  "ui": "new",
+  "theme": "light",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": [
+   {
+    "text": "Why does the billing webhook retry twice",
+    "color": "rgb(63, 73, 89)",
+    "x": 214,
+    "y": 18,
+    "box": [
+     82,
+     9,
+     200,
+     27
+    ]
+   }
+  ]
+ },
+ {
+  "variant": "after",
+  "name": "light-over-cccccc-settings",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-light-over-cccccc-settings.png",
+  "ui": "new",
+  "theme": "light",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": []
+ },
+ {
+  "variant": "after",
+  "name": "light-over-cccccc-settings-custom-provider",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-light-over-cccccc-settings-custom-provider.png",
+  "ui": "new",
+  "theme": "light",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": [
+   {
+    "text": "One endpoint, any protocol — OpenAI, Ant",
+    "color": "rgb(63, 73, 89)",
+    "x": 1049,
+    "y": 124,
+    "box": [
+     395,
+     106,
+     1035,
+     142
+    ]
+   }
+  ]
+ },
+ {
+  "variant": "after",
+  "name": "light-over-white-home-composer",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-light-over-white-home-composer.png",
+  "ui": "new",
+  "theme": "light",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": []
+ },
+ {
+  "variant": "after",
+  "name": "light-over-white-chat",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-light-over-white-chat.png",
+  "ui": "new",
+  "theme": "light",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": [
+   {
+    "text": "Why does the billing webhook retry twice",
+    "color": "rgb(63, 73, 89)",
+    "x": 214,
+    "y": 18,
+    "box": [
+     82,
+     9,
+     200,
+     27
+    ]
+   }
+  ]
+ },
+ {
+  "variant": "after",
+  "name": "light-over-white-settings",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-light-over-white-settings.png",
+  "ui": "new",
+  "theme": "light",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": []
+ },
+ {
+  "variant": "after",
+  "name": "light-over-white-settings-custom-provider",
+  "path": "/workspace/modus-redesign/glass-floor/shots2/after-light-over-white-settings-custom-provider.png",
+  "ui": "new",
+  "theme": "light",
+  "chrome": "82%",
+  "overlay": "89%",
+  "probes": [
+   {
+    "text": "One endpoint, any protocol — OpenAI, Ant",
+    "color": "rgb(63, 73, 89)",
+    "x": 1049,
+    "y": 124,
+    "box": [
+     395,
+     106,
+     1035,
+     142
+    ]
+   }
+  ]
+ }
+]
