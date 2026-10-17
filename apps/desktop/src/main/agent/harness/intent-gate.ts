@@ -61,6 +61,8 @@ const NAMED_TARGET = [
   /[\p{Ll}\d,]\s+\p{Lu}\p{Ll}{2,}/u, // capitalized name mid-sentence (Sidebar, Windows)
   // App surfaces that exist once, so naming them is enough in any case ("sidebar" == "Sidebar").
   // Generic nouns (button, label, modal, component, page) are not here: they still need a name.
+  // Translation into a named language: the language is the target.
+  /\b(?:translate|translat(?:ion|ing)|tradu\p{L}*)[^\n]*?(?<![\p{L}])(?:english|portuguese|spanish|french|german|italian|japanese|chinese|korean|russian|dutch|ingl[eê]s|portugu[eê]s|espanhol|franc[eê]s|alem[aã]o|italiano|japon[eê]s|chin[eê]s|coreano|russo|holand[eê]s|pt-br|en-us|zh)(?![\p{L}])/iu,
   /\b(?:side\s?bar|barra\s+lateral|nav\s?bar|tool\s?bar|title\s?bar|status\s?bar|header|footer|cabe[cç]alho|rodap[eé]|composer)(?![\p{L}\p{N}_])/iu,
 ];
 /**
@@ -128,6 +130,20 @@ function agentAskedQuestion(assistantText: string | undefined): boolean {
   return lastLine.includes("?");
 }
 
+// Verbs added after #250 (build-something verbs). They stand down when the agent's last reply
+// proposed a plan, because the request then points at that plan.
+const PLAN_FOLLOW_UP_VERB = String.raw`(?:implement|create|insert|include|implement[ae]|implementar|cri[ae]|criar|inclu[ia]|incluir|insir[ae]|inserir)`;
+const PLAN_FOLLOW_UP_REQUEST = new RegExp(
+  `${CLAUSE_START}${POLITE_PREFIX}${PLAN_FOLLOW_UP_VERB}(?![\\p{L}\\p{N}_])`,
+  "iu",
+);
+/** A plan: a "plan"/"plano"/"steps" heading or at least two numbered or bulleted lines. */
+function agentProposedPlan(assistantText: string | undefined): boolean {
+  if (!assistantText) return false;
+  if (/\b(?:plan|plano|proposed\s+steps|passos|etapas)\b\s*[:\n]/i.test(assistantText)) return true;
+  return (assistantText.match(/^\s*(?:\d+[.)]|[-*•])\s+\S/gm) ?? []).length >= 2;
+}
+
 function lacksTarget(input: IntentGateInput): boolean {
   if (input.askMissingTarget === false || input.mode !== "build") return false;
   // Long requests describe themselves; skip the regex scan entirely (bounded cost).
@@ -144,6 +160,8 @@ function lacksTarget(input: IntentGateInput): boolean {
     return false;
   }
   if (agentAskedQuestion(assistantText) && AFFIRMATIVE_REPLY.test(input.text)) return false;
+  // "Implement the feature" right after the agent laid out a plan refers to that plan.
+  if (agentProposedPlan(assistantText) && PLAN_FOLLOW_UP_REQUEST.test(input.text)) return false;
   return true;
 }
 

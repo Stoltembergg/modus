@@ -248,6 +248,53 @@ describe("evaluateIntentGate", () => {
     { label: "proceed", note: "lowercase composer", text: "Arruma o composer por favor" },
     { label: "clarify", note: "generic noun", text: "fix the button" },
     { label: "clarify", note: "generic noun pt", text: "Ajusta o modal" },
+    // Build verbs stand down only when the agent's last reply proposed a plan
+    { label: "clarify", note: "create, no context", text: "Create a new one" },
+    {
+      label: "proceed",
+      note: "implement after agent plan",
+      text: "Implement the feature",
+      extra: {
+        previousTurn: assistant(
+          "Plan:\n1. Add a retry counter to the session.\n2. Back off between attempts.\nWant me to go ahead?",
+        ),
+      },
+    },
+    {
+      label: "proceed",
+      note: "cria after agent numbered steps",
+      text: "Cria isso",
+      extra: { previousTurn: assistant("1. Novo hook de tema\n2. Toggle nas configurações") },
+    },
+    {
+      label: "clarify",
+      note: "create after a reply with no plan",
+      text: "Create a new one",
+      extra: { previousTurn: assistant("Done. Anything else?") },
+    },
+    {
+      label: "clarify",
+      note: "plan does not cover other verbs",
+      text: "fix it",
+      extra: { previousTurn: assistant("Plan:\n1. Add a retry counter.\n2. Back off.") },
+    },
+    // Translation with a named language counts as a target (Debbie, review of 3f89c081)
+    { label: "proceed", note: "translate + language pt", text: "traduz pra inglês" },
+    { label: "proceed", note: "translate + language en", text: "translate to english" },
+    {
+      label: "proceed",
+      note: "translate + language + por favor",
+      text: "traduz isso pra inglês por favor",
+    },
+    {
+      label: "proceed",
+      note: "translate + language no accent",
+      text: "Traduz isso para Portugues",
+    },
+    { label: "proceed", note: "translate + language en caps", text: "Translate it into Spanish" },
+    { label: "clarify", note: "translate, no language", text: "traduz isso" },
+    // Known gap (Debbie: minor, non-blocking): a setting name without a file still asks
+    { label: "clarify", note: "known gap: setting name", text: "ativa o modo escuro" },
     // Follow-up 3: edit verbs missing from #250 (each asks without a target, proceeds with one)
     ...(
       [
