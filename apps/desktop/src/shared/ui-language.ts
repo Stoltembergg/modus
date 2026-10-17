@@ -1,8 +1,10 @@
 /**
  * App language (v0.1.11 language selector), shared by main, preload and renderer.
  *
- * The user picks "system" (the default) or one of the languages that ship a
- * complete UI catalog (Settings + app shell + native menu / dialogs).
+ * The user picks "system" or one of the languages that ship a complete UI
+ * catalog (Settings + app shell + native menu / dialogs). The default is
+ * English (C6.2) until the whole app is translated, so a first run never opens
+ * a half-translated window; "system" is opt-in.
  * "system" maps the OS preferred languages to that list by language with a
  * region fallback: pt-PT → pt-BR when there is no pt-PT catalog, en-GB → en,
  * anything unknown → en.
@@ -33,7 +35,7 @@ export const UI_LANGUAGES: readonly UiLanguageOption[] = [
   { id: "pt-BR", nativeName: "Português (Brasil)", intlLocale: "pt-BR" },
 ];
 
-export const DEFAULT_UI_LANGUAGE_PREFERENCE: UiLanguagePreference = "system";
+export const DEFAULT_UI_LANGUAGE_PREFERENCE: UiLanguagePreference = "en";
 export const FALLBACK_UI_LANGUAGE: UiLanguageId = "en";
 
 export const UI_LANGUAGE_PREFERENCES: readonly UiLanguagePreference[] = [
@@ -101,9 +103,21 @@ export function matchSystemLanguage(systemLocales: readonly string[]): {
 }
 
 /**
- * Resolve the preference against the OS. Under "system" the `Intl` tag keeps
- * the OS region (en-GB dates for an en-GB user); an explicit choice uses that
- * language's own tag.
+ * The first OS entry in the given language, canonicalised (en-GB for an en-GB
+ * user who picked English), so an explicit choice still keeps the OS region.
+ */
+function osTagForLanguage(id: UiLanguageId, systemLocales: readonly string[]): string | undefined {
+  for (const entry of systemLocales) {
+    const tag = canonical(entry);
+    if (tag && languageOf(tag) === languageOf(id)) return tag;
+  }
+  return undefined;
+}
+
+/**
+ * Resolve the preference against the OS. The `Intl` tag keeps the OS region
+ * whenever the OS lists the same language (en-GB dates for an en-GB user, under
+ * "system" or with "English" picked); otherwise it is the language's own tag.
  */
 export function resolveUiLanguage(
   preference: UiLanguagePreference,
@@ -114,7 +128,7 @@ export function resolveUiLanguage(
     return {
       preference,
       language: preference,
-      intlLocale: uiLanguageOption(preference).intlLocale,
+      intlLocale: osTagForLanguage(preference, locales) ?? uiLanguageOption(preference).intlLocale,
       systemLocales: locales,
     };
   }

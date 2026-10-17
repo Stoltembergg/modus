@@ -10,7 +10,8 @@ import { SelectField } from "./form-controls";
 import { SettingsList, SettingsRow } from "./settings-layout";
 
 /**
- * Settings > General > Language. "System" (default) follows the OS language;
+ * Settings > General > Language. English is the default (C6.2); "System"
+ * follows the OS language;
  * each language is listed by its own name ("Português (Brasil)", "English"),
  * never translated into the current UI language. The change is live: main
  * persists it, rebuilds the native menu and pushes the new `<html lang>`.

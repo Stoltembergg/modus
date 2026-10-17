@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { matchSystemLanguage, resolveUiLanguage, UI_LANGUAGES } from "./ui-language";
+import {
+  DEFAULT_UI_LANGUAGE_PREFERENCE,
+  matchSystemLanguage,
+  resolveUiLanguage,
+  UI_LANGUAGES,
+} from "./ui-language";
 
 describe("System language mapping (OS locale → shipped language)", () => {
   it.each([
@@ -26,7 +31,7 @@ describe("System language mapping (OS locale → shipped language)", () => {
     expect(matchSystemLanguage(["en-GB", "pt-BR"]).language).toBe("en");
   });
 
-  it("an explicit choice ignores the OS and uses that language's own Intl tag", () => {
+  it("an explicit choice uses that language's own Intl tag when the OS has another language", () => {
     expect(resolveUiLanguage("en", ["pt-BR"])).toMatchObject({
       language: "en",
       intlLocale: "en-US",
@@ -35,6 +40,21 @@ describe("System language mapping (OS locale → shipped language)", () => {
       language: "pt-BR",
       intlLocale: "pt-BR",
     });
+  });
+
+  it("English picked on an en-GB OS keeps en-GB dates", () => {
+    const state = resolveUiLanguage("en", ["en-GB"]);
+    expect(state).toMatchObject({ language: "en", intlLocale: "en-GB" });
+    expect(new Intl.DateTimeFormat(state.intlLocale).format(new Date(2026, 9, 17))).toBe(
+      "17/10/2026",
+    );
+    // The first OS entry in that language decides the region.
+    expect(resolveUiLanguage("en", ["pt-BR", "en-GB"]).intlLocale).toBe("en-GB");
+    expect(resolveUiLanguage("pt-BR", ["pt-PT"]).intlLocale).toBe("pt-PT");
+  });
+
+  it("the default preference is English, not System (C6.2)", () => {
+    expect(DEFAULT_UI_LANGUAGE_PREFERENCE).toBe("en");
   });
 
   it("lists each language by its own native name", () => {

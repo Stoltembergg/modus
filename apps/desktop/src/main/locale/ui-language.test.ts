@@ -45,13 +45,29 @@ function fakeWindow() {
 }
 
 describe("language store (userData/ui-language.json)", () => {
-  it("defaults to System when missing, unreadable or unknown", () => {
+  it("defaults to English when missing, unreadable or unknown", () => {
     const dir = tempDir();
-    expect(createUiLanguageStore(dir).read()).toBe("system");
+    expect(createUiLanguageStore(dir).read()).toBe("en");
     writeFileSync(join(dir, UI_LANGUAGE_FILE_NAME), "not json");
-    expect(createUiLanguageStore(dir).read()).toBe("system");
+    expect(createUiLanguageStore(dir).read()).toBe("en");
     writeFileSync(join(dir, UI_LANGUAGE_FILE_NAME), '{"language":"fr-FR"}');
-    expect(createUiLanguageStore(dir).read()).toBe("system");
+    expect(createUiLanguageStore(dir).read()).toBe("en");
+  });
+
+  it("first run opens in English even with the OS in Portuguese", () => {
+    const controller = createUiLanguageController({
+      store: createUiLanguageStore(tempDir()),
+      systemLocales: () => ["pt-BR"],
+    });
+    expect(controller.getState()).toMatchObject({
+      preference: "en",
+      language: "en",
+      intlLocale: "en-US",
+    });
+    const argument = controller.rendererArgument();
+    expect(JSON.parse(argument.slice(UI_LANGUAGE_ARGUMENT_PREFIX.length))).toMatchObject({
+      language: "en",
+    });
   });
 
   it("persists across a reload: a new controller on the same userData starts in the chosen language", () => {
@@ -81,8 +97,10 @@ describe("language store (userData/ui-language.json)", () => {
 describe("language controller", () => {
   it("System follows the OS locale, re-read when a window regains focus", () => {
     let os = ["pt-PT"];
+    const dir = tempDir();
+    writeFileSync(join(dir, UI_LANGUAGE_FILE_NAME), '{"language":"system"}');
     const controller = createUiLanguageController({
-      store: createUiLanguageStore(tempDir()),
+      store: createUiLanguageStore(dir),
       systemLocales: () => os,
     });
     expect(controller.getState()).toMatchObject({

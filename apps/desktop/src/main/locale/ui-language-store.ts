@@ -17,7 +17,7 @@ export type UiLanguageStore = {
  * The language preference as a small JSON file in Electron `userData`, next to
  * appearance.json. Read synchronously before the window exists, so the first
  * frame and the native menu are already in the chosen language. A missing,
- * unreadable or unknown value reads as "system".
+ * unreadable or unknown value reads as the default, English (C6.2).
  */
 export function createUiLanguageStore(userDataDir: string): UiLanguageStore {
   const filePath = join(userDataDir, UI_LANGUAGE_FILE_NAME);
