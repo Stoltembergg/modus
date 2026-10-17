@@ -6,6 +6,7 @@
  * no locale means English.
  */
 import { type GroupRoomLocale, resolveGroupRoomLocale } from "./group-room-locale";
+import { lookupCatalogText } from "./i18n-catalog";
 
 export const SHELL_TEXT_EN = {
   "shell.projects": "Projects",
@@ -123,7 +124,7 @@ export const SHELL_TEXT_ZH: Record<ShellTextKey, string> = {
   "shell.run.spawningSubagent": "正在启动子代理",
 };
 
-const SHELL_TEXT: Record<GroupRoomLocale, Record<ShellTextKey, string>> = {
+const SHELL_TEXT: Record<GroupRoomLocale, Partial<Record<ShellTextKey, string>>> = {
   en: SHELL_TEXT_EN,
   pt: SHELL_TEXT_PT,
   zh: SHELL_TEXT_ZH,
@@ -139,5 +140,8 @@ function fillShellText(template: string, vars?: ShellTextVars): string {
 }
 
 export function shellText(key: ShellTextKey, locale?: string | null, vars?: ShellTextVars): string {
-  return fillShellText(SHELL_TEXT[resolveGroupRoomLocale(locale)][key], vars);
+  return fillShellText(
+    lookupCatalogText(SHELL_TEXT_EN, SHELL_TEXT[resolveGroupRoomLocale(locale)], key),
+    vars,
+  );
 }

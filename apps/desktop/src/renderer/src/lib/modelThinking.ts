@@ -1,4 +1,5 @@
 import type { ThinkingBudget, ThinkingLevel, ThinkingOption } from "../../../shared/contracts";
+import { formatUiNumber } from "./uiIntl";
 
 type ModelThinkingOwner = {
   thinkingLevel: ThinkingLevel;
@@ -33,7 +34,7 @@ export function selectedThinkingLabel(model: ModelThinkingOwner): string {
   if (model.thinkingBudget) {
     const tokens = Number(model.thinkingVariant);
     return model.thinkingLevel !== "off" && Number.isSafeInteger(tokens)
-      ? `${tokens.toLocaleString()} tokens`
+      ? `${formatUiNumber(tokens)} tokens`
       : "Off";
   }
   return selectedThinkingOption(model).label;

@@ -3,9 +3,21 @@ import { useEffect, useState } from "react";
 import type { SkillInfo } from "../../../../../shared/contracts";
 import { CollapsibleMotion } from "../../../components/ui/CollapsibleMotion";
 import { WorkingText } from "../../../components/ui/WorkingText";
+import { type SettingsTextFn, settingsTextFor, useSettingsText } from "../../../lib/settingsText";
+import { textWithNodes } from "../../../lib/settingsTextNodes";
 import { SettingsList, SettingsPageHeader, SettingsSection } from "../settings-layout";
 
+function scopeBadge(skill: SkillInfo, t: SettingsTextFn = settingsTextFor()): string {
+  if (skill.scope === "builtin") {
+    return t("settings.skillsRules.scopeBuiltin");
+  }
+  return skill.scope === "user"
+    ? t("settings.skillsRules.scopeUser", { source: skill.source })
+    : t("settings.skillsRules.scopeProject", { source: skill.source });
+}
+
 export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
+  const t = useSettingsText();
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [skillsError, setSkillsError] = useState<string | undefined>();
@@ -61,13 +73,6 @@ export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
     }
   }
 
-  function scopeBadge(skill: SkillInfo): string {
-    if (skill.scope === "builtin") {
-      return "builtin";
-    }
-    return skill.scope === "user" ? `user · ${skill.source}` : `project · ${skill.source}`;
-  }
-
   return (
     <>
       <SettingsPageHeader
@@ -80,7 +85,7 @@ export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
               type="button"
             >
               <IconWorld size={14} stroke={1.7} />
-              Open folder
+              {t("settings.skillsRules.openFolder")}
             </button>
             <button
               className="flex h-8 items-center gap-1.5 rounded-md bg-fg px-2.5 text-canvas text-xs transition-colors hover:bg-fg-muted disabled:opacity-40"
@@ -89,12 +94,12 @@ export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
               type="button"
             >
               <IconPlus size={14} stroke={2} />
-              New
+              {t("settings.skillsRules.new")}
             </button>
           </>
         }
         singleLineDescription
-        title="Skills"
+        title={t("settings.skillsRules.skillsTitle")}
       />
 
       {skillsError ? <p className="-mt-4 text-danger text-xs">{skillsError}</p> : null}
@@ -102,32 +107,30 @@ export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
       <CollapsibleMotion open={creating && Boolean(cwd)} preset="default">
         <div className="flex flex-col gap-3 rounded-lg border border-hairline-soft bg-panel px-5 py-4">
           <label className="flex flex-col gap-1.5">
-            <span className="text-xs text-fg-subtle">Name</span>
+            <span className="text-xs text-fg-subtle">{t("settings.skillsRules.name")}</span>
             <input
               className="h-8 rounded-md border border-hairline bg-surface px-2.5 text-sm text-fg outline-none focus:border-focus-ring"
               onChange={(event) => setDraftName(event.target.value)}
-              placeholder="code-review"
+              placeholder={t("settings.skillsRules.namePlaceholder")}
               value={draftName}
             />
           </label>
           <label className="flex flex-col gap-1.5">
-            <span className="text-xs text-fg-subtle">Description</span>
+            <span className="text-xs text-fg-subtle">{t("settings.skillsRules.description")}</span>
             <textarea
               className="scroll-thin min-h-[68px] resize-none rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-fg leading-5 outline-none focus:border-focus-ring"
               maxLength={280}
               onChange={(event) => setDraftDescription(event.target.value)}
-              placeholder="Review a diff for correctness and security"
+              placeholder={t("settings.skillsRules.descriptionPlaceholder")}
               value={draftDescription}
             />
           </label>
           <label className="flex flex-col gap-1.5">
-            <span className="text-xs text-fg-subtle">Instructions</span>
+            <span className="text-xs text-fg-subtle">{t("settings.skillsRules.instructions")}</span>
             <textarea
               className="scroll-thin min-h-48 resize-y rounded-md border border-hairline bg-surface px-3 py-2 font-mono text-xs text-fg leading-5 outline-none placeholder:text-fg-faint focus:border-focus-ring"
               onChange={(event) => setDraftBody(event.target.value)}
-              placeholder={
-                "# code-review\n\nUse this skill when reviewing code.\n\n## Steps\n\n1. Read the diff.\n2. Find correctness risks.\n3. Return concise findings first."
-              }
+              placeholder={t("settings.skillsRules.instructionsPlaceholder")}
               value={draftBody}
             />
           </label>
@@ -137,7 +140,7 @@ export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
               onClick={() => setCreating(false)}
               type="button"
             >
-              Cancel
+              {t("settings.skillsRules.cancel")}
             </button>
             <button
               className="flex h-8 items-center gap-1.5 rounded-md bg-fg px-3 text-canvas text-xs transition-colors hover:bg-fg-muted disabled:opacity-40"
@@ -146,30 +149,33 @@ export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
               type="button"
             >
               {saving ? (
-                <WorkingText className="text-canvas">Creating…</WorkingText>
+                <WorkingText className="text-canvas">
+                  {t("settings.skillsRules.creating")}
+                </WorkingText>
               ) : (
-                "Create skill"
+                t("settings.skillsRules.createSkill")
               )}
             </button>
           </div>
         </div>
       </CollapsibleMotion>
 
-      <SettingsSection title="Available skills">
+      <SettingsSection title={t("settings.skillsRules.availableSkills")}>
         {!cwd ? (
           <div className="rounded-lg border border-hairline-soft bg-panel px-5 py-6">
-            <p className="text-sm text-fg-muted">Open a workspace to discover and create skills.</p>
+            <p className="text-sm text-fg-muted">{t("settings.skillsRules.noWorkspaceSkills")}</p>
           </div>
         ) : loading && skills.length === 0 ? (
           <div className="rounded-lg border border-hairline-soft bg-panel px-5 py-6 text-sm text-fg-muted">
-            <WorkingText>Discovering skills…</WorkingText>
+            <WorkingText>{t("settings.skillsRules.discoveringSkills")}</WorkingText>
           </div>
         ) : skills.length === 0 ? (
           <div className="flex flex-col items-start gap-2 rounded-lg border border-hairline-soft bg-panel px-5 py-6">
             <p className="text-sm text-fg-muted">
-              No skills yet. Create one, or drop a{" "}
-              <span className="font-mono text-xs">SKILL.md</span> into{" "}
-              <span className="font-mono text-xs">.modus/skills/&lt;name&gt;/</span>.
+              {textWithNodes(t("settings.skillsRules.noSkills"), {
+                file: <span className="font-mono text-xs">SKILL.md</span>,
+                dir: <span className="font-mono text-xs">.modus/skills/&lt;name&gt;/</span>,
+              })}
             </p>
           </div>
         ) : (
@@ -191,7 +197,7 @@ export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
                   ) : null}
                 </div>
                 <span className="shrink-0 rounded-full bg-chip-faint px-1.5 py-px text-2xs text-fg-faint">
-                  {scopeBadge(skill)}
+                  {scopeBadge(skill, t)}
                 </span>
               </div>
             ))}

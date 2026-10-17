@@ -1,5 +1,6 @@
 import type { FileChangeStat, WorkingChangeStats } from "../../../../../shared/contracts";
 import { cn } from "../../../lib/cn";
+import { formatUiNumber, useUiIntlLocale } from "../../../lib/uiIntl";
 
 /**
  * Shared change-summary primitives: green/red ± line counters and per-file
@@ -16,10 +17,11 @@ export function LineDelta({
   removed: number;
   muted?: boolean;
 }) {
+  const locale = useUiIntlLocale();
   return (
     <span className={cn("shrink-0 font-mono text-xs tabular-nums", muted && "opacity-80")}>
-      <span className="text-success">+{added.toLocaleString()}</span>{" "}
-      <span className="text-danger">-{removed.toLocaleString()}</span>
+      <span className="text-success">+{formatUiNumber(added, undefined, locale)}</span>{" "}
+      <span className="text-danger">-{formatUiNumber(removed, undefined, locale)}</span>
     </span>
   );
 }

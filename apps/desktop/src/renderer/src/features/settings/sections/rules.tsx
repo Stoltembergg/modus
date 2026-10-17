@@ -8,6 +8,8 @@ import type {
 } from "../../../../../shared/contracts";
 import { WorkingText } from "../../../components/ui/WorkingText";
 import { cn } from "../../../lib/cn";
+import { useSettingsText } from "../../../lib/settingsText";
+import { textWithNodes } from "../../../lib/settingsTextNodes";
 import {
   ReadOnlyPill,
   SettingsList,
@@ -16,6 +18,7 @@ import {
 } from "../settings-layout";
 
 export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
+  const t = useSettingsText();
   const [rules, setRules] = useState<RuleFileInfo[]>([]);
   const [agents, setAgents] = useState<WorkspaceAgentsState | undefined>();
   const [draft, setDraft] = useState("");
@@ -75,7 +78,11 @@ export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
       const next = await window.modus.rules.saveAgents({ cwd, content: draft });
       setAgents(next);
       setDraft(next.content);
-      setMessage(next.exists ? "AGENTS.md saved." : "AGENTS.md created.");
+      setMessage(
+        next.exists
+          ? t("settings.skillsRules.agentsSaved")
+          : t("settings.skillsRules.agentsCreated"),
+      );
       setRules(await window.modus.rules.list(cwd));
     } catch (error) {
       setRulesError(error instanceof Error ? error.message : String(error));
@@ -108,7 +115,11 @@ export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
               type="button"
             >
               <IconRefresh size={14} stroke={1.7} />
-              {loading ? <WorkingText>Refreshing…</WorkingText> : "Refresh"}
+              {loading ? (
+                <WorkingText>{t("settings.skillsRules.refreshing")}</WorkingText>
+              ) : (
+                t("settings.skillsRules.refresh")
+              )}
             </button>
             <button
               className="flex h-8 items-center gap-1.5 rounded-md bg-fg px-2.5 text-canvas text-xs transition-colors hover:bg-fg-muted disabled:opacity-40"
@@ -118,44 +129,52 @@ export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
             >
               <IconCheck size={13} stroke={2} />
               {saving ? (
-                <WorkingText className="text-canvas">Saving…</WorkingText>
+                <WorkingText className="text-canvas">
+                  {t("settings.skillsRules.saving")}
+                </WorkingText>
               ) : agents?.exists ? (
-                "Save"
+                t("settings.skillsRules.save")
               ) : (
-                "Create AGENTS.md"
+                t("settings.skillsRules.createAgents")
               )}
             </button>
           </>
         }
-        title="Rules"
+        title={t("settings.skillsRules.rulesTitle")}
       />
 
       {rulesError ? <p className="-mt-4 text-danger text-xs">{rulesError}</p> : null}
       {message ? <p className="-mt-4 text-success text-xs">{message}</p> : null}
 
       <SettingsSection
-        title="AGENTS.md"
+        title={t("settings.skillsRules.agentsSectionTitle")}
         description={
           exampleLoaded
-            ? "Edit this example, then save it to your workspace."
-            : "Applied automatically in this workspace."
+            ? t("settings.skillsRules.editExampleDescription")
+            : t("settings.skillsRules.appliedAutomaticallyDescription")
         }
       >
         {!cwd ? (
           <div className="rounded-lg border border-hairline-soft bg-panel px-5 py-6">
-            <p className="text-sm text-fg-muted">Open a workspace to edit project rules.</p>
+            <p className="text-sm text-fg-muted">
+              {t("settings.skillsRules.noWorkspaceEditRules")}
+            </p>
           </div>
         ) : (
           <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-2">
-              <ReadOnlyPill>{agents?.exists ? "On disk" : "Example (not saved)"}</ReadOnlyPill>
+              <ReadOnlyPill>
+                {agents?.exists
+                  ? t("settings.skillsRules.onDisk")
+                  : t("settings.skillsRules.exampleNotSaved")}
+              </ReadOnlyPill>
               <button
                 className="flex h-8 items-center gap-1.5 rounded-md border border-hairline bg-surface px-2.5 text-xs text-fg transition-colors hover:bg-hover disabled:opacity-40"
                 disabled={!agents || loading || saving}
                 onClick={useExample}
                 type="button"
               >
-                Reset to example
+                {t("settings.skillsRules.resetToExample")}
               </button>
               {agents?.exists ? (
                 <button
@@ -173,7 +192,7 @@ export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
                   type="button"
                 >
                   <IconFileText size={14} stroke={1.7} />
-                  Open file
+                  {t("settings.skillsRules.openFile")}
                 </button>
               ) : null}
             </div>
@@ -184,7 +203,7 @@ export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
                 setDraft(event.target.value);
                 setMessage(undefined);
               }}
-              placeholder="Project rules…"
+              placeholder={t("settings.skillsRules.projectRulesPlaceholder")}
               spellCheck={false}
               value={loading ? "" : draft}
             />
@@ -192,22 +211,25 @@ export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
         )}
       </SettingsSection>
 
-      <SettingsSection title="Detected rule files">
+      <SettingsSection title={t("settings.skillsRules.detectedRuleFiles")}>
         {!cwd ? (
           <div className="rounded-lg border border-hairline-soft bg-panel px-5 py-6">
-            <p className="text-sm text-fg-muted">Open a workspace to discover project rules.</p>
+            <p className="text-sm text-fg-muted">
+              {t("settings.skillsRules.noWorkspaceDiscoverRules")}
+            </p>
           </div>
         ) : loading && rules.length === 0 && !agents ? (
           <div className="rounded-lg border border-hairline-soft bg-panel px-5 py-6 text-sm text-fg-muted">
-            <WorkingText>Scanning workspace…</WorkingText>
+            <WorkingText>{t("settings.skillsRules.scanningWorkspace")}</WorkingText>
           </div>
         ) : rules.length === 0 ? (
           <div className="flex flex-col items-start gap-2 rounded-lg border border-hairline-soft bg-panel px-5 py-6">
             <p className="text-sm text-fg-muted">
-              No rule files on disk yet. Save the example above to create{" "}
-              <span className="font-mono text-xs">AGENTS.md</span>, or add{" "}
-              <span className="font-mono text-xs">.cursor/rules/*.mdc</span> with{" "}
-              <span className="font-mono text-xs">alwaysApply: true</span>.
+              {textWithNodes(t("settings.skillsRules.noRuleFiles"), {
+                agents: <span className="font-mono text-xs">AGENTS.md</span>,
+                cursorRules: <span className="font-mono text-xs">.cursor/rules/*.mdc</span>,
+                alwaysApply: <span className="font-mono text-xs">alwaysApply: true</span>,
+              })}
             </p>
           </div>
         ) : (
@@ -234,7 +256,7 @@ export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
                   ) : null}
                   {rule.globs ? (
                     <p className="mt-0.5 truncate pl-7.5 font-mono text-2xs text-fg-faint">
-                      globs: {rule.globs}
+                      {t("settings.skillsRules.globs", { globs: rule.globs })}
                     </p>
                   ) : null}
                 </div>
@@ -248,11 +270,10 @@ export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
       </SettingsSection>
 
       {cwd && autoApplied.length > 0 ? (
-        <SettingsSection title="Auto-applied">
+        <SettingsSection title={t("settings.skillsRules.autoAppliedTitle")}>
           <div className="rounded-lg border border-hairline-soft bg-panel px-5 py-4">
             <p className="text-sm text-fg-muted">
-              {autoApplied.length} rule file{autoApplied.length === 1 ? "" : "s"} injected into the
-              system prompt for every new agent session in this workspace.
+              {t.plural("settings.skillsRules.autoAppliedDescription", autoApplied.length)}
             </p>
           </div>
         </SettingsSection>
@@ -275,14 +296,15 @@ function ruleSourceLabel(source: RuleSource): string {
 }
 
 function RuleModeBadge({ mode }: { mode: RuleMode }) {
+  const t = useSettingsText();
   const label =
     mode === "always"
-      ? "Always"
+      ? t("settings.skillsRules.ruleModeAlways")
       : mode === "glob"
-        ? "Glob"
+        ? t("settings.skillsRules.ruleModeGlob")
         : mode === "intelligent"
-          ? "Intelligent"
-          : "Manual";
+          ? t("settings.skillsRules.ruleModeIntelligent")
+          : t("settings.skillsRules.ruleModeManual");
   const tone =
     mode === "always"
       ? "bg-focus-ring-soft/15 text-focus-ring-soft"

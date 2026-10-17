@@ -23,6 +23,7 @@ import type {
 import { EmptyState } from "../../../components/ui/Panel";
 import { Tooltip } from "../../../components/ui/Tooltip";
 import { WorkingText } from "../../../components/ui/WorkingText";
+import { useSettingsText } from "../../../lib/settingsText";
 import { CustomProviderForm } from "../CustomProviderForm";
 import { DefaultModelSetting } from "../DefaultModelSetting";
 import { ProviderLogo } from "../ProviderLogo";
@@ -121,6 +122,7 @@ export function ModelProviderSettingsPanel({
   defaultModel?: string | undefined;
   onSetDefaultModel?(modelId: string): void;
 }) {
+  const t = useSettingsText();
   const [providerQuery, setProviderQuery] = useState("");
   const providers = useMemo(() => [...connected, ...popular], [connected, popular]);
 
@@ -129,9 +131,9 @@ export function ModelProviderSettingsPanel({
       <SettingsPageHeader
         actions={
           <>
-            <Tooltip content="Refresh providers">
+            <Tooltip content={t("settings.providers.refreshProviders")}>
               <button
-                aria-label="Refresh providers"
+                aria-label={t("settings.providers.refreshProviders")}
                 className="flex size-7 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg"
                 onClick={() => {
                   onError(undefined);
@@ -150,11 +152,11 @@ export function ModelProviderSettingsPanel({
               type="button"
             >
               <IconPlus size={14} stroke={2.1} />
-              Connect custom provider
+              {t("settings.providers.connectCustomProvider")}
             </button>
           </>
         }
-        title="Model & Provider"
+        title={t("settings.providers.title")}
       />
 
       {models && onSetDefaultModel ? (
@@ -253,6 +255,7 @@ function ProviderCatalog({
   onQueryChange(query: string): void;
   onSelectProvider(provider: ModelProviderInfo): void;
 }) {
+  const t = useSettingsText();
   const normalizedQuery = normalizeSearchValue(query);
   const visibleConnected = useMemo(
     () => connected.filter((provider) => providerMatchesQuery(provider, normalizedQuery)),
@@ -268,20 +271,18 @@ function ProviderCatalog({
     <section className="min-w-0">
       <div className="mb-3 flex items-end justify-between gap-4">
         <div className="min-w-0">
-          <h3 className="text-md font-normal text-fg">Providers</h3>
-          <p className="mt-1 text-xs text-fg-faint">
-            Connected, available, and custom providers in one place.
-          </p>
+          <h3 className="text-md font-normal text-fg">{t("settings.providers.catalogTitle")}</h3>
+          <p className="mt-1 text-xs text-fg-faint">{t("settings.providers.catalogDescription")}</p>
         </div>
-        <ReadOnlyPill>{`${visibleCount} shown`}</ReadOnlyPill>
+        <ReadOnlyPill>{t.plural("settings.providers.countShown", visibleCount)}</ReadOnlyPill>
       </div>
 
       <div className="overflow-hidden rounded-lg border border-hairline-soft bg-panel">
         <div className="border-hairline-soft border-b p-3">
           <SearchField
-            ariaLabel="Search providers"
+            ariaLabel={t("settings.providers.searchProviders")}
             onChange={onQueryChange}
-            placeholder="Search providers..."
+            placeholder={t("settings.providers.searchProvidersPlaceholder")}
             value={query}
           />
         </div>
@@ -289,7 +290,7 @@ function ProviderCatalog({
         <div className="scroll-thin max-h-[min(560px,calc(100vh-280px))] min-h-[320px] overflow-y-auto p-2">
           {visibleCount > 0 ? (
             <>
-              <ProviderGroup title="Connected">
+              <ProviderGroup title={t("settings.providers.groupConnected")}>
                 {visibleConnected.map((provider) => (
                   <ProviderCatalogRow
                     active={provider.id === currentProvider?.id}
@@ -300,7 +301,7 @@ function ProviderCatalog({
                 ))}
               </ProviderGroup>
 
-              <ProviderGroup title="Available">
+              <ProviderGroup title={t("settings.providers.groupAvailable")}>
                 {visiblePopular.map((provider) => (
                   <ProviderCatalogRow
                     active={provider.id === currentProvider?.id}
@@ -314,8 +315,8 @@ function ProviderCatalog({
           ) : (
             <EmptyState
               compact
-              description="Try another provider name, model count, or source."
-              hint="No providers found"
+              description={t("settings.providers.noProvidersFoundDescription")}
+              hint={t("settings.providers.noProvidersFoundHint")}
             />
           )}
         </div>
@@ -339,6 +340,7 @@ function ProviderConfigDialogShell({
   closeLabel: string;
   onClose(): void;
 }) {
+  const t = useSettingsText();
   return (
     <Dialog.Root
       onOpenChange={(nextOpen) => {
@@ -354,7 +356,7 @@ function ProviderConfigDialogShell({
           <Dialog.Popup className="popup-chrome flex h-[min(820px,calc(100vh-48px))] w-full max-w-[760px] flex-col overflow-hidden outline-none transition-[opacity,transform] duration-150 motion-reduce:transition-none data-ending-style:translate-y-2 data-ending-style:opacity-0 data-starting-style:translate-y-2 data-starting-style:opacity-0">
             <div className="flex h-[52px] items-center justify-between gap-3 px-5">
               <Dialog.Close
-                aria-label={`Back from ${title}`}
+                aria-label={t("settings.providers.backFrom", { title })}
                 className="flex size-7 shrink-0 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg"
               >
                 <IconArrowLeft size={16} stroke={1.7} />
@@ -415,12 +417,15 @@ function ProviderDetailDialog({
   onSetAllModels(enabled: boolean): void;
   onToggleModel(model: ProviderModelConfig, enabled: boolean): void;
 }) {
-  const title = detail ? `Configure ${detail.name}` : "Configure provider";
+  const t = useSettingsText();
+  const title = detail
+    ? t("settings.providers.configureProviderNamed", { name: detail.name })
+    : t("settings.providers.configureProvider");
 
   return (
     <ProviderConfigDialogShell
-      closeLabel="Close provider configuration"
-      description="Connect provider credentials and choose which models Modus should expose."
+      closeLabel={t("settings.providers.closeProviderConfiguration")}
+      description={t("settings.providers.providerDetailDescription")}
       open={open}
       title={title}
       onClose={onClose}
@@ -448,8 +453,8 @@ function ProviderDetailDialog({
       ) : (
         <EmptyState
           compact
-          description="The selected provider is not available anymore. Close this panel and choose another provider."
-          hint="Provider unavailable"
+          description={t("settings.providers.providerUnavailableDescription")}
+          hint={t("settings.providers.providerUnavailableHint")}
         />
       )}
     </ProviderConfigDialogShell>
@@ -467,24 +472,29 @@ function ProviderConnectionDialog({
   onClose(): void;
   onSelect(method: ProviderConnectionMethod): void;
 }) {
+  const t = useSettingsText();
   if (!provider) {
     return null;
   }
 
   return (
     <ProviderConfigDialogShell
-      closeLabel="Close connection method selection"
-      description="Choose how Modus should connect this provider."
+      closeLabel={t("settings.providers.closeConnectionMethodSelection")}
+      description={t("settings.providers.connectionDialogDescription")}
       open
-      title={`Connect ${provider.name}`}
+      title={t("settings.providers.connectProviderNamed", { name: provider.name })}
       onClose={onClose}
     >
       <div className="pt-5">
         <div className="flex items-center gap-3">
           <ProviderLogo framed={false} name={provider.name} provider={provider.id} size="lg" />
           <div>
-            <h3 className="text-md font-normal text-fg">Connect {provider.name}</h3>
-            <p className="mt-1 text-xs text-fg-faint">Choose a sign-in method.</p>
+            <h3 className="text-md font-normal text-fg">
+              {t("settings.providers.connectProviderNamed", { name: provider.name })}
+            </h3>
+            <p className="mt-1 text-xs text-fg-faint">
+              {t("settings.providers.chooseSignInMethod")}
+            </p>
           </div>
         </div>
         <div className="mt-7 grid gap-2">
@@ -523,6 +533,7 @@ function ProviderAuthDialog({
   onCancel(): void;
   onRespond(value: string | undefined): void;
 }) {
+  const t = useSettingsText();
   const [value, setValue] = useState("");
 
   if (!operation) {
@@ -538,15 +549,17 @@ function ProviderAuthDialog({
 
   return (
     <ProviderConfigDialogShell
-      closeLabel="Cancel provider sign-in"
-      description="Complete the provider sign-in in the requested browser or device flow."
+      closeLabel={t("settings.providers.cancelProviderSignIn")}
+      description={t("settings.providers.authDialogDescription")}
       open
-      title="Complete sign-in"
+      title={t("settings.providers.completeSignIn")}
       onClose={onCancel}
     >
       <div className="pt-5">
-        <h3 className="text-md font-normal text-fg">Complete sign-in</h3>
-        <p className="mt-2 text-sm text-fg-muted">{operation.message ?? "Waiting for sign-in…"}</p>
+        <h3 className="text-md font-normal text-fg">{t("settings.providers.completeSignIn")}</h3>
+        <p className="mt-2 text-sm text-fg-muted">
+          {operation.message ?? t("settings.providers.waitingForSignIn")}
+        </p>
 
         {operation.status === "select" ? (
           <div className="mt-6 grid gap-2">
@@ -569,7 +582,9 @@ function ProviderAuthDialog({
           <div className="mt-6 space-y-3">
             {operation.userCode ? (
               <div className="rounded-md border border-hairline-soft bg-panel px-3 py-3">
-                <div className="text-2xs text-fg-faint">Verification code</div>
+                <div className="text-2xs text-fg-faint">
+                  {t("settings.providers.verificationCode")}
+                </div>
                 <div className="mt-1 font-mono text-lg text-fg">{operation.userCode}</div>
               </div>
             ) : null}
@@ -582,7 +597,7 @@ function ProviderAuthDialog({
                   type="button"
                 >
                   <IconCopy size={13} stroke={1.7} />
-                  Copy link
+                  {t("settings.providers.copyLink")}
                 </button>
               </div>
             ) : null}
@@ -614,14 +629,14 @@ function ProviderAuthDialog({
               disabled={busy || !canSubmit}
               type="submit"
             >
-              Continue
+              {t("settings.providers.continue")}
             </button>
           </form>
         ) : null}
 
         {operation.status === "pending" ? (
           <div className="mt-6 text-sm text-fg-faint">
-            <WorkingText>Waiting for provider…</WorkingText>
+            <WorkingText>{t("settings.providers.waitingForProvider")}</WorkingText>
           </div>
         ) : null}
       </div>
@@ -642,12 +657,15 @@ function CustomProviderDialog({
   onComplete(provider: string): void;
   onError(message: string | undefined): void;
 }) {
-  const title = initial ? `Edit ${initial.name || initial.provider}` : "Connect custom provider";
+  const t = useSettingsText();
+  const title = initial
+    ? t("settings.providers.editProviderNamed", { name: initial.name || initial.provider })
+    : t("settings.providers.connectCustomProvider");
 
   return (
     <ProviderConfigDialogShell
-      closeLabel="Close custom provider dialog"
-      description="Connect an OpenAI, Anthropic or Gemini compatible endpoint and choose the models Modus should expose."
+      closeLabel={t("settings.providers.closeCustomProviderDialog")}
+      description={t("settings.providers.customProviderDescription")}
       open={open}
       title={title}
       onClose={onCancel}
@@ -680,6 +698,7 @@ export function UnofficialProviderInterstitialDialog({
   onCancel(): void;
   onConfirm(): void;
 }) {
+  const t = useSettingsText();
   const [checked, setChecked] = useState(false);
   // The dialog owner stays mounted across cancel/reopen, so the local
   // `checked` state would otherwise survive a dismissal and re-expose a
@@ -701,10 +720,10 @@ export function UnofficialProviderInterstitialDialog({
   // so the user must always explicitly opt in.
   return (
     <ProviderConfigDialogShell
-      closeLabel="Cancel Antigravity sign-in"
-      description="Acknowledge the unofficial-endpoints risk before Antigravity OAuth begins."
+      closeLabel={t("settings.providers.cancelAntigravitySignIn")}
+      description={t("settings.providers.acknowledgeRiskDescription")}
       open
-      title={`Acknowledge ${provider.name} risk`}
+      title={t("settings.providers.acknowledgeRiskTitle", { name: provider.name })}
       onClose={onCancel}
     >
       <div className="pt-5">
@@ -713,7 +732,7 @@ export function UnofficialProviderInterstitialDialog({
           <div>
             <h3 className="text-md font-normal text-fg">{provider.name}</h3>
             <p className="mt-1 text-xs text-fg-faint">
-              Unofficial provider — acknowledgement required before OAuth.
+              {t("settings.providers.unofficialProviderRequiredBeforeOAuth")}
             </p>
           </div>
         </div>

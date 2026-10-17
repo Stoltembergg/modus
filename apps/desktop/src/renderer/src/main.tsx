@@ -8,6 +8,7 @@ import { App } from "./app/App";
 import { reportRendererStartup } from "./app/startup-report";
 import { initAppearanceAttributes } from "./lib/appearance";
 import { initTheme } from "./lib/theme";
+import { initUiLanguage } from "./lib/uiLanguage";
 import "./styles/app.css";
 import "./styles/tokens-new.css";
 
@@ -34,6 +35,8 @@ function StartupCommitReporter() {
 // Paint the stored palette before first render (no theme flash).
 initTheme();
 initAppearanceAttributes();
+// `<html lang>` = the stored app language before the first frame.
+initUiLanguage();
 
 // The To-dos top-bar toggle is gone (pinned To-dos appears when the agent creates a checklist); drop its stale preference.
 try {

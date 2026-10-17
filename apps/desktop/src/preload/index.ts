@@ -14,6 +14,7 @@ import type {
   UpdateRestoreUiState,
   UpdateState,
 } from "../shared/contracts";
+import type { UiLanguageState } from "../shared/ui-language";
 import { resolveWindowAppearance } from "../shared/window-appearance";
 import type { ModusApi, SecurityState } from "./types";
 
@@ -35,6 +36,27 @@ function readInitialAppearance(): AppearanceState | null {
 }
 
 const initialAppearance = readInitialAppearance();
+
+const UI_LANGUAGE_ARGUMENT_PREFIX = "--modus-ui-language=";
+
+function readInitialUiLanguage(): UiLanguageState | null {
+  const raw = process.argv.find((arg) => arg.startsWith(UI_LANGUAGE_ARGUMENT_PREFIX));
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw.slice(UI_LANGUAGE_ARGUMENT_PREFIX.length)) as UiLanguageState;
+    return typeof parsed?.intlLocale === "string" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+const initialUiLanguage = readInitialUiLanguage();
+const uiLanguageListeners = new Set<(state: UiLanguageState) => void>();
+
+ipcRenderer.on("ui-language:event", (_event: IpcRendererEvent, state: UiLanguageState) => {
+  if (typeof state?.intlLocale !== "string") return;
+  for (const listener of uiLanguageListeners) listener(state);
+});
 let nativeGlassAvailable = initialAppearance?.glass ?? windowAppearance.glass === "native";
 const nativeGlassListeners = new Set<(available: boolean) => void>();
 const appearanceListeners = new Set<(state: AppearanceState) => void>();
@@ -64,6 +86,16 @@ const api: ModusApi = {
       onChange(handler) {
         appearanceListeners.add(handler);
         return () => appearanceListeners.delete(handler);
+      },
+    },
+    uiLanguage: {
+      initial: initialUiLanguage,
+      get: () => ipcRenderer.invoke("ui-language:get") as Promise<UiLanguageState>,
+      set: (preference) =>
+        ipcRenderer.invoke("ui-language:set", { preference }) as Promise<UiLanguageState>,
+      onChange(handler) {
+        uiLanguageListeners.add(handler);
+        return () => uiLanguageListeners.delete(handler);
       },
     },
     version: () => ipcRenderer.invoke("app:version") as Promise<string>,

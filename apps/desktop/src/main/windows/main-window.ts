@@ -15,6 +15,7 @@ import {
 import type { AppearanceController } from "../appearance/appearance-controller";
 import { IPC_CHANNELS } from "../ipc/channels";
 import { isTrustedRendererUrl, registerTrustedSender } from "../ipc/trusted-sender";
+import type { UiLanguageController } from "../locale/ui-language-controller";
 import type { StartupTimeline } from "../startup/startup-timeline";
 import { windowChromeOptionsFor } from "./window-options";
 
@@ -62,9 +63,12 @@ function resolveRendererTarget(
 export function createMainWindow({
   startupTimeline,
   appearance,
+  uiLanguage,
 }: {
   startupTimeline: StartupTimeline;
   appearance: Pick<AppearanceController, "attach" | "rendererArgument" | "getState">;
+  /** Optional so older call sites and tests keep working; the app always passes it. */
+  uiLanguage?: Pick<UiLanguageController, "attach" | "rendererArgument">;
 }): BrowserWindowType {
   const preloadPath = fileURLToPath(new URL("../preload/index.cjs", import.meta.url));
   const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
@@ -91,7 +95,10 @@ export function createMainWindow({
         nodeIntegration: false,
         sandbox: true,
         webSecurity: true,
-        additionalArguments: [appearance.rendererArgument()],
+        additionalArguments: [
+          appearance.rendererArgument(),
+          ...(uiLanguage ? [uiLanguage.rendererArgument()] : []),
+        ],
       },
     });
 
@@ -105,6 +112,7 @@ export function createMainWindow({
   }
   // Material, colours and the glass-off sequencing live in the appearance controller.
   appearance.attach(window, { nativeGlassAvailable });
+  uiLanguage?.attach(window);
   const ownerEpoch = registerPlanBuildOwner(window.webContents.id);
   startupTimeline.mark("main.window-created");
 

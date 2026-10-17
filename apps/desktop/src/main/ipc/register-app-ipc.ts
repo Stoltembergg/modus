@@ -18,6 +18,7 @@ import type {
   DiffTarget,
   ReaIntegrationStatus,
 } from "../../shared/contracts";
+import { mainText } from "../../shared/main-text";
 import {
   getRunWorkspaceRevision,
   listAgentEventPage,
@@ -206,6 +207,7 @@ import {
   denyPendingQuestionRequests,
   resolveQuestionRequest,
 } from "../interaction/question-broker";
+import { currentUiLocale, type UiLanguageController } from "../locale/ui-language-controller";
 import {
   deleteMcpServer,
   ensureMcpConfigFile,
@@ -360,6 +362,7 @@ import {
   workspaceRenameSchema,
 } from "./schemas";
 import { assertTrustedSender } from "./trusted-sender";
+import { registerUiLanguageIpcHandlers } from "./ui-language-ipc";
 import { registerUpdateIpcHandlers } from "./update-ipc";
 import { clearSelectedWorkspace } from "./workspace-selection";
 
@@ -409,10 +412,12 @@ function getSenderWindow(event: IpcMainInvokeEvent): BrowserWindowType {
 export function registerAppIpc({
   startupTimeline,
   appearance,
+  uiLanguage,
   reaIntegration,
 }: {
   startupTimeline?: StartupTimeline;
   appearance?: Pick<AppearanceController, "getState" | "set">;
+  uiLanguage?: Pick<UiLanguageController, "getState" | "set">;
   reaIntegration?: {
     getStatus: () => ReaIntegrationStatus;
     setEnabled: (enabled: boolean) => Promise<ReaIntegrationStatus>;
@@ -425,6 +430,7 @@ export function registerAppIpc({
     retry: () => getReaSessionManager().retry(),
   };
   if (appearance) registerAppearanceIpcHandlers(ipcMain, assertTrustedSender, appearance);
+  if (uiLanguage) registerUiLanguageIpcHandlers(ipcMain, assertTrustedSender, uiLanguage);
 
   // Validate explicit 1:1/group choices here. Agent App-default selection is sent as `null` so
   // the runtime can bypass stale hot/PI branch models; unlinked legacy rows stay unset to restore.
@@ -1867,7 +1873,7 @@ export function registerAppIpc({
     const parsed = parseIpcInput(dialogSaveImageSchema, input, IPC_CHANNELS.dialogSaveImage);
     const result = await dialog.showSaveDialog(getSenderWindow(event), {
       defaultPath: defaultPngName(parsed.defaultName),
-      filters: [{ name: "PNG Image", extensions: ["png"] }],
+      filters: [{ name: mainText("main.dialog.pngImage", currentUiLocale()), extensions: ["png"] }],
     });
     if (result.canceled || !result.filePath) {
       return { saved: false as const };
