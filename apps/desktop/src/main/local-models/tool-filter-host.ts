@@ -88,12 +88,19 @@ export class ToolFilterHost {
     await this.request({ type: "probe" }, this.probeTimeoutMs, true);
   }
 
-  async load(dir: string): Promise<{ rssBytes: number; loadMs: number }> {
-    const reply = await this.request({ type: "load", dir }, this.loadTimeoutMs, true);
+  async load(
+    dir: string,
+    cacheDir?: string,
+  ): Promise<{ rssBytes: number; loadMs: number; cachedDocs: number }> {
+    const reply = await this.request(
+      { type: "load", dir, ...(cacheDir ? { cacheDir } : {}) },
+      this.loadTimeoutMs,
+      true,
+    );
     this.loaded = true;
     return reply.type === "ok"
-      ? { rssBytes: reply.rssBytes, loadMs: reply.loadMs ?? 0 }
-      : { rssBytes: 0, loadMs: 0 };
+      ? { rssBytes: reply.rssBytes, loadMs: reply.loadMs ?? 0, cachedDocs: reply.cachedDocs ?? 0 }
+      : { rssBytes: 0, loadMs: 0, cachedDocs: 0 };
   }
 
   async warm(docs: WorkerDoc[]): Promise<void> {

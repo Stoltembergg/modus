@@ -77,7 +77,10 @@ export type ToolRankerStatus =
 export type RankerBackend = {
   running(): boolean;
   busy(): boolean;
-  load(dir: string): Promise<{ rssBytes: number; loadMs: number }>;
+  load(
+    dir: string,
+    cacheDir?: string,
+  ): Promise<{ rssBytes: number; loadMs: number; cachedDocs?: number }>;
   warm(docs: WorkerDoc[]): Promise<void>;
   select(input: {
     query: string;
@@ -100,6 +103,8 @@ export type EnsureFiles = (
 export type LocalToolRankerDeps = {
   isEnabled: () => boolean;
   dir: string;
+  /** On-disk doc-embedding cache, read and written by the model process (embed-cache.ts). */
+  cacheDir?: string;
   backend: RankerBackend;
   baseUrl?: string;
   ensureFiles?: EnsureFiles;
@@ -232,11 +237,11 @@ export function createLocalToolRanker(deps: LocalToolRankerDeps): LocalToolRanke
         return status;
       }
       setStatus({ state: "loading" });
-      const loaded = await backend.load(deps.dir);
+      const loaded = await backend.load(deps.dir, deps.cacheDir);
       attempts = 0;
       setStatus({ state: "ready", loadMs: loaded.loadMs, utilityRssBytes: loaded.rssBytes });
       log(
-        `rerank03 ready in the model process in ${loaded.loadMs} ms, utility rss ${Math.round(loaded.rssBytes / 1e6)} MB`,
+        `rerank03 ready in the model process in ${loaded.loadMs} ms, utility rss ${Math.round(loaded.rssBytes / 1e6)} MB, ${loaded.cachedDocs ?? 0} doc vectors from the disk cache`,
       );
       if (knownDocs.length > 0) void backend.warm(knownDocs).catch(() => undefined);
     } catch (error) {

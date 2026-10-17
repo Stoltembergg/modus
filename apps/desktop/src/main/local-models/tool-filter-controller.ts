@@ -7,6 +7,7 @@ import {
   type ToolFilterModel,
   type ToolFilterState,
 } from "../../shared/tool-filter";
+import { embedCacheDir } from "./embed-cache";
 import { manifestBytes, RERANK03_MODEL } from "./manifest";
 import { onnxRuntimeSupported } from "./onnx-runtime";
 import { type HostExitReason, type ModelProcess, ToolFilterHost } from "./tool-filter-host";
@@ -215,6 +216,7 @@ export function createToolFilterController(deps: ToolFilterControllerDeps): Tool
   const ranker = createLocalToolRanker({
     isEnabled: isOn,
     dir,
+    cacheDir: embedCacheDir(deps.userDataDir),
     backend: host,
     ...(deps.ensureFiles ? { ensureFiles: deps.ensureFiles } : {}),
     ...(deps.deadlineMs === undefined ? {} : { deadlineMs: deps.deadlineMs }),
