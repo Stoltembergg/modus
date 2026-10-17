@@ -211,6 +211,124 @@ describe("evaluateIntentGate", () => {
     { label: "proceed", note: "known file", text: "Atualize o README com as instruções de build" },
     { label: "proceed", note: "dotfile", text: "Add a .nvmrc file with Node 22" },
     { label: "proceed", note: "version", text: "Add a changelog entry for v0.1.7" },
+    // Follow-up 1: a trailing polite word reads the same as the request without it
+    { label: "clarify", note: "trailing please, no target", text: "fix it please" },
+    { label: "clarify", note: "trailing por favor, no target", text: "arruma isso por favor" },
+    { label: "clarify", note: "trailing pls, no target", text: "Fix the bug, pls" },
+    {
+      label: "proceed",
+      note: "trailing please + project target",
+      text: "Fix the failing tests please",
+    },
+    {
+      label: "proceed",
+      note: "trailing por favor + project target",
+      text: "Conserta os testes, por favor",
+    },
+    { label: "proceed", note: "trailing pls + project target", text: "fix the build pls" },
+    {
+      label: "proceed",
+      note: "trailing please + project target",
+      text: "Remove the unused import, please.",
+    },
+    {
+      label: "clarify",
+      note: "trailing please keeps open-ended",
+      text: "Improve the tests please",
+    },
+    // Follow-up 2: unique app surfaces count in any case; generic UI nouns still ask
+    {
+      label: "proceed",
+      note: "lowercase sidebar",
+      text: "Troque as bordas da sidebar por espaçamento",
+    },
+    { label: "proceed", note: "sidebar at start", text: "Sidebar: remove the divider" },
+    { label: "proceed", note: "lowercase header", text: "fix the header spacing" },
+    { label: "proceed", note: "barra lateral", text: "Ajusta a barra lateral" },
+    { label: "proceed", note: "lowercase composer", text: "Arruma o composer por favor" },
+    { label: "clarify", note: "generic noun", text: "fix the button" },
+    { label: "clarify", note: "generic noun pt", text: "Ajusta o modal" },
+    // Build verbs stand down only when the agent's last reply proposed a plan
+    { label: "clarify", note: "create, no context", text: "Create a new one" },
+    {
+      label: "proceed",
+      note: "implement after agent plan",
+      text: "Implement the feature",
+      extra: {
+        previousTurn: assistant(
+          "Plan:\n1. Add a retry counter to the session.\n2. Back off between attempts.\nWant me to go ahead?",
+        ),
+      },
+    },
+    {
+      label: "proceed",
+      note: "cria after agent numbered steps",
+      text: "Cria isso",
+      extra: { previousTurn: assistant("1. Novo hook de tema\n2. Toggle nas configurações") },
+    },
+    {
+      label: "clarify",
+      note: "create after a reply with no plan",
+      text: "Create a new one",
+      extra: { previousTurn: assistant("Done. Anything else?") },
+    },
+    {
+      label: "clarify",
+      note: "plan does not cover other verbs",
+      text: "fix it",
+      extra: { previousTurn: assistant("Plan:\n1. Add a retry counter.\n2. Back off.") },
+    },
+    // Translation with a named language counts as a target (Debbie, review of 3f89c081)
+    { label: "proceed", note: "translate + language pt", text: "traduz pra inglês" },
+    { label: "proceed", note: "translate + language en", text: "translate to english" },
+    {
+      label: "proceed",
+      note: "translate + language + por favor",
+      text: "traduz isso pra inglês por favor",
+    },
+    {
+      label: "proceed",
+      note: "translate + language no accent",
+      text: "Traduz isso para Portugues",
+    },
+    { label: "proceed", note: "translate + language en caps", text: "Translate it into Spanish" },
+    { label: "clarify", note: "translate, no language", text: "traduz isso" },
+    // Known gap (Debbie: minor, non-blocking): a setting name without a file still asks
+    { label: "clarify", note: "known gap: setting name", text: "ativa o modo escuro" },
+    // Follow-up 3: edit verbs missing from #250 (each asks without a target, proceeds with one)
+    ...(
+      [
+        ["Implement it", "Implement retry in session.ts"],
+        ["Create a new one", "Create a `useTheme` hook"],
+        ["Insert it here", "Insert a row in Sidebar.tsx"],
+        ["Include that too", "Include the icon in AppSidebar.tsx"],
+        ["Hide it", "Hide the sidebar"],
+        ["Disable that", "Disable `autoSave`"],
+        ["Enable it", "Enable strict mode in tsconfig.json"],
+        ["Revert that change", "Revert the change to intent-gate.ts"],
+        ["Undo it", "Undo the last edit to App.tsx"],
+        ["Translate it", 'Translate "Settings" to Portuguese'],
+        ["Center it", "Center the toolbar"],
+        ["Align them", "Align the icons in the header"],
+        ["Resize it", "Resize the composer"],
+        ["Implementa isso", "Implementa o retry em session.ts"],
+        ["Cria um novo", "Cria um hook `useTheme`"],
+        ["Inclui isso também", "Inclui o ícone no AppSidebar.tsx"],
+        ["Insira aqui", "Insira uma linha no Sidebar.tsx"],
+        ["Esconde isso", "Esconde a barra lateral"],
+        ["Desativa isso", "Desativa o `autoSave`"],
+        ["Ativa isso", "Ativa o modo estrito no tsconfig.json"],
+        ["Reverte isso", "Reverte a mudança no intent-gate.ts"],
+        ["Desfaz isso", "Desfaz a última edição no App.tsx"],
+        ["Traduz isso", 'Traduz "Settings" para português'],
+        ["Centraliza isso", "Centraliza o rodapé"],
+        ["Alinha isso", "Alinha os ícones do cabeçalho"],
+        ["Redimensiona isso", "Redimensiona o composer"],
+      ] as const
+    ).flatMap(([vague, named]) => [
+      { label: "clarify" as const, note: "new verb, no target", text: vague },
+      { label: "proceed" as const, note: "new verb, target", text: named },
+    ]),
     // Prior conversational context
     {
       label: "proceed",

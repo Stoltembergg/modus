@@ -3191,7 +3191,7 @@ describe("PiSdkRuntime", () => {
     await new PiSdkRuntime().prompt(createWindowStub(), {
       context: [],
       delivery: "normal",
-      message: "Implement the feature",
+      message: "Implement the feature in session.ts",
       sessionId,
       userMessageId: "todo-root-user",
     });
@@ -3288,7 +3288,7 @@ describe("PiSdkRuntime", () => {
     const result = await new PiSdkRuntime().prompt(createWindowStub(), {
       context: [],
       delivery: "normal",
-      message: "Implement the feature",
+      message: "Implement the feature in session.ts",
       sessionId,
       userMessageId: "cwd-moved-user",
     });
