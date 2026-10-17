@@ -192,13 +192,20 @@ describe("new look tokens: values", () => {
       saturateLight: decl(light, "--glass-saturate"),
       radii: ["xs", "sm", "md", "lg", "xl", "2xl"].map((r) => decl(dark, `--radius-${r}`)),
     }).toEqual({
-      chrome: "64%",
-      overlay: "90%",
-      blur: "20px",
+      chrome: "63%",
+      overlay: "86%",
+      blur: "24px",
       saturateDark: "1.3",
       saturateLight: "1.6",
       radii: ["6px", "8px", "10px", "14px", "18px", "24px"],
     });
+  });
+
+  it("(b) glass ruling (Gabriel 2026-10-13): more transparent than 64% / 90%, blur not lowered", () => {
+    expect(pct(decl(dark, "--glass-alpha-chrome"))).toBeLessThan(0.64);
+    expect(pct(decl(dark, "--glass-alpha-overlay"))).toBeLessThan(0.9);
+    const blur = Number(decl(dark, "--glass-blur")?.match(/^(\d+)px$/)?.[1]);
+    expect(blur).toBeGreaterThanOrEqual(20);
   });
 
   it("(b) one alpha set for both themes: light never overrides a glass alpha", () => {
@@ -248,7 +255,7 @@ describe("new look tokens: contrast gate", () => {
           `${at} muted`,
         ).toBeGreaterThanOrEqual(4.5);
         // TODO(redesign shell PR): subtle carries text-2xs labels and should reach
-        // 4.5:1 here (today ~4.27 dark / ~3.97 light over window glass on grey);
+        // 4.5:1 here (today ~4.20 dark / ~3.93 light over window glass on grey);
         // see "Redesign pending" item 1 in HANDOFF.md.
         expect(
           worst(color(theme, "--color-fg-subtle"), surface, [GREY]),
@@ -259,6 +266,37 @@ describe("new look tokens: contrast gate", () => {
           `${at} faint`,
         ).toBeGreaterThanOrEqual(3);
       }
+    }
+  });
+
+  it("(c) chat / Settings tint (#245, --glass-alpha-chat) stacked on the window glass", () => {
+    const chrome = pct(decl(dark, "--glass-alpha-chrome"));
+    const chat = pct(decl(appStrip, "--glass-alpha-chat"));
+    for (const theme of THEMES) {
+      const likely = theme === "light" ? WHITE : BLACK;
+      const panel = color(theme, "--color-panel");
+      const elevated = color(theme, "--color-elevated");
+      const stacked = (ink: Rgb, backdrops: Rgb[]) =>
+        Math.min(
+          ...backdrops.map((bg) => contrast(ink, over(chat, elevated, over(chrome, panel, bg)))),
+        );
+      const at = `${theme} chat on window`;
+      expect(
+        stacked(color(theme, "--color-fg"), [WHITE, GREY, BLACK]),
+        `${at} fg`,
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(
+        stacked(color(theme, "--color-fg-muted"), [GREY, likely]),
+        `${at} muted`,
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(
+        stacked(color(theme, "--color-fg-subtle"), [GREY]),
+        `${at} subtle`,
+      ).toBeGreaterThanOrEqual(3);
+      expect(
+        stacked(color(theme, "--color-fg-faint"), [GREY, likely]),
+        `${at} faint`,
+      ).toBeGreaterThanOrEqual(3);
     }
   });
 

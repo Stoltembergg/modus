@@ -9,10 +9,10 @@
  *
  * Glass: same D2 architecture (one tint + blur on .app-shell, panels
  * transparent on top). Tiers are tint colour + one alpha set for both themes:
- *   g0 window  --color-panel    @ --glass-alpha-chrome  64%
+ *   g0 window  --color-panel    @ --glass-alpha-chrome  63%
  *   g1 inset   --color-canvas   (main/inset surfaces; opaque in Sidebar/Off)
  *   g2 raised  --color-surface  (composer, cards, lists)
- *   g3 overlay --color-elevated @ --glass-alpha-overlay 90%
+ *   g3 overlay --color-elevated @ --glass-alpha-overlay 86%
  * Text contrast on these tiers, and the solid fallback at the end of this
  * file, are pinned by styles/tokensNew.test.ts.
  *
@@ -99,10 +99,13 @@
   --shadow-composer-focus: var(--shadow-1), 0 0 0 1px var(--color-focus-ring);
   --overlay-scrim-color: rgba(3, 6, 12, 0.42);
 
-  /* Glass */
-  --glass-alpha-chrome: 64%;
-  --glass-alpha-overlay: 90%;
-  --glass-blur: 20px;
+  /* Glass (Gabriel 2026-10-13: slightly more transparent than 64% / 90%, blur kept
+     high enough for legibility). These are the lowest alphas the contrast gate in
+     tokensNew.test.ts allows: chrome is held by dark fg over a white backdrop
+     (min 62.5%), overlay by light dialog-warning text (min 85.5%). */
+  --glass-alpha-chrome: 63%;
+  --glass-alpha-overlay: 86%;
+  --glass-blur: 24px;
   --glass-saturate: 1.3;
 
   /* Spacing */
