@@ -43,7 +43,7 @@ describe("windowChromeOptionsFor", () => {
     expect(
       windowChromeOptionsFor(host, { glass: true, effectiveTheme: "dark", look: "new" }),
     ).toMatchObject({
-      titleBarOverlay: { color: "#00000000", symbolColor: "#e7ebf1", height: 36 },
+      titleBarOverlay: { color: "#00000000", symbolColor: "#f2f4f8", height: 36 },
     });
     expect(
       windowChromeOptionsFor(host, { glass: true, effectiveTheme: "light", look: "new" }),

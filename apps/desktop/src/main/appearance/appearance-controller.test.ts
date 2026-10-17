@@ -225,7 +225,7 @@ describe("appearance controller", () => {
     expect(ok.raw.setBackgroundMaterial).toHaveBeenCalledWith("acrylic");
     expect(ok.raw.setTitleBarOverlay).toHaveBeenCalledWith({
       color: "#00000000",
-      symbolColor: "#e7ebf1",
+      symbolColor: "#f2f4f8",
       height: 36,
     });
 
@@ -239,7 +239,7 @@ describe("appearance controller", () => {
     expect(broken.raw.setBackgroundColor).toHaveBeenLastCalledWith("#0f1520");
     expect(broken.raw.setTitleBarOverlay).toHaveBeenLastCalledWith({
       color: "#0f1520",
-      symbolColor: "#e7ebf1",
+      symbolColor: "#f2f4f8",
       height: 36,
     });
   });

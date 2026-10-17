@@ -47,7 +47,7 @@ export function SettingsSection({
       <div className="min-w-0">
         <h3 className="text-sm font-medium text-fg">{title}</h3>
         {description ? (
-          <p className="mt-0.5 text-xs leading-4 text-fg-faint">{description}</p>
+          <p className="mt-0.5 text-xs leading-4 text-fg-muted">{description}</p>
         ) : null}
       </div>
       {children}

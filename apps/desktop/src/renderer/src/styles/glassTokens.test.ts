@@ -213,6 +213,30 @@ describe("glass tokens (D1)", () => {
     }
   });
 
+  it("(b) readable helper text (#254): fg-muted > 4.5:1 on the window, the overlay and the chat tint, dark, dark-plus and light", () => {
+    // Classic counterpart of tokensNew.test.ts: the call sites in readableText.test.ts
+    // render in both looks.
+    const chat = alpha("--glass-alpha-chat");
+    for (const theme of THEMES) {
+      const backdrops = [GREY, theme === "light" ? WHITE : BLACK];
+      const muted = color(theme, "--color-fg-muted");
+      const panel = color(theme, "--color-panel");
+      const elevated = color(theme, "--color-elevated");
+      const surfaces: Record<string, (bg: Rgb) => Rgb> = {
+        window: (bg) => over(alpha("--glass-alpha-chrome"), panel, bg),
+        overlay: (bg) => over(alpha("--glass-alpha-overlay"), elevated, bg),
+        "chat tint on window": (bg) =>
+          over(chat, elevated, over(alpha("--glass-alpha-chrome"), panel, bg)),
+      };
+      for (const [name, surface] of Object.entries(surfaces)) {
+        expect(
+          Math.min(...backdrops.map((bg) => contrast(muted, surface(bg)))),
+          `${theme} ${name} muted`,
+        ).toBeGreaterThan(4.5);
+      }
+    }
+  });
+
   it("(b) the gate rejects the thinner chrome tier the redesign brief floated (72%)", () => {
     // dark-plus fg over a white desktop drops to ~4.2:1 at 72%.
     expect(worst("dark-plus", "--glass-alpha-chrome", "--color-fg", [WHITE], 0.72)).toBeLessThan(

@@ -246,7 +246,7 @@ export function CustomProviderForm({
         <h2 className="text-md text-fg">
           {editing ? `Edit ${initial?.name || initial?.provider}` : "Connect custom provider"}
         </h2>
-        <p className="mt-1 text-xs leading-5 text-fg-faint">
+        <p className="mt-1 text-xs leading-5 text-fg-muted">
           One endpoint, any protocol — OpenAI, Anthropic or Gemini compatible, including relays and
           coding-plan gateways.
         </p>
@@ -276,7 +276,7 @@ export function CustomProviderForm({
             );
           })}
         </fieldset>
-        <p className="text-xs leading-5 text-fg-faint">
+        <p className="text-xs leading-5 text-fg-muted">
           {protocol?.hint ?? `Custom protocol: ${api}`}
         </p>
       </FormSection>
@@ -668,7 +668,7 @@ function ModelRowEditor({
                       value={row.thinkingXHigh}
                     />
                   </div>
-                  <p className="text-xs leading-5 text-fg-faint">
+                  <p className="text-xs leading-5 text-fg-muted">
                     The value in each box is sent to the provider for that level; leave a box empty
                     to hide the level in Modus. Off stays available either way.
                   </p>
@@ -825,7 +825,7 @@ function OptionGroup({
     <section className="grid gap-3">
       <div>
         <h4 className="text-xs text-fg-muted">{title}</h4>
-        <p className="mt-0.5 text-xs leading-5 text-fg-faint">{hint}</p>
+        <p className="mt-0.5 text-xs leading-5 text-fg-muted">{hint}</p>
       </div>
       {children}
     </section>

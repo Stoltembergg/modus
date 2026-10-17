@@ -151,10 +151,10 @@ describe("new look tokens: values", () => {
       "--color-panel": "#0b1018",
       "--color-surface": "#151d2a",
       "--color-elevated": "#1a2333",
-      "--color-fg": "#e7ebf1",
+      "--color-fg": "#f2f4f8",
       "--color-fg-muted": "#a9b2c0",
       "--color-fg-subtle": "#939dac",
-      "--color-fg-faint": "#7a8494",
+      "--color-fg-faint": "#7d8797",
       "--color-accent": "#863ff5",
       "--color-accent-hover": "#8d4bf6",
       "--color-accent-active": "#7a35e8",
@@ -192,13 +192,20 @@ describe("new look tokens: values", () => {
       saturateLight: decl(light, "--glass-saturate"),
       radii: ["xs", "sm", "md", "lg", "xl", "2xl"].map((r) => decl(dark, `--radius-${r}`)),
     }).toEqual({
-      chrome: "64%",
-      overlay: "90%",
-      blur: "20px",
+      chrome: "60%",
+      overlay: "86%",
+      blur: "24px",
       saturateDark: "1.3",
       saturateLight: "1.6",
       radii: ["6px", "8px", "10px", "14px", "18px", "24px"],
     });
+  });
+
+  it("(b) glass ruling (Gabriel 2026-10-13): more transparent than 64% / 90%, blur not lowered", () => {
+    expect(pct(decl(dark, "--glass-alpha-chrome"))).toBeLessThan(0.64);
+    expect(pct(decl(dark, "--glass-alpha-overlay"))).toBeLessThan(0.9);
+    const blur = Number(decl(dark, "--glass-blur")?.match(/^(\d+)px$/)?.[1]);
+    expect(blur).toBeGreaterThanOrEqual(20);
   });
 
   it("(b) one alpha set for both themes: light never overrides a glass alpha", () => {
@@ -248,7 +255,7 @@ describe("new look tokens: contrast gate", () => {
           `${at} muted`,
         ).toBeGreaterThanOrEqual(4.5);
         // TODO(redesign shell PR): subtle carries text-2xs labels and should reach
-        // 4.5:1 here (today ~4.27 dark / ~3.97 light over window glass on grey);
+        // 4.5:1 here (today ~3.99 dark / ~3.79 light over window glass on grey);
         // see "Redesign pending" item 1 in HANDOFF.md.
         expect(
           worst(color(theme, "--color-fg-subtle"), surface, [GREY]),
@@ -258,6 +265,64 @@ describe("new look tokens: contrast gate", () => {
           worst(color(theme, "--color-fg-faint"), surface, [GREY, likely]),
           `${at} faint`,
         ).toBeGreaterThanOrEqual(3);
+      }
+    }
+  });
+
+  it("(c) chat / Settings tint (#245, --glass-alpha-chat) stacked on the window glass", () => {
+    const chrome = pct(decl(dark, "--glass-alpha-chrome"));
+    const chat = pct(decl(appStrip, "--glass-alpha-chat"));
+    for (const theme of THEMES) {
+      const likely = theme === "light" ? WHITE : BLACK;
+      const panel = color(theme, "--color-panel");
+      const elevated = color(theme, "--color-elevated");
+      const stacked = (ink: Rgb, backdrops: Rgb[]) =>
+        Math.min(
+          ...backdrops.map((bg) => contrast(ink, over(chat, elevated, over(chrome, panel, bg)))),
+        );
+      const at = `${theme} chat on window`;
+      expect(
+        stacked(color(theme, "--color-fg"), [WHITE, GREY, BLACK]),
+        `${at} fg`,
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(
+        stacked(color(theme, "--color-fg-muted"), [GREY, likely]),
+        `${at} muted`,
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(
+        stacked(color(theme, "--color-fg-subtle"), [GREY]),
+        `${at} subtle`,
+      ).toBeGreaterThanOrEqual(3);
+      expect(
+        stacked(color(theme, "--color-fg-faint"), [GREY, likely]),
+        `${at} faint`,
+      ).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it("(c) readable helper text (#254): fg-muted > 4.5:1 on the window, the overlay and the #245 tint, dark and light", () => {
+    // Settings descriptions, form helpers, empty-room messages and context usage moved
+    // from fg-faint to fg-muted (readableText.test.ts pins the call sites). Same backdrop
+    // model as the muted gate above. Eye-care Dark resolves to dark in the new look
+    // (lib/theme.ts); classic dark / dark-plus / light are pinned in glassTokens.test.ts.
+    const chrome = pct(decl(dark, "--glass-alpha-chrome"));
+    const overlay = pct(decl(dark, "--glass-alpha-overlay"));
+    const chat = pct(decl(appStrip, "--glass-alpha-chat"));
+    for (const theme of THEMES) {
+      const backdrops = [GREY, theme === "light" ? WHITE : BLACK];
+      const muted = color(theme, "--color-fg-muted");
+      const panel = color(theme, "--color-panel");
+      const elevated = color(theme, "--color-elevated");
+      const surfaces: Record<string, (bg: Rgb) => Rgb> = {
+        window: (bg) => over(chrome, panel, bg),
+        overlay: (bg) => over(overlay, elevated, bg),
+        "#245 tint on window": (bg) => over(chat, elevated, over(chrome, panel, bg)),
+      };
+      for (const [name, surface] of Object.entries(surfaces)) {
+        expect(
+          Math.min(...backdrops.map((bg) => contrast(muted, surface(bg)))),
+          `${theme} ${name} muted`,
+        ).toBeGreaterThan(4.5);
       }
     }
   });
@@ -354,14 +419,44 @@ describe("new look tokens: contrast gate", () => {
     expect(css).not.toMatch(/^\s*--color-warning:/m);
   });
 
-  it("(c) muted and subtle stay distinct steps on the canvas, in both themes", () => {
+  it("(c) faint stays clearly apart from fg: >= 3:1 between the two colours and >= 3x on every solid surface, both themes", () => {
     for (const theme of THEMES) {
-      const canvas = color(theme, "--color-canvas");
-      const muted = contrast(color(theme, "--color-fg-muted"), canvas);
-      const subtle = contrast(color(theme, "--color-fg-subtle"), canvas);
-      const faint = contrast(color(theme, "--color-fg-faint"), canvas);
-      expect(muted / subtle, `${theme} muted vs subtle`).toBeGreaterThanOrEqual(1.2);
-      expect(subtle, `${theme} subtle above faint`).toBeGreaterThan(faint);
+      const fg = color(theme, "--color-fg");
+      const faint = color(theme, "--color-fg-faint");
+      expect(contrast(fg, faint), `${theme} fg vs faint`).toBeGreaterThanOrEqual(3);
+      for (const base of [
+        "--color-canvas",
+        "--color-panel",
+        "--color-surface",
+        "--color-elevated",
+      ]) {
+        const bg = color(theme, base);
+        expect(
+          contrast(fg, bg) / contrast(faint, bg),
+          `${theme} ${base} fg/faint`,
+        ).toBeGreaterThanOrEqual(3);
+      }
+    }
+  });
+
+  it("(c) text hierarchy: fg > muted > subtle > faint, each step >= 1.2x contrast, on every solid surface, both themes", () => {
+    const ladder = ["--color-fg", "--color-fg-muted", "--color-fg-subtle", "--color-fg-faint"];
+    for (const theme of THEMES) {
+      for (const base of [
+        "--color-canvas",
+        "--color-panel",
+        "--color-surface",
+        "--color-elevated",
+      ]) {
+        const bg = color(theme, base);
+        const levels = ladder.map((name) => contrast(color(theme, name), bg));
+        for (let i = 1; i < ladder.length; i += 1) {
+          expect(
+            (levels[i - 1] ?? 0) / (levels[i] ?? 1),
+            `${theme} ${base}: ${ladder[i - 1]} vs ${ladder[i]}`,
+          ).toBeGreaterThanOrEqual(1.2);
+        }
+      }
     }
   });
 
