@@ -14,7 +14,7 @@ const SITES: Record<string, { anchors: string[]; count?: [string, number] }> = {
   "../features/settings/CustomProviderForm.tsx": {
     anchors: [
       "One endpoint, any protocol",
-      "{protocol?.hint ?? `Custom protocol: ${api}`}",
+      "{protocol?.hint ?? `Custom protocol:",
       "The value in each box is sent to the provider",
       ">{hint}</p>",
     ],
