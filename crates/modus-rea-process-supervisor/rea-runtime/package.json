@@ -1,0 +1,10 @@
+{
+  "name": "modus-rea-runtime",
+  "version": "6.5.0",
+  "private": true,
+  "description": "Locked install manifest for the REA worker run by modus-rea-process-supervisor. Bump with crates/modus-rea-process-supervisor/rea-runtime/README.md.",
+  "license": "MIT",
+  "dependencies": {
+    "rea-agents": "6.5.0"
+  }
+}
