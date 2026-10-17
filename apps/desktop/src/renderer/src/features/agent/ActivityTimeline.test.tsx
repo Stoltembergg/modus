@@ -144,6 +144,65 @@ describe("ActivityTimeline", () => {
     );
   });
 
+  it("stops filling an underfilled viewport when an older page adds no events", async () => {
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(300);
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(0);
+    let olderAttempts = 0;
+    const listEventPage = vi.fn(
+      async (_sessionId: string, options: AgentEventPageOptions): Promise<AgentEventPage> => {
+        if (options.direction === "backward" && options.beforeCursor !== undefined) {
+          olderAttempts += 1;
+          // Server claims more history and moves its cursor, but the page is empty.
+          return {
+            events: [],
+            summaryEvents: [],
+            activityEvents: [],
+            snapshotCursor: 20,
+            nextCursor: options.beforeCursor - 1,
+            hasMore: true,
+          };
+        }
+        return {
+          events: [
+            {
+              id: "latest",
+              createdAt: "2026-10-01T12:00:00.000Z",
+              event: {
+                type: "run.started",
+                sessionId: "s",
+                runId: "run-latest",
+                delivery: "normal",
+                eventCursor: 20,
+              },
+            },
+          ],
+          summaryEvents: [],
+          activityEvents: [],
+          snapshotCursor: 20,
+          nextCursor: 20,
+          hasMore: true,
+        };
+      },
+    );
+    Object.assign(window, { modus: { agent: { listEventPage } } });
+    render(<ActivityTimeline cwd="/repo" hub={new AgentEventHub()} sessionId="s" />);
+    await waitFor(() => expect(olderAttempts).toBeGreaterThanOrEqual(1));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    });
+    expect(olderAttempts).toBe(1);
+    // The explicit button still works after the automatic fill stops.
+    const button = screen.getByRole("button", { name: "Load earlier activity" });
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    await waitFor(() => expect(olderAttempts).toBe(2));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    });
+    expect(olderAttempts).toBe(2);
+  });
+
   it("ignores an older-page response arriving after switching sessions", async () => {
     vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(300);
     let finishOlder!: (page: AgentEventPage) => void;

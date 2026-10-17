@@ -20,6 +20,8 @@ type ActivityHistoryPage = {
   hasOlder: boolean;
   loadingOlder: boolean;
   error: boolean;
+  /** The last older page added no events: stop auto-filling (the button still works). */
+  fillStalled?: boolean;
 };
 
 function pageCursor(item: AgentEventItem): number | undefined {
@@ -90,6 +92,7 @@ export function ActivityTimeline({
         };
         const page: AgentEventPage = await listEventPage(sessionId, options);
         if (requestGenerationRef.current !== generation) return;
+        const previousLength = historyRef.current.length;
         const merged = prependAgentEventPage(historyRef.current, page.events);
         historyRef.current = merged;
         setEvents(merged);
@@ -99,6 +102,7 @@ export function ActivityTimeline({
           hasOlder: page.hasMore && page.nextCursor !== current.beforeCursor,
           loadingOlder: false,
           error: false,
+          fillStalled: merged.length === previousLength,
         });
       } catch {
         if (requestGenerationRef.current === generation) {
@@ -167,7 +171,13 @@ export function ActivityTimeline({
   }, [hub, sessionId, updateHistoryPage]);
 
   useEffect(() => {
-    if (!historyPage.hasOlder || historyPage.loadingOlder || historyPage.error) return;
+    if (
+      !historyPage.hasOlder ||
+      historyPage.loadingOlder ||
+      historyPage.error ||
+      historyPage.fillStalled
+    )
+      return;
     const viewport = scrollContainerRef.current;
     if (!viewport) return;
     let disposed = false;

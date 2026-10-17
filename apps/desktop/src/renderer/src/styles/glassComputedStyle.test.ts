@@ -20,13 +20,28 @@ const CHROME = [process.env.CHROME_PATH, "google-chrome", "google-chrome-stable"
   .find((bin) => spawnSync(bin, ["--version"], { stdio: "ignore" }).status === 0);
 if (!CHROME && process.env.CI) throw new Error("D2 computed-style test needs Chrome on CI");
 
+/**
+ * Settings › custom provider form: its sticky action bar, exactly as the component renders it.
+ * The form opens in a Dialog.Portal (body level, inside .popup-chrome), never inside
+ * .settings-content, so the Settings 10% tint must not reach it.
+ */
+const PROVIDER_FOOTER = (() => {
+  const source = readFileSync(
+    fileURLToPath(new URL("../features/settings/CustomProviderForm.tsx", import.meta.url)),
+    "utf8",
+  );
+  const attrs = source.match(/<div\s+([^>]*\bsticky bottom-0\b[^>]*)>/)?.[1];
+  if (!attrs) throw new Error("CustomProviderForm sticky footer not found");
+  return `<div data-settings-sticky-footer ${attrs.replace(/\bclassName=/, "class=")}></div>`;
+})();
+
 const SCENE = `
 <div id="root"><div class="app-shell"><div class="app-layout-row surface-app">
   <nav class="app-rail"><button class="app-rail-item" type="button">A</button></nav>
   <aside class="app-context-sidebar bg-panel"><div class="app-context-sidebar-body bg-panel"></div></aside>
   <main class="surface-main rounded-b-lg border border-hairline-strong border-t-0" style="width:600px">
     <div class="surface-raised"></div>
-    <div class="popup-chrome"></div>
+    <div class="popup-chrome">${PROVIDER_FOOTER}</div>
     <div class="pdf-page-chrome"></div>
     <div class="dialog-scrim"></div>
     <div class="composer-glass"></div>
@@ -61,6 +76,13 @@ const CANDIDATES = [
   "border-t-0",
   "bg-canvas",
   "bg-card",
+  "sticky",
+  "bottom-0",
+  "z-10",
+  "border-hairline-soft",
+  "border-t",
+  "pt-3",
+  "pb-1",
 ];
 const PANELS = [".app-rail", ".app-context-sidebar", ".surface-main"];
 const CHROME_PARTS = [".app-rail", ".app-context-sidebar"];
@@ -225,7 +247,7 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
         // Measure the settled palette, including the Composer's existing transition.
         getComputedStyle(document.querySelector('.composer-glass')).backgroundColor;
         await Promise.allSettled(document.getAnimations().map(animation => animation.finished));
-        return ${MEASURE}(${JSON.stringify([...PANELS, ...OVERLAYS, ...CHAT_SURFACES, ...CHAT_AVATARS, "[data-table-menu-card]", '[data-streamdown="table-wrapper"]', "[data-table-frame]", "[data-table-menu]", ".chat-run-status", ".app-shell", "html"])});
+        return ${MEASURE}(${JSON.stringify([...PANELS, ...OVERLAYS, ...CHAT_SURFACES, ...CHAT_AVATARS, "[data-table-menu-card]", '[data-streamdown="table-wrapper"]', "[data-table-frame]", "[data-table-menu]", "[data-settings-sticky-footer]", ".chat-run-status", ".app-shell", "html"])});
       })()`,
       awaitPromise: true,
       returnByValue: true,
@@ -391,6 +413,14 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
       expect(m[".chat-run-status"]?.alpha).toBe(0);
       expect(m[".chat-run-status"]?.effective).toBe(m[".surface-main"]?.effective);
       expect(m[".chat-run-status"]?.backdrop).toBe("none");
+    }
+  });
+
+  it("custom provider action bar stays opaque in its dialog so fields never show through it", async () => {
+    for (const theme of THEMES) {
+      const m = await measure(theme, true, "full");
+      expect(m["[data-settings-sticky-footer]"]?.alpha, `${theme} footer`).toBe(1);
+      expect(m["[data-settings-sticky-footer]"]?.effective, `${theme} footer`).toBe(1);
     }
   });
 

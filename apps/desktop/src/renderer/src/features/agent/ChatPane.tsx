@@ -126,6 +126,8 @@ type ChatEventHistoryPageState = {
   hasOlder: boolean;
   loadingOlder: boolean;
   error?: boolean | undefined;
+  /** The last older page added no events: stop auto-filling (the button still works). */
+  fillStalled?: boolean | undefined;
 };
 const EMPTY_CHAT_EVENT_HISTORY_PAGE: ChatEventHistoryPageState = {
   hasOlder: false,
@@ -793,6 +795,7 @@ export function ChatPane({
           hasOlder:
             page.hasMore && page.nextCursor !== undefined && page.nextCursor !== state.beforeCursor,
           loadingOlder: false,
+          fillStalled: merged.length === current.length,
         });
       } catch {
         if (eventHistoryGenerationRef.current === requestGeneration) {
@@ -1056,7 +1059,12 @@ export function ChatPane({
   // A short newest page cannot produce a scroll event. Fill the viewport
   // automatically; older overflowing history remains paginated on scroll.
   useEffect(() => {
-    if (!eventHistoryPage.hasOlder || eventHistoryPage.loadingOlder || eventHistoryPage.error)
+    if (
+      !eventHistoryPage.hasOlder ||
+      eventHistoryPage.loadingOlder ||
+      eventHistoryPage.error ||
+      eventHistoryPage.fillStalled
+    )
       return;
     const viewport = scrollContainerRef.current;
     if (!viewport) return;
