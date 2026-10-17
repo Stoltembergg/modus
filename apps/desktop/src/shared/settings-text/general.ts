@@ -45,12 +45,12 @@ export const GENERAL_TEXT_PT: Record<keyof typeof GENERAL_TEXT_EN, string> = {
   "settings.general.languageSystemResolved": "Sistema ({language})",
   "settings.general.projectFallback": "Projeto",
   "settings.general.openWorkspaceError":
-    "Abra um workspace para definir uma substituição do projeto.",
+    "Abra um workspace para definir uma configuração própria do projeto.",
   "settings.general.tabHome": "Início",
   "settings.general.approvalModeGlobalTitle": "Modo de aprovação global",
   "settings.general.approvalModeProjectTitle": "Modo de aprovação de {project}",
   "settings.general.approvalModeGlobalDesc":
-    "Padrão para todo workspace que não define uma substituição.",
+    "Padrão para todo workspace que não tem configuração própria.",
   "settings.general.approvalModeFollowingGlobal":
     "Seguindo o padrão global ({mode}). Escolha um modo para substituir.",
   "settings.general.approvalModeOverrideActiveWorkspace":
@@ -70,7 +70,7 @@ export const GENERAL_TEXT_PT: Record<keyof typeof GENERAL_TEXT_EN, string> = {
     "Perguntar apenas para ações de alto risco, como exclusões e git push.",
   "settings.general.modeFullAccess": "Acesso total",
   "settings.general.modeFullAccessDesc": "Nunca perguntar. Acesso irrestrito aos seus arquivos.",
-  "settings.general.askMissingTargetTitle": "Perguntar antes de agir quando o alvo estiver ausente",
+  "settings.general.askMissingTargetTitle": "Perguntar antes de agir quando não estiver claro o que alterar",
   "settings.general.askMissingTargetDesc":
     'No modo Build, faz uma pergunta quando um pedido como "corrige isso" não diz o que mudar. Desativado: o agente prossegue diretamente. Ações destrutivas são sempre confirmadas.',
 };

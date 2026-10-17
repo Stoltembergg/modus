@@ -78,7 +78,7 @@ export const QUESTION_TEXT_PT: Record<keyof typeof QUESTION_TEXT_EN, string> = {
   "settings.question.showLess": "Mostrar menos",
   "settings.question.showAllLines_one": "Mostrar tudo (mais {count} linha)",
   "settings.question.showAllLines_other": "Mostrar tudo (mais {count} linhas)",
-  "settings.question.clarify.header": "Qual requisito ou alvo deve guiar esta tarefa?",
+  "settings.question.clarify.header": "Qual requisito ou objetivo deve guiar esta tarefa?",
   "settings.question.clarify.detail":
     "Digite uma resposta curta, escolha o padrão conservador ou cancele este turno.",
   "settings.question.clarify.useDefault": "Usar um padrão conservador",

@@ -179,7 +179,7 @@ export const ACCOUNT_TEXT_PT: Record<keyof typeof ACCOUNT_TEXT_EN, string> = {
   "settings.account.emailPlaceholder": "voce@exemplo.com",
   "settings.account.passwordLabel": "Senha",
   "settings.account.passwordPlaceholder": "Senha",
-  "settings.account.working": "Trabalhando…",
+  "settings.account.working": "Aguarde…",
   "settings.account.signIn": "Entrar",
   "settings.account.backToSignIn": "Voltar para o login",
   "settings.account.orDivider": "ou",
@@ -188,9 +188,9 @@ export const ACCOUNT_TEXT_PT: Record<keyof typeof ACCOUNT_TEXT_EN, string> = {
   "settings.account.continueWith": "Continuar com {provider}",
   "settings.account.cancel": "Cancelar",
   "settings.account.cancelConfirmKeepUntil":
-    " Você mantém o plano {plan} até {until}; depois disso passa para o Free.",
+    " Você mantém o plano {plan} até {until}; depois disso passa para o plano Free.",
   "settings.account.cancelConfirmKeepPeriodEnd":
-    " Você mantém o plano {plan} até o fim do período pago; depois disso passa para o Free.",
+    " Você mantém o plano {plan} até o fim do período pago; depois disso passa para o plano Free.",
   "settings.account.cancelConfirmMessage":
     "Cancelar sua assinatura do plano {plan}? O Mercado Pago interrompe cobranças futuras.{keep} Nada é reembolsado, e os créditos que você já tem continuam na sua conta.",
   "settings.account.returnNoticeSuccess":
@@ -257,7 +257,7 @@ export const ACCOUNT_TEXT_PT: Record<keyof typeof ACCOUNT_TEXT_EN, string> = {
   "settings.account.changePlanTitle": "Mudar de plano",
   "settings.account.thePeriodEnds": "o fim do período",
   "settings.account.subscriptionEndedDescription":
-    "O Mercado Pago não fará novas cobranças. Você mantém o plano {plan} até {until}; depois disso você passa para o Free e pode assinar de novo. Seus créditos continuam.",
+    "O Mercado Pago não fará novas cobranças. Você mantém o plano {plan} até {until}; depois disso você passa para o plano Free e pode assinar de novo. Seus créditos continuam.",
   "settings.account.subscriptionCancelledTitle": "Assinatura cancelada",
   "settings.account.cancelling": "Cancelando…",
   "settings.account.checkAgain": "Verificar de novo",

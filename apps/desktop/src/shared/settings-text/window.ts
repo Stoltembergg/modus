@@ -64,7 +64,7 @@ export const WINDOW_TEXT_PT: Record<keyof typeof WINDOW_TEXT_EN, string> = {
   "settings.window.disconnectProviderConfirmCustom":
     'Desconectar "{name}"? Isso remove as credenciais salvas e os modelos ativados do Modus. Seu endpoint e definição de modelo permanecerão para reconexão.',
   "settings.window.disconnectProviderConfirmStandard":
-    'Desconectar "{name}"? Isso remove as credenciais salvas e os modelos ativados do Modus. Qualquer substituição de URL base do Modus também será removida.',
+    'Desconectar "{name}"? Isso remove as credenciais salvas e os modelos ativados do Modus. Qualquer URL base personalizada do Modus também será removida.',
   "settings.window.providerSignInFailed": "Falha ao entrar no provedor.",
 
   // Shared form controls & KeyValueEditor

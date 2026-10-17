@@ -41,7 +41,7 @@ describe("clarification card language", () => {
     const question = clarification();
     const onSubmit = vi.fn();
     render(<QuestionCard mode="question" onSubmit={onSubmit} questions={[question]} />);
-    expect(screen.getByText("Qual requisito ou alvo deve guiar esta tarefa?")).toBeTruthy();
+    expect(screen.getByText("Qual requisito ou objetivo deve guiar esta tarefa?")).toBeTruthy();
     expect(
       screen.getByText(
         "Digite uma resposta curta, escolha o padrão conservador ou cancele este turno.",

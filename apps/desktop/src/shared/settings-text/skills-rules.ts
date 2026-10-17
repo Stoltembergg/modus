@@ -67,10 +67,10 @@ export const SKILLS_RULES_TEXT_PT: Record<keyof typeof SKILLS_RULES_TEXT_EN, str
   "settings.skillsRules.name": "Nome",
   "settings.skillsRules.namePlaceholder": "code-review",
   "settings.skillsRules.description": "Descrição",
-  "settings.skillsRules.descriptionPlaceholder": "Revise um diff quanto a correção e segurança",
+  "settings.skillsRules.descriptionPlaceholder": "Revise um diff quanto à correção e à segurança",
   "settings.skillsRules.instructions": "Instruções",
   "settings.skillsRules.instructionsPlaceholder":
-    "# code-review\n\nUse esta skill ao revisar código.\n\n## Passos\n\n1. Leia o diff.\n2. Encontre riscos de correção.\n3. Retorne conclusões concisas primeiro.",
+    "# code-review\n\nUse esta skill ao revisar código.\n\n## Passos\n\n1. Leia o diff.\n2. Encontre problemas de corretude.\n3. Retorne conclusões concisas primeiro.",
   "settings.skillsRules.cancel": "Cancelar",
   "settings.skillsRules.creating": "Criando…",
   "settings.skillsRules.createSkill": "Criar skill",

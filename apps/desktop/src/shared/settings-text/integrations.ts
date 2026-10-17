@@ -186,7 +186,7 @@ export const INTEGRATIONS_TEXT_PT: Record<keyof typeof INTEGRATIONS_TEXT_EN, str
   "settings.integrations.enterApiKeyBeforeSaving":
     "Insira uma chave de API do Composio antes de salvar.",
   "settings.integrations.tooManyOperationsSelected":
-    "Selecione 500 operações ou menos. Busque na lista de operações e permita apenas o que os agentes precisam.",
+    "Selecione 500 operações ou menos. Busque na lista de operações e permita apenas aquilo de que os agentes precisam.",
   "settings.integrations.selectToolBeforeEnablingConsumer":
     "Selecione pelo menos uma ferramenta MCP antes de ativar o Composio For You para agentes.",
   "settings.integrations.selectAccountAndOperationBeforeEnablingPlatform":

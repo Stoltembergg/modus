@@ -156,7 +156,7 @@ export const MCP_TEXT_PT: Record<keyof typeof MCP_TEXT_EN, string> = {
   "settings.mcp.saveGlobally": "Salvar globalmente para todos os workspaces",
   "settings.mcp.openWorkspaceToConfigure": "Abra um workspace para configurar servidores MCP",
   "settings.mcp.serversFooterHint":
-    "Servidores globais estão disponíveis em todos os workspaces. Servidores de projeto ficam no workspace selecionado. “Always allow” confia em uma ferramenta neste workspace.",
+    "Servidores globais estão disponíveis em todos os workspaces. Servidores de projeto ficam no workspace selecionado. “Yes, always allow in this project” confia em uma ferramenta neste workspace.",
   "settings.mcp.editJsonTitle": "Avançado: editar o mcp.json do projeto diretamente",
   "settings.mcp.editJsonButton": "Editar JSON",
   "settings.mcp.formTitleAdd": "Adicionar servidor MCP",

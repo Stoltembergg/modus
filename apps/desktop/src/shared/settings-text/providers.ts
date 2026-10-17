@@ -186,7 +186,7 @@ export const PROVIDERS_TEXT_PT: Record<keyof typeof PROVIDERS_TEXT_EN, string> =
   "settings.providers.antigravityRiskReview":
     "Revise o que o Antigravity faz e o que ele não promete antes de iniciar o login.",
   "settings.providers.antigravityEndpointsReverseEngineer":
-    "O Antigravity acessa o Google por endpoints internos não oficiais do Cloud Code Assist, incluindo métodos não documentados que o plugin original precisa fazer engenharia reversa.",
+    "O Antigravity acessa o Google por endpoints internos não oficiais do Cloud Code Assist, incluindo métodos não documentados que o plugin original precisa descobrir por engenharia reversa.",
   "settings.providers.upstreamWarningTerms":
     "O README original alerta que o uso pode violar os termos de serviço do Google e que o Google pode advertir, restringir ou suspender a conta vinculada. O comportamento dos endpoints e as cotas podem mudar sem aviso prévio.",
   "settings.providers.modusGuaranteeDisclaimer":
@@ -209,7 +209,7 @@ export const PROVIDERS_TEXT_PT: Record<keyof typeof PROVIDERS_TEXT_EN, string> =
   "settings.providers.defaultModelDescription": "Toda nova mensagem é executada com este modelo.",
   "settings.providers.groupEnabled": "Ativados",
   "settings.providers.groupEnabledDescription": "Disponíveis no campo de mensagem.",
-  "settings.providers.groupThinking": "Pensamento",
+  "settings.providers.groupThinking": "Raciocínio",
   "settings.providers.groupThinkingDescription": "Suporta controles de raciocínio.",
   "settings.providers.groupStandard": "Padrão",
   "settings.providers.groupStandardDescription": "Modelos de completion comuns.",
@@ -217,7 +217,7 @@ export const PROVIDERS_TEXT_PT: Record<keyof typeof PROVIDERS_TEXT_EN, string> =
   "settings.providers.modelResultLabel_other": "{count} modelos exibidos",
   "settings.providers.invalidNumber": "Número inválido: {value}",
   "settings.providers.protocolOpenAiHint":
-    "Protocolo Chat Completions — OpenAI, maioria dos relays, vLLM, Ollama, LM Studio.",
+    "Protocolo Chat Completions — OpenAI, a maioria dos relays, vLLM, Ollama, LM Studio.",
   "settings.providers.protocolOpenAiUrlHint":
     "Endpoint compatível com OpenAI, incluindo o caminho de versão quando necessário.",
   "settings.providers.protocolBearerKeyHint": "Enviada como Authorization: Bearer.",
@@ -247,11 +247,11 @@ export const PROVIDERS_TEXT_PT: Record<keyof typeof PROVIDERS_TEXT_EN, string> =
   "settings.providers.thinkingPresetCustom": "Mapeamento personalizado",
   "settings.providers.thinkingFormatOpenAi": "Esforço de raciocínio da OpenAI",
   "settings.providers.thinkingFormatOpenRouter": "Raciocínio do OpenRouter",
-  "settings.providers.thinkingFormatDeepSeek": "Pensamento do DeepSeek",
+  "settings.providers.thinkingFormatDeepSeek": "Raciocínio do DeepSeek",
   "settings.providers.thinkingFormatTogether": "Raciocínio da Together",
-  "settings.providers.thinkingFormatZai": "Ativar pensamento da zAI",
-  "settings.providers.thinkingFormatQwen": "Ativar pensamento do Qwen",
+  "settings.providers.thinkingFormatZai": "Ativar raciocínio da zAI",
+  "settings.providers.thinkingFormatQwen": "Ativar raciocínio do Qwen",
   "settings.providers.thinkingFormatQwenChatTemplate": "Template de chat do Qwen",
-  "settings.providers.thinkingFormatStringThinking": "Pensamento como string",
+  "settings.providers.thinkingFormatStringThinking": "Raciocínio como string",
   "settings.providers.modelIdRequired": "Todo modelo precisa de um id de modelo.",
 };

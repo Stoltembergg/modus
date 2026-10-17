@@ -176,9 +176,9 @@ export const CUSTOM_PROVIDER_TEXT_PT: Record<keyof typeof CUSTOM_PROVIDER_TEXT_E
   "settings.customProvider.testContacting": "Contatando endpoint…",
   "settings.customProvider.testConnected": "Conectado · {latency} ms",
   "settings.customProvider.testConnectedThinking":
-    "Conectado · {latency} ms · pensamento verificado",
-  "settings.customProvider.summaryThinking": "pensamento · {summary}",
-  "settings.customProvider.summaryNoThinking": "sem pensamento",
+    "Conectado · {latency} ms · raciocínio verificado",
+  "settings.customProvider.summaryThinking": "raciocínio · {summary}",
+  "settings.customProvider.summaryNoThinking": "sem raciocínio",
   "settings.customProvider.summaryImageInput": "entrada de imagem",
   "settings.customProvider.summaryProviderDefault": "padrão do provedor",
   "settings.customProvider.summaryClaudeEffort": "esforço do Claude",
@@ -188,17 +188,17 @@ export const CUSTOM_PROVIDER_TEXT_PT: Record<keyof typeof CUSTOM_PROVIDER_TEXT_E
   "settings.customProvider.modelIdPlaceholder": "id-do-modelo",
   "settings.customProvider.modelDisplayName": "Nome de exibição do modelo",
   "settings.customProvider.modelDisplayNamePlaceholder": "Nome de exibição",
-  "settings.customProvider.modelThinking": "Pensamento",
-  "settings.customProvider.modelSupportsThinking": "{name} suporta pensamento",
+  "settings.customProvider.modelThinking": "Raciocínio",
+  "settings.customProvider.modelSupportsThinking": "{name} suporta raciocínio",
   "settings.customProvider.modelDefaultName": "modelo",
   "settings.customProvider.removeModel": "Remover modelo",
   "settings.customProvider.options": "Opções",
-  "settings.customProvider.thinkingSection": "Pensamento",
+  "settings.customProvider.thinkingSection": "Raciocínio",
   "settings.customProvider.thinkingHintAnthropic":
     "Relays do Claude usam níveis de esforço; escolha a predefinição do Claude (low – max) ou mapeie a sua.",
   "settings.customProvider.thinkingHintOther":
-    "Mapeie as predefinições de pensamento do Modus para o que este endpoint espera.",
-  "settings.customProvider.thinkingLevels": "Níveis de pensamento",
+    "Mapeie as predefinições de raciocínio do Modus para o que este endpoint espera.",
+  "settings.customProvider.thinkingLevels": "Níveis de raciocínio",
   "settings.customProvider.requestFormat": "Formato da requisição",
   "settings.customProvider.formatOpenaiDefault": "Padrão da OpenAI",
   "settings.customProvider.thinkingLevelOff": "Desativado",
@@ -211,12 +211,12 @@ export const CUSTOM_PROVIDER_TEXT_PT: Record<keyof typeof CUSTOM_PROVIDER_TEXT_E
   "settings.customProvider.placeholderHidden": "oculto",
   "settings.customProvider.customLevelsHint":
     "O valor em cada campo é enviado ao provedor para esse nível; deixe o campo vazio para ocultar o nível no Modus. A opção Desativado continua disponível de qualquer forma.",
-  "settings.customProvider.adaptiveThinking": "Pensamento adaptativo",
+  "settings.customProvider.adaptiveThinking": "Raciocínio adaptativo",
   "settings.customProvider.adaptiveThinkingDescription":
     "Envia thinking.type: adaptive com output_config.effort — obrigatório para modelos da classe Claude Opus 4.7+, recomendado para o 4.6.",
-  "settings.customProvider.allowUnsignedThinking": "Permitir pensamento sem assinatura",
+  "settings.customProvider.allowUnsignedThinking": "Permitir raciocínio sem assinatura",
   "settings.customProvider.allowUnsignedThinkingDescription":
-    "Reproduz blocos de pensamento mesmo quando o relay remove assinaturas — mantém o pensamento visível entre turnos.",
+    "Reproduz blocos de raciocínio mesmo quando o relay remove assinaturas — mantém o raciocínio visível entre turnos.",
   "settings.customProvider.streamingUsage": "Uso no streaming",
   "settings.customProvider.streamingUsageDescription":
     "Lê o uso de tokens das respostas em streaming quando o endpoint informar.",
