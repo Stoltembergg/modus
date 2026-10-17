@@ -34,9 +34,11 @@ import { m, useReducedMotion } from "motion/react";
 import { type KeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import type { QuestionAnswer, QuestionPrompt } from "../../../../shared/contracts";
 import { cn } from "../../lib/cn";
+import { useSettingsText } from "../../lib/settingsText";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { CollapsibleMotion } from "../ui/CollapsibleMotion";
 import { WorkingText } from "../ui/WorkingText";
+import { questionPromptDisplay } from "./questionPromptText";
 
 export type QuestionCardStatus = "pending" | "answered" | "expired";
 
@@ -76,6 +78,7 @@ const SHELL =
   "mb-2 overflow-hidden rounded-xl border border-composer-border bg-elevated shadow-composer-edge outline-none focus-visible:shadow-composer-focus";
 
 function StatusBadge({ status }: { status: QuestionCardStatus }) {
+  const t = useSettingsText();
   if (status === "pending") return null;
   return (
     <span
@@ -85,7 +88,7 @@ function StatusBadge({ status }: { status: QuestionCardStatus }) {
       )}
       data-status={status}
     >
-      {status === "expired" ? "Expired" : "Answered"}
+      {status === "expired" ? t("settings.question.expired") : t("settings.question.answered")}
     </span>
   );
 }
@@ -131,12 +134,13 @@ function QuestionMode({
   status = "pending",
   onSubmit,
   onSkip,
-  submitLabel = "Submit",
-  nextLabel = "Next",
-  skipLabel = "Dismiss",
-  customPlaceholder = "Or type a different answer…",
+  submitLabel,
+  nextLabel,
+  skipLabel,
+  customPlaceholder,
   className,
 }: QuestionCardQuestionProps) {
+  const t = useSettingsText();
   const [index, setIndex] = useState(0);
   const [cursor, setCursor] = useState(0);
   const [drafts, setDrafts] = useState<Record<string, Draft>>(() =>
@@ -158,6 +162,7 @@ function QuestionMode({
     return null;
   }
   const kind = questionKind(active);
+  const display = questionPromptDisplay(active, t);
   const draft = drafts[active.id] ?? EMPTY_DRAFT;
   const isLast = index >= questions.length - 1;
   const multiple = questions.length > 1;
@@ -278,7 +283,7 @@ function QuestionMode({
     <m.section
       animate={{ opacity: 1, y: 0 }}
       aria-disabled={locked || undefined}
-      aria-label="Question"
+      aria-label={t("settings.question.question")}
       className={cn(SHELL, className)}
       data-kind={kind}
       data-mode="question"
@@ -291,13 +296,13 @@ function QuestionMode({
     >
       <CardHeader
         icon={<IconMessageCircleQuestion size={ICON.sm} stroke={ICON_STROKE.sm} />}
-        label={multiple ? "Questions" : "Question"}
+        label={multiple ? t("settings.question.questions") : t("settings.question.question")}
       >
         <StatusBadge status={sent && status === "pending" ? "answered" : status} />
         {multiple ? (
           <>
             <button
-              aria-label="Previous question"
+              aria-label={t("settings.question.previousQuestion")}
               className="flex size-5 items-center justify-center rounded transition-colors hover:bg-hover hover:text-fg-subtle disabled:opacity-40"
               disabled={index === 0}
               onClick={() => goToPage(index - 1)}
@@ -306,10 +311,10 @@ function QuestionMode({
               <IconChevronLeft size={ICON.sm} stroke={ICON_STROKE.sm} />
             </button>
             <span className="tabular-nums">
-              {index + 1} of {questions.length}
+              {t("settings.question.pageOf", { index: index + 1, total: questions.length })}
             </span>
             <button
-              aria-label="Next question"
+              aria-label={t("settings.question.nextQuestion")}
               className="flex size-5 items-center justify-center rounded transition-colors hover:bg-hover hover:text-fg-subtle disabled:opacity-40"
               disabled={isLast}
               onClick={() => goToPage(index + 1)}
@@ -323,9 +328,9 @@ function QuestionMode({
 
       <div className="px-3.5 py-3">
         <div className="min-w-0">
-          <div className="font-semibold text-md text-fg leading-snug">{active.header}</div>
-          {active.detail ? (
-            <div className="mt-1 text-fg-subtle text-xs leading-relaxed">{active.detail}</div>
+          <div className="font-semibold text-md text-fg leading-snug">{display.header}</div>
+          {display.detail ? (
+            <div className="mt-1 text-fg-subtle text-xs leading-relaxed">{display.detail}</div>
           ) : null}
         </div>
 
@@ -357,9 +362,13 @@ function QuestionMode({
                     {optionIndex + 1}
                   </span>
                   <span className="flex min-w-0 items-center gap-1.5 text-sm">
-                    <span className="truncate font-medium text-fg">{option.label}</span>
+                    <span className="truncate font-medium text-fg">
+                      {display.optionLabel(option.label)}
+                    </span>
                     {option.recommended ? (
-                      <span className="shrink-0 text-fg-faint text-xs">(Recommended)</span>
+                      <span className="shrink-0 text-fg-faint text-xs">
+                        {t("settings.question.recommended")}
+                      </span>
                     ) : null}
                     {option.description ? (
                       <IconInfoCircle
@@ -387,11 +396,19 @@ function QuestionMode({
         <div className="mt-2.5 flex items-center gap-2">
           <IconPencil className="shrink-0 text-fg-faint" size={ICON.sm} stroke={ICON_STROKE.sm} />
           <input
-            aria-label={kind === "text" ? "Your answer" : "Other answer"}
+            aria-label={
+              kind === "text"
+                ? t("settings.question.yourAnswer")
+                : t("settings.question.otherAnswer")
+            }
             className="min-w-0 flex-1 bg-transparent text-sm text-fg placeholder:text-fg-faint outline-none disabled:opacity-60"
             disabled={locked}
             onChange={(event) => updateDraft(active.id, { custom: event.target.value })}
-            placeholder={kind === "text" ? "Type your answer…" : customPlaceholder}
+            placeholder={
+              kind === "text"
+                ? t("settings.question.typeAnswer")
+                : (customPlaceholder ?? t("settings.question.customPlaceholder"))
+            }
             value={draft.custom}
           />
           {onSkip ? (
@@ -401,7 +418,7 @@ function QuestionMode({
               onClick={skip}
               type="button"
             >
-              {skipLabel}
+              {skipLabel ?? t("settings.question.dismiss")}
               <kbd className="rounded border border-hairline px-1 py-px font-sans text-2xs">
                 ESC
               </kbd>
@@ -413,7 +430,9 @@ function QuestionMode({
             onClick={primaryAction}
             type="button"
           >
-            {isLast ? submitLabel : nextLabel}
+            {isLast
+              ? (submitLabel ?? t("settings.question.submit"))
+              : (nextLabel ?? t("settings.question.next"))}
             <span className="text-2xs text-build-fg/60">⏎</span>
           </button>
         </div>
@@ -474,13 +493,14 @@ function ApprovalMode({
   choices,
   defaultChoice,
   denyChoice,
-  approveLabel = "Approve",
-  denyLabel = "Deny",
+  approveLabel,
+  denyLabel,
   allowReason = false,
   status = "pending",
   onDecide,
   className,
 }: QuestionCardApprovalProps) {
+  const t = useSettingsText();
   const [selected, setSelected] = useState(defaultChoice);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | undefined>();
@@ -531,7 +551,7 @@ function ApprovalMode({
     <m.section
       animate={{ opacity: 1, y: 0 }}
       aria-disabled={locked || undefined}
-      aria-label="Tool approval"
+      aria-label={t("settings.question.toolApproval")}
       className={cn(SHELL, className)}
       data-mode="approval"
       data-status={status}
@@ -541,7 +561,10 @@ function ApprovalMode({
       tabIndex={-1}
       transition={{ duration: reduceMotion ? 0 : 0.14, ease: "easeOut" }}
     >
-      <CardHeader icon={<IconLock size={ICON.sm} stroke={ICON_STROKE.sm} />} label="Approval">
+      <CardHeader
+        icon={<IconLock size={ICON.sm} stroke={ICON_STROKE.sm} />}
+        label={t("settings.question.approval")}
+      >
         <StatusBadge status={status} />
       </CardHeader>
       <div className="px-3.5 py-3">
@@ -572,7 +595,9 @@ function ApprovalMode({
               onClick={() => setShowDetails((value) => !value)}
               type="button"
             >
-              {showDetails ? "Hide details" : "Show details"}
+              {showDetails
+                ? t("settings.question.hideDetails")
+                : t("settings.question.showDetails")}
             </button>
             {showDetails ? <ApprovalDetails details={details} /> : null}
           </div>
@@ -641,11 +666,11 @@ function ApprovalMode({
           <div className="mt-2.5 flex items-center gap-2">
             <IconPencil className="shrink-0 text-fg-faint" size={ICON.sm} stroke={ICON_STROKE.sm} />
             <input
-              aria-label="Reason (optional)"
+              aria-label={t("settings.question.reasonOptional")}
               className="min-w-0 flex-1 bg-transparent text-sm text-fg placeholder:text-fg-faint outline-none disabled:opacity-60"
               disabled={locked}
               onChange={(event) => setNote(event.target.value)}
-              placeholder="Add a reason (optional)…"
+              placeholder={t("settings.question.reasonPlaceholder")}
               value={note}
             />
           </div>
@@ -663,7 +688,7 @@ function ApprovalMode({
             onClick={() => void submit(denyChoice)}
             type="button"
           >
-            {denyLabel}
+            {denyLabel ?? t("settings.question.deny")}
             <kbd className="rounded border border-hairline px-1 py-px font-sans text-2xs">ESC</kbd>
           </button>
           <button
@@ -672,7 +697,9 @@ function ApprovalMode({
             onClick={() => void submit()}
             type="button"
           >
-            {submitting ? "Submitting" : approveLabel}
+            {submitting
+              ? t("settings.question.submitting")
+              : (approveLabel ?? t("settings.question.approve"))}
             <IconCornerDownLeft size={ICON.sm} stroke={ICON_STROKE.sm} />
           </button>
         </div>
@@ -700,11 +727,12 @@ export type QuestionCardSummaryProps = {
 };
 
 function SummaryMode({ running = false, items, label, className }: QuestionCardSummaryProps) {
+  const t = useSettingsText();
   const [open, setOpen] = useState(false);
   const count = items.length;
   const text = useMemo(
-    () => label ?? `Asked ${count} ${count === 1 ? "question" : "questions"}`,
-    [count, label],
+    () => label ?? t.plural("settings.question.asked", count),
+    [count, label, t],
   );
 
   if (running) {
@@ -714,7 +742,9 @@ function SummaryMode({ running = false, items, label, className }: QuestionCardS
         data-mode="summary"
         data-status="pending"
       >
-        <WorkingText className="min-w-0 flex-1 truncate">Asking…</WorkingText>
+        <WorkingText className="min-w-0 flex-1 truncate">
+          {t("settings.question.asking")}
+        </WorkingText>
       </div>
     );
   }
@@ -746,7 +776,9 @@ function SummaryMode({ running = false, items, label, className }: QuestionCardS
               <div className="mt-0.5 text-fg-faint text-xs">
                 {item.answer || "—"}
                 {item.recommended ? (
-                  <span className="ml-1.5 text-fg-faint/70">(Recommended)</span>
+                  <span className="ml-1.5 text-fg-faint/70">
+                    {t("settings.question.recommended")}
+                  </span>
                 ) : null}
               </div>
             </div>
@@ -774,6 +806,7 @@ const APPROVAL_DETAILS_PREVIEW_LINES = 40;
 
 /** Exact payload behind "Show details". Long payloads collapse, always saying how much is hidden. */
 export function ApprovalDetails({ details }: { details: string }) {
+  const t = useSettingsText();
   const [showAll, setShowAll] = useState(false);
   const lines = details.split("\n");
   const isDiff = details.startsWith("@@");
@@ -811,7 +844,9 @@ export function ApprovalDetails({ details }: { details: string }) {
           onClick={() => setShowAll((value) => !value)}
           type="button"
         >
-          {showAll ? "Show less" : `Show all (${hidden} more ${hidden === 1 ? "line" : "lines"})`}
+          {showAll
+            ? t("settings.question.showLess")
+            : t.plural("settings.question.showAllLines", hidden)}
         </button>
       ) : null}
     </>

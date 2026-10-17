@@ -11,6 +11,7 @@ import { AnimatePresence, m } from "motion/react";
 import { type ReactNode, useState } from "react";
 import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
 import { cn } from "../../lib/cn";
+import { useSettingsText } from "../../lib/settingsText";
 import type { KeyValueRow } from "./provider-form-mapping";
 
 /**
@@ -253,6 +254,7 @@ export function KeyValueEditor({
   onChange(rowId: string, patch: Partial<KeyValueRow>): void;
   onRemove(rowId: string): void;
 }) {
+  const t = useSettingsText();
   return (
     <section className="grid gap-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -282,21 +284,21 @@ export function KeyValueEditor({
               transition={{ duration: 0.14, ease: "easeOut" }}
             >
               <input
-                aria-label={`${title} key`}
+                aria-label={t("settings.window.keyValueKeyAriaLabel", { title })}
                 className="h-9 rounded-md border border-hairline bg-canvas px-3 font-mono text-xs text-fg outline-none placeholder:text-fg-faint transition-colors hover:border-hairline-strong focus:border-hairline-strong"
                 onChange={(event) => onChange(row.rowId, { key: event.target.value })}
                 placeholder={keyPlaceholder}
                 value={row.key}
               />
               <input
-                aria-label={`${title} value`}
+                aria-label={t("settings.window.keyValueValueAriaLabel", { title })}
                 className="h-9 rounded-md border border-hairline bg-canvas px-3 font-mono text-xs text-fg outline-none placeholder:text-fg-faint transition-colors hover:border-hairline-strong focus:border-hairline-strong"
                 onChange={(event) => onChange(row.rowId, { value: event.target.value })}
                 placeholder={valuePlaceholder}
                 value={row.value}
               />
               <button
-                aria-label="Remove row"
+                aria-label={t("settings.window.removeRow")}
                 className="flex size-7 items-center justify-center self-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg"
                 onClick={() => onRemove(row.rowId)}
                 type="button"

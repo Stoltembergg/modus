@@ -13,6 +13,7 @@ import type { CustomProviderConfig, TestCustomProviderResult } from "../../../..
 import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
 import { WorkingText } from "../../components/ui/WorkingText";
 import { cn } from "../../lib/cn";
+import { type SettingsTextFn, settingsTextFor, useSettingsText } from "../../lib/settingsText";
 import {
   Disclosure,
   Field,
@@ -54,6 +55,17 @@ import {
  * before anything is saved.
  */
 
+const DEFAULT_URL_PLACEHOLDER = "https://api.example.com/v1";
+const API_KEY_PLACEHOLDER = "sk-...";
+
+function getApiKeyDescription(editing: boolean, api: string, t: SettingsTextFn): string {
+  const base = editing
+    ? t("settings.customProvider.apiKeyEditingHint")
+    : t("settings.customProvider.apiKeyNewHint");
+  const keyHintKey = protocolFor(api)?.keyHintKey;
+  return keyHintKey ? `${base} ${t(keyHintKey)}` : base;
+}
+
 /* ── Component ──────────────────────────────────────────────────────────── */
 
 export function CustomProviderForm({
@@ -67,6 +79,7 @@ export function CustomProviderForm({
   onComplete(provider: string): void;
   onError(message: string | undefined): void;
 }) {
+  const t = useSettingsText();
   const editing = Boolean(initial);
   const initialCompat = (initial?.compat ?? {}) as Record<string, unknown>;
   const [rows, setRows] = useState<CustomModelRow[]>(() =>
@@ -209,7 +222,7 @@ export function CustomProviderForm({
     setBusy(true);
     reportError(undefined);
     try {
-      const modelInputs = rows.map((row) => rowToModelInput(row, api));
+      const modelInputs = rows.map((row) => rowToModelInput(row, api, t));
       await window.modus.model.upsertCustomProvider({
         provider,
         name,
@@ -230,11 +243,11 @@ export function CustomProviderForm({
   }
 
   const missingReason = !name.trim()
-    ? "Add a display name first."
+    ? t("settings.customProvider.missingName")
     : !baseUrl.trim()
-      ? "Add the provider base URL first."
+      ? t("settings.customProvider.missingBaseUrl")
       : !rows.some((row) => row.id.trim())
-        ? "Add at least one model id first."
+        ? t("settings.customProvider.missingModelId")
         : undefined;
 
   return (
@@ -244,17 +257,21 @@ export function CustomProviderForm({
     >
       <header>
         <h2 className="text-md text-fg">
-          {editing ? `Edit ${initial?.name || initial?.provider}` : "Connect custom provider"}
+          {editing
+            ? t("settings.customProvider.editTitle", {
+                name: initial?.name || initial?.provider || "",
+              })
+            : t("settings.customProvider.connectTitle")}
         </h2>
         <p className="mt-1 text-xs leading-5 text-fg-muted">
-          One endpoint, any protocol — OpenAI, Anthropic or Gemini compatible, including relays and
-          coding-plan gateways.
+          {/* One endpoint, any protocol */}
+          {t("settings.customProvider.description")}
         </p>
       </header>
 
-      <FormSection title="Protocol">
+      <FormSection title={t("settings.customProvider.protocol")}>
         <fieldset className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <legend className="sr-only">Provider protocol</legend>
+          <legend className="sr-only">{t("settings.customProvider.protocolLegend")}</legend>
           {PROTOCOLS.map((option) => {
             const selected = api === option.value;
             return (
@@ -277,61 +294,63 @@ export function CustomProviderForm({
           })}
         </fieldset>
         <p className="text-xs leading-5 text-fg-muted">
-          {protocol?.hint ?? `Custom protocol: ${api}`}
+          {protocol
+            ? t(protocol.hintKey)
+            : t("settings.customProvider.protocolHintCustom", { api })}
         </p>
       </FormSection>
 
-      <FormSection title="Connection">
+      <FormSection title={t("settings.customProvider.connection")}>
         <Field
-          description="Shown in the model picker. The provider id is derived automatically."
-          label="Display name"
+          description={t("settings.customProvider.displayNameDescription")}
+          label={t("settings.customProvider.displayName")}
           onChange={changeName}
-          placeholder="My Relay"
+          placeholder={t("settings.customProvider.displayNamePlaceholder")}
           value={name}
         />
         <Field
-          description={protocol?.urlHint ?? "Endpoint base URL."}
-          label="Base URL"
+          description={
+            protocol ? t(protocol.urlHintKey) : t("settings.customProvider.urlHintDefault")
+          }
+          label={t("settings.customProvider.baseUrl")}
           mono
           onChange={setBaseUrl}
-          placeholder={protocol?.urlPlaceholder ?? "https://api.example.com/v1"}
+          placeholder={protocol?.urlPlaceholder ?? DEFAULT_URL_PLACEHOLDER}
           type="url"
           value={baseUrl}
         />
         <Field
           autoComplete="off"
-          description={
-            editing
-              ? `Leave blank to keep the stored key. ${protocol?.keyHint ?? ""}`
-              : `Stored securely on this device. ${protocol?.keyHint ?? ""}`
-          }
-          label="API key"
+          description={getApiKeyDescription(editing, api, t)}
+          label={t("settings.customProvider.apiKey")}
           onChange={setApiKey}
-          placeholder={editing ? "••••••• (unchanged)" : "sk-..."}
+          placeholder={
+            editing ? t("settings.customProvider.apiKeyPlaceholderUnchanged") : API_KEY_PLACEHOLDER
+          }
           type="password"
           value={apiKey}
         />
 
-        <Disclosure label="Advanced connection">
+        <Disclosure label={t("settings.customProvider.advancedConnection")}>
           <Field
             description={
               editing
-                ? "Locked while editing an existing provider."
-                : "Lowercase id used in Modus configuration."
+                ? t("settings.customProvider.providerIdEditingDescription")
+                : t("settings.customProvider.providerIdDescription")
             }
-            label="Provider id"
+            label={t("settings.customProvider.providerId")}
             mono
             onChange={(value) => {
               setProviderTouched(true);
               setProvider(value);
             }}
-            placeholder="my-relay"
+            placeholder={t("settings.customProvider.providerIdPlaceholder")}
             value={provider}
           />
           <ToggleField
             checked={authHeader}
-            description="Also send the key as Authorization: Bearer — required by most relays, redundant on native Anthropic/Gemini endpoints."
-            label="Authorization bearer header"
+            description={t("settings.customProvider.authHeaderDescription")}
+            label={t("settings.customProvider.authHeader")}
             onChange={(value) => {
               setAuthHeaderTouched(true);
               setAuthHeader(value);
@@ -341,31 +360,31 @@ export function CustomProviderForm({
             <>
               <ToggleField
                 checked={supportsDeveloperRole}
-                description="Send system instructions with the developer role when the endpoint supports it."
-                label="Developer role"
+                description={t("settings.customProvider.developerRoleDescription")}
+                label={t("settings.customProvider.developerRole")}
                 onChange={setSupportsDeveloperRole}
               />
               <ToggleField
                 checked={supportsReasoningEffort}
-                description="Endpoint accepts the reasoning_effort request field."
-                label="Reasoning effort field"
+                description={t("settings.customProvider.reasoningEffortDescription")}
+                label={t("settings.customProvider.reasoningEffort")}
                 onChange={setSupportsReasoningEffort}
               />
             </>
           ) : null}
           <KeyValueEditor
-            addLabel="Add header"
-            description="Sent with every request to this provider."
-            emptyLabel="No custom headers."
-            keyPlaceholder="Header"
+            addLabel={t("settings.customProvider.addHeader")}
+            description={t("settings.customProvider.providerHeadersDescription")}
+            emptyLabel={t("settings.customProvider.providerHeadersEmpty")}
+            keyPlaceholder={t("settings.customProvider.headerKeyPlaceholder")}
             onAdd={() => setProviderHeaders((current) => [...current, createKeyValueRow()])}
             onChange={updateProviderHeader}
             onRemove={(rowId) =>
               setProviderHeaders((current) => current.filter((row) => row.rowId !== rowId))
             }
             rows={providerHeaders}
-            title="Provider headers"
-            valuePlaceholder="Value"
+            title={t("settings.customProvider.providerHeadersTitle")}
+            valuePlaceholder={t("settings.customProvider.headerValuePlaceholder")}
           />
         </Disclosure>
       </FormSection>
@@ -378,10 +397,10 @@ export function CustomProviderForm({
             type="button"
           >
             <IconPlus size={13} stroke={1.8} />
-            Add model
+            {t("settings.customProvider.addModel")}
           </button>
         }
-        title="Models"
+        title={t("settings.customProvider.modelsSection")}
       >
         <div className="grid gap-2.5">
           <AnimatePresence initial={false}>
@@ -412,13 +431,17 @@ export function CustomProviderForm({
             onClick={() => void runConnectionTest()}
             title={
               testTarget
-                ? "Send a one-token probe through the real driver."
-                : "Add a model id first."
+                ? t("settings.customProvider.testButtonTitleReady")
+                : t("settings.customProvider.testButtonTitleMissingModel")
             }
             type="button"
           >
             <IconPlugConnected size={13} stroke={1.8} />
-            {testing ? <WorkingText>Testing…</WorkingText> : "Test connection"}
+            {testing ? (
+              <WorkingText>{t("settings.customProvider.testing")}</WorkingText>
+            ) : (
+              t("settings.customProvider.testConnection")
+            )}
           </button>
           <ConnectionTestStatus result={visibleTestResult} testing={testing} />
           <div className="flex-1" />
@@ -427,7 +450,7 @@ export function CustomProviderForm({
             onClick={onCancel}
             type="button"
           >
-            Cancel
+            {t("settings.customProvider.cancel")}
           </button>
           <button
             className="flex h-9 shrink-0 items-center gap-2 rounded-md bg-fg px-3.5 text-sm text-canvas transition-colors hover:bg-fg-muted disabled:cursor-not-allowed disabled:opacity-50"
@@ -435,7 +458,13 @@ export function CustomProviderForm({
             title={missingReason}
             type="submit"
           >
-            {busy ? <WorkingText className="text-canvas">Saving…</WorkingText> : "Save provider"}
+            {busy ? (
+              <WorkingText className="text-canvas">
+                {t("settings.customProvider.saving")}
+              </WorkingText>
+            ) : (
+              t("settings.customProvider.saveProvider")
+            )}
           </button>
         </div>
       </div>
@@ -450,8 +479,11 @@ function ConnectionTestStatus({
   result: TestCustomProviderResult | undefined;
   testing: boolean;
 }) {
+  const t = useSettingsText();
   if (testing) {
-    return <span className="text-xs text-fg-faint">Contacting endpoint…</span>;
+    return (
+      <span className="text-xs text-fg-faint">{t("settings.customProvider.testContacting")}</span>
+    );
   }
   if (!result) {
     return null;
@@ -471,8 +503,13 @@ function ConnectionTestStatus({
     <span className="flex min-w-0 items-center gap-1.5 text-xs text-success" title={result.message}>
       <IconCircleCheck className="shrink-0" size={14} stroke={1.8} />
       <span className="min-w-0 truncate">
-        Connected · {result.latencyMs.toLocaleString()} ms
-        {result.sawThinking ? " · thinking verified" : ""}
+        {result.sawThinking
+          ? t("settings.customProvider.testConnectedThinking", {
+              latency: result.latencyMs.toLocaleString(),
+            })
+          : t("settings.customProvider.testConnected", {
+              latency: result.latencyMs.toLocaleString(),
+            })}
       </span>
     </span>
   );
@@ -514,6 +551,7 @@ function ModelRowEditor({
   onChange(patch: Partial<CustomModelRow>): void;
   onRemove(): void;
 }) {
+  const t = useSettingsText();
   const [open, setOpen] = useState(false);
   const isAnthropic = protocol === "anthropic-messages";
   const isOpenAiCompletions = protocol === "openai-completions";
@@ -527,8 +565,12 @@ function ModelRowEditor({
   }
 
   const summary = [
-    row.reasoning ? `thinking · ${optionSummary(row.thinkingPreset, isAnthropic)}` : "no thinking",
-    row.imageInput ? "image input" : undefined,
+    row.reasoning
+      ? t("settings.customProvider.summaryThinking", {
+          summary: optionSummary(row.thinkingPreset, isAnthropic, t),
+        })
+      : t("settings.customProvider.summaryNoThinking"),
+    row.imageInput ? t("settings.customProvider.summaryImageInput") : undefined,
     row.api.trim() ? row.api.trim() : undefined,
   ]
     .filter(Boolean)
@@ -545,29 +587,31 @@ function ModelRowEditor({
     >
       <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] items-center gap-2 px-3 py-2.5">
         <input
-          aria-label="Model id"
+          aria-label={t("settings.customProvider.modelId")}
           className="h-9 min-w-0 rounded-md border border-hairline bg-canvas px-3 font-mono text-xs text-fg outline-none placeholder:text-fg-faint transition-colors hover:border-hairline-strong focus:border-hairline-strong"
           onChange={(event) => onChange({ id: event.target.value })}
-          placeholder="model-id"
+          placeholder={t("settings.customProvider.modelIdPlaceholder")}
           value={row.id}
         />
         <input
-          aria-label="Model display name"
+          aria-label={t("settings.customProvider.modelDisplayName")}
           className="h-9 min-w-0 rounded-md border border-hairline bg-canvas px-3 text-sm text-fg outline-none placeholder:text-fg-faint transition-colors hover:border-hairline-strong focus:border-hairline-strong"
           onChange={(event) => onChange({ name: event.target.value })}
-          placeholder="Display name"
+          placeholder={t("settings.customProvider.modelDisplayNamePlaceholder")}
           value={row.name}
         />
         <span className="flex shrink-0 items-center gap-2 pl-1 text-xs text-fg-subtle">
-          Thinking
+          {t("settings.customProvider.modelThinking")}
           <SwitchControl
-            ariaLabel={`${row.id.trim() || "model"} supports thinking`}
+            ariaLabel={t("settings.customProvider.modelSupportsThinking", {
+              name: row.id.trim() || t("settings.customProvider.modelDefaultName"),
+            })}
             checked={row.reasoning}
             onCheckedChange={(value) => onChange({ reasoning: value })}
           />
         </span>
         <button
-          aria-label="Remove model"
+          aria-label={t("settings.customProvider.removeModel")}
           className="flex size-7 shrink-0 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg disabled:cursor-not-allowed disabled:opacity-35"
           disabled={!removable}
           onClick={onRemove}
@@ -588,7 +632,7 @@ function ModelRowEditor({
           size={12}
           stroke={1.8}
         />
-        Options
+        {t("settings.customProvider.options")}
         <span className="min-w-0 truncate">{summary ? `— ${summary}` : ""}</span>
       </button>
 
@@ -598,25 +642,31 @@ function ModelRowEditor({
             <OptionGroup
               hint={
                 isAnthropic
-                  ? "Claude relays use effort levels; pick the Claude preset (low – max) or map your own."
-                  : "Map Modus thinking presets to what this endpoint expects."
+                  ? t("settings.customProvider.thinkingHintAnthropic")
+                  : t("settings.customProvider.thinkingHintOther")
               }
-              title="Thinking"
+              title={t("settings.customProvider.thinkingSection")}
             >
               <div className="grid gap-4 sm:grid-cols-2">
                 <SelectField
-                  label="Thinking levels"
+                  label={t("settings.customProvider.thinkingLevels")}
                   onChange={(value) => onChange({ thinkingPreset: value as ThinkingPreset })}
-                  options={THINKING_PRESET_OPTIONS}
+                  options={THINKING_PRESET_OPTIONS.map((option) => ({
+                    label: t(option.label),
+                    value: option.value,
+                  }))}
                   value={row.thinkingPreset}
                 />
                 {isOpenAiCompletions ? (
                   <SelectField
-                    label="Request format"
+                    label={t("settings.customProvider.requestFormat")}
                     onChange={(value) => onChange({ thinkingFormat: value as ModelThinkingFormat })}
                     options={[
-                      { label: "OpenAI default", value: "none" },
-                      ...THINKING_FORMAT_OPTIONS,
+                      { label: t("settings.customProvider.formatOpenaiDefault"), value: "none" },
+                      ...THINKING_FORMAT_OPTIONS.map((option) => ({
+                        label: t(option.label),
+                        value: option.value,
+                      })),
                     ]}
                     value={row.thinkingFormat}
                   />
@@ -626,51 +676,51 @@ function ModelRowEditor({
                 <div className="grid gap-3">
                   <div className="grid gap-3 sm:grid-cols-3">
                     <Field
-                      label="Off"
+                      label={t("settings.customProvider.thinkingLevelOff")}
                       mono
                       onChange={(value) => onChange({ thinkingOff: value })}
-                      placeholder="default"
+                      placeholder={t("settings.customProvider.placeholderDefault")}
                       value={row.thinkingOff}
                     />
                     <Field
-                      label="Minimal"
+                      label={t("settings.customProvider.thinkingLevelMinimal")}
                       mono
                       onChange={(value) => onChange({ thinkingMinimal: value })}
-                      placeholder="hidden"
+                      placeholder={t("settings.customProvider.placeholderHidden")}
                       value={row.thinkingMinimal}
                     />
                     <Field
-                      label="Low"
+                      label={t("settings.customProvider.thinkingLevelLow")}
                       mono
                       onChange={(value) => onChange({ thinkingLow: value })}
-                      placeholder="hidden"
+                      placeholder={t("settings.customProvider.placeholderHidden")}
                       value={row.thinkingLow}
                     />
                     <Field
-                      label="Medium"
+                      label={t("settings.customProvider.thinkingLevelMedium")}
                       mono
                       onChange={(value) => onChange({ thinkingMedium: value })}
-                      placeholder="hidden"
+                      placeholder={t("settings.customProvider.placeholderHidden")}
                       value={row.thinkingMedium}
                     />
                     <Field
-                      label="High"
+                      label={t("settings.customProvider.thinkingLevelHigh")}
                       mono
                       onChange={(value) => onChange({ thinkingHigh: value })}
-                      placeholder="hidden"
+                      placeholder={t("settings.customProvider.placeholderHidden")}
                       value={row.thinkingHigh}
                     />
                     <Field
-                      label="Extra high"
+                      label={t("settings.customProvider.thinkingLevelExtraHigh")}
                       mono
                       onChange={(value) => onChange({ thinkingXHigh: value })}
-                      placeholder="hidden"
+                      placeholder={t("settings.customProvider.placeholderHidden")}
                       value={row.thinkingXHigh}
                     />
                   </div>
                   <p className="text-xs leading-5 text-fg-muted">
-                    The value in each box is sent to the provider for that level; leave a box empty
-                    to hide the level in Modus. Off stays available either way.
+                    {/* The value in each box is sent to the provider */}
+                    {t("settings.customProvider.customLevelsHint")}
                   </p>
                 </div>
               ) : null}
@@ -678,14 +728,14 @@ function ModelRowEditor({
                 <div className="grid gap-1">
                   <ToggleField
                     checked={row.adaptiveThinking}
-                    description="Send thinking.type: adaptive with output_config.effort — required for Claude Opus 4.7+ class models, recommended for 4.6."
-                    label="Adaptive thinking"
+                    description={t("settings.customProvider.adaptiveThinkingDescription")}
+                    label={t("settings.customProvider.adaptiveThinking")}
                     onChange={(value) => onChange({ adaptiveThinking: value })}
                   />
                   <ToggleField
                     checked={row.allowEmptySignature}
-                    description="Replay thinking blocks even when the relay strips signatures — keeps thinking visible across turns."
-                    label="Allow unsigned thinking"
+                    description={t("settings.customProvider.allowUnsignedThinkingDescription")}
+                    label={t("settings.customProvider.allowUnsignedThinking")}
                     onChange={(value) => onChange({ allowEmptySignature: value })}
                   />
                 </div>
@@ -693,30 +743,33 @@ function ModelRowEditor({
               {isOpenAiCompletions ? (
                 <ToggleField
                   checked={row.supportsUsageInStreaming}
-                  description="Read token usage from streaming responses when the endpoint reports it."
-                  label="Streaming usage"
+                  description={t("settings.customProvider.streamingUsageDescription")}
+                  label={t("settings.customProvider.streamingUsage")}
                   onChange={(value) => onChange({ supportsUsageInStreaming: value })}
                 />
               ) : null}
             </OptionGroup>
           ) : null}
 
-          <OptionGroup hint="Defaults suit most relays." title="Capabilities & limits">
+          <OptionGroup
+            hint={t("settings.customProvider.capabilitiesLimitsHint")}
+            title={t("settings.customProvider.capabilitiesLimits")}
+          >
             <ToggleField
               checked={row.imageInput}
-              description="Allow image attachments for this model."
-              label="Image input"
+              description={t("settings.customProvider.imageInputDescription")}
+              label={t("settings.customProvider.imageInput")}
               onChange={(value) => onChange({ imageInput: value })}
             />
             <div className="grid gap-4 sm:grid-cols-2">
               <Field
-                label="Context window"
+                label={t("settings.customProvider.contextWindow")}
                 onChange={(value) => onChange({ contextWindow: value })}
                 placeholder="128000"
                 value={row.contextWindow}
               />
               <Field
-                label="Max output tokens"
+                label={t("settings.customProvider.maxOutputTokens")}
                 onChange={(value) => onChange({ maxTokens: value })}
                 placeholder="16384"
                 value={row.maxTokens}
@@ -725,14 +778,17 @@ function ModelRowEditor({
           </OptionGroup>
 
           <OptionGroup
-            hint="Only needed when this model lives on a different endpoint or protocol."
-            title="Endpoint override"
+            hint={t("settings.customProvider.endpointOverrideHint")}
+            title={t("settings.customProvider.endpointOverride")}
           >
             <div className="grid gap-4 sm:grid-cols-2">
               <SelectField
-                label="Protocol"
+                label={t("settings.customProvider.protocol")}
                 onChange={(value) => onChange({ api: value })}
-                options={MODEL_API_OPTIONS}
+                options={MODEL_API_OPTIONS.map((option) => ({
+                  label: t(option.label),
+                  value: option.value,
+                }))}
                 value={
                   (MODEL_API_OPTIONS.some((option) => option.value === row.api)
                     ? row.api
@@ -740,38 +796,41 @@ function ModelRowEditor({
                 }
               />
               <Field
-                label="Base URL"
+                label={t("settings.customProvider.baseUrl")}
                 mono
                 onChange={(value) => onChange({ baseUrl: value })}
-                placeholder="provider default"
+                placeholder={t("settings.customProvider.placeholderProviderDefault")}
                 type="url"
                 value={row.baseUrl}
               />
             </div>
           </OptionGroup>
 
-          <OptionGroup hint="Optional $ per 1M tokens, for cost display." title="Pricing">
+          <OptionGroup
+            hint={t("settings.customProvider.pricingHint")}
+            title={t("settings.customProvider.pricing")}
+          >
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <Field
-                label="Input"
+                label={t("settings.customProvider.costInput")}
                 onChange={(value) => onChange({ costInput: value })}
                 placeholder="0"
                 value={row.costInput}
               />
               <Field
-                label="Output"
+                label={t("settings.customProvider.costOutput")}
                 onChange={(value) => onChange({ costOutput: value })}
                 placeholder="0"
                 value={row.costOutput}
               />
               <Field
-                label="Cache read"
+                label={t("settings.customProvider.costCacheRead")}
                 onChange={(value) => onChange({ costCacheRead: value })}
                 placeholder="0"
                 value={row.costCacheRead}
               />
               <Field
-                label="Cache write"
+                label={t("settings.customProvider.costCacheWrite")}
                 onChange={(value) => onChange({ costCacheWrite: value })}
                 placeholder="0"
                 value={row.costCacheWrite}
@@ -780,18 +839,18 @@ function ModelRowEditor({
           </OptionGroup>
 
           <KeyValueEditor
-            addLabel="Add header"
-            description="Override or extend the provider headers for this model."
-            emptyLabel="No model-specific headers."
-            keyPlaceholder="Header"
+            addLabel={t("settings.customProvider.addHeader")}
+            description={t("settings.customProvider.modelHeadersDescription")}
+            emptyLabel={t("settings.customProvider.modelHeadersEmpty")}
+            keyPlaceholder={t("settings.customProvider.headerKeyPlaceholder")}
             onAdd={() => onChange({ headers: [...row.headers, createKeyValueRow()] })}
             onChange={updateHeader}
             onRemove={(rowId) =>
               onChange({ headers: row.headers.filter((header) => header.rowId !== rowId) })
             }
             rows={row.headers}
-            title="Model headers"
-            valuePlaceholder="Value"
+            title={t("settings.customProvider.modelHeadersTitle")}
+            valuePlaceholder={t("settings.customProvider.headerValuePlaceholder")}
           />
         </div>
       </CollapsibleMotion>
@@ -799,17 +858,23 @@ function ModelRowEditor({
   );
 }
 
-function optionSummary(preset: ThinkingPreset, isAnthropic: boolean): string {
+function optionSummary(
+  preset: ThinkingPreset,
+  isAnthropic: boolean,
+  t: SettingsTextFn = settingsTextFor(),
+): string {
   if (preset === "default") {
-    return isAnthropic ? "provider default" : "provider default";
+    return isAnthropic
+      ? t("settings.customProvider.summaryProviderDefault")
+      : t("settings.customProvider.summaryProviderDefault");
   }
   if (preset === "claude") {
-    return "claude effort";
+    return t("settings.customProvider.summaryClaudeEffort");
   }
   if (preset === "openai") {
-    return "openai effort";
+    return t("settings.customProvider.summaryOpenaiEffort");
   }
-  return "custom levels";
+  return t("settings.customProvider.summaryCustomLevels");
 }
 
 function OptionGroup({

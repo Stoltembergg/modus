@@ -8,6 +8,8 @@ import type {
   BillingState,
   BillingWallet,
 } from "../../../../../shared/billing";
+import type { SettingsTextKey } from "../../../../../shared/settings-text";
+import { type SettingsTextFn, settingsTextFor, useSettingsText } from "../../../lib/settingsText";
 import { ReadOnlyPill, SettingsList, SettingsRow, SettingsSection } from "../settings-layout";
 
 const SECONDARY_BUTTON =
@@ -27,22 +29,23 @@ export function cancelConfirmMessage(
   planName: string,
   accessUntil: string | null,
   keepsPlan = true,
+  t: SettingsTextFn = settingsTextFor(),
 ): string {
   const keep = !keepsPlan
     ? ""
     : accessUntil
-      ? ` You keep ${planName} until ${accessUntil}; after that you move to Free.`
-      : ` You keep ${planName} until the end of the period you paid for; after that you move to Free.`;
-  return `Cancel your ${planName} subscription? Mercado Pago stops future charges.${keep} Nothing is refunded, and the credits you already have stay in your account.`;
+      ? t("settings.account.cancelConfirmKeepUntil", { plan: planName, until: accessUntil })
+      : t("settings.account.cancelConfirmKeepPeriodEnd", { plan: planName });
+  return t("settings.account.cancelConfirmMessage", { plan: planName, keep });
 }
 
 /** L1g: the router keeps the plan for these statuses until current_period_end after a cancel. */
 const GRACE_FROM = new Set(["active", "trialing"]);
 
-const RETURN_NOTICES: Record<string, string> = {
-  success: "Payment received. Your credits are added as soon as Mercado Pago confirms the payment.",
-  cancel: "Checkout was cancelled. Nothing was charged.",
-  portal: "Back from billing. Showing the latest plan.",
+const RETURN_NOTICES: Record<string, SettingsTextKey> = {
+  success: "settings.account.returnNoticeSuccess",
+  cancel: "settings.account.returnNoticeCancel",
+  portal: "settings.account.returnNoticePortal",
 };
 
 /**
@@ -54,8 +57,14 @@ export function formatCredits(value: number, locale?: string): string {
 }
 
 /** "1 credit", "5,000 credits". */
-export function creditCount(value: number, locale?: string): string {
-  return `${formatCredits(value, locale)} ${value === 1 ? "credit" : "credits"}`;
+export function creditCount(
+  value: number,
+  locale?: string,
+  t: SettingsTextFn = settingsTextFor(),
+): string {
+  return t.plural("settings.account.creditCount", value, {
+    count: formatCredits(value, locale),
+  });
 }
 
 /** Minor units → money in the user's locale (Intl only; an unknown currency code shows the code). */
@@ -72,8 +81,15 @@ export function formatMoney(amountMinor: number, currency: string, locale?: stri
 }
 
 /** A credit pack row title: "5,000 credits for R$36.90". */
-export function packTitle(pack: BillingCreditPack, locale?: string): string {
-  return `${creditCount(pack.credits, locale)} for ${formatMoney(pack.amountMinor, pack.currency, locale)}`;
+export function packTitle(
+  pack: BillingCreditPack,
+  locale?: string,
+  t: SettingsTextFn = settingsTextFor(),
+): string {
+  return t("settings.account.packTitle", {
+    credits: creditCount(pack.credits, locale, t),
+    price: formatMoney(pack.amountMinor, pack.currency, locale),
+  });
 }
 
 function planLabel(plans: readonly BillingPlan[], plan: string): string {
@@ -95,43 +111,55 @@ export function creditsDescription(
   locale?: string,
   /** On Free the debt also comes out of the next monthly top-up (renew_free_credits_for_user). */
   onFreePlan = false,
+  t: SettingsTextFn = settingsTextFor(),
 ): string {
   const held = wallet.reserved;
   const parts: string[] = [];
   if (wallet.allowance === undefined || wallet.purchased === undefined) {
-    parts.push(
-      `Credits from your ${planName} plan are used first, then purchased credits, which never expire.`,
-    );
+    parts.push(t("settings.account.creditsUnknownLots", { plan: planName }));
   } else {
     const allowanceLeft = Math.max(0, wallet.allowance - held);
     const purchasedLeft = wallet.purchased - Math.max(0, held - wallet.allowance);
     if (purchasedLeft > 0) {
       parts.push(
-        `${creditCount(allowanceLeft, locale)} from your ${planName} plan are used first, then ${creditCount(purchasedLeft, locale)} purchased, which never expire.`,
+        t("settings.account.creditsAllowanceAndPurchased", {
+          allowance: creditCount(allowanceLeft, locale, t),
+          plan: planName,
+          purchased: creditCount(purchasedLeft, locale, t),
+        }),
       );
     } else {
-      parts.push(`${creditCount(allowanceLeft, locale)} from your ${planName} plan.`);
+      parts.push(
+        t("settings.account.creditsAllowanceOnly", {
+          allowance: creditCount(allowanceLeft, locale, t),
+          plan: planName,
+        }),
+      );
     }
   }
   if (held > 0) {
     parts.push(
-      `Another ${creditCount(held, locale)} ${held === 1 ? "is" : "are"} held for requests in progress.`,
+      t.plural("settings.account.creditsHeld", held, {
+        credits: creditCount(held, locale, t),
+      }),
     );
   }
   const owed = wallet.shortfallOwed;
   if (typeof owed === "number" && owed > 0) {
+    const extra = onFreePlan ? t("settings.account.creditsOwedFreeTopUp") : "";
     parts.push(
-      `You owe ${creditCount(owed, locale)} from a refunded purchase. ${
-        owed === 1 ? "It's" : "They're"
-      } deducted as you use Modus${onFreePlan ? " and from your next free monthly credits" : ""}.`,
+      t.plural("settings.account.creditsOwed", owed, {
+        credits: creditCount(owed, locale, t),
+        extra,
+      }),
     );
   }
   return parts.join(" ");
 }
 
-const PROVIDER_LABEL: Record<BillingProvider, string> = {
-  mercadopago: "Subscribe",
-  stripe: "Pay by card (Stripe)",
+const PROVIDER_LABEL: Record<BillingProvider, SettingsTextKey> = {
+  mercadopago: "settings.account.subscribe",
+  stripe: "settings.account.payByCardStripe",
 };
 
 type CatalogPlan = {
@@ -198,29 +226,42 @@ function CreditPackRows({
   disabled: boolean;
   onBuyCredits(packId: BillingCreditPack["packId"]): void;
 }) {
+  const t = useSettingsText();
   return (
     <>
       {packs.map((pack) => (
         <SettingsRow
           control={
             <button
-              aria-label={`Buy ${formatCredits(pack.credits)} credits`}
+              aria-label={t("settings.account.buyCreditsAria", {
+                count: formatCredits(pack.credits),
+              })}
               className={PRIMARY_BUTTON}
               disabled={disabled}
               onClick={() => onBuyCredits(pack.packId)}
               type="button"
             >
               <IconExternalLink size={13} stroke={2} />
-              Buy credits
+              {t("settings.account.buyCredits")}
             </button>
           }
           key={pack.packId}
-          title={packTitle(pack)}
+          title={packTitle(pack, undefined, t)}
         />
       ))}
     </>
   );
 }
+
+const SUB_STATUS_KEY: Record<string, SettingsTextKey> = {
+  active: "settings.account.subStatusActive",
+  trialing: "settings.account.subStatusTrialing",
+  past_due: "settings.account.subStatusPastDue",
+  canceled: "settings.account.subStatusCanceled",
+  unpaid: "settings.account.subStatusUnpaid",
+  incomplete: "settings.account.subStatusIncomplete",
+  paused: "settings.account.subStatusPaused",
+};
 
 /** Presentational: everything comes from BillingState (display data only). */
 export function BillingSectionView({
@@ -233,6 +274,7 @@ export function BillingSectionView({
   onBuyCredits,
   accessPlan,
 }: ViewProps) {
+  const t = useSettingsText();
   if (!state || state.status === "unavailable" || state.status === "signed-out") return null;
   const current: BillingPlan | undefined = state.plans.find(
     (plan) => plan.plan === state.currentPlan,
@@ -270,51 +312,59 @@ export function BillingSectionView({
   const keepsPlan = GRACE_FROM.has(state.subscription?.status ?? "");
   const rawStatus = state.subscription?.status ?? "";
   const statusLabel = paymentPending
-    ? "Payment pending"
+    ? t("settings.account.statusPaymentPending")
     : paused
-      ? "Subscription paused"
-      : `${rawStatus.charAt(0).toUpperCase()}${rawStatus.slice(1).replace(/_/g, " ")}`;
+      ? t("settings.account.statusSubscriptionPaused")
+      : SUB_STATUS_KEY[rawStatus]
+        ? t(SUB_STATUS_KEY[rawStatus])
+        : `${rawStatus.charAt(0).toUpperCase()}${rawStatus.slice(1).replace(/_/g, " ")}`;
 
   const fallbackPlanDescription = (() => {
     const parts: string[] = [];
     if (current && current.monthlyCredits > 0) {
-      parts.push(`Tops up to ${creditCount(current.monthlyCredits)} each month.`);
+      parts.push(
+        t("settings.account.fallbackPlanTopsUp", {
+          credits: creditCount(current.monthlyCredits, undefined, t),
+        }),
+      );
     }
     if (packAccess) {
-      parts.push(`Your credit pack unlocks ${packAccess} models.`);
+      parts.push(t("settings.account.fallbackPlanPackAccess", { plan: packAccess }));
     } else if ((state.wallet?.purchased ?? 0) > 0) {
-      parts.push("Credit packs don't change your plan.");
+      parts.push(t("settings.account.fallbackPlanCreditPacksNoChange"));
     }
     return parts.join(" ");
   })();
+
+  const returnNotice = state.lastReturn ? RETURN_NOTICES[state.lastReturn] : undefined;
 
   return (
     <SettingsSection
       description={
         plansOnSale
-          ? "Plans billed monthly in BRL through Mercado Pago. Credits arrive after payment confirmation."
-          : "Pay with Pix or card in BRL. Credits arrive after Mercado Pago confirms payment."
+          ? t("settings.account.sectionPlansOnSaleDescription")
+          : t("settings.account.sectionPacksOnlyDescription")
       }
-      title="Plan and credits"
+      title={t("settings.account.sectionPlanAndCreditsTitle")}
     >
       {state.error ? <p className="mb-3 text-danger text-xs">{state.error}</p> : null}
-      {state.lastReturn && RETURN_NOTICES[state.lastReturn] ? (
-        <p className="mb-3 text-success text-xs">{RETURN_NOTICES[state.lastReturn]}</p>
-      ) : null}
+      {returnNotice ? <p className="mb-3 text-success text-xs">{t(returnNotice)}</p> : null}
       {state.pending ? (
-        <p className="mb-3 text-fg-muted text-xs">
-          Finish in your browser, then come back to Modus.
-        </p>
+        <p className="mb-3 text-fg-muted text-xs">{t("settings.account.pendingBrowserNotice")}</p>
       ) : null}
       <SettingsList>
         <SettingsRow
           control={
             <div className="flex items-center gap-2">
               <ReadOnlyPill>
-                {loading ? "Loading…" : paused ? `${planName} (paused)` : planName}
+                {loading
+                  ? t("settings.account.loading")
+                  : paused
+                    ? t("settings.account.planPausedPill", { plan: planName })
+                    : planName}
               </ReadOnlyPill>
               <button
-                aria-label="Refresh plan"
+                aria-label={t("settings.account.refreshPlanAria")}
                 className={SECONDARY_BUTTON}
                 disabled={busy || loading}
                 onClick={onRefresh}
@@ -327,32 +377,38 @@ export function BillingSectionView({
           description={
             ending
               ? renews
-                ? `Cancelled. You keep ${planName} until ${renews}.`
-                : `Cancelled. You keep ${planName} until the period ends.`
+                ? t("settings.account.planEndingWithDate", { plan: planName, date: renews })
+                : t("settings.account.planEndingPeriodEnd", { plan: planName })
               : subscribed
                 ? `${statusLabel}${
                     mpCancelling
-                      ? ", cancelling."
+                      ? t("settings.account.subCancellingSuffix")
                       : state.subscription?.cancelAtPeriodEnd
                         ? renews
-                          ? `, ends on ${renews}.`
-                          : ", ends when the period ends."
+                          ? t("settings.account.subEndsOnSuffix", { date: renews })
+                          : t("settings.account.subEndsPeriodEndSuffix")
                         : renews && !paused
-                          ? `, renews on ${renews}.`
+                          ? t("settings.account.subRenewsOnSuffix", { date: renews })
                           : "."
                   }`
                 : fallbackPlanDescription
           }
-          title="Current plan"
+          title={t("settings.account.currentPlanTitle")}
         />
         <SettingsRow
           control={<ReadOnlyPill>{formatCredits(state.wallet?.balance ?? 0)}</ReadOnlyPill>}
           description={
             state.wallet
-              ? creditsDescription(state.wallet, planName, undefined, state.currentPlan === "free")
-              : "Credits appear after your email is confirmed."
+              ? creditsDescription(
+                  state.wallet,
+                  planName,
+                  undefined,
+                  state.currentPlan === "free",
+                  t,
+                )
+              : t("settings.account.creditsUnconfirmedEmail")
           }
-          title="Credits"
+          title={t("settings.account.creditsTitle")}
         />
         {subscribed ? (
           stripeSubscription ? (
@@ -365,19 +421,20 @@ export function BillingSectionView({
                   type="button"
                 >
                   <IconExternalLink size={13} stroke={2} />
-                  Manage billing
+                  {t("settings.account.manageBilling")}
                 </button>
               }
-              description="Upgrade, downgrade, cancel or update the payment method in Stripe."
-              title="Change plan"
+              description={t("settings.account.changePlanStripeDescription")}
+              title={t("settings.account.changePlanTitle")}
             />
           ) : ending ? (
             <SettingsRow
               control={null}
-              description={`Mercado Pago won't charge you again. You keep ${planName} until ${
-                renews ?? "the period ends"
-              }; after that you move to Free and can subscribe again. Your credits stay.`}
-              title="Subscription cancelled"
+              description={t("settings.account.subscriptionEndedDescription", {
+                plan: planName,
+                until: renews ?? t("settings.account.thePeriodEnds"),
+              })}
+              title={t("settings.account.subscriptionCancelledTitle")}
             />
           ) : mpCancelling ? (
             <SettingsRow
@@ -388,17 +445,22 @@ export function BillingSectionView({
                   onClick={onCancel}
                   type="button"
                 >
-                  {state.cancelling ? "Cancelling…" : "Check again"}
+                  {state.cancelling
+                    ? t("settings.account.cancelling")
+                    : t("settings.account.checkAgain")}
                 </button>
               }
               description={
                 state.cancelling
-                  ? "Cancelling with Mercado Pago…"
+                  ? t("settings.account.cancellingWithMercadoPago")
                   : keepsPlan && renews
-                    ? `Cancellation requested. Waiting for Mercado Pago to confirm. You keep ${planName} until ${renews}.`
-                    : "Cancellation requested. Waiting for Mercado Pago to confirm; you can subscribe again once it does."
+                    ? t("settings.account.cancelRequestedKeepUntil", {
+                        plan: planName,
+                        date: renews,
+                      })
+                    : t("settings.account.cancelRequestedCanResubscribe")
               }
-              title="Cancelling…"
+              title={t("settings.account.cancelling")}
             />
           ) : paymentPending ? (
             <SettingsRow
@@ -409,25 +471,25 @@ export function BillingSectionView({
                   onClick={onCancel}
                   type="button"
                 >
-                  Cancel and try again
+                  {t("settings.account.cancelAndTryAgain")}
                 </button>
               }
-              description="Mercado Pago hasn't confirmed a payment for this subscription. If you didn't finish paying, cancel it and subscribe again."
-              title="Payment pending"
+              description={t("settings.account.paymentPendingDescription")}
+              title={t("settings.account.statusPaymentPending")}
             />
           ) : (
             <>
               {paused ? (
                 <SettingsRow
                   control={null}
-                  description="Mercado Pago paused this subscription: no charges, and only the Free plan's models until it resumes. Your credits stay. Cancel it to subscribe again later."
-                  title="Subscription paused"
+                  description={t("settings.account.subscriptionPausedDescription")}
+                  title={t("settings.account.statusSubscriptionPaused")}
                 />
               ) : (
                 <SettingsRow
                   control={null}
-                  description="Your subscription is billed by Mercado Pago. Payments and receipts are in your Mercado Pago account."
-                  title="Billing"
+                  description={t("settings.account.subscriptionBilledByMpDescription")}
+                  title={t("settings.account.billingTitle")}
                 />
               )}
               <SettingsRow
@@ -436,21 +498,24 @@ export function BillingSectionView({
                     className={DANGER_BUTTON}
                     disabled={busy || loading}
                     onClick={() => {
-                      if (window.confirm(cancelConfirmMessage(planName, renews, keepsPlan))) {
+                      if (window.confirm(cancelConfirmMessage(planName, renews, keepsPlan, t))) {
                         onCancel();
                       }
                     }}
                     type="button"
                   >
-                    Cancel subscription
+                    {t("settings.account.cancelSubscription")}
                   </button>
                 }
                 description={
                   keepsPlan && renews
-                    ? `Stops future Mercado Pago charges. You keep ${planName} until ${renews}, then Free. No refund; your credits stay.`
-                    : "Stops future Mercado Pago charges. No refund; your credits stay."
+                    ? t("settings.account.cancelSubscriptionKeepsPlanDescription", {
+                        plan: planName,
+                        date: renews,
+                      })
+                    : t("settings.account.cancelSubscriptionDescription")
                 }
-                title="Cancel subscription"
+                title={t("settings.account.cancelSubscription")}
               />
             </>
           )
@@ -463,11 +528,11 @@ export function BillingSectionView({
                 onClick={onRefresh}
                 type="button"
               >
-                Try again
+                {t("settings.account.tryAgain")}
               </button>
             }
-            description="Check your connection, then try again."
-            title="Credit packs couldn't be loaded"
+            description={t("settings.account.catalogFailedDescription")}
+            title={t("settings.account.catalogFailedTitle")}
           />
         ) : catalog.length === 0 ? (
           <SettingsRow
@@ -478,11 +543,11 @@ export function BillingSectionView({
                 onClick={onRefresh}
                 type="button"
               >
-                Refresh
+                {t("settings.account.refresh")}
               </button>
             }
-            description="Nothing is for sale right now. Refresh to check again."
-            title="Credit packs aren't on sale"
+            description={t("settings.account.catalogEmptyDescription")}
+            title={t("settings.account.catalogEmptyTitle")}
           />
         ) : (
           catalog.map((plan) => (
@@ -500,25 +565,36 @@ export function BillingSectionView({
                       type="button"
                     >
                       <IconExternalLink size={13} stroke={2} />
-                      {PROVIDER_LABEL[offer.provider]}
+                      {t(PROVIDER_LABEL[offer.provider])}
                     </button>
                   ))}
                 </div>
               }
-              description={`${creditCount(plan.monthlyCredits)} a month`}
+              description={t("settings.account.creditsPerMonth", {
+                credits: creditCount(plan.monthlyCredits, undefined, t),
+              })}
               key={plan.plan}
-              title={`${plan.name} for ${plan.offers
-                .map((offer) => `${formatMoney(offer.amountMinor, offer.currency)} a month`)
-                .join(" or ")}`}
+              title={t("settings.account.planOfferTitle", {
+                plan: plan.name,
+                price: plan.offers
+                  .map((offer) =>
+                    t("settings.account.pricePerMonth", {
+                      price: formatMoney(offer.amountMinor, offer.currency),
+                    }),
+                  )
+                  .join(t("settings.account.priceOrJoin")),
+              })}
             />
           ))
         )}
       </SettingsList>
       {!loading && packs.length > 0 ? (
         <div className="mt-4">
-          <h3 className="mb-2 font-medium text-fg text-xs">Credit packs</h3>
+          <h3 className="mb-2 font-medium text-fg text-xs">
+            {t("settings.account.creditPacksHeading")}
+          </h3>
           <p className="mb-3 text-xs leading-4 text-fg-muted">
-            One-time payment with Pix or card. Purchased credits never expire.
+            {t("settings.account.creditPacksDescription")}
           </p>
           <SettingsList>
             <CreditPackRows

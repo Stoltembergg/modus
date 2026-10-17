@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
+import { useSettingsText } from "../../lib/settingsText";
 import { SwitchControl } from "./form-controls";
-
-const TITLE = "Ask before acting when the target is missing";
 
 /**
  * Build mode asks one question when an edit request names nothing to change ("Fix it").
@@ -9,9 +8,11 @@ const TITLE = "Ask before acting when the target is missing";
  * reasoning level or the available tools, and destructive-action confirmation stays on.
  */
 export function AskMissingTargetSetting() {
+  const t = useSettingsText();
   const [enabled, setEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | undefined>();
+  const title = t("settings.general.askMissingTargetTitle");
 
   useEffect(() => {
     let cancelled = false;
@@ -44,15 +45,12 @@ export function AskMissingTargetSetting() {
     <section className="mt-6 rounded-lg bg-panel px-4 py-3">
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0">
-          <h3 className="text-md font-normal text-fg">{TITLE}</h3>
-          <p className="mt-1 text-xs text-fg-faint">
-            In Build mode, asks one question when a request like "Fix it" doesn't say what to
-            change. Off: the agent proceeds directly. Destructive actions are always confirmed.
-          </p>
+          <h3 className="text-md font-normal text-fg">{title}</h3>
+          <p className="mt-1 text-xs text-fg-faint">{t("settings.general.askMissingTargetDesc")}</p>
           {error ? <p className="mt-1 text-xs text-danger">{error}</p> : null}
         </div>
         <SwitchControl
-          ariaLabel={TITLE}
+          ariaLabel={title}
           checked={enabled}
           disabled={saving}
           onCheckedChange={(checked) => void toggle(checked)}
