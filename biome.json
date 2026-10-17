@@ -35,6 +35,7 @@
       "!**/.modus-cache",
       "!**/.modus",
       "!package-lock.json",
+      "!crates/modus-rea-process-supervisor/rea-runtime/package-lock.json",
       "!catalog",
       "!.cursor",
       "!MODUS_V0.1.0_EXECUTION_PLAN.md",

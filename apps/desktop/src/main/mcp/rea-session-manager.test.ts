@@ -201,8 +201,8 @@ describe("ReaSessionManager", () => {
     }
   });
 
-  it("starts lazily and gives the supervisor no redundant command arguments", async () => {
-    const { manager, clients, transportParameters } = setup();
+  it("starts lazily and gives the supervisor only its private locked-runtime root", async () => {
+    const { manager, clients, transportParameters, userDataDirectory } = setup();
     expect(clients).toHaveLength(0);
 
     const page = await manager.listTools(owner("session-a"), { offset: 0, limit: 10 });
@@ -211,8 +211,10 @@ describe("ReaSessionManager", () => {
     expect(page.tools.map((tool) => tool.name)).toEqual(["echo"]);
     expect(transportParameters[0]).toMatchObject({
       command: "fake-rea-supervisor",
-      args: [],
+      args: ["--install-root", join(userDataDirectory, "rea", "runtime")],
     });
+    // No package spec or npx reaches the supervisor; it installs from its embedded lockfile.
+    expect(JSON.stringify(transportParameters[0]?.args)).not.toMatch(/npx|rea-agents@/);
     await manager.disposeAll();
   });
 
@@ -380,6 +382,7 @@ describe("ReaSessionManager", () => {
         join(userDataDirectory, "rea"),
         join(userDataDirectory, "rea", "workers"),
         join(userDataDirectory, "rea", "npm-cache"),
+        join(userDataDirectory, "rea", "runtime"),
       ]) {
         expect(statSync(directory).mode & 0o777).toBe(0o700);
       }
@@ -595,6 +598,27 @@ describe("ReaSessionManager", () => {
 
     await expect(
       harness.manager.listTools(owner("missing-npx"), { offset: 0, limit: 10 }),
+    ).rejects.toThrow();
+    expect(harness.manager.getIntegrationStatus().status).toBe("needs_node");
+    await harness.manager.disposeAll();
+  });
+
+  it.each([
+    "failed to install the locked REA runtime: spawn npm ENOENT: No such file or directory (os error 2)",
+    "'npm' is not recognized as an internal or external command",
+  ])("classifies a missing npm for the locked install as needs_node: %s", async (stderr) => {
+    let feedStderr: ((text: string) => void) | undefined;
+    const harness = setup({
+      transportStderr: true,
+      connect: async () => {
+        feedStderr?.(stderr);
+        throw new Error("MCP error -32000: Connection closed");
+      },
+    });
+    feedStderr = (text) => harness.emitStderr(0, text);
+
+    await expect(
+      harness.manager.listTools(owner("missing-npm"), { offset: 0, limit: 10 }),
     ).rejects.toThrow();
     expect(harness.manager.getIntegrationStatus().status).toBe("needs_node");
     await harness.manager.disposeAll();
