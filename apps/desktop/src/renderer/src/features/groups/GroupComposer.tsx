@@ -359,7 +359,7 @@ export function GroupComposer({
           data-testid="group-kickoff"
         >
           <p className="font-medium text-fg text-xs">{t("composer.kickoffTitle")}</p>
-          <p className="text-2xs text-fg-faint">{t("composer.kickoffHint")}</p>
+          <p className="text-2xs text-fg-muted">{t("composer.kickoffHint")}</p>
           <label className="block text-2xs text-fg-muted">
             {t("composer.kickoffOutcome")}
             <input

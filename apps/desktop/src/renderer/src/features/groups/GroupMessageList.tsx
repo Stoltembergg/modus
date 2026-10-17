@@ -509,13 +509,13 @@ export function GroupMessageList({
           ) : null}
           {error ? <div className="text-center text-danger text-xs">{error}</div> : null}
           {loaded && roomMessages.length === 0 && !error && visibleWorkingRows.length === 0 ? (
-            <div className="py-16 text-center text-fg-faint text-sm" data-testid="group-room-empty">
+            <div className="py-16 text-center text-fg-muted text-sm" data-testid="group-room-empty">
               {t("list.empty")}
             </div>
           ) : null}
           {searching && renderedMessages.length === 0 && roomMessages.length > 0 ? (
             <div
-              className="py-10 text-center text-fg-faint text-sm"
+              className="py-10 text-center text-fg-muted text-sm"
               data-testid="group-conversation-search-empty"
             >
               {t("list.noMatches", { query: searchQuery.trim() })}

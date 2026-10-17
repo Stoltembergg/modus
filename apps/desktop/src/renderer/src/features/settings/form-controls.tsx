@@ -71,7 +71,7 @@ export function Field({
         type={type}
         value={value}
       />
-      {description ? <span className="text-xs leading-5 text-fg-faint">{description}</span> : null}
+      {description ? <span className="text-xs leading-5 text-fg-muted">{description}</span> : null}
     </label>
   );
 }
@@ -190,7 +190,7 @@ export function ToggleField({
     <div className="flex items-center justify-between gap-4 py-1">
       <span className="min-w-0">
         <span className="block text-sm text-fg">{label}</span>
-        <span className="mt-0.5 block text-xs leading-5 text-fg-faint">{description}</span>
+        <span className="mt-0.5 block text-xs leading-5 text-fg-muted">{description}</span>
       </span>
       <SwitchControl ariaLabel={label} checked={checked} onCheckedChange={onChange} />
     </div>
@@ -258,7 +258,7 @@ export function KeyValueEditor({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="text-xs text-fg-muted">{title}</h3>
-          <p className="mt-0.5 max-w-[560px] text-xs leading-5 text-fg-faint">{description}</p>
+          <p className="mt-0.5 max-w-[560px] text-xs leading-5 text-fg-muted">{description}</p>
         </div>
         <button
           className="flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-xs text-fg-subtle transition-colors hover:bg-hover hover:text-fg"

@@ -300,6 +300,33 @@ describe("new look tokens: contrast gate", () => {
     }
   });
 
+  it("(c) readable helper text (#254): fg-muted > 4.5:1 on the window, the overlay and the #245 tint, dark and light", () => {
+    // Settings descriptions, form helpers, empty-room messages and context usage moved
+    // from fg-faint to fg-muted (readableText.test.ts pins the call sites). Same backdrop
+    // model as the muted gate above. Eye-care Dark resolves to dark in the new look
+    // (lib/theme.ts); classic dark / dark-plus / light are pinned in glassTokens.test.ts.
+    const chrome = pct(decl(dark, "--glass-alpha-chrome"));
+    const overlay = pct(decl(dark, "--glass-alpha-overlay"));
+    const chat = pct(decl(appStrip, "--glass-alpha-chat"));
+    for (const theme of THEMES) {
+      const backdrops = [GREY, theme === "light" ? WHITE : BLACK];
+      const muted = color(theme, "--color-fg-muted");
+      const panel = color(theme, "--color-panel");
+      const elevated = color(theme, "--color-elevated");
+      const surfaces: Record<string, (bg: Rgb) => Rgb> = {
+        window: (bg) => over(chrome, panel, bg),
+        overlay: (bg) => over(overlay, elevated, bg),
+        "#245 tint on window": (bg) => over(chat, elevated, over(chrome, panel, bg)),
+      };
+      for (const [name, surface] of Object.entries(surfaces)) {
+        expect(
+          Math.min(...backdrops.map((bg) => contrast(muted, surface(bg)))),
+          `${theme} ${name} muted`,
+        ).toBeGreaterThan(4.5);
+      }
+    }
+  });
+
   it("(c) solid surfaces (Transparency off / fallback): body text AA, faint >= 4:1", () => {
     for (const theme of THEMES) {
       for (const base of [

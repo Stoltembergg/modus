@@ -879,9 +879,9 @@ function ContextUsageTooltip({
     return (
       <div className="w-[260px] px-1 py-1.5 text-sm text-fg">
         <div className="mb-1 font-medium text-fg-muted">Context usage</div>
-        <div className="text-fg-faint text-xs">No context usage yet.</div>
+        <div className="text-fg-muted text-xs">No context usage yet.</div>
         {usageWindow ? (
-          <div className="mt-2 text-2xs text-fg-faint">
+          <div className="mt-2 text-2xs text-fg-muted">
             Context window {usageWindow.toLocaleString()} tokens
           </div>
         ) : null}
@@ -893,7 +893,7 @@ function ContextUsageTooltip({
     <div className="w-[320px] px-1 py-1.5 text-sm text-fg">
       <div className="mb-2 font-medium text-fg-muted">Context usage</div>
       <ContextUsageRow label="Total" strong value={formatUsagePercent(total)} />
-      {tokenLine ? <div className="mt-2 text-xs text-fg-faint">{tokenLine}</div> : null}
+      {tokenLine ? <div className="mt-2 text-xs text-fg-muted">{tokenLine}</div> : null}
     </div>
   );
 }
