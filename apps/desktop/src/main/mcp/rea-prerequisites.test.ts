@@ -46,10 +46,10 @@ describe("REA prerequisite checks", () => {
     }
   });
 
-  it("reports needs_node when npm/npx is missing even with a supported Node", async () => {
+  it("reports needs_node when npm is missing even with a supported Node", async () => {
     const result = await checkReaPrerequisites({
       run: async (command) => {
-        if (command === "npx") throw new Error("spawn npx ENOENT");
+        if (command === "npm") throw new Error("spawn npm ENOENT");
         return "v24.21.0";
       },
     });
@@ -57,7 +57,7 @@ describe("REA prerequisite checks", () => {
     if (!result.ok) expect(result.note).toContain(REA_SUPPORTED_NODE_RANGE);
   });
 
-  it("passes when Node and npx are both available and supported", async () => {
+  it("passes when Node and npm are both available and supported", async () => {
     const seen: string[] = [];
     const result = await checkReaPrerequisites({
       run: async (command) => {
@@ -66,6 +66,6 @@ describe("REA prerequisite checks", () => {
       },
     });
     expect(result).toEqual({ ok: true });
-    expect(seen).toEqual(["node", "npx"]);
+    expect(seen).toEqual(["node", "npm"]);
   });
 });

@@ -55,7 +55,7 @@ const MAX_REA_DIAGNOSTIC_BYTES = 8 * 1024;
 const REA_NETWORK_FAILURE_PATTERN =
   /enotfound|etimedout|econnrefused|econnreset|eai_again|getaddrinfo|fetch failed|network|offline|registry/;
 const REA_MISSING_RUNTIME_PATTERN =
-  /spawn (?:npx|node)(?:\.cmd|\.exe)? enoent|npx(?:\.cmd)?: command not found|node(?:\.exe)?: command not found|'(?:npx|node)(?:\.cmd|\.exe)?' is not recognized|ebadengine|unsupported engine/;
+  /spawn (?:npm|npx|node)(?:\.cmd|\.exe)? enoent|(?:npm|npx)(?:\.cmd)?: command not found|node(?:\.exe)?: command not found|'(?:npm|npx|node)(?:\.cmd|\.exe)?' is not recognized|ebadengine|unsupported engine/;
 const CLEANUP_FAILURE_MESSAGE =
   "REA worker cleanup failed; the worker remains quarantined until cleanup is confirmed.";
 const REA_PROVIDER_ENV = [
@@ -304,6 +304,8 @@ export class ReaSessionManager {
   private readonly reaDirectory: string;
   private readonly workersDirectory: string;
   private readonly npmCacheDirectory: string;
+  /** Root of the locked REA runtime installs (`npm ci` from the supervisor's lockfile). */
+  private readonly runtimeDirectory: string;
   private readonly settingsStore: ReaSettingsStore;
   private readonly checkPrerequisites: () => Promise<ReaPrerequisiteResult>;
   private readonly removeWorkerDirectory: (directory: string) => void;
@@ -331,6 +333,7 @@ export class ReaSessionManager {
       options.tempDirectory ?? join(options.userDataDirectory ?? app.getPath("userData"), "rea");
     this.workersDirectory = join(this.reaDirectory, "workers");
     this.npmCacheDirectory = join(this.reaDirectory, "npm-cache");
+    this.runtimeDirectory = join(this.reaDirectory, "runtime");
     this.settingsStore = options.settingsStore ?? new ReaSettingsStore();
     this.checkPrerequisites =
       options.checkPrerequisites ?? (() => checkReaPrerequisites({ platform: this.platform }));
@@ -630,12 +633,15 @@ export class ReaSessionManager {
       ensurePrivateDirectory(this.reaDirectory);
       ensurePrivateDirectory(this.workersDirectory);
       ensurePrivateDirectory(this.npmCacheDirectory);
+      ensurePrivateDirectory(this.runtimeDirectory);
       this.sweepStaleWorkerDirectories();
       worker.workingDirectory = mkdtempSync(join(this.workersDirectory, "worker-"));
       const client = this.clientFactory();
       const transport = this.transportFactory({
         command: this.supervisorPath ?? resolveReaSupervisorPath(),
-        args: [],
+        // The supervisor installs its embedded lockfile with `npm ci --ignore-scripts` under
+        // this private root and runs the installed entry point; it never calls `npx`.
+        args: ["--install-root", this.runtimeDirectory],
         env: safeEnvironment(this.npmCacheDirectory),
         cwd: worker.workingDirectory,
         stderr: "pipe",

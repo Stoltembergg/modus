@@ -42,8 +42,8 @@ function defaultRunCommand(platform: NodeJS.Platform): ReaCommandRunner {
       maxBuffer: 1024 * 1024,
       env: process.env,
     };
-    // `npx` is a `.cmd` shim on Windows, so on win32 both commands are invoked through
-    // `cmd.exe`, matching the supervisor's launch path.
+    // `npm` is a `.cmd` shim on Windows, so on win32 both commands are invoked through
+    // `cmd.exe`, matching the supervisor's `npm ci` launch path.
     const invocation =
       platform === "win32"
         ? execFileAsync("cmd", ["/d", "/s", "/c", `${command} ${args.join(" ")}`], options)
@@ -69,7 +69,7 @@ export async function checkReaPrerequisites(
     return {
       ok: false,
       status: "needs_node",
-      note: `REA needs Node.js ${REA_SUPPORTED_NODE_RANGE} and npm/npx on PATH. Install Node.js and retry; Modus does not install a runtime.`,
+      note: `REA needs Node.js ${REA_SUPPORTED_NODE_RANGE} and npm on PATH. Install Node.js and retry; Modus does not install a runtime.`,
     };
   }
   if (!isSupportedNodeVersion(nodeOutput)) {
@@ -81,12 +81,13 @@ export async function checkReaPrerequisites(
   }
 
   try {
-    await run("npx", ["--version"]);
+    // The supervisor installs REA with `npm ci` from its lockfile; `npx` is no longer used.
+    await run("npm", ["--version"]);
   } catch {
     return {
       ok: false,
       status: "needs_node",
-      note: `REA needs npm/npx alongside Node.js ${REA_SUPPORTED_NODE_RANGE}. Install npm and retry; Modus does not install a runtime.`,
+      note: `REA needs npm alongside Node.js ${REA_SUPPORTED_NODE_RANGE}. Install npm and retry; Modus does not install a runtime.`,
     };
   }
 
