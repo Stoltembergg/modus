@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,7 +17,12 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { BrowserWindow as BrowserWindowType } from "electron";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentEvent, PlanRef, SubagentWorktreeInfo } from "../../shared/contracts";
+import type {
+  AgentEvent,
+  AgentSessionInfo,
+  PlanRef,
+  SubagentWorktreeInfo,
+} from "../../shared/contracts";
 import type {
   HarnessContext,
   HarnessHook,
@@ -168,9 +173,13 @@ vi.mock("./model-service", () => ({
 }));
 
 const { getDatabase } = await import("../db/database");
-const { PiSdkRuntime, activeToolNamesForSession, removeRunOutputTrackerIfOwned } = await import(
-  "./pi-sdk-runtime"
-);
+const {
+  PiSdkRuntime,
+  activeToolNamesForSession,
+  disallowedToolReason,
+  growOnlyToolNames,
+  removeRunOutputTrackerIfOwned,
+} = await import("./pi-sdk-runtime");
 const agentEventStore = await import("./agent-event-store");
 const modelService = await import("./model-service");
 const { toolRegistry } = await import("./tools/registry");
@@ -13046,4 +13055,221 @@ describe("workspace move", () => {
     ).resolves.toMatchObject({ workspaceId: f.sourceId, cwd });
     expect(getAgentSession(f.sessionId)?.pinnedAt).toBeTruthy();
   });
+});
+
+describe("PiSdkRuntime per-request token stability", () => {
+  beforeEach(() => resetFeatureFlagOverrides());
+  afterEach(() => resetFeatureFlagOverrides());
+
+  type Request = { systemPrompt: string; toolsJson: string[]; userTexts: string[] };
+  const userText = (message: Context["messages"][number]): string => {
+    if (message.role !== "user") return "";
+    if (typeof message.content === "string") return message.content;
+    return message.content.map((block) => (block.type === "text" ? block.text : "")).join("\n");
+  };
+
+  async function runTurns(
+    modes: Array<"build" | "plan">,
+    beforeTurn?: (
+      turn: number,
+      harness: Awaited<ReturnType<typeof createOfflinePiToolSessions>>,
+    ) => void,
+  ) {
+    const requests: Request[] = [];
+    const harness = await createOfflinePiToolSessions({
+      onStream: (_session, context) => {
+        requests.push({
+          systemPrompt: context.systemPrompt ?? "",
+          toolsJson: (context.tools ?? []).map((tool) =>
+            JSON.stringify({
+              name: tool.name,
+              description: tool.description,
+              parameters: tool.parameters,
+            }),
+          ),
+          userTexts: context.messages.map(userText).filter(Boolean),
+        });
+      },
+    });
+    const runtime = new PiSdkRuntime();
+    const sessionId = `token-stability-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const lastRequestOfTurn: Request[] = [];
+    for (const [index, mode] of modes.entries()) {
+      beforeTurn?.(index + 1, harness);
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        delivery: "normal",
+        message: `Turn ${index + 1}: explain src/app.ts.`,
+        sessionId,
+        ...(mode === "plan" ? { mode: "plan" as const } : {}),
+      });
+      const last = requests.at(-1);
+      if (!last) throw new Error("Expected a provider request.");
+      lastRequestOfTurn.push(last);
+    }
+    return { requests, lastRequestOfTurn, runtime, sessionId, harness };
+  }
+
+  it("grows the tool list without removing or reordering earlier tools", () => {
+    expect(growOnlyToolNames(undefined, ["read", "edit"])).toEqual(["read", "edit"]);
+    expect(growOnlyToolNames(["read", "edit", "bash"], ["read", "plan_write"])).toEqual([
+      "read",
+      "edit",
+      "bash",
+      "plan_write",
+    ]);
+    expect(growOnlyToolNames(["read", "edit"], ["edit", "read"])).toEqual(["read", "edit"]);
+  });
+
+  it("sends inline visuals, skills and subagents once in the system prompt, not in every user message", async () => {
+    const { lastRequestOfTurn, runtime, sessionId } = await runTurns(["build", "build", "build"]);
+    const [first, , third] = lastRequestOfTurn;
+    for (const marker of ["<inline_visuals>", "## Skills", "## Subagents"]) {
+      expect(third?.systemPrompt.split(marker)).toHaveLength(2);
+      for (const text of third?.userTexts ?? []) expect(text).not.toContain(marker);
+    }
+    expect(third?.userTexts).toEqual([
+      "Turn 1: explain src/app.ts.",
+      "Turn 2: explain src/app.ts.",
+      "Turn 3: explain src/app.ts.",
+    ]);
+    // Same session, same config: the cached prefix is byte-identical.
+    expect(third?.systemPrompt).toBe(first?.systemPrompt);
+    expect(third?.toolsJson).toEqual(first?.toolsJson);
+    await runtime.releaseRuntime(sessionId);
+  }, 30_000);
+
+  it("keeps the skills manifest single with the Prompt Registry enabled", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_PROMPT_REGISTRY: true });
+    const { lastRequestOfTurn, runtime, sessionId } = await runTurns(["build", "build"]);
+    const second = lastRequestOfTurn[1];
+    for (const marker of ["<inline_visuals>", "## Skills", "## Subagents"]) {
+      expect(second?.systemPrompt.split(marker)).toHaveLength(2);
+      for (const text of second?.userTexts ?? []) expect(text).not.toContain(marker);
+    }
+    expect(second?.toolsJson).toEqual(lastRequestOfTurn[0]?.toolsJson);
+    await runtime.releaseRuntime(sessionId);
+  }, 30_000);
+
+  it("keeps the tools array byte-stable and grow-only across build and plan turns", async () => {
+    const { lastRequestOfTurn, runtime, sessionId } = await runTurns([
+      "build",
+      "plan",
+      "build",
+      "plan",
+      "build",
+    ]);
+    for (let turn = 1; turn < lastRequestOfTurn.length; turn += 1) {
+      const previous = lastRequestOfTurn[turn - 1]?.toolsJson ?? [];
+      const current = lastRequestOfTurn[turn]?.toolsJson ?? [];
+      expect(current.slice(0, previous.length)).toEqual(previous);
+    }
+    const names = (request?: Request) =>
+      (request?.toolsJson ?? []).map((json) => (JSON.parse(json) as { name: string }).name);
+    expect(names(lastRequestOfTurn[0])).toContain("edit");
+    expect(names(lastRequestOfTurn[0])).not.toContain("plan_write");
+    // The first plan turn appends plan_write; nothing is removed.
+    expect(names(lastRequestOfTurn[1])).toEqual([...names(lastRequestOfTurn[0]), "plan_write"]);
+    for (const request of lastRequestOfTurn.slice(2)) {
+      expect(request.toolsJson).toEqual(lastRequestOfTurn[1]?.toolsJson);
+      expect(request.systemPrompt).toBe(lastRequestOfTurn[1]?.systemPrompt);
+    }
+    // Plan Mode still forbids inline visuals in its own per-turn block.
+    expect(lastRequestOfTurn[1]?.userTexts.at(-1)).toContain("PLAN MODE");
+    await runtime.releaseRuntime(sessionId);
+  }, 30_000);
+
+  it("refuses an exposed tool that the current Plan Mode turn does not allow", async () => {
+    const target = join(cwd, "plan-mode-write.txt");
+    const { runtime, sessionId, harness } = await runTurns(["build", "plan"], (turn, offline) => {
+      if (turn === 2) offline.requestTool("write", { path: target, content: "nope" });
+    });
+    const result = harness
+      .messagesFor(harness.sessionAt())
+      .findLast((message) => message.role === "toolResult");
+    expect(result?.role === "toolResult" && result.isError).toBe(true);
+    expect(result?.role === "toolResult" ? result.content : []).toEqual([
+      {
+        type: "text",
+        text: "Blocked write: Plan Mode is read-only. Use read, grep, find, ls, web_search, web_fetch, fast_codebase, plan_write, ask_user to research and write the plan, or ask the user to switch to Build mode.",
+      },
+    ]);
+    expect(existsSync(target)).toBe(false);
+    await runtime.releaseRuntime(sessionId);
+  }, 30_000);
+
+  describe("refusal text for exposed-but-disallowed tools", () => {
+    const sessionInfo = (overrides: Partial<AgentSessionInfo> = {}): AgentSessionInfo => ({
+      id: `limits-${crypto.randomUUID()}`,
+      workspaceId: `workspace-${crypto.randomUUID()}`,
+      title: "chat",
+      cwd,
+      status: "idle",
+      createdAt: "",
+      updatedAt: "",
+      ...overrides,
+    });
+    const limitsFor = (info: AgentSessionInfo, profile: "chat" | "plan") => ({
+      profile,
+      allowed: new Set(activeToolNamesForSession(info, profile)),
+      allowedOutsidePlan: new Set(activeToolNamesForSession(info, "chat")),
+    });
+    const GENERIC =
+      "is not available in this turn (for example in Plan Mode). Use the tools this turn allows.";
+
+    it("explains Plan Mode only when Plan Mode is the cause", () => {
+      new PiSdkRuntime(); // registers the process-wide tools
+      const reason = disallowedToolReason("edit", limitsFor(sessionInfo(), "plan"));
+      expect(reason).toBe(
+        "Blocked edit: Plan Mode is read-only. Use read, grep, find, ls, web_search, web_fetch, fast_codebase, plan_write, ask_user to research and write the plan, or ask the user to switch to Build mode.",
+      );
+    });
+
+    it("keeps the generic message for a group limit, in Build and in Plan turns", async () => {
+      const { GROUP_TOOL_NAMES } = await import("./tools/group-tools");
+      new PiSdkRuntime();
+      const notAMember = sessionInfo();
+      const groupTool = GROUP_TOOL_NAMES[0] as string;
+      expect(activeToolNamesForSession(notAMember, "chat")).not.toContain(groupTool);
+      for (const profile of ["chat", "plan"] as const) {
+        expect(disallowedToolReason(groupTool, limitsFor(notAMember, profile))).toBe(
+          `${groupTool} ${GENERIC}`,
+        );
+      }
+    });
+
+    it("keeps the generic message for a subagent limit, even in a Plan turn", () => {
+      new PiSdkRuntime();
+      const readOnlyChild = sessionInfo({
+        parentSessionId: `parent-${crypto.randomUUID()}`,
+        subagentReadOnly: true,
+      });
+      expect(activeToolNamesForSession(readOnlyChild, "chat")).not.toContain("edit");
+      for (const profile of ["chat", "plan"] as const) {
+        expect(disallowedToolReason("edit", limitsFor(readOnlyChild, profile))).toBe(
+          `edit ${GENERIC}`,
+        );
+      }
+    });
+  });
+
+  it("rebuilds the idle session's system prompt when the subagent catalog changes", async () => {
+    const agentsDir = join(cwd, ".modus", "agents");
+    const { lastRequestOfTurn, runtime, sessionId } = await runTurns(["build", "build"], (turn) => {
+      if (turn !== 2) return;
+      mkdirSync(agentsDir, { recursive: true });
+      writeFileSync(
+        join(agentsDir, "token-auditor.md"),
+        "---\nname: token-auditor\ndescription: Audits token use.\n---\nAudit tokens.",
+        "utf8",
+      );
+    });
+    expect(lastRequestOfTurn[0]?.systemPrompt).not.toContain("token-auditor");
+    expect(lastRequestOfTurn[1]?.systemPrompt).toContain("token-auditor");
+    for (const text of lastRequestOfTurn[1]?.userTexts ?? []) {
+      expect(text).not.toContain("token-auditor");
+    }
+    await runtime.releaseRuntime(sessionId);
+  }, 30_000);
 });

@@ -15,4 +15,12 @@ describe("Plan Mode planning prompt", () => {
     expect(preamble).toContain("rollback");
     expect(planModePreamble("build")).toBe("");
   });
+
+  it("tells the planner that mutating tools are blocked even when they are listed", () => {
+    const preamble = planModePreamble("plan");
+    expect(preamble).toContain(
+      "Plan Mode is read-only: edit, write, bash, terminal and other mutating tools are blocked in this mode",
+    );
+    expect(preamble).toContain("even if they appear in your tool list");
+  });
 });

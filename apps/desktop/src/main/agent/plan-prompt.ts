@@ -3,8 +3,9 @@ import type { ToolProfileName } from "../../shared/tools";
 
 /**
  * Per-turn instruction prepended to the user's message in Plan Mode. Capability
- * is already enforced by the active tool set (the plan profile has no edit/
- * write/bash); this block sets the planner's OBJECTIVE and QUALITY BAR so the
+ * is enforced by the plan profile (no edit/write/bash): calls outside it are
+ * refused for the turn even when the session's grow-only tool set exposes
+ * them; this block sets the planner's OBJECTIVE and QUALITY BAR so the
  * model researches, clarifies, and writes one concise, decision-complete plan
  * rather than coding — and, crucially, does NOT over-specify (the planning-time
  * analog of hardcoding). Principles distilled from Codex's plan-mode template.
@@ -12,6 +13,7 @@ import type { ToolProfileName } from "../../shared/tools";
 const PLAN_MODE_INSTRUCTION = [
   "<plan_mode>",
   "You are in PLAN MODE. Do not implement anything: research and write ONE plan via plan_write.",
+  "Plan Mode is read-only: edit, write, bash, terminal and other mutating tools are blocked in this mode and any call to them is refused, even if they appear in your tool list.",
   "",
   "## Explore first, ask second",
   "- Ground the plan in how this project ACTUALLY works: read/grep/find/ls to discover facts before planning.",

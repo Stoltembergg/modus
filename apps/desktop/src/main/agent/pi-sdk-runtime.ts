@@ -338,10 +338,12 @@ Skip heavy formatting for one-line answers, greetings, or simple confirmations.
 </response_formatting>`;
 
 /**
- * Chat/build-only: operable inline visuals. Injected per turn from `mode`
- * (sessions switch plan↔build without recreating the system prompt).
+ * Operable inline visuals. Lives in the system prompt (sent once per request,
+ * cached) rather than in every user message; Plan Mode turns opt out through
+ * the `<plan_mode>` block they carry.
  */
 const RESPONSE_FORMAT_INLINE_VISUALS = `<inline_visuals>
+In Plan Mode (a \`<plan_mode>\` block in the user's message), follow that block instead: no inline visuals.
 Inline visuals (how the UI streams — prefer this over stuffing large HTML into a tool call):
 - Static architecture / pipeline / flow / sequence → fenced \`mermaid\` diagram.
 - Operable HTML/SVG → open a fenced \`html\` or \`svg\` block in the assistant message early and grow it as you write. The UI paints as \`message\` tokens arrive (tool-argument channels are often buffered until complete).
@@ -908,6 +910,42 @@ export function activeToolNamesForSession(
   return active.filter((name) => !disabled.has(name));
 }
 
+/**
+ * Tools exposed to the model for this turn: the session's earlier set, in its
+ * original order, plus any newly allowed tool appended at the end. The array
+ * never shrinks or reorders, so the provider's prompt cache over tools, system
+ * prompt and history stays valid across turns and mode switches. Tools that are
+ * exposed but not allowed this turn are refused at call time.
+ */
+export function growOnlyToolNames(
+  previous: readonly string[] | undefined,
+  allowed: readonly string[],
+): string[] {
+  if (!previous) return [...allowed];
+  const seen = new Set(previous);
+  return [...previous, ...allowed.filter((name) => !seen.has(name))];
+}
+
+/** What the current turn may call; see disallowedToolReason. */
+export type TurnToolLimits = {
+  profile: ToolProfileName;
+  allowed: ReadonlySet<string>;
+  /** Tools this session could call in a non-Plan turn (group/subagent limits still applied). */
+  allowedOutsidePlan: ReadonlySet<string>;
+};
+
+/**
+ * Refusal text for a tool that is exposed (grow-only set) but not allowed this
+ * turn. The Plan Mode explanation is used only when Plan Mode is the actual
+ * cause; group, subagent and any other limits keep the generic message.
+ */
+export function disallowedToolReason(toolName: string, limits: TurnToolLimits): string {
+  if (limits.profile === "plan" && limits.allowedOutsidePlan.has(toolName)) {
+    return `Blocked ${toolName}: Plan Mode is read-only. Use ${[...limits.allowed].join(", ")} to research and write the plan, or ask the user to switch to Build mode.`;
+  }
+  return `${toolName} is not available in this turn (for example in Plan Mode). Use the tools this turn allows.`;
+}
+
 function isGroupMailboxToolName(name: string): boolean {
   return (
     name === GROUP_MAILBOX_SEND_TOOL ||
@@ -959,6 +997,16 @@ export class PiSdkRuntime implements AgentRuntime {
   private reaGenerations = new Map<string, string>();
   /** The persona block each cached 1:1 chat was built with (A3): a change rebuilds it. */
   private personaPrompts = new Map<string, string | undefined>();
+  /**
+   * Per-session prompt sections that used to ride every user message (inline
+   * visuals, skills manifest, subagents). They now live in the system prompt;
+   * a change rebuilds the idle session like a persona edit.
+   */
+  private stablePromptSections = new Map<string, string>();
+  /** Grow-only tool names exposed to the model, per session (see growOnlyToolNames). */
+  private exposedToolNames = new Map<string, string[]>();
+  /** Tools the current turn may actually call (mode, group membership, subagent limits). */
+  private turnToolLimits = new Map<string, TurnToolLimits>();
   private turnSettledListeners = new Set<(event: TurnSettledEvent) => void>();
   private eventListeners = new Set<(event: AgentEvent) => void>();
   private questionPendingListeners = new Set<(sessionId: string) => void>();
@@ -1918,6 +1966,10 @@ export class PiSdkRuntime implements AgentRuntime {
     input: ToolCallInput,
     promptLifecycleToken: symbol,
   ): Promise<{ block?: boolean | undefined; reason?: string | undefined } | undefined> {
+    const limits = this.turnToolLimits.get(sessionId);
+    if (limits && !limits.allowed.has(input.toolName)) {
+      return { block: true, reason: disallowedToolReason(input.toolName, limits) };
+    }
     this.cancelPendingSpillToolCall(sessionId, input.toolCallId);
     this.recordPendingSpillToolCall(sessionId, input, promptLifecycleToken);
     if (!isFeatureFlagEnabled("MODUS_USE_KERNEL") || !isFeatureFlagEnabled("MODUS_REPEAT_GUARDS")) {
@@ -2695,7 +2747,8 @@ export class PiSdkRuntime implements AgentRuntime {
       const toolsChanged =
         existing.toolRegistryRevision !== toolRegistry.revision &&
         this.isIdleForRebuild(sessionId, existing);
-      if (!workspaceMoved && !personaChanged && !toolsChanged) {
+      const sectionsChanged = this.stablePromptSectionsChanged(sessionId, existing);
+      if (!workspaceMoved && !personaChanged && !toolsChanged && !sectionsChanged) {
         return existing;
       }
       // The stored cwd moved (an Agent Group member entered or left its
@@ -2751,6 +2804,35 @@ export class PiSdkRuntime implements AgentRuntime {
       });
     this.resumePromises.set(sessionId, next);
     return await next;
+  }
+
+  /**
+   * Sections that are the same for every turn of a session and therefore belong
+   * in the system prompt: inline visuals, the skills manifest (the Prompt
+   * Registry adds its own when enabled) and the subagent catalog (top-level
+   * sessions only).
+   */
+  private resolveStablePromptSections(sessionId: string, cwd: string): string[] {
+    const skillsManifest = isFeatureFlagEnabled("MODUS_PROMPT_REGISTRY")
+      ? ""
+      : resolveSkillsPrompt(cwd, []);
+    const subagents = getAgentSession(sessionId)?.parentSessionId
+      ? ""
+      : resolveSubagentsPrompt(cwd);
+    return [RESPONSE_FORMAT_INLINE_VISUALS, skillsManifest, subagents].filter(Boolean);
+  }
+
+  /** True when an idle session's skills/subagents/models changed since its system prompt was built. */
+  private stablePromptSectionsChanged(
+    sessionId: string,
+    runtimeSession: SdkRuntimeSession,
+  ): boolean {
+    const built = this.stablePromptSections.get(sessionId);
+    if (built === undefined) return false;
+    return (
+      built !== this.resolveStablePromptSections(sessionId, runtimeSession.info.cwd).join("\n\n") &&
+      this.isIdleForRebuild(sessionId, runtimeSession)
+    );
   }
 
   /**
@@ -3091,6 +3173,12 @@ export class PiSdkRuntime implements AgentRuntime {
         ...(!promptRegistryEnabled && rulesPrompt ? [rulesPrompt] : []),
         ...(!promptRegistryEnabled && personaPrompt ? [personaPrompt] : []),
       ],
+      // Re-evaluated on every loader reload, so the sections stay current.
+      appendSystemPromptOverride: (base) => {
+        const sections = this.resolveStablePromptSections(sessionId, cwd);
+        this.stablePromptSections.set(sessionId, sections.join("\n\n"));
+        return [...base, ...sections];
+      },
     });
     await loader.reload();
     return { settingsManager, loader, promptLifecycleToken };
@@ -4052,12 +4140,10 @@ export class PiSdkRuntime implements AgentRuntime {
 
     try {
       await this.refreshPromptResources(runtimeSession);
-      // Per-turn mode: switch the active tool set (plan = read-only research +
-      // plan artifacts; build = full chat tools). setActiveToolsByName also rebuilds
-      // the system prompt for the new set, and takes effect on this turn.
-      runtimeSession.session.setActiveToolsByName(
-        activeToolNamesForSession(runtimeSession.info, profile),
-      );
+      // Per-turn mode decides what the turn may call (plan = read-only research +
+      // plan artifacts; build = full chat tools). The exposed set is grow-only so
+      // the prompt cache survives mode switches; disallowed calls are refused.
+      this.applyTurnToolSet(runtimeSession, profile);
 
       // Per-turn model + thinking: the composer's current selection travels with
       // the prompt and is applied authoritatively here, so the turn never runs
@@ -5214,6 +5300,27 @@ export class PiSdkRuntime implements AgentRuntime {
   }
 
   /**
+   * Expose the session's grow-only tool set (decided on its first turn) and
+   * record which of those tools this turn may call. setActiveToolsByName also
+   * rebuilds the system prompt, which stays byte-identical while the set does.
+   */
+  private applyTurnToolSet(runtimeSession: SdkRuntimeSession, profile: ToolProfileName): void {
+    const sessionId = runtimeSession.info.id;
+    const allowed = activeToolNamesForSession(runtimeSession.info, profile);
+    const exposed = growOnlyToolNames(this.exposedToolNames.get(sessionId), allowed);
+    this.exposedToolNames.set(sessionId, exposed);
+    this.turnToolLimits.set(sessionId, {
+      profile,
+      allowed: new Set(allowed),
+      // Only computed for Plan turns: what the same session could call outside Plan Mode.
+      allowedOutsidePlan: new Set(
+        profile === "plan" ? activeToolNamesForSession(runtimeSession.info, "chat") : allowed,
+      ),
+    });
+    runtimeSession.session.setActiveToolsByName(exposed);
+  }
+
+  /**
    * Build the full prompt text for a turn: plan-mode preamble, manually invoked
    * skills, resolved context, passive terminal/app awareness, then the user's
    * message. Shared by fresh and queued turns so a steered message carries the
@@ -5236,12 +5343,10 @@ export class PiSdkRuntime implements AgentRuntime {
     const appDigest = summarizeApps({ sessionId: runtimeSession.info.id });
     const digest = [terminalDigest, appDigest].filter(Boolean).join("\n");
     const awareness = digest ? `<active_terminals>\n${digest}\n</active_terminals>` : "";
+    // Only skills the user invoked this turn; the manifest is in the system prompt.
     const skillsText = resolveSkillsPrompt(runtimeSession.info.cwd, input.skills ?? [], undefined, {
-      includeManifest: !isFeatureFlagEnabled("MODUS_PROMPT_REGISTRY"),
+      includeManifest: false,
     });
-    const subagentsText = runtimeSession.info.parentSessionId
-      ? ""
-      : resolveSubagentsPrompt(runtimeSession.info.cwd);
     let projectMemoryText = "";
     if (options.includeProjectMemory !== false) {
       const { paths, symbols } = projectMemoryHints(input.context, runtimeSession.info.cwd);
@@ -5283,10 +5388,7 @@ export class PiSdkRuntime implements AgentRuntime {
     }
     return [
       planModePreamble(input.mode),
-      // Plan turns forbid inline visuals via planModePreamble; chat/build get the channel here.
-      input.mode === "plan" ? "" : RESPONSE_FORMAT_INLINE_VISUALS,
       skillsText,
-      subagentsText,
       contextText,
       awareness,
       projectMemoryText,
@@ -5317,9 +5419,7 @@ export class PiSdkRuntime implements AgentRuntime {
     try {
       await this.refreshPromptResources(runtimeSession);
       if (isFeatureFlagEnabled("MODUS_PROMPT_REGISTRY")) {
-        runtimeSession.session.setActiveToolsByName(
-          activeToolNamesForSession(runtimeSession.info, runtimeSession.profile),
-        );
+        this.applyTurnToolSet(runtimeSession, runtimeSession.profile);
       }
       const message = await this.composeTurnMessage(runtimeSession, input, {
         includeProjectMemory: false,
@@ -5785,6 +5885,7 @@ export class PiSdkRuntime implements AgentRuntime {
     this.backgroundChildTasks.delete(sessionId);
     await this.disposeReaWorker(sessionId, generation);
     await this.disposeSessionOnly(sessionId);
+    this.exposedToolNames.delete(sessionId);
   }
 
   async releaseRuntime(sessionId: string): Promise<void> {
@@ -5834,6 +5935,8 @@ export class PiSdkRuntime implements AgentRuntime {
     const runtimeSession = this.sessions.get(sessionId);
     this.parentSessionByChild.delete(sessionId);
     this.personaPrompts.delete(sessionId);
+    this.stablePromptSections.delete(sessionId);
+    this.turnToolLimits.delete(sessionId);
     if (!runtimeSession) {
       HarnessObserver.getInstance().releaseSession(sessionId);
       this.clearRepeatGuardSession(sessionId);
