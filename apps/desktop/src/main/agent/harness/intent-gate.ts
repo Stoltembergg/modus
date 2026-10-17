@@ -38,7 +38,7 @@ const DIRECT_DESTRUCTIVE_EFFECT = new RegExp(
 // Missing-target rule: an imperative edit verb (pt-BR or English) at the start of a clause,
 // optionally after a polite prefix, with nothing that says what to change.
 const POLITE_PREFIX = String.raw`(?:(?:ok|okay|sim|please|pls|can you|could you|would you|i want you to|i need you to|go ahead and|now|por favor|pode|você pode|vc pode|voce pode|poderia|consegue|agora|então|entao)[\s,]+)*`;
-const EDIT_VERB = String.raw`(?:fix|repair|add|change|modify|update|upgrade|refactor|rewrite|delete|remove|convert|improve|optimi[sz]e|clean\s+up|rename|move|split|replace|tweak|adjust|edit|redo|make|do(?!\s+(?:you|we|i|they|not)\b)|handle|deal\s+with|get\s+rid\s+of|sort\s+out|corrij[ae]|corrigir|corrige|consert[ae]|consertar|arrum[ae]|arrumar|ajust[ae]|ajustar|adicion[ae]|adicionar|acrescent[ae]|coloc[ae]|coloque|mud[ae]|mudar|alter[ae]|alterar|troc[ae]|troque|trocar|refator[ae]|refatorar|remov[ae]|remover|apag[ae]|apague|apagar|delet[ae]|deletar|exclu[ia]|excluir|tir[ae](?!\s+(?:uma|minha|essa)\s+d[uú]vida)|tirar|convert[ae]|converter|atualiz[ae]|atualizar|melhor[ae]|melhorar|otimiz[ae]|otimizar|renomei[ae]|renomear|mov[ae]|mover|limp[ae]|limpar|resolv[ae]|resolver|deix[ae](?!\s+eu\b)|faz(?!\s+(?:sentido|quanto|tempo|diferen[cç]a)\b)|faça|faca|fazer|substitu[ia]|substituir|separ[ae]|divid[ae])`;
+const EDIT_VERB = String.raw`(?:fix|repair|add|change|modify|update|upgrade|refactor|rewrite|delete|remove|convert|improve|optimi[sz]e|clean\s+up|rename|move|split|replace|tweak|adjust|edit|redo|make|do(?!\s+(?:you|we|i|they|not)\b)|handle|deal\s+with|get\s+rid\s+of|sort\s+out|corrij[ae]|corrigir|corrige|consert[ae]|consertar|arrum[ae]|arrumar|ajust[ae]|ajustar|adicion[ae]|adicionar|acrescent[ae]|coloc[ae]|coloque|mud[ae]|mudar|alter[ae]|alterar|troc[ae]|troque|trocar|refator[ae]|refatorar|remov[ae]|remover|apag[ae]|apague|apagar|delet[ae]|deletar|exclu[ia]|excluir|tir[ae](?!\s+(?:uma|minha|essa)\s+d[uú]vida)|tirar|convert[ae]|converter|atualiz[ae]|atualizar|melhor[ae]|melhorar|otimiz[ae]|otimizar|renomei[ae]|renomear|mov[ae]|mover|limp[ae]|limpar|resolv[ae]|resolver|deix[ae](?!\s+eu\b)|faz(?!\s+(?:sentido|quanto|tempo|diferen[cç]a)\b)|faça|faca|fazer|substitu[ia]|substituir|separ[ae]|divid[ae]|implement|create|insert|include|hide|disable|enable|revert|undo|translate|cent(?:er|re)|align|resize|implement[ae]|implementar|cri[ae]|criar|inclu[ia]|incluir|insir[ae]|inserir|escond[ae]|esconder|desativ[ae]|desativar|ativ[ae]|ativar|revert[ae]|reverter|desfaz|desfaça|desfaca|desfazer|traduz|traduza|traduzir|centraliz[ae]|centralizar|alinh[ae]|alinhar|redimension[ae]|redimensionar)`;
 const CLAUSE_START = String.raw`(?:^|[.!?;:,\n]\s*|\b(?:and|then|e|depois|aí|ai)\s+)`;
 const EDIT_REQUEST = new RegExp(
   `${CLAUSE_START}${POLITE_PREFIX}${EDIT_VERB}(?![\\p{L}\\p{N}_])`,
@@ -59,6 +59,9 @@ const NAMED_TARGET = [
   /\bv?\d+\.\d+(?:\.\d+)?\b/, // version number
   /\b(?:README|CHANGELOG|LICENSE|CONTRIBUTING|Dockerfile|Makefile)\b/,
   /[\p{Ll}\d,]\s+\p{Lu}\p{Ll}{2,}/u, // capitalized name mid-sentence (Sidebar, Windows)
+  // App surfaces that exist once, so naming them is enough in any case ("sidebar" == "Sidebar").
+  // Generic nouns (button, label, modal, component, page) are not here: they still need a name.
+  /\b(?:side\s?bar|barra\s+lateral|nav\s?bar|tool\s?bar|title\s?bar|status\s?bar|header|footer|cabe[cç]alho|rodap[eé]|composer)(?![\p{L}\p{N}_])/iu,
 ];
 /**
  * Targets that exist once per project, so naming them is enough: lint, warnings, tests, build,
@@ -105,8 +108,19 @@ function namesTarget(text: string, longTextNamesTarget = true): boolean {
 // "Improve the tests" names the target but not what to change, so it still asks.
 const OPEN_ENDED_VERB = /\b(?:improve|optimi[sz]e|melhor[ae]r?|otimiz(?:e|a|ar))\b/i;
 
+/**
+ * A trailing polite word ("fix the tests please", "arruma os testes por favor") is stripped
+ * before the end-anchored checks, so it reads the same as the request without it.
+ */
+const TRAILING_POLITENESS =
+  /[\s,]+(?:please|pls|plz|thanks|thank\s+you|por\s+favor|pfv|pf|obrigad[oa])\s*[.!?]*\s*$/iu;
+
+function withoutTrailingPoliteness(text: string): string {
+  return text.replace(TRAILING_POLITENESS, "");
+}
+
 function isProjectTargetRequest(text: string): boolean {
-  return PROJECT_TARGET.test(text) && !OPEN_ENDED_VERB.test(text);
+  return PROJECT_TARGET.test(withoutTrailingPoliteness(text)) && !OPEN_ENDED_VERB.test(text);
 }
 
 function agentAskedQuestion(assistantText: string | undefined): boolean {
