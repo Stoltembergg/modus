@@ -566,6 +566,8 @@ export type ModusApi = {
     getMode(input?: { cwd?: string }): Promise<ApprovalModeState>;
     setMode(input: { mode: ApprovalMode; cwd?: string }): Promise<ApprovalModeState>;
     clearProjectMode(input: { cwd: string }): Promise<ApprovalModeState>;
+    getAskMissingTarget(): Promise<boolean>;
+    setAskMissingTarget(input: { enabled: boolean }): Promise<boolean>;
   };
   questions: {
     /** Resolve a pending ask_user request with the user's answers (or a skip). */

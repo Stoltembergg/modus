@@ -193,6 +193,8 @@ export const IPC_CHANNELS = {
   permissionGetMode: "permission:get-mode",
   permissionSetMode: "permission:set-mode",
   permissionClearProjectMode: "permission:clear-project-mode",
+  permissionGetAskMissingTarget: "permission:get-ask-missing-target",
+  permissionSetAskMissingTarget: "permission:set-ask-missing-target",
   questionsRespond: "questions:respond",
   contextSearch: "context:search",
   contextResolve: "context:resolve",

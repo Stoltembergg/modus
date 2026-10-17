@@ -229,7 +229,9 @@ import {
 import {
   clearProjectApprovalMode,
   getApprovalModeState,
+  getAskMissingTarget,
   listPermissionDecisions,
+  setAskMissingTarget,
   setGlobalApprovalMode,
   setProjectApprovalMode,
 } from "../permissions/permission-store";
@@ -284,6 +286,7 @@ import {
   approvalModeClearProjectSchema,
   approvalModeGetSchema,
   approvalModeSchema,
+  askMissingTargetSchema,
   browserBoundsSchema,
   browserCreateTabSchema,
   browserDesignModeSchema,
@@ -1257,6 +1260,21 @@ export function registerAppIpc({
     );
     clearProjectApprovalMode(parsed.cwd);
     return getApprovalModeState(parsed.cwd);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.permissionGetAskMissingTarget, (event) => {
+    assertTrustedSender(event);
+    return getAskMissingTarget();
+  });
+
+  ipcMain.handle(IPC_CHANNELS.permissionSetAskMissingTarget, (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(
+      askMissingTargetSchema,
+      input,
+      IPC_CHANNELS.permissionSetAskMissingTarget,
+    );
+    return setAskMissingTarget(parsed.enabled);
   });
 
   ipcMain.handle(IPC_CHANNELS.questionsRespond, (event, input) => {
