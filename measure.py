@@ -15,7 +15,8 @@ from PIL import Image, ImageFilter
 
 W, H, SIGMA = 1920, 1080, 24
 HERE = os.path.dirname(os.path.abspath(__file__))
-WALLS = os.path.join(HERE, "wallpapers")
+WALLS = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "wallpapers")
+OUTFILE = sys.argv[2] if len(sys.argv) > 2 else os.path.join(HERE, "results.json")
 
 def hx(s): s = s.lstrip("#"); return np.array([int(s[i:i+2], 16) for i in (0, 2, 4)], float)
 
@@ -91,7 +92,7 @@ def main():
             p5, mn = stats(theme, bg, surf, text)
             out[name][f"{theme}|{satmode}|{surf}|{text}"] = {"p5": round(p5, 2), "min": round(mn, 2), "floor": floor(theme, bg, surf, text)}
     print(name, "done", file=sys.stderr)
-  json.dump(out, open(os.path.join(HERE, "results.json"), "w"), indent=1)
+  json.dump(out, open(OUTFILE, "w"), indent=1)
 
 if __name__ == "__main__":
   main()
