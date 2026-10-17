@@ -151,10 +151,10 @@ describe("new look tokens: values", () => {
       "--color-panel": "#0b1018",
       "--color-surface": "#151d2a",
       "--color-elevated": "#1a2333",
-      "--color-fg": "#e7ebf1",
+      "--color-fg": "#f1f3f7",
       "--color-fg-muted": "#a9b2c0",
       "--color-fg-subtle": "#939dac",
-      "--color-fg-faint": "#7a8494",
+      "--color-fg-faint": "#7d8797",
       "--color-accent": "#863ff5",
       "--color-accent-hover": "#8d4bf6",
       "--color-accent-active": "#7a35e8",
@@ -392,14 +392,24 @@ describe("new look tokens: contrast gate", () => {
     expect(css).not.toMatch(/^\s*--color-warning:/m);
   });
 
-  it("(c) muted and subtle stay distinct steps on the canvas, in both themes", () => {
+  it("(c) text hierarchy: fg > muted > subtle > faint, each step >= 1.2x contrast, on every solid surface, both themes", () => {
+    const ladder = ["--color-fg", "--color-fg-muted", "--color-fg-subtle", "--color-fg-faint"];
     for (const theme of THEMES) {
-      const canvas = color(theme, "--color-canvas");
-      const muted = contrast(color(theme, "--color-fg-muted"), canvas);
-      const subtle = contrast(color(theme, "--color-fg-subtle"), canvas);
-      const faint = contrast(color(theme, "--color-fg-faint"), canvas);
-      expect(muted / subtle, `${theme} muted vs subtle`).toBeGreaterThanOrEqual(1.2);
-      expect(subtle, `${theme} subtle above faint`).toBeGreaterThan(faint);
+      for (const base of [
+        "--color-canvas",
+        "--color-panel",
+        "--color-surface",
+        "--color-elevated",
+      ]) {
+        const bg = color(theme, base);
+        const levels = ladder.map((name) => contrast(color(theme, name), bg));
+        for (let i = 1; i < ladder.length; i += 1) {
+          expect(
+            (levels[i - 1] ?? 0) / (levels[i] ?? 1),
+            `${theme} ${base}: ${ladder[i - 1]} vs ${ladder[i]}`,
+          ).toBeGreaterThanOrEqual(1.2);
+        }
+      }
     }
   });
 

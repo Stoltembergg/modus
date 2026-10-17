@@ -122,7 +122,7 @@ export const NEW_LOOK_SOLID_WINDOW_BACKGROUND: Record<
 
 /** Window-control glyph colour in the new look (mirrors --color-fg in tokens-new.css). */
 export const NEW_LOOK_WINDOW_SYMBOL_COLOR: Record<Exclude<EffectiveTheme, "dark-plus">, string> = {
-  dark: "#e7ebf1",
+  dark: "#f1f3f7",
   light: "#161c27",
 };
 
