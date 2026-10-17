@@ -2,61 +2,88 @@
  {
   "variant": "before",
   "theme": "dark",
-  "wall": "sequoia-light",
-  "fg": 7.35,
-  "muted": 3.78,
-  "subtle": 2.95,
-  "faint": 2.23
- },
- {
-  "variant": "before",
-  "theme": "dark",
-  "wall": "bloom-dark",
-  "fg": 17.25,
-  "muted": 8.88,
-  "subtle": 6.93,
-  "faint": 5.23
+  "wall": "white",
+  "fg": 4.52,
+  "muted": 2.33,
+  "subtle": 1.81,
+  "faint": 1.37
  },
  {
   "variant": "before",
   "theme": "light",
-  "wall": "bloom-dark",
-  "fg": 5.74,
-  "muted": 3.06,
-  "subtle": 2.23,
-  "faint": 1.78
- },
- {
-  "variant": "before",
-  "theme": "light",
-  "wall": "sequoia-light",
-  "fg": 9.53,
-  "muted": 5.08,
-  "subtle": 3.71,
-  "faint": 2.96
+  "wall": "black",
+  "fg": 5.41,
+  "muted": 2.88,
+  "subtle": 2.1,
+  "faint": 1.68
  },
  {
   "variant": "after",
   "theme": "dark",
-  "wall": "sequoia-light",
-  "fg": 12.68,
-  "muted": 6.53,
-  "subtle": 5.09,
-  "faint": 3.85
+  "wall": "white",
+  "fg": 10.22,
+  "muted": 5.26,
+  "subtle": 4.1,
+  "faint": 3.1
  },
  {
   "variant": "after",
   "theme": "dark",
-  "wall": "bloom-dark",
-  "fg": 17.3,
-  "muted": 8.9,
-  "subtle": 6.95,
-  "faint": 5.25
+  "wall": "cccccc",
+  "fg": 11.69,
+  "muted": 6.02,
+  "subtle": 4.69,
+  "faint": 3.55
+ },
+ {
+  "variant": "after",
+  "theme": "dark",
+  "wall": "city-rush",
+  "fg": 15.84,
+  "muted": 8.15,
+  "subtle": 6.36,
+  "faint": 4.81
+ },
+ {
+  "variant": "after",
+  "theme": "dark",
+  "wall": "333333",
+  "fg": 16.47,
+  "muted": 8.48,
+  "subtle": 6.61,
+  "faint": 4.99
+ },
+ {
+  "variant": "after",
+  "theme": "dark",
+  "wall": "black",
+  "fg": 17.67,
+  "muted": 9.1,
+  "subtle": 7.1,
+  "faint": 5.36
  },
  {
   "variant": "after",
   "theme": "light",
-  "wall": "bloom-dark",
+  "wall": "white",
+  "fg": 15.48,
+  "muted": 8.25,
+  "subtle": 6.02,
+  "faint": 4.8
+ },
+ {
+  "variant": "after",
+  "theme": "light",
+  "wall": "cccccc",
+  "fg": 14.28,
+  "muted": 7.61,
+  "subtle": 5.55,
+  "faint": 4.43
+ },
+ {
+  "variant": "after",
+  "theme": "light",
+  "wall": "city-rush",
   "fg": 10.17,
   "muted": 5.42,
   "subtle": 3.95,
@@ -65,10 +92,19 @@
  {
   "variant": "after",
   "theme": "light",
-  "wall": "sequoia-light",
-  "fg": 12.37,
-  "muted": 6.59,
-  "subtle": 4.81,
-  "faint": 3.84
+  "wall": "333333",
+  "fg": 10.93,
+  "muted": 5.82,
+  "subtle": 4.25,
+  "faint": 3.39
+ },
+ {
+  "variant": "after",
+  "theme": "light",
+  "wall": "black",
+  "fg": 9.96,
+  "muted": 5.31,
+  "subtle": 3.87,
+  "faint": 3.09
  }
 ]

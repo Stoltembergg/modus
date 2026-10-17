@@ -26,8 +26,8 @@ _Jennie, 2026-10-17 (BRT). Repo Stoltembergg/modus, main `3d796844` (#254 merged
 6. **Real screenshots:** real Electron builds.
    - Before: main's renderer, the `modus-glass` build, whose renderer sources are byte-identical to `3d796844`.
    - After: an `electron-vite build` of the fix branch.
-   - Glass is forced on (`data-native-glass`, Full transparency). The real wallpaper sits behind the window with CSS `blur(24px)` and **no material layer**, i.e. the gate model.
-   - P5 contrast of the token colours is taken against an empty 190×750 px strip of window glass on the Settings screen (`shots/pixel-contrast.json`). Script: `pr-glass/app/floor-shots.mjs`.
+   - Glass is forced on (`data-native-glass`, Full transparency). A free backdrop sits behind the window: the CC0 photo with CSS `blur(24px)`, or a plain colour. There is **no material layer**, i.e. the gate model.
+   - P5 contrast of the token colours is taken against an empty 190×750 px strip of window glass on the Settings screen (`shots/pixel-contrast.json`). Script: `pr-glass/app/floor-shots2.mjs`.
 
 Code: `measure.py` (→ `results.json`, `tables.md`).
 
@@ -43,7 +43,7 @@ Code: `measure.py` (→ `results.json`, `tables.md`).
 
 I found no clean Sonoma source (Basic Apple Guy's Sonoma page 404s). The Sequoia pair covers the default macOS case. The plain white and black frames bound every wallpaper: no real wallpaper in the set was worse than them at P5.
 
-The PR screenshots show the app over these wallpapers *after a 24px blur*, behind the app window. They are not the wallpapers themselves; see the open questions.
+The PR screenshots use only the CC0 photo and plain colours. An earlier set over blurred Apple and Microsoft wallpapers was removed from the assets branch tip; it remains in that branch's history at `4797e0e0`, which was not rewritten.
 
 ## Results (P5 contrast; **bold** = fails the gate)
 
@@ -155,20 +155,26 @@ The PR screenshots show the app over these wallpapers *after a 24px blur*, behin
 | **max** | **61.0%** | **73.0%** | **58.5%** | **56.5%** | **50.0%** | **50.5%** |
 
 
-### Real screenshots (gate model: 24px blur, no material), P5 over an empty window strip
+### Real screenshots (gate model, no material), P5 over an empty strip of window glass on Settings
 
-| Build | Theme over wallpaper | fg | muted | subtle | faint |
+Backdrops are free only: the CC0 "City rush" photo (blurred 24px) and plain colours. The Apple and Microsoft wallpapers were used only for the numeric measurement above and appear in no image at the assets branch tip. Script: `pr-glass/app/floor-shots2.mjs`; data: `shots/pixel-contrast.json` on the assets branch.
+
+| Build | Theme over backdrop | fg | muted | subtle | faint |
 |---|---|---|---|---|---|
-| before (60%) | dark over Sequoia light | 7.35 | **3.78** | **2.95** | **2.23** |
-| before (60%) | dark over Bloom dark | 17.25 | 8.88 | 6.93 | 5.23 |
-| before (60%) | light over Bloom dark | 5.74 | **3.06** | **2.23** | **1.78** |
-| before (60%) | light over Sequoia light | 9.53 | 5.08 | 3.71 | **2.96** |
-| after (82%) | dark over Sequoia light | 12.68 | 6.53 | 5.09 | 3.85 |
-| after (82%) | dark over Bloom dark | 17.30 | 8.90 | 6.95 | 5.25 |
-| after (82%) | light over Bloom dark | 10.17 | 5.42 | 3.95 | 3.15 |
-| after (82%) | light over Sequoia light | 12.37 | 6.59 | 4.81 | 3.84 |
+| before, main (60/86) | dark over white | 4.52 | **2.33** | **1.81** | **1.37** |
+| before, main (60/86) | light over black | 5.41 | **2.88** | **2.10** | **1.68** |
+| after (82/89) | dark over white | 10.22 | 5.26 | 4.10 | 3.10 |
+| after (82/89) | dark over #cccccc | 11.69 | 6.02 | 4.69 | 3.55 |
+| after (82/89) | dark over City rush | 15.84 | 8.15 | 6.36 | 4.81 |
+| after (82/89) | dark over #333333 | 16.47 | 8.48 | 6.61 | 4.99 |
+| after (82/89) | dark over black | 17.67 | 9.10 | 7.10 | 5.36 |
+| after (82/89) | light over white | 15.48 | 8.25 | 6.02 | 4.80 |
+| after (82/89) | light over #cccccc | 14.28 | 7.61 | 5.55 | 4.43 |
+| after (82/89) | light over City rush | 10.17 | 5.42 | 3.95 | 3.15 |
+| after (82/89) | light over #333333 | 10.93 | 5.82 | 4.25 | 3.39 |
+| after (82/89) | light over black | 9.96 | 5.31 | 3.87 | 3.09 |
 
-These line up with the model: the strip is a fixed part of the screen, so it reads a little better than the whole-frame P5.
+Over plain white and black these match the model (dark over white: 2.34 → 3.0x faint). The City rush figures read better than the whole-frame P5 because the strip covers only one part of the photo.
 
 ## What the floor means against 60% and Gabriel's ruling
 
@@ -191,15 +197,15 @@ On the gate model, **no value below about 78% can satisfy the gate for fg-muted 
 4. **Stronger tint only behind text:** the window is mostly text (sidebar, chat, Settings). Per-region tints would bring back visible panels, i.e. the dividers Gabriel ruled out. Not simpler.
 5. **Gate on the measured material:** the recommended follow-up. If real captures confirm that the material adds roughly what the approximation assumes, a floor around **62%** holds every gate over pure white and black, inside the ruling. That needs a macOS machine and a Windows 11 machine, each over a white and a black wallpaper, sampling the pixels behind the empty sidebar.
 
-## Recommendation
+## Decisions (Debbie, 2026-10-17)
 
-- **Ship the gate-model floor (82% / 89%) only if Gabriel accepts giving up "more transparent than 64%"** for v0.1.11. It is what the current gate demands, and it is what the PR implements.
-- Otherwise, **hold the PR**. Measure the native material on real macOS and Windows, then set the floor from that measurement: the approximation says ~62% window / ~73% overlay.
-- Either way, keep the new test: every backdrop from white to black, all four text tiers.
+- **Gate model:** the gate stays on the no-material model.
+- **faint:** keeps the 3:1 gate, for auxiliary or disabled text only.
+- **Values:** 82% / 89% is the only value she approves without a hardware measurement.
+- **Screenshots:** redone over the CC0 photo and plain colours only. The Apple and Microsoft images were removed from the PR and from the assets branch tip; they remain in that branch's history at `4797e0e0`, which is not rewritten.
 
-## Open questions
+## Open question for Gabriel
 
-- **Debbie:** do we keep gating on "no OS material"? The native material is the theme-matched scrim, and on real hardware it is probably what keeps 60% legible. Numbers for both models are above.
-- **Gabriel, via Grok:** 82% undoes the 2026-10-13 ruling. Accept it for v0.1.11, or wait for the real-material measurement?
-- **Faint:** it binds every floor. It is documented as auxiliary/disabled text only. If it were held to 3:1 only on solid surfaces, the gate-model floor would be 78% / 76%, still above 64%.
-- **Assets:** the PR screenshots contain *blurred* Apple and Microsoft wallpapers behind the app. They aren't the wallpapers, but say so if you'd rather have them redone over the CC0 photo and plain colours only.
+Accept 82% / 89% for v0.1.11, or hold #257 until hardware captures on a real Mac and a real Windows 11, each over a white and a black wallpaper?
+
+If those captures confirm the approximate-material numbers (about 61% dark / 56.5% light), Debbie would approve a lower floor. It must come with an opaque fallback for reduce-transparency or energy saving.
