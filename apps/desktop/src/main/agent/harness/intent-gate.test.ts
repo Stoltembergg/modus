@@ -295,6 +295,24 @@ describe("evaluateIntentGate", () => {
     { label: "clarify", note: "translate, no language", text: "traduz isso" },
     // Known gap (Debbie: minor, non-blocking): a setting name without a file still asks
     { label: "clarify", note: "known gap: setting name", text: "ativa o modo escuro" },
+    {
+      label: "clarify",
+      note: "options list ending in a question is not a plan",
+      text: "cria",
+      extra: { previousTurn: assistant("Opções:\n- sqlite\n- json\nQual prefere?") },
+    },
+    {
+      label: "clarify",
+      note: "numbered options ending in a question is not a plan",
+      text: "Implement it",
+      extra: { previousTurn: assistant("1. A lock\n2. A queue\nWhich one do you want?") },
+    },
+    {
+      label: "proceed",
+      note: "plan heading + confirmation question still counts",
+      text: "Implement the feature",
+      extra: { previousTurn: assistant("Plano:\n1. Novo hook\n2. Toggle\nPosso seguir?") },
+    },
     // Follow-up 3: edit verbs missing from #250 (each asks without a target, proceeds with one)
     ...(
       [
