@@ -58,7 +58,7 @@ const NAMED_TARGET = [
   /(?:^|\s)\.[a-z][\w.-]*/i, // dotfile (.nvmrc, .env)
   /\bv?\d+\.\d+(?:\.\d+)?\b/, // version number
   /\b(?:README|CHANGELOG|LICENSE|CONTRIBUTING|Dockerfile|Makefile)\b/,
-  /[\p{Ll}\d,]\s+\p{Lu}\p{Ll}{2,}/u, // capitalized name mid-sentence (Sidebar, Windows)
+  /[\p{Ll}\d,][ \t]+\p{Lu}\p{Ll}{2,}/u, // capitalized name mid-sentence (Sidebar, Windows); not across a line break
   // App surfaces that exist once, so naming them is enough in any case ("sidebar" == "Sidebar").
   // Generic nouns (button, label, modal, component, page) are not here: they still need a name.
   // Translation into a named language: the language is the target.
@@ -137,10 +137,15 @@ const PLAN_FOLLOW_UP_REQUEST = new RegExp(
   `${CLAUSE_START}${POLITE_PREFIX}${PLAN_FOLLOW_UP_VERB}(?![\\p{L}\\p{N}_])`,
   "iu",
 );
-/** A plan: a "plan"/"plano"/"steps" heading or at least two numbered or bulleted lines. */
+/**
+ * A plan: a "plan"/"plano"/"steps" heading (even with a trailing confirmation question), or at
+ * least two numbered or bulleted lines when the reply does not end in a question.
+ */
 function agentProposedPlan(assistantText: string | undefined): boolean {
   if (!assistantText) return false;
   if (/\b(?:plan|plano|proposed\s+steps|passos|etapas)\b\s*[:\n]/i.test(assistantText)) return true;
+  // A heading-less list that ends in a question offers options; the user has not picked one.
+  if (agentAskedQuestion(assistantText)) return false;
   return (assistantText.match(/^\s*(?:\d+[.)]|[-*•])\s+\S/gm) ?? []).length >= 2;
 }
 
