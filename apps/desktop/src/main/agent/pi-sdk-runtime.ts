@@ -4520,6 +4520,9 @@ export class PiSdkRuntime implements AgentRuntime {
               mode: input.mode ?? "build",
               contextPaths: projectMemoryHints(input.context, runtimeSession.info.cwd).paths,
               changedPaths: [],
+              hasAttachedContext:
+                (input.context?.length ?? 0) > 0 || (input.attachments?.length ?? 0) > 0,
+              previousTurn: previousIntentTurn(runtimeSession.session, input.sessionId, run.id),
             });
       let intentAssumption: string | undefined;
       if (intentGate.action === "clarify" || intentGate.action === "confirm") {
@@ -5996,6 +5999,43 @@ function buildTurnImages(
     data: attachment.data,
     mimeType: attachment.mimeType,
   }));
+}
+
+/**
+ * The previous exchange, for the intent gate only: the prior run's raw prompt and the
+ * text of the agent's last reply. Lets "Fix it" after a pasted error, or "sim" after an
+ * agent question, proceed without a clarifying question.
+ */
+function previousIntentTurn(
+  session: AgentSession,
+  sessionId: string,
+  runId: string,
+): { userText?: string; assistantText?: string } {
+  const turn: { userText?: string; assistantText?: string } = {};
+  const userText = listAgentRuns(sessionId)
+    .filter((run) => run.id !== runId)
+    .at(-1)?.prompt;
+  if (userText) turn.userText = userText;
+  const messages = session.state.messages as ReadonlyArray<{ role?: unknown; content?: unknown }>;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === "user") break;
+    if (message?.role !== "assistant") continue;
+    const text = Array.isArray(message.content)
+      ? message.content
+          .map((part: { type?: unknown; text?: unknown }) =>
+            part?.type === "text" && typeof part.text === "string" ? part.text : "",
+          )
+          .join("")
+      : typeof message.content === "string"
+        ? message.content
+        : "";
+    if (text.trim()) {
+      turn.assistantText = text;
+      break;
+    }
+  }
+  return turn;
 }
 
 /**

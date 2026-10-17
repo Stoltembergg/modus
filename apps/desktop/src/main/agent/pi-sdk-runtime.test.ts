@@ -3052,7 +3052,7 @@ describe("PiSdkRuntime", () => {
     await runtime.prompt(createWindowStub(), {
       context: [],
       delivery: "normal",
-      message: "Fix a typo",
+      message: "Fix a typo in README.md",
       sessionId,
     });
 
@@ -3105,7 +3105,7 @@ describe("PiSdkRuntime", () => {
     await runtime.prompt(createWindowStub(), {
       context: [],
       delivery: "normal",
-      message: "Fix a typo",
+      message: "Fix a typo in README.md",
       sessionId,
     });
 
@@ -3144,7 +3144,7 @@ describe("PiSdkRuntime", () => {
     const prompt = runtime.prompt(createWindowStub(), {
       context: [],
       delivery: "normal",
-      message: "Fix a typo",
+      message: "Fix a typo in README.md",
       sessionId,
     });
     await citationCreated;
@@ -3719,7 +3719,7 @@ describe("PiSdkRuntime", () => {
     await new PiSdkRuntime().prompt(createWindowStub(), {
       context: [],
       delivery: "normal",
-      message: "Fix a typo",
+      message: "Fix a typo in README.md",
       sessionId,
     });
 
@@ -4678,6 +4678,70 @@ describe("PiSdkRuntime", () => {
     expect(questionPayload).not.toContain("PRIVATE_INTENT_TEXT");
   });
 
+  async function runIntentTurns(
+    messages: string[],
+    stateMessages: unknown[] = [],
+  ): Promise<{ questions: number; prompts: string[] }> {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const prompts: string[] = [];
+    const session = createMockPiSession({
+      prompt: vi.fn(async (message: string) => {
+        prompts.push(message);
+      }),
+      state: { messages: stateMessages },
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const window = createWindowStub();
+    (window.webContents.send as ReturnType<typeof vi.fn>).mockImplementation(
+      (_channel: string, event: { type?: string; request?: { id: string } }) => {
+        if (event.type === "question.requested" && event.request) {
+          queueMicrotask(() => resolveQuestionRequest(event.request?.id ?? "", [], true));
+        }
+      },
+    );
+    const runtime = new PiSdkRuntime();
+    for (const message of messages) {
+      await runtime.prompt(window, { context: [], delivery: "normal", message, sessionId });
+    }
+    const { count } = getDatabase()
+      .prepare(
+        "select count(*) as count from agent_events where session_id = ? and type = 'question.requested'",
+      )
+      .get(sessionId) as { count: number };
+    return { questions: count, prompts };
+  }
+
+  it("asks before a target-less edit and proceeds on the default when skipped", async () => {
+    const { questions, prompts } = await runIntentTurns(["Fix it"]);
+    expect(questions).toBe(1);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("Assumption: Use a conservative default and proceed.");
+  });
+
+  it("does not ask for 'Fix it' right after a pasted error", async () => {
+    const { questions, prompts } = await runIntentTurns([
+      "TypeError: Cannot read properties of undefined (reading 'map') at TodosCard.tsx:42",
+      "Fix it",
+    ]);
+    expect(questions).toBe(0);
+    expect(prompts).toHaveLength(2);
+  });
+
+  it("does not ask when the user answers the agent's question", async () => {
+    const { questions, prompts } = await runIntentTurns(
+      ["sim, remove"],
+      [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Quer que eu remova o import não usado?" }],
+        },
+      ],
+    );
+    expect(questions).toBe(0);
+    expect(prompts[0]).not.toContain("<intent_assumption>");
+  });
+
   it("blocks a consequential action when confirmation is skipped", async () => {
     const sessionId = `session-${crypto.randomUUID()}`;
     insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
@@ -4966,7 +5030,7 @@ describe("PiSdkRuntime", () => {
     const secondBeforePreflight = runtime.prompt(window, {
       context: [],
       delivery: "normal",
-      message: "Fix a typo",
+      message: "Fix a typo in README.md",
       sessionId,
       userMessageId: "hook-user-two-early",
     });
@@ -5980,7 +6044,7 @@ describe("PiSdkRuntime", () => {
     await new PiSdkRuntime().prompt(createWindowStub(), {
       context: [],
       delivery: "normal",
-      message: "handle compaction",
+      message: "handle compaction in session.ts",
       sessionId,
       userMessageId: `user-${sessionId}`,
     });
@@ -6992,7 +7056,7 @@ describe("PiSdkRuntime", () => {
     await runtime.prompt(createWindowStub(), {
       context: [],
       delivery: "normal",
-      message: "Fix a typo",
+      message: "Fix a typo in README.md",
       sessionId,
       userMessageId: "message-1",
     });
@@ -7005,7 +7069,7 @@ describe("PiSdkRuntime", () => {
       phase: "terminal",
       verificationStatus: "not_required",
     });
-    expect(JSON.stringify(state)).not.toContain("Fix a typo");
+    expect(JSON.stringify(state)).not.toContain("Fix a typo in README.md");
     const snapshots = (
       getDatabase()
         .prepare(
