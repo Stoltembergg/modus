@@ -155,6 +155,95 @@ describe("ChatPane paged history", () => {
     await waitFor(() => expect(screen.queryByTestId("chat-load-older-events")).toBeNull());
     view.unmount();
   });
+  it("stops filling an underfilled viewport when an older page adds no events", async () => {
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(300);
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(0);
+    const latestEvent: AgentEventPage["events"][number] = {
+      id: "latest-run",
+      event: {
+        type: "run.started",
+        sessionId: "session-1",
+        runId: "latest",
+        delivery: "normal",
+        eventCursor: 9,
+      },
+      createdAt: "2026-10-01T12:00:00.000Z",
+    };
+    const olderCalls = (): AgentEventPageOptions[] =>
+      listEventPage.mock.calls
+        .map(([, options]) => options)
+        .filter(
+          (options) => options.direction === "backward" && options.beforeCursor !== undefined,
+        );
+    const listEventPage = vi.fn(
+      async (_sessionId: string, options: AgentEventPageOptions): Promise<AgentEventPage> => {
+        const base = { summaryEvents: [], activityEvents: [], snapshotCursor: 9 };
+        if ("runId" in options && options.runId) {
+          return { ...base, events: [], nextCursor: 0, hasMore: false };
+        }
+        if (options.direction === "backward" && options.beforeCursor !== undefined) {
+          // Server claims more history and moves its cursor, but the page is empty.
+          return { ...base, events: [], nextCursor: options.beforeCursor - 1, hasMore: true };
+        }
+        return { ...base, events: [latestEvent], nextCursor: 9, hasMore: true };
+      },
+    );
+    Object.assign(window, {
+      modus: {
+        agent: {
+          listEventPage,
+          releaseRuntime: vi.fn(async () => undefined),
+          startPlanBuild: vi.fn(),
+        },
+        diff: { sessionStats: vi.fn(async () => ({})) },
+        process: {
+          list: vi.fn(async () => []),
+          onChanged: vi.fn(() => () => undefined),
+        },
+      },
+    });
+    const view = render(
+      <ChatPane
+        defaultModel=""
+        hideComposer
+        hub={new AgentEventHub()}
+        models={[]}
+        onModelChange={() => undefined}
+        onModelConfigChange={async () => undefined}
+        onOpenReview={() => undefined}
+        onPlanUpdated={() => undefined}
+        onSessionsChanged={() => undefined}
+        session={{
+          id: "session-1",
+          workspaceId: "workspace-1",
+          title: "Session",
+          cwd: "/repo",
+          status: "idle",
+          createdAt: "2026-10-01T00:00:00.000Z",
+          updatedAt: "2026-10-01T00:00:00.000Z",
+        }}
+        workspace={null}
+      />,
+    );
+    await waitFor(() => expect(olderCalls().length).toBeGreaterThanOrEqual(1));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    });
+    expect(olderCalls()).toHaveLength(1);
+    // The explicit button still works after the automatic fill stops.
+    const button = await screen.findByTestId("chat-load-older-events");
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    await waitFor(() => expect(olderCalls()).toHaveLength(2));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    });
+    expect(olderCalls()).toHaveLength(2);
+    view.unmount();
+  });
+
   it("does not carry the previous session pagination cursor into the newly selected session", async () => {
     vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(300);
     const height = vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(500);
