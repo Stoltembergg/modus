@@ -124,6 +124,7 @@ import type {
   WorkspaceInfo,
 } from "../shared/contracts";
 import type { StartupMetricInput } from "../shared/startup";
+import type { UiLanguagePreference, UiLanguageState } from "../shared/ui-language";
 import type { WindowChromeMode } from "../shared/window-appearance";
 
 export type PlanBuildStart = {
@@ -175,6 +176,14 @@ export type ModusApi = {
       get(): Promise<AppearanceState>;
       set(input: AppearanceSetInput): Promise<AppearanceState>;
       onChange(handler: (state: AppearanceState) => void): () => void;
+    };
+    /** App language (Settings > General > Language), owned by the main process. */
+    uiLanguage: {
+      /** State at window creation, read synchronously so the first frame is translated. */
+      initial: UiLanguageState | null;
+      get(): Promise<UiLanguageState>;
+      set(preference: UiLanguagePreference): Promise<UiLanguageState>;
+      onChange(handler: (state: UiLanguageState) => void): () => void;
     };
     version(): Promise<string>;
     securityState(): Promise<SecurityState>;

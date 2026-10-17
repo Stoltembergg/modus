@@ -1,6 +1,7 @@
 import { memo, useMemo } from "react";
 import type { QuestionAnswer, QuestionRequest } from "../../../../shared/contracts";
 import { QuestionCard, type QuestionSummaryItem } from "../../components/question/QuestionCard";
+import { type SettingsTextFn, settingsTextFor, useSettingsText } from "../../lib/settingsText";
 
 /**
  * Transcript card for a completed `ask_user` call (Cursor/Codex-style): collapsed
@@ -43,11 +44,12 @@ function buildQuestionSummary(
   questions: ArgQuestion[],
   answers: QuestionAnswer[] | undefined,
   skipped: boolean | undefined,
+  t: SettingsTextFn = settingsTextFor(),
 ): QuestionSummaryItem[] {
   const answersById = new Map((answers ?? []).map((answer) => [answer.questionId, answer]));
   return questions.map((question, index) => {
     const structured = question.id ? answersById.get(question.id) : answers?.[index];
-    const answer = skipped ? "Skipped" : answerText(structured);
+    const answer = skipped ? t("settings.question.skipped") : answerText(structured);
     const recommended = (question.options ?? []).some(
       (option) =>
         option.recommended === true &&
@@ -65,10 +67,11 @@ export const QuestionToolCard = memo(function QuestionToolCard({
   answers,
   skipped,
 }: QuestionToolCardProps) {
+  const t = useSettingsText();
   const questions = useMemo(() => request?.questions ?? readQuestions(args), [args, request]);
   const items = useMemo(
-    () => buildQuestionSummary(questions, answers, skipped),
-    [answers, questions, skipped],
+    () => buildQuestionSummary(questions, answers, skipped, t),
+    [answers, questions, skipped, t],
   );
   return <QuestionCard items={items} mode="summary" running={!isComplete} />;
 });

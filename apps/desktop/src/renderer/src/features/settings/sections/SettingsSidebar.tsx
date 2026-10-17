@@ -10,10 +10,16 @@ import {
   IconUser,
   IconUserCircle,
 } from "@tabler/icons-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { cn } from "../../../lib/cn";
+import { useSettingsText } from "../../../lib/settingsText";
 import type { SettingsSectionId } from "../settings-types";
-import { filterSettingsNav, groupSettingsNav, SETTINGS_NAV_ITEMS } from "../settingsNav";
+import {
+  filterSettingsNav,
+  groupSettingsNav,
+  SETTINGS_NAV_GROUPS,
+  SETTINGS_NAV_ITEMS,
+} from "../settingsNav";
 
 const SETTINGS_NAV_ICONS: Record<SettingsSectionId, ReactNode> = {
   general: <IconSettings size={16} stroke={1.7} />,
@@ -42,7 +48,24 @@ export function SettingsSidebar({
   onQueryChange(query: string): void;
   onSectionChange(section: SettingsSectionId): void;
 }) {
-  const visibleItems = filterSettingsNav(SETTINGS_NAV_ITEMS, query);
+  const t = useSettingsText();
+  const localizedItems = useMemo(
+    () =>
+      SETTINGS_NAV_ITEMS.map((item) => ({
+        ...item,
+        label: t(item.labelKey),
+      })),
+    [t],
+  );
+  const localizedGroups = useMemo(
+    () =>
+      SETTINGS_NAV_GROUPS.map((group) => ({
+        ...group,
+        title: t(group.titleKey),
+      })),
+    [t],
+  );
+  const visibleItems = filterSettingsNav(localizedItems, query);
   const version = useAppVersion();
 
   return (
@@ -61,7 +84,7 @@ export function SettingsSidebar({
         type="button"
       >
         <IconArrowLeft size={16} stroke={1.7} />
-        Back
+        {t("settings.window.back")}
       </button>
 
       <label className="relative mb-4 block">
@@ -73,14 +96,14 @@ export function SettingsSidebar({
         <input
           className="h-9 w-full rounded-lg bg-surface/45 pr-3 pl-8 text-sm text-fg outline-none transition-colors placeholder:text-fg-faint focus:bg-surface focus-visible:ring-2 focus-visible:ring-focus-ring/35"
           onChange={(event) => onQueryChange(event.target.value)}
-          placeholder="Search settings..."
+          placeholder={t("settings.window.searchPlaceholder")}
           value={query}
         />
       </label>
 
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
         {visibleItems.length > 0 ? (
-          groupSettingsNav(visibleItems)
+          groupSettingsNav(visibleItems, localizedGroups)
             .filter(({ items }) => items.length > 0)
             .map(({ group, items }) => (
               <SettingsNavGroup key={group.id} title={group.title}>
@@ -97,12 +120,12 @@ export function SettingsSidebar({
               </SettingsNavGroup>
             ))
         ) : (
-          <p className="px-2 text-sm text-fg-muted">No settings match</p>
+          <p className="px-2 text-sm text-fg-muted">{t("settings.window.noSettingsMatch")}</p>
         )}
       </div>
 
       <div className="px-2 pt-3 pb-1 text-xs text-fg-faint">
-        <div>Modus Desktop</div>
+        <div>{t("settings.window.appTitle")}</div>
         {version ? <div className="mt-1">v{version}</div> : null}
       </div>
     </aside>

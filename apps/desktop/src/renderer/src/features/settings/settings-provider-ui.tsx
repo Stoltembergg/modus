@@ -28,6 +28,8 @@ import {
   selectedThinkingLabel,
   selectedThinkingOption,
 } from "../../lib/modelThinking";
+import { type SettingsTextFn, settingsTextFor, useSettingsText } from "../../lib/settingsText";
+import { formatUiNumber, uiIntlLocale } from "../../lib/uiIntl";
 import { Field, parsePositiveInteger, SelectField, SwitchControl } from "./form-controls";
 import { groupProviderModels, modelResultLabel } from "./modelListUtils";
 import { ProviderLogo } from "./ProviderLogo";
@@ -73,6 +75,7 @@ export function ProviderRow({
   active: boolean;
   onClick(): void;
 }) {
+  const t = useSettingsText();
   const status = providerStatus(provider);
 
   return (
@@ -93,13 +96,15 @@ export function ProviderRow({
       <span className="min-w-0">
         <span className="flex min-w-0 items-center gap-2">
           <span className="truncate text-sm text-fg">{provider.name}</span>
-          {provider.source === "custom" ? <TinyBadge>custom</TinyBadge> : null}
+          {provider.source === "custom" ? (
+            <TinyBadge>{t("settings.providerUi.customBadge")}</TinyBadge>
+          ) : null}
           {provider.id === "antigravity" ? (
-            <UnofficialProviderMark>Unofficial</UnofficialProviderMark>
+            <UnofficialProviderMark>{t("settings.providerUi.unofficial")}</UnofficialProviderMark>
           ) : null}
         </span>
         <span className="mt-0.5 block truncate text-xs text-fg-faint">
-          {providerSummary(provider)}
+          {providerSummary(provider, t)}
         </span>
       </span>
       <span className="flex items-center gap-2">
@@ -148,6 +153,7 @@ export function ProviderDetail({
   onSetAllModels(enabled: boolean): void;
   onToggleModel(model: ProviderModelConfig, enabled: boolean): void;
 }) {
+  const t = useSettingsText();
   const [modelsOpen, setModelsOpen] = useState(false);
   const [modelQuery, setModelQuery] = useState("");
   const [modelFilter, setModelFilter] = useState<ModelFilter>("all");
@@ -163,7 +169,7 @@ export function ProviderDetail({
       ),
     [models, modelFilter, modelQuery],
   );
-  const modelGroups = useMemo(() => groupProviderModels(filteredModels), [filteredModels]);
+  const modelGroups = useMemo(() => groupProviderModels(filteredModels, t), [filteredModels, t]);
   const allEnabled = enabledCount === models.length && models.length > 0;
   const noneEnabled = enabledCount === 0;
 
@@ -182,16 +188,21 @@ export function ProviderDetail({
             <div className="min-w-0">
               <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <h3 className="truncate text-md font-normal text-fg">{detail.name}</h3>
-                {detail.source === "custom" ? <TinyBadge>custom</TinyBadge> : null}
-                {detail.id === "antigravity" ? (
-                  <UnofficialProviderMark>Unofficial</UnofficialProviderMark>
+                {detail.source === "custom" ? (
+                  <TinyBadge>{t("settings.providerUi.customBadge")}</TinyBadge>
                 ) : null}
-                {detail.id === "commandcode" ? <TinyBadge>pricing unknown</TinyBadge> : null}
+                {detail.id === "antigravity" ? (
+                  <UnofficialProviderMark>
+                    {t("settings.providerUi.unofficial")}
+                  </UnofficialProviderMark>
+                ) : null}
+                {detail.id === "commandcode" ? (
+                  <TinyBadge>{t("settings.providerUi.pricingUnknown")}</TinyBadge>
+                ) : null}
               </div>
               {detail.id === "commandcode" ? (
                 <p className="mt-2 text-xs leading-5 text-fg-muted">
-                  Pricing is not published for these models and is not shown to avoid implying any
-                  cost.
+                  {t("settings.providerUi.commandCodePricingNotice")}
                 </p>
               ) : null}
             </div>
@@ -228,9 +239,12 @@ export function ProviderDetail({
           type="button"
         >
           <span className="min-w-0">
-            <span className="block text-sm text-fg">Models</span>
+            <span className="block text-sm text-fg">{t("settings.providerUi.modelsHeading")}</span>
             <span className="mt-0.5 block text-xs text-fg-faint">
-              {`${enabledCount} of ${detail.modelCount} enabled`}
+              {t("settings.providerUi.modelsSummary", {
+                enabled: enabledCount,
+                total: detail.modelCount,
+              })}
             </span>
           </span>
           <IconChevronRight
@@ -245,10 +259,10 @@ export function ProviderDetail({
             <div className="flex flex-wrap items-center justify-end gap-2">
               {busy ? (
                 <span className="rounded-full bg-chip px-2.5 py-1 text-xs text-fg-muted">
-                  <WorkingText>Saving</WorkingText>
+                  <WorkingText>{t("settings.providerUi.saving")}</WorkingText>
                 </span>
               ) : (
-                <ReadOnlyPill>{modelResultLabel(filteredModels.length)}</ReadOnlyPill>
+                <ReadOnlyPill>{modelResultLabel(filteredModels.length, t)}</ReadOnlyPill>
               )}
               <button
                 className="flex h-9 items-center rounded-md bg-chip-faint px-3 text-sm text-fg-subtle transition-colors hover:bg-hover hover:text-fg disabled:opacity-40"
@@ -256,7 +270,7 @@ export function ProviderDetail({
                 onClick={() => onSetAllModels(true)}
                 type="button"
               >
-                Enable all
+                {t("settings.providerUi.enableAll")}
               </button>
               <button
                 className="flex h-9 items-center rounded-md bg-chip-faint px-3 text-sm text-fg-subtle transition-colors hover:bg-hover hover:text-fg disabled:opacity-40"
@@ -264,7 +278,7 @@ export function ProviderDetail({
                 onClick={() => onSetAllModels(false)}
                 type="button"
               >
-                Disable all
+                {t("settings.providerUi.disableAll")}
               </button>
               {detail.source === "custom" ? (
                 <button
@@ -273,16 +287,16 @@ export function ProviderDetail({
                   type="button"
                 >
                   <IconPlus size={14} stroke={1.8} />
-                  Edit models
+                  {t("settings.providerUi.editModels")}
                 </button>
               ) : null}
             </div>
 
             <div className="mt-3 flex flex-col gap-3 lg:flex-row lg:items-center">
               <SearchField
-                ariaLabel="Search models"
+                ariaLabel={t("settings.providerUi.searchModelsAria")}
                 onChange={setModelQuery}
-                placeholder="Search models..."
+                placeholder={t("settings.providerUi.searchModelsPlaceholder")}
                 value={modelQuery}
               />
               <SegmentedFilter
@@ -308,8 +322,8 @@ export function ProviderDetail({
               ) : (
                 <EmptyState
                   compact
-                  description="Adjust the search text or filter to bring models back."
-                  hint="No models match"
+                  description={t("settings.providerUi.noModelsMatchDescription")}
+                  hint={t("settings.providerUi.noModelsMatchHint")}
                 />
               )}
             </div>
@@ -345,6 +359,7 @@ export function ProviderCredentials({
   onKeyChange(apiKey: string): void;
   onOpenConnection(): void;
 }) {
+  const t = useSettingsText();
   const storedBaseUrl = detail.baseUrl ?? "";
   const [baseUrl, setBaseUrl] = useState(storedBaseUrl);
   const baseUrlChanged = baseUrl.trim() !== storedBaseUrl;
@@ -352,16 +367,7 @@ export function ProviderCredentials({
   const canSubmit = Boolean(keyValue.trim()) || (supportsBaseUrlOverride && baseUrlChanged);
   const canDisconnect = detail.authSource === "stored" && Boolean(detail.authKind);
   const editing = detail.source === "builtin" && (!detail.configured || credentialEditorOpen);
-  const isNativeProvider = detail.id === "commandcode" || detail.id === "antigravity";
-  const connectionLabel = isNativeProvider
-    ? providerDetailConnectionLabel(detail)
-    : !detail.configured
-      ? "Not connected"
-      : canDisconnect
-        ? (detail.authLabel ?? "Connected locally")
-        : detail.authSource
-          ? `Managed by ${detail.authLabel ?? detail.authSource}`
-          : "Saved in Modus";
+  const connectionLabel = providerDetailConnectionLabel(detail, t);
 
   // Antigravity never exposes an API key input. Show a single OAuth CTA and a
   // persistent status line; the risk acknowledgement interstitial is the
@@ -370,7 +376,7 @@ export function ProviderCredentials({
     return (
       <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-chip-faint px-3 py-3">
         <span className="min-w-0">
-          <span className="block text-sm text-fg">Connection</span>
+          <span className="block text-sm text-fg">{t("settings.providerUi.connection")}</span>
           <span className="mt-0.5 block truncate text-xs text-fg-faint">{connectionLabel}</span>
         </span>
         <span className="flex shrink-0 items-center gap-1.5">
@@ -379,7 +385,9 @@ export function ProviderCredentials({
             onClick={onOpenConnection}
             type="button"
           >
-            {detail.configured ? "Re-authenticate" : "Sign in with Antigravity"}
+            {detail.configured
+              ? t("settings.providerUi.reauthenticate")
+              : t("settings.providerUi.signInWithAntigravity")}
           </button>
           {canDisconnect ? (
             <button
@@ -387,12 +395,12 @@ export function ProviderCredentials({
               onClick={onDisconnectProvider}
               type="button"
             >
-              Disconnect
+              {t("settings.providerUi.disconnect")}
             </button>
           ) : null}
           {detail.source === "custom" ? (
             <button
-              aria-label={`Remove ${detail.name}`}
+              aria-label={t("settings.providerUi.removeProvider", { name: detail.name })}
               className="flex size-8 items-center justify-center rounded-full text-danger transition-colors hover:bg-danger/10"
               onClick={onDeleteProvider}
               type="button"
@@ -409,7 +417,7 @@ export function ProviderCredentials({
     return (
       <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-chip-faint px-3 py-3">
         <span className="min-w-0">
-          <span className="block text-sm text-fg">Connection</span>
+          <span className="block text-sm text-fg">{t("settings.providerUi.connection")}</span>
           <span className="mt-0.5 block truncate text-xs text-fg-faint">{connectionLabel}</span>
         </span>
         <span className="flex shrink-0 items-center gap-1.5">
@@ -418,7 +426,9 @@ export function ProviderCredentials({
             onClick={detail.source === "custom" ? onEditProvider : onOpenConnection}
             type="button"
           >
-            {detail.source === "custom" ? "Edit" : "Change"}
+            {detail.source === "custom"
+              ? t("settings.providerUi.edit")
+              : t("settings.providerUi.change")}
           </button>
           {canDisconnect ? (
             <button
@@ -426,12 +436,12 @@ export function ProviderCredentials({
               onClick={onDisconnectProvider}
               type="button"
             >
-              Disconnect
+              {t("settings.providerUi.disconnect")}
             </button>
           ) : null}
           {detail.source === "custom" ? (
             <button
-              aria-label={`Remove ${detail.name}`}
+              aria-label={t("settings.providerUi.removeProvider", { name: detail.name })}
               className="flex size-7 items-center justify-center rounded-full text-danger transition-colors hover:bg-danger/10"
               onClick={onDeleteProvider}
               type="button"
@@ -458,7 +468,9 @@ export function ProviderCredentials({
     >
       <div className="flex flex-wrap gap-2">
         <label className="relative min-w-0 flex-1">
-          <span className="sr-only">API key for {detail.name}</span>
+          <span className="sr-only">
+            {t("settings.providerUi.apiKeyFor", { name: detail.name })}
+          </span>
           <IconKey
             className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-fg-faint"
             size={15}
@@ -467,7 +479,11 @@ export function ProviderCredentials({
           <input
             className="h-9 w-full rounded-md border border-hairline bg-canvas pr-3 pl-9 text-sm text-fg outline-none placeholder:text-fg-faint transition-colors focus:border-hairline-strong"
             onChange={(event) => onKeyChange(event.target.value)}
-            placeholder={detail.configured ? "Update API key" : "API key"}
+            placeholder={
+              detail.configured
+                ? t("settings.providerUi.updateApiKeyPlaceholder")
+                : t("settings.providerUi.apiKey")
+            }
             type="password"
             value={keyValue}
           />
@@ -478,11 +494,11 @@ export function ProviderCredentials({
           type="submit"
         >
           {busy ? (
-            <WorkingText className="text-canvas">Connecting…</WorkingText>
+            <WorkingText className="text-canvas">{t("settings.providerUi.connecting")}</WorkingText>
           ) : detail.configured ? (
-            "Update"
+            t("settings.providerUi.update")
           ) : (
-            "Connect"
+            t("settings.providerUi.connect")
           )}
         </button>
         {detail.configured ? (
@@ -492,14 +508,16 @@ export function ProviderCredentials({
             onClick={onCredentialEditorClose}
             type="button"
           >
-            Cancel
+            {t("settings.providerUi.cancel")}
           </button>
         ) : null}
       </div>
 
       {supportsBaseUrlOverride ? (
         <label className="relative mt-2 block min-w-0">
-          <span className="sr-only">Custom base URL for {detail.name}</span>
+          <span className="sr-only">
+            {t("settings.providerUi.customBaseUrlFor", { name: detail.name })}
+          </span>
           <IconWorld
             className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-fg-faint"
             size={15}
@@ -509,7 +527,7 @@ export function ProviderCredentials({
             autoComplete="off"
             className="h-9 w-full rounded-md border border-hairline bg-canvas pr-3 pl-9 font-mono text-sm text-fg outline-none placeholder:text-fg-faint transition-colors focus:border-hairline-strong"
             onChange={(event) => setBaseUrl(event.target.value)}
-            placeholder="Custom base URL — official endpoint by default"
+            placeholder={t("settings.providerUi.customBaseUrlPlaceholder")}
             spellCheck={false}
             type="url"
             value={baseUrl}
@@ -533,6 +551,8 @@ export function ModelGroupSection({
   onEditModel(model: ProviderModelConfig, patch: ModelConfigPatch): void;
   onToggleModel(model: ProviderModelConfig, enabled: boolean): void;
 }) {
+  const { title, description } = group;
+
   return (
     <section>
       <div
@@ -540,8 +560,8 @@ export function ModelGroupSection({
         data-strip="panel"
       >
         <div className="min-w-0">
-          <h5 className="text-xs font-normal text-fg-muted">{group.title}</h5>
-          <p className="mt-0.5 text-2xs text-fg-subtle">{group.description}</p>
+          <h5 className="text-xs font-normal text-fg-muted">{title}</h5>
+          <p className="mt-0.5 text-2xs text-fg-subtle">{description}</p>
         </div>
         <ReadOnlyPill>{group.models.length.toString()}</ReadOnlyPill>
       </div>
@@ -574,6 +594,7 @@ export function ModelRow({
   onEditModel(model: ProviderModelConfig, patch: ModelConfigPatch): void;
   onToggleModel(model: ProviderModelConfig, enabled: boolean): void;
 }) {
+  const t = useSettingsText();
   const [open, setOpen] = useState(false);
   const thinkingOptions = useMemo(() => modelThinkingOptions(model), [model]);
   const thinkingSelection = selectedThinkingOption(model);
@@ -654,9 +675,19 @@ export function ModelRow({
           <div className="mt-1 flex min-w-0 flex-wrap gap-x-2 gap-y-1 text-xs text-fg-faint">
             <span className="min-w-0 truncate font-mono">{model.id}</span>
             {model.contextWindow ? (
-              <span>{`${model.contextWindow.toLocaleString()} ctx`}</span>
+              <span>
+                {t("settings.providerUi.contextTokens", {
+                  count: formatUiNumber(model.contextWindow, undefined, uiIntlLocale(t.locale)),
+                })}
+              </span>
             ) : null}
-            {model.maxTokens ? <span>{`${model.maxTokens.toLocaleString()} out`}</span> : null}
+            {model.maxTokens ? (
+              <span>
+                {t("settings.providerUi.maxOutputTokensShort", {
+                  count: formatUiNumber(model.maxTokens, undefined, uiIntlLocale(t.locale)),
+                })}
+              </span>
+            ) : null}
             {model.thinkingLevel !== "off" ? <span>{thinkingLabel}</span> : null}
           </div>
         </div>
@@ -664,7 +695,7 @@ export function ModelRow({
           {expandable ? (
             <button
               aria-expanded={open}
-              aria-label={`Configure ${model.name}`}
+              aria-label={t("settings.providerUi.configureModel", { name: model.name })}
               className="flex size-7 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg"
               onClick={() => setOpen((value) => !value)}
               type="button"
@@ -673,7 +704,11 @@ export function ModelRow({
             </button>
           ) : null}
           <SwitchControl
-            ariaLabel={`${model.enabled ? "Disable" : "Enable"} ${model.name}`}
+            ariaLabel={
+              model.enabled
+                ? t("settings.providerUi.disableModel", { name: model.name })
+                : t("settings.providerUi.enableModel", { name: model.name })
+            }
             checked={model.enabled}
             disabled={busy}
             onCheckedChange={(checked) => onToggleModel(model, checked)}
@@ -686,9 +721,11 @@ export function ModelRow({
           {model.thinkingBudget ? (
             <div className="grid max-w-sm grid-cols-[minmax(0,1fr)_auto_auto] items-end gap-2">
               <Field
-                label="Thinking budget (tokens)"
+                label={t("settings.providerUi.thinkingBudgetLabel")}
                 onChange={setBudgetDraft}
-                placeholder={model.thinkingBudget.min?.toString() ?? "Tokens"}
+                placeholder={
+                  model.thinkingBudget.min?.toString() ?? t("settings.providerUi.tokensPlaceholder")
+                }
                 value={budgetDraft}
               />
               <button
@@ -697,7 +734,7 @@ export function ModelRow({
                 onClick={saveBudget}
                 type="button"
               >
-                Apply
+                {t("settings.providerUi.apply")}
               </button>
               <button
                 className="flex h-10 items-center justify-center rounded-md px-3 text-fg-muted text-sm transition-colors hover:bg-hover hover:text-fg"
@@ -705,13 +742,13 @@ export function ModelRow({
                 onClick={() => onEditModel(model, { thinkingVariant: "off" })}
                 type="button"
               >
-                Off
+                {t("settings.providerUi.off")}
               </button>
             </div>
           ) : canEditThinking ? (
             <div className="grid max-w-xs gap-2">
               <SelectField
-                label="Default thinking level"
+                label={t("settings.providerUi.defaultThinkingLevel")}
                 onChange={(value) => onEditModel(model, { thinkingVariant: value })}
                 options={thinkingOptions}
                 value={thinkingSelection.value}
@@ -721,13 +758,13 @@ export function ModelRow({
           {editableLimits ? (
             <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
               <Field
-                label="Context window"
+                label={t("settings.providerUi.contextWindow")}
                 onChange={setContextDraft}
                 placeholder="128000"
                 value={contextDraft}
               />
               <Field
-                label="Max output tokens"
+                label={t("settings.providerUi.maxOutputTokens")}
                 onChange={setMaxTokensDraft}
                 placeholder="16384"
                 value={maxTokensDraft}
@@ -738,7 +775,7 @@ export function ModelRow({
                 onClick={saveLimits}
                 type="button"
               >
-                Save
+                {t("settings.providerUi.save")}
               </button>
             </div>
           ) : null}
@@ -759,15 +796,16 @@ export function SegmentedFilter({
   value: ModelFilter;
   onChange(value: ModelFilter): void;
 }) {
+  const t = useSettingsText();
   const options: Array<{ value: ModelFilter; label: string; count?: number }> = [
-    { value: "all", label: "All" },
-    { value: "enabled", label: "Enabled", count: enabledCount },
-    { value: "thinking", label: "Thinking", count: thinkingCount },
+    { value: "all", label: t("settings.providerUi.filterAll") },
+    { value: "enabled", label: t("settings.providerUi.filterEnabled"), count: enabledCount },
+    { value: "thinking", label: t("settings.providerUi.filterThinking"), count: thinkingCount },
   ];
 
   return (
     <fieldset className="flex shrink-0 items-center gap-1 rounded-lg border border-hairline bg-canvas p-1">
-      <legend className="sr-only">Filter models</legend>
+      <legend className="sr-only">{t("settings.providerUi.filterModelsLegend")}</legend>
       <IconFilter className="ml-1 text-fg-faint" size={14} stroke={1.7} />
       {options.map((option) => (
         <button
@@ -792,6 +830,7 @@ export function SegmentedFilter({
 }
 
 export function ProviderDetailLoading() {
+  const t = useSettingsText();
   return (
     <m.section
       animate={{ opacity: 1, y: 0 }}
@@ -800,7 +839,7 @@ export function ProviderDetailLoading() {
       initial={{ opacity: 0, y: 8 }}
       transition={{ duration: 0.16, ease: "easeOut" }}
     >
-      <WorkingText className="text-sm">Loading provider</WorkingText>
+      <WorkingText className="text-sm">{t("settings.providerUi.loadingProvider")}</WorkingText>
     </m.section>
   );
 }
@@ -816,6 +855,7 @@ export function SearchField({
   value: string;
   onChange(value: string): void;
 }) {
+  const t = useSettingsText();
   return (
     <label className="relative block min-w-0 flex-1">
       <span className="sr-only">{ariaLabel}</span>
@@ -833,7 +873,7 @@ export function SearchField({
       />
       {value ? (
         <button
-          aria-label={`Clear ${ariaLabel.toLowerCase()}`}
+          aria-label={t("settings.providerUi.clearField", { label: ariaLabel.toLowerCase() })}
           className="absolute top-1/2 right-1.5 flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg"
           onClick={() => onChange("")}
           type="button"
@@ -846,9 +886,12 @@ export function SearchField({
 }
 
 export function ProviderStatusPill({ status }: { status: ProviderStatus }) {
+  const t = useSettingsText();
   if (status === "error") {
     return (
-      <span className="rounded-full bg-danger/10 px-2 py-1 text-xs text-danger">Needs review</span>
+      <span className="rounded-full bg-danger/10 px-2 py-1 text-xs text-danger">
+        {t("settings.providerUi.statusNeedsReview")}
+      </span>
     );
   }
 
@@ -856,15 +899,20 @@ export function ProviderStatusPill({ status }: { status: ProviderStatus }) {
     return (
       <span className="flex items-center gap-1 rounded-full bg-success/10 px-2 py-1 text-xs text-success">
         <IconCheck size={12} stroke={2} />
-        Connected
+        {t("settings.providerUi.statusConnected")}
       </span>
     );
   }
 
-  return <span className="rounded-full bg-chip px-2 py-1 text-xs text-fg-muted">Setup</span>;
+  return (
+    <span className="rounded-full bg-chip px-2 py-1 text-xs text-fg-muted">
+      {t("settings.providerUi.statusSetup")}
+    </span>
+  );
 }
 
 export function ModelKindBadge({ model }: { model: ProviderModelConfig }) {
+  const t = useSettingsText();
   return (
     <span
       className={cn(
@@ -873,7 +921,9 @@ export function ModelKindBadge({ model }: { model: ProviderModelConfig }) {
       )}
     >
       {model.reasoning ? <IconBrain size={11} stroke={1.8} /> : null}
-      {model.reasoning ? "thinking" : "standard"}
+      {model.reasoning
+        ? t("settings.providerUi.modelKindThinking")
+        : t("settings.providerUi.modelKindStandard")}
     </span>
   );
 }
@@ -902,36 +952,63 @@ export function providerStatus(provider: ModelProviderInfo): ProviderStatus {
  * (Command Code, Antigravity) get explicit, plan-approved copy; stock providers
  * fall back to the existing `enabled / configured / model count` phrasing.
  */
-export function providerSummary(provider: ModelProviderInfo): string {
-  return providerCatalogSummary(provider);
+export function providerSummary(
+  provider: ModelProviderInfo,
+  t: SettingsTextFn = settingsTextFor(),
+): string {
+  return providerCatalogSummary(provider, t);
 }
 
-export function providerCatalogSummary(provider: ModelProviderInfo): string {
+export function providerCatalogSummary(
+  provider: ModelProviderInfo,
+  t: SettingsTextFn = settingsTextFor(),
+): string {
   if (provider.id === "commandcode") {
     if (provider.enabledModelCount > 0) {
-      return `${provider.enabledModelCount} enabled · ${provider.modelCount} models · pricing unknown`;
+      return t("settings.providerUi.summaryCommandCodeEnabled", {
+        enabled: provider.enabledModelCount,
+        models: provider.modelCount,
+      });
     }
     if (provider.configured) {
-      return `${provider.modelCount} models · key saved · unverified`;
+      return t("settings.providerUi.summaryCommandCodeConfigured", {
+        models: provider.modelCount,
+      });
     }
-    return `${provider.modelCount} models · API key · pricing unknown`;
+    return t("settings.providerUi.summaryCommandCodeDefault", {
+      models: provider.modelCount,
+    });
   }
   if (provider.id === "antigravity") {
     if (provider.enabledModelCount > 0) {
-      return `${provider.enabledModelCount} enabled · ${provider.modelCount} models`;
+      return t("settings.providerUi.summaryEnabledModels", {
+        enabled: provider.enabledModelCount,
+        models: provider.modelCount,
+      });
     }
     if (provider.configured) {
-      return `${provider.modelCount} models · signed in`;
+      return t("settings.providerUi.summaryAntigravitySignedIn", {
+        models: provider.modelCount,
+      });
     }
-    return `${provider.modelCount} models · OAuth only · unofficial endpoints`;
+    return t("settings.providerUi.summaryAntigravityDefault", {
+      models: provider.modelCount,
+    });
   }
   if (provider.enabledModelCount > 0) {
-    return `${provider.enabledModelCount} enabled · ${provider.modelCount} models`;
+    return t("settings.providerUi.summaryEnabledModels", {
+      enabled: provider.enabledModelCount,
+      models: provider.modelCount,
+    });
   }
   if (provider.configured) {
-    return `${provider.modelCount} models · key configured`;
+    return t("settings.providerUi.summaryKeyConfigured", {
+      models: provider.modelCount,
+    });
   }
-  return `${provider.modelCount} models`;
+  return t("settings.providerUi.summaryModelCount", {
+    models: provider.modelCount,
+  });
 }
 
 /**
@@ -942,26 +1019,27 @@ export function providerCatalogSummary(provider: ModelProviderInfo): string {
  */
 export function providerDetailConnectionLabel(
   detail: Pick<ModelProviderInfo, "id" | "configured" | "authKind" | "authLabel" | "authSource">,
+  t: SettingsTextFn = settingsTextFor(),
 ): string {
   if (detail.id === "commandcode") {
-    if (!detail.configured) return "API key required";
-    return detail.authLabel ?? "API key saved — not verified";
+    if (!detail.configured) return t("settings.providerUi.connectionApiKeyRequired");
+    return detail.authLabel ?? t("settings.providerUi.connectionApiKeySavedUnverified");
   }
   if (detail.id === "antigravity") {
-    if (!detail.configured) return "OAuth sign-in required";
+    if (!detail.configured) return t("settings.providerUi.connectionOAuthSignInRequired");
     return detail.authLabel ?? "OAuth";
   }
-  if (!detail.configured) return "Not connected";
+  if (!detail.configured) return t("settings.providerUi.notConnected");
   if (detail.authSource) {
     if (detail.authSource === "stored" && detail.authKind === "oauth") {
-      return "Connected locally";
+      return t("settings.providerUi.connectedLocally");
     }
     if (detail.authSource === "stored" && detail.authKind === "api-key") {
-      return "API key";
+      return t("settings.providerUi.apiKey");
     }
-    return `Managed by ${detail.authLabel ?? detail.authSource}`;
+    return t("settings.providerUi.managedBy", { source: detail.authLabel ?? detail.authSource });
   }
-  return "Saved in Modus";
+  return t("settings.providerUi.savedInModus");
 }
 
 export function normalizeSearchValue(value: string): string {
@@ -1031,19 +1109,20 @@ export function modelMatchesQuery(model: ProviderModelConfig, query: string): bo
 
 type SettingsProjectTab = { rootPath: string; displayName: string };
 
-const projectLabel = (cwd: string): string =>
-  cwd.split(/[\\/]/).filter(Boolean).at(-1) ?? "Project";
+const projectLabel = (cwd: string, t: SettingsTextFn = settingsTextFor()): string =>
+  cwd.split(/[\\/]/).filter(Boolean).at(-1) ?? t("settings.providerUi.projectFallback");
 
 export function settingsProjectTabs(
   cwd: string | undefined,
   workspaces: WorkspaceInfo[],
+  t: SettingsTextFn = settingsTextFor(),
 ): SettingsProjectTab[] {
   const seen = new Set<string>();
   const tabs: SettingsProjectTab[] = [];
   const push = (rootPath: string, displayName: string): void => {
     if (!rootPath || seen.has(rootPath)) return;
     seen.add(rootPath);
-    tabs.push({ rootPath, displayName: displayName || projectLabel(rootPath) });
+    tabs.push({ rootPath, displayName: displayName || projectLabel(rootPath, t) });
   };
   if (cwd) push(cwd, workspaces.find((workspace) => workspace.rootPath === cwd)?.displayName ?? "");
   for (const workspace of workspaces) push(workspace.rootPath, workspace.displayName);

@@ -1,86 +1,109 @@
 import { app, Menu, type MenuItemConstructorOptions } from "electron";
+import { type MainTextKey, mainText } from "../../shared/main-text";
 
 /**
- * Native application menu (macOS menu bar / Windows Alt menu).
+ * Native application menu (macOS menu bar / Windows Alt menu), in the app
+ * language. Every item carries an explicit label from `main-text.ts`: Electron
+ * role defaults are English on Windows / Linux. `installApplicationMenu` is
+ * called again on each language change, so the menu switches without a restart.
  * In-window File/Edit/View/Help stubs are decorative and must not appear on macOS.
  */
-export function installApplicationMenu(): void {
-  const isMac = process.platform === "darwin";
+export function buildApplicationMenuTemplate({
+  locale,
+  platform = process.platform,
+  appName = "Modus",
+}: {
+  locale?: string | undefined;
+  platform?: NodeJS.Platform;
+  appName?: string;
+} = {}): MenuItemConstructorOptions[] {
+  const isMac = platform === "darwin";
+  const t = (key: MainTextKey) => mainText(key, locale, { app: appName });
+  const item = (role: NonNullable<MenuItemConstructorOptions["role"]>, key: MainTextKey) => ({
+    role,
+    label: t(key),
+  });
+  const separator = { type: "separator" as const };
 
-  const template: MenuItemConstructorOptions[] = [
+  return [
     ...(isMac
       ? [
           {
-            label: app.name,
+            label: appName,
             submenu: [
-              { role: "about" as const },
-              { type: "separator" as const },
-              { role: "services" as const },
-              { type: "separator" as const },
-              { role: "hide" as const },
-              { role: "hideOthers" as const },
-              { role: "unhide" as const },
-              { type: "separator" as const },
-              { role: "quit" as const },
+              item("about", "main.menu.about"),
+              separator,
+              item("services", "main.menu.services"),
+              separator,
+              item("hide", "main.menu.hide"),
+              item("hideOthers", "main.menu.hideOthers"),
+              item("unhide", "main.menu.unhide"),
+              separator,
+              item("quit", "main.menu.quit"),
             ],
           },
         ]
       : []),
     {
-      label: "File",
-      submenu: [isMac ? { role: "close" } : { role: "quit" }],
+      label: t("main.menu.file"),
+      submenu: [isMac ? item("close", "main.menu.close") : item("quit", "main.menu.quit")],
     },
     {
-      label: "Edit",
+      label: t("main.menu.edit"),
       submenu: [
-        { role: "undo" },
-        { role: "redo" },
-        { type: "separator" },
-        { role: "cut" },
-        { role: "copy" },
-        { role: "paste" },
+        item("undo", "main.menu.undo"),
+        item("redo", "main.menu.redo"),
+        separator,
+        item("cut", "main.menu.cut"),
+        item("copy", "main.menu.copy"),
+        item("paste", "main.menu.paste"),
         ...(isMac
           ? [
-              { role: "pasteAndMatchStyle" as const },
-              { role: "delete" as const },
-              { role: "selectAll" as const },
+              item("pasteAndMatchStyle", "main.menu.pasteAndMatchStyle"),
+              item("delete", "main.menu.delete"),
+              item("selectAll", "main.menu.selectAll"),
             ]
           : [
-              { role: "delete" as const },
-              { type: "separator" as const },
-              { role: "selectAll" as const },
+              item("delete", "main.menu.delete"),
+              separator,
+              item("selectAll", "main.menu.selectAll"),
             ]),
       ],
     },
     {
-      label: "View",
+      label: t("main.menu.view"),
       submenu: [
-        { role: "reload" },
-        { role: "forceReload" },
-        { role: "toggleDevTools" },
-        { type: "separator" },
-        { role: "resetZoom" },
-        { role: "zoomIn" },
-        { role: "zoomOut" },
-        { type: "separator" },
-        { role: "togglefullscreen" },
+        item("reload", "main.menu.reload"),
+        item("forceReload", "main.menu.forceReload"),
+        item("toggleDevTools", "main.menu.toggleDevTools"),
+        separator,
+        item("resetZoom", "main.menu.resetZoom"),
+        item("zoomIn", "main.menu.zoomIn"),
+        item("zoomOut", "main.menu.zoomOut"),
+        separator,
+        item("togglefullscreen", "main.menu.toggleFullScreen"),
       ],
     },
     {
-      label: "Window",
+      label: t("main.menu.window"),
       submenu: [
-        { role: "minimize" },
-        { role: "zoom" },
+        item("minimize", "main.menu.minimize"),
+        item("zoom", "main.menu.zoom"),
         ...(isMac
-          ? [{ type: "separator" as const }, { role: "front" as const }]
-          : [{ role: "close" as const }]),
+          ? [separator, item("front", "main.menu.front")]
+          : [item("close", "main.menu.close")]),
       ],
     },
     {
       role: "help",
+      label: t("main.menu.help"),
       submenu: [],
     },
   ];
+}
 
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+export function installApplicationMenu(locale?: string): void {
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate(buildApplicationMenuTemplate({ locale, appName: app.name })),
+  );
 }

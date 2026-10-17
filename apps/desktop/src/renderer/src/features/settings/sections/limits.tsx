@@ -11,6 +11,7 @@ import type {
 import { EmptyState } from "../../../components/ui/Panel";
 import { cn } from "../../../lib/cn";
 import { formatClock } from "../../../lib/formatClock";
+import { uiIntlLocale } from "../../../lib/uiIntl";
 import { SwitchControl } from "../form-controls";
 import { SettingsPageHeader, SettingsRow, SettingsSection } from "../settings-layout";
 
@@ -100,7 +101,7 @@ function formatMetricValue(value: number, unit: string): string {
 }
 
 function formatMetricNumber(value: number): string {
-  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(value);
+  return new Intl.NumberFormat(uiIntlLocale(), { maximumFractionDigits: 2 }).format(value);
 }
 
 function groupConfiguredModelLimitsByProvider(models: ModelInfo[]) {
@@ -335,7 +336,9 @@ function LimitValue({ label, value }: { label: string; value: number | undefined
     <div className="min-w-[104px]">
       <div className="text-2xs text-fg-faint">{label}</div>
       <div className="mt-0.5 text-xs tabular-nums text-fg-muted">
-        {value === undefined ? "Unavailable" : `${new Intl.NumberFormat().format(value)} tokens`}
+        {value === undefined
+          ? "Unavailable"
+          : `${new Intl.NumberFormat(uiIntlLocale()).format(value)} tokens`}
       </div>
     </div>
   );
