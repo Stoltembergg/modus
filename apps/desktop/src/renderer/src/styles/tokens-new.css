@@ -9,10 +9,10 @@
  *
  * Glass: same D2 architecture (one tint + blur on .app-shell, panels
  * transparent on top). Tiers are tint colour + one alpha set for both themes:
- *   g0 window  --color-panel    @ --glass-alpha-chrome  60%
+ *   g0 window  --color-panel    @ --glass-alpha-chrome  82%
  *   g1 inset   --color-canvas   (main/inset surfaces; opaque in Sidebar/Off)
  *   g2 raised  --color-surface  (composer, cards, lists)
- *   g3 overlay --color-elevated @ --glass-alpha-overlay 86%
+ *   g3 overlay --color-elevated @ --glass-alpha-overlay 89%
  * Text contrast on these tiers, and the solid fallback at the end of this
  * file, are pinned by styles/tokensNew.test.ts.
  *
@@ -29,10 +29,8 @@
   --color-elevated: #1a2333;
   --color-code-bg: #0f1520;
 
-  /* Text. fg and faint are a touch lighter than the concept (#e7ebf1 / #7a8494) so the
-     window glass can be more transparent and still pass the contrast gate. fg keeps a
-     little headroom (4.54:1 on the 60% window over white). faint (3.01:1 there) is for
-     auxiliary/disabled text only, never text needed to use the app. */
+  /* Text. fg and faint are a touch lighter than the concept (#e7ebf1 / #7a8494).
+     faint is for auxiliary/disabled text only, never text needed to use the app. */
   --color-fg: #f2f4f8;
   --color-fg-muted: #a9b2c0;
   --color-fg-subtle: #939dac;
@@ -102,12 +100,16 @@
   --shadow-composer-focus: var(--shadow-1), 0 0 0 1px var(--color-focus-ring);
   --overlay-scrim-color: rgba(3, 6, 12, 0.42);
 
-  /* Glass (Gabriel 2026-10-13: more transparent than 64% / 90%, blur kept high enough
-     for legibility). One alpha set for both themes. The contrast gate in
-     tokensNew.test.ts holds chrome at 60% (dark fg over white, dark and light faint)
-     and the overlay at 86% (light dialog-warning text, min 85.5%). */
-  --glass-alpha-chrome: 60%;
-  --glass-alpha-overlay: 86%;
+  /* Glass. Gabriel 2026-10-13 asked for more transparency than 64% / 90% with legible
+     text. v0.1.11 opacity floor (PR #257; data in branch
+     pr-assets/glass-opacity-floor, free/): the window glass can sit over any
+     wallpaper, including one of the opposite brightness (white behind dark, black
+     behind light). On the gate model (no OS material), the smallest alphas that keep fg
+     and fg-muted >= 4.5:1 and subtle / faint >= 3:1 there are chrome 81.5% (dark faint
+     over white; light needs 81%) and overlay 88.5% (dark faint over white). The values
+     below are those floors rounded up. tokensNew.test.ts pins them. */
+  --glass-alpha-chrome: 82%;
+  --glass-alpha-overlay: 89%;
   --glass-blur: 24px;
   --glass-saturate: 1.3;
 
