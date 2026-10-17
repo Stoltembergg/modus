@@ -81,6 +81,7 @@ import {
   requestPermission,
   resolvePermissionRequest,
 } from "../permissions/permission-broker";
+import { getAskMissingTarget } from "../permissions/permission-store";
 import {
   applyPlanAcceptanceEvidenceById,
   fingerprintPlanSource,
@@ -4523,6 +4524,7 @@ export class PiSdkRuntime implements AgentRuntime {
               hasAttachedContext:
                 (input.context?.length ?? 0) > 0 || (input.attachments?.length ?? 0) > 0,
               previousTurn: previousIntentTurn(runtimeSession.session, input.sessionId, run.id),
+              askMissingTarget: getAskMissingTarget(),
             });
       let intentAssumption: string | undefined;
       if (intentGate.action === "clarify" || intentGate.action === "confirm") {

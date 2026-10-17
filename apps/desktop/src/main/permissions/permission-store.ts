@@ -124,6 +124,18 @@ function deleteSetting(key: string): void {
   getDatabase().prepare("delete from app_settings where key = ?").run(key);
 }
 
+/** User setting "Ask before acting when the target is missing" (intent gate). Default on. */
+const ASK_MISSING_TARGET_KEY = "intent_gate.ask_missing_target";
+
+export function getAskMissingTarget(): boolean {
+  return readSetting(ASK_MISSING_TARGET_KEY) !== "false";
+}
+
+export function setAskMissingTarget(enabled: boolean): boolean {
+  writeSetting(ASK_MISSING_TARGET_KEY, enabled ? "true" : "false");
+  return enabled;
+}
+
 export function getGlobalApprovalMode(): ApprovalMode {
   const value = readSetting(APPROVAL_MODE_KEY);
   return isApprovalMode(value) ? value : DEFAULT_APPROVAL_MODE;

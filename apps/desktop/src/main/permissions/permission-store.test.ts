@@ -10,7 +10,12 @@ let userData: string;
 vi.mock("electron", () => ({ app: { getPath: () => userData } }));
 
 const { getDatabase, migrateDatabase } = await import("../db/database");
-const { findWorkspaceAllowDecision, recordPermissionDecision } = await import("./permission-store");
+const {
+  findWorkspaceAllowDecision,
+  getAskMissingTarget,
+  recordPermissionDecision,
+  setAskMissingTarget,
+} = await import("./permission-store");
 
 beforeAll(async () => {
   userData = await mkdtemp(join(tmpdir(), "modus-permission-store-test-"));
@@ -129,5 +134,15 @@ describe("workspace permission grants", () => {
     expect(
       legacy.prepare("select workspace_id, tool_name from permissions where id = 'legacy'").get(),
     ).toEqual({ workspace_id: null, tool_name: null });
+  });
+});
+
+describe("ask before acting when the target is missing", () => {
+  it("defaults on and persists the user's choice", () => {
+    expect(getAskMissingTarget()).toBe(true);
+    expect(setAskMissingTarget(false)).toBe(false);
+    expect(getAskMissingTarget()).toBe(false);
+    expect(setAskMissingTarget(true)).toBe(true);
+    expect(getAskMissingTarget()).toBe(true);
   });
 });

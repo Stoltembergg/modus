@@ -305,6 +305,8 @@ const api: ModusApi = {
     getMode: (input) => ipcRenderer.invoke("permission:get-mode", input ?? {}),
     setMode: (input) => ipcRenderer.invoke("permission:set-mode", input),
     clearProjectMode: (input) => ipcRenderer.invoke("permission:clear-project-mode", input),
+    getAskMissingTarget: () => ipcRenderer.invoke("permission:get-ask-missing-target"),
+    setAskMissingTarget: (input) => ipcRenderer.invoke("permission:set-ask-missing-target", input),
   },
   questions: {
     respond: (input) => ipcRenderer.invoke("questions:respond", input),

@@ -88,9 +88,7 @@ describe("evaluateIntentGate", () => {
     expect(evaluateIntentGate(input("Review the security implications of deleting data"))).toEqual({
       action: "proceed",
     });
-    expect(evaluateIntentGate(input("Remove the unused import"))).not.toMatchObject({
-      action: "confirm",
-    });
+    expect(evaluateIntentGate(input("Remove the unused import"))).toEqual({ action: "proceed" });
     expect(evaluateIntentGate(input("Remove the unused import in Sidebar.tsx"))).toEqual({
       action: "proceed",
     });
@@ -145,6 +143,33 @@ describe("evaluateIntentGate", () => {
     { label: "clarify", note: "no target pt", text: "Pode corrigir isso?" },
     { label: "clarify", note: "no target pt", text: "Por favor, adiciona testes para essa função" },
     // Action with a target in the request
+    // Targets that are unique in any project (lint, tests, build, CI, version, dependencies)
+    { label: "proceed", note: "project target", text: "Fix the lint errors" },
+    { label: "proceed", note: "project target", text: "Corrija os erros de lint" },
+    { label: "proceed", note: "project target", text: "Update the version" },
+    { label: "proceed", note: "project target", text: "Atualize a versão" },
+    { label: "proceed", note: "project target", text: "Fix the failing tests" },
+    { label: "proceed", note: "project target", text: "Fix the build" },
+    { label: "proceed", note: "project target", text: "Fix CI" },
+    { label: "proceed", note: "project target", text: "Resolve the merge conflicts" },
+    { label: "proceed", note: "project target", text: "Update dependencies" },
+    { label: "proceed", note: "project target", text: "Remove the unused import" },
+    { label: "proceed", note: "project target", text: "fix the warnings" },
+    { label: "proceed", note: "project target", text: "Corrija os erros de tipo" },
+    { label: "proceed", note: "project target", text: "Fix the type errors" },
+    { label: "proceed", note: "project target", text: "Resolva os conflitos de merge" },
+    { label: "proceed", note: "project target", text: "Atualize as dependências" },
+    { label: "proceed", note: "project target", text: "Conserta os testes" },
+    { label: "proceed", note: "project target", text: "Fix the typecheck" },
+    { label: "clarify", note: "open-ended verb", text: "Improve the tests" },
+    { label: "clarify", note: "open-ended verb", text: "Melhora os testes" },
+    { label: "clarify", note: "which dependency", text: "Update the dependency" },
+    { label: "proceed", note: "lowercase error", text: "fix this: error: cannot read config" },
+    { label: "proceed", note: "lowercase error", text: "fix typeerror: x is undefined" },
+    // A leading "ok"/"sim" does not hide the verb
+    { label: "clarify", note: "leading ok", text: "ok, fix it" },
+    { label: "clarify", note: "leading sim", text: "sim corrige isso" },
+    { label: "proceed", note: "leading ok", text: "ok fix the build" },
     { label: "proceed", note: "file", text: "Fix the type error in TodosCard.tsx" },
     {
       label: "proceed",
@@ -300,6 +325,73 @@ describe("evaluateIntentGate", () => {
     expect(evaluateIntentGate(input("Delete all the data"))).toMatchObject({ action: "confirm" });
     expect(evaluateIntentGate({ ...input("Fix it"), hasDestructiveAction: true })).toMatchObject({
       action: "confirm",
+    });
+  });
+
+  describe("previous-reply cost", () => {
+    it("keeps a 100 KB previous agent reply under 50 ms", () => {
+      const huge = `${"a".repeat(50_000)}${"-".repeat(50_000)}`;
+      const started = performance.now();
+      const result = evaluateIntentGate({ ...input("Fix it"), previousTurn: assistant(huge) });
+      const elapsed = performance.now() - started;
+      expect(result.action).toBe("clarify");
+      expect(elapsed).toBeLessThan(50);
+    });
+
+    it("only reads the tail of the previous agent reply", () => {
+      const filler = "word ".repeat(1_000);
+      expect(
+        evaluateIntentGate({
+          ...input("Fix it"),
+          previousTurn: assistant(`Edited Sidebar.tsx.\n${filler}`),
+        }).action,
+      ).toBe("clarify");
+      expect(
+        evaluateIntentGate({
+          ...input("Fix it"),
+          previousTurn: assistant(`${filler}\nEdited Sidebar.tsx.`),
+        }).action,
+      ).toBe("proceed");
+    });
+
+    it("skips the edit-verb scan for a long request", () => {
+      const long = `fix ${"x".repeat(100_000)}`;
+      const started = performance.now();
+      expect(evaluateIntentGate(input(long)).action).not.toBe("clarify");
+      expect(performance.now() - started).toBeLessThan(50);
+    });
+  });
+
+  describe("user setting: ask before acting when the target is missing", () => {
+    const off = { askMissingTarget: false } as const;
+
+    it("asks by default", () => {
+      expect(evaluateIntentGate(input("Fix it")).action).toBe("clarify");
+    });
+
+    it.each([
+      "Fix it",
+      "Melhora isso",
+      "ok, fix it",
+      "Please fix the bug",
+    ])("proceeds directly when off: %s", (text) => {
+      expect(evaluateIntentGate({ ...input(text), ...off })).toEqual({ action: "proceed" });
+    });
+
+    it("proceeds directly when off after a previous turn", () => {
+      expect(
+        evaluateIntentGate({
+          ...input("Fix it"),
+          ...off,
+          previousTurn: { userText: "what's new in the repo?", assistantText: "Nothing changed." },
+        }),
+      ).toEqual({ action: "proceed" });
+    });
+
+    it("keeps destructive confirmation when off", () => {
+      expect(evaluateIntentGate({ ...input("Delete all the data"), ...off })).toMatchObject({
+        action: "confirm",
+      });
     });
   });
 });

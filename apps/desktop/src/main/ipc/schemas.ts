@@ -553,6 +553,10 @@ export const approvalModeClearProjectSchema = z.object({
   cwd: z.string().min(1),
 });
 
+export const askMissingTargetSchema = z.object({
+  enabled: z.boolean(),
+});
+
 export const questionRespondSchema = z.object({
   requestId: nonEmptyString,
   skipped: z.boolean(),

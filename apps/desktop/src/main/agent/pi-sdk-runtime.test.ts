@@ -4728,6 +4728,50 @@ describe("PiSdkRuntime", () => {
     expect(prompts).toHaveLength(2);
   });
 
+  it("proceeds without asking when the user turned the setting off", async () => {
+    permissionStore.setAskMissingTarget(false);
+    try {
+      const { questions, prompts } = await runIntentTurns(["Fix it"]);
+      expect(questions).toBe(0);
+      expect(prompts[0]).not.toContain("<intent_assumption>");
+    } finally {
+      permissionStore.setAskMissingTarget(true);
+    }
+  });
+
+  it("proceeds without asking after a previous turn when the setting is off", async () => {
+    permissionStore.setAskMissingTarget(false);
+    try {
+      const { questions, prompts } = await runIntentTurns(
+        ["what's new in the repo?", "Fix it"],
+        [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "Nothing changed since yesterday." }],
+          },
+        ],
+      );
+      expect(questions).toBe(0);
+      expect(prompts).toHaveLength(2);
+      expect(prompts[1]).not.toContain("<intent_assumption>");
+    } finally {
+      permissionStore.setAskMissingTarget(true);
+    }
+  });
+
+  it("still asks after the same previous turn when the setting is on", async () => {
+    const { questions } = await runIntentTurns(
+      ["what's new in the repo?", "Fix it"],
+      [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Nothing changed since yesterday." }],
+        },
+      ],
+    );
+    expect(questions).toBe(1);
+  });
+
   it("does not ask when the user answers the agent's question", async () => {
     const { questions, prompts } = await runIntentTurns(
       ["sim, remove"],
