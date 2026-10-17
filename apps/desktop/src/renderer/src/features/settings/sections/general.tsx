@@ -4,6 +4,7 @@ import { ApprovalModeSettings } from "../ApprovalModeSettings";
 import { AskMissingTargetSetting } from "../AskMissingTargetSetting";
 import { LanguageSetting } from "../LanguageSetting";
 import { SettingsPageHeader } from "../settings-layout";
+import { ToolFilterSetting } from "../ToolFilterSetting";
 
 export function GeneralSettingsPanel({
   cwd,
@@ -19,6 +20,7 @@ export function GeneralSettingsPanel({
       <LanguageSetting />
       <ApprovalModeSettings {...(cwd ? { cwd } : {})} workspaces={workspaces} />
       <AskMissingTargetSetting />
+      <ToolFilterSetting />
     </>
   );
 }

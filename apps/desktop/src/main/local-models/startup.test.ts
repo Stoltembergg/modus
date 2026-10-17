@@ -1,41 +1,32 @@
-import { describe, expect, it, vi } from "vitest";
-import { startLocalModels } from "./startup";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-describe("startLocalModels", () => {
-  it("flag off: imports nothing and starts nothing", () => {
-    const importRanker = vi.fn();
-    expect(startLocalModels("/tmp/user-data", () => false, importRanker)).toBeUndefined();
-    expect(importRanker).not.toHaveBeenCalled();
-  });
+const fork = vi.fn();
+vi.mock("electron", () => ({ utilityProcess: { fork } }));
 
-  it("flag off by default (MODUS_LOCAL_TOOL_FILTER unset)", () => {
+afterEach(() => {
+  vi.resetModules();
+  vi.unstubAllEnvs();
+  fork.mockReset();
+});
+
+describe("local models startup", () => {
+  it("filter off (default): creating the controller spawns nothing and the turn filter is off", async () => {
     vi.stubEnv("MODUS_LOCAL_TOOL_FILTER", "");
-    const importRanker = vi.fn();
-    expect(startLocalModels("/tmp/user-data", undefined, importRanker)).toBeUndefined();
-    expect(importRanker).not.toHaveBeenCalled();
-    vi.unstubAllEnvs();
+    const { startLocalModels, getToolFilterController, stopLocalModels } = await import(
+      "./startup"
+    );
+    const { turnToolFilterEnabled } = await import("./turn-tool-filter");
+    const dir = `/tmp/modus-startup-test-${process.pid}`;
+    startLocalModels(dir);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fork).not.toHaveBeenCalled();
+    expect(getToolFilterController(dir).getState().enabled).toBe(false);
+    expect(turnToolFilterEnabled()).toBe(false);
+    stopLocalModels();
   });
 
-  it("flag on: prepares the shared ranker in the background, never throws", async () => {
-    const prepare = vi.fn(async () => ({ state: "idle" as const }));
-    const getLocalToolRanker = vi.fn(() => ({ prepare }));
-    await startLocalModels(
-      "/tmp/user-data",
-      () => true,
-      async () => ({ getLocalToolRanker }) as never,
-    );
-    expect(getLocalToolRanker).toHaveBeenCalledWith("/tmp/user-data");
-    expect(prepare).toHaveBeenCalledTimes(1);
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    await expect(
-      startLocalModels(
-        "/tmp/user-data",
-        () => true,
-        async () => {
-          throw new Error("boom");
-        },
-      ),
-    ).resolves.toBeUndefined();
-    warn.mockRestore();
+  it("the worker module sits next to the main bundle", async () => {
+    const { workerModulePath } = await import("./startup");
+    expect(workerModulePath()).toMatch(/tool-filter-worker\.js$/);
   });
 });

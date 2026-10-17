@@ -11,6 +11,8 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve(__dirname, "src/main/index.ts"),
+          // RERANK-03 tool filter: entry of the model utilityProcess (never loaded in main).
+          "tool-filter-worker": resolve(__dirname, "src/main/local-models/tool-filter-worker.ts"),
         },
       },
     },

@@ -8,7 +8,15 @@ export type LocalModelFailure =
   | "load-failed"
   | "not-ready"
   | "timeout"
-  | "inference-failed";
+  | "inference-failed"
+  /** A selection is still running in the model process; no second one is started. */
+  | "busy"
+  /** The model process exited unexpectedly (crash, OOM kill). */
+  | "crashed"
+  /** The model process stopped answering and was killed. */
+  | "hung"
+  /** The user cancelled the download. */
+  | "cancelled";
 
 export class LocalModelError extends Error {
   readonly code: LocalModelFailure;

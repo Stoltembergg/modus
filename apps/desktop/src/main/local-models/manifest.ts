@@ -10,6 +10,8 @@ export type LocalModelFile = {
   sha256: string;
   /** "license" files ship next to the weights (Apache-2.0 + NOTICE); never loaded. */
   role: "model" | "tokenizer" | "license";
+  /** Exact size in bytes (download progress and the size shown before downloading). */
+  bytes?: number;
 };
 
 export type LocalModelManifest = {
@@ -22,31 +24,37 @@ export const RERANK03_MODEL = {
   files: [
     {
       name: "model.onnx",
+      bytes: 390002003,
       sha256: "2847dfad94d1c37c55f9dda6100ef7781699cdb3efa81b695e4362de9a7b53cc",
       role: "model",
     },
     {
       name: "tokenizer.json",
+      bytes: 25301669,
       sha256: "c60019bed2dd23874c14a3cfc88db5c591c66f91f7502f91ab3c9717329917cd",
       role: "tokenizer",
     },
     {
       name: "tokenizer_config.json",
+      bytes: 12860,
       sha256: "6ed69389e30a8ecabfce2f9ebcdf0c908b34056f24d994340f2f216521c057d5",
       role: "tokenizer",
     },
     {
       name: "special_tokens_map.json",
+      bytes: 871,
       sha256: "013787ee251ff611722479197c00853b62113ad303cb0a36524231783c676c69",
       role: "tokenizer",
     },
     {
       name: "LICENSE",
+      bytes: 11358,
       sha256: "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
       role: "license",
     },
     {
       name: "NOTICE",
+      bytes: 633,
       sha256: "7d59b92777beb1fdc5d9c60c4d3c380c95d377a7b44b0ce14f4fbf7bda7048d7",
       role: "license",
     },
@@ -56,6 +64,11 @@ export const RERANK03_MODEL = {
   docMaxLength: 192,
   dimensions: 384,
 } as const satisfies LocalModelManifest & Record<string, unknown>;
+
+/** Total bytes downloaded when the tool filter is turned on (weights + tokenizer + license). */
+export function manifestBytes(manifest: LocalModelManifest = RERANK03_MODEL): number {
+  return manifest.files.reduce((sum, file) => sum + (file.bytes ?? 0), 0);
+}
 
 export const DEFAULT_LOCAL_MODELS_BASE_URL =
   "https://github.com/Stoltembergg/modus/releases/download/model-rerank03-v1/";
