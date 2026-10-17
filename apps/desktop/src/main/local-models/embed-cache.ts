@@ -6,35 +6,60 @@ import { RERANK03_MODEL } from "./manifest";
 /**
  * On-disk cache of tool-doc embeddings for the local tool filter. Read and
  * written by the model process only (it computes the vectors). Each entry is
- * keyed by the model's pinned sha256 + the sha256 of the exact text embedded
- * (the tool's doc_short), so a new model or a changed description invalidates
- * only what it touches. The file is replaced atomically (tmp + rename); a file
+ * keyed by the cache identity (pinned model + tokenizer sha256s + docMaxLength)
+ * + the sha256 of the exact text embedded (the tool's doc_short), so a new
+ * model/tokenizer invalidates everything and a changed description only its
+ * own entry. The file is replaced atomically (tmp + rename); a file
  * that does not parse, is truncated, or has the wrong dimension is discarded
  * and recomputed, never used.
  */
 export const EMBED_CACHE_FILE = "embeddings.json";
-export const EMBED_CACHE_VERSION = 1;
+/** Bumped for format changes (2: combined model + tokenizer + docMaxLength identity). */
+export const EMBED_CACHE_VERSION = 2;
 /** Hard cap; entries least recently seen in a catalog go first. ~1.5 KB each at 384 dims. */
 export const EMBED_CACHE_MAX_ENTRIES = 2_000;
 
-/** Model identity for keys: the pinned sha256 of the weights (the manifest's model file). */
-export function rerank03ModelSha(): string {
-  const model = RERANK03_MODEL.files.find((file) => file.role === "model");
-  if (!model) throw new Error("RERANK-03 manifest has no model file");
-  return model.sha256;
+export type CacheIdentityInput = {
+  /** Pinned files whose bytes shape the vectors: the model and every tokenizer file. */
+  files: ReadonlyArray<{ name: string; sha256: string; role: string }>;
+  docMaxLength: number;
+};
+
+/**
+ * One combined identity for the vectors: sha256 over the pinned sha256 of
+ * model.onnx and of every tokenizer file in the manifest (today tokenizer.json,
+ * tokenizer_config.json, special_tokens_map.json), plus docMaxLength. Any of
+ * them changing invalidates every entry. Used in the file header and as the
+ * key prefix.
+ */
+export function cacheIdentity({ files, docMaxLength }: CacheIdentityInput): string {
+  const pinned = files
+    .filter((file) => file.role === "model" || file.role === "tokenizer")
+    .map((file) => `${file.name}=${file.sha256}`)
+    .sort();
+  if (!pinned.some((line) => line.startsWith("model.onnx="))) {
+    throw new Error("RERANK-03 manifest has no model.onnx");
+  }
+  return createHash("sha256")
+    .update(JSON.stringify({ files: pinned, docMaxLength }), "utf8")
+    .digest("hex");
+}
+
+export function rerank03CacheIdentity(): string {
+  return cacheIdentity({ files: RERANK03_MODEL.files, docMaxLength: RERANK03_MODEL.docMaxLength });
 }
 
 const sha256 = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
 
-export function embedCacheKey(modelSha: string, text: string): string {
-  return `${modelSha}:${sha256(text)}`;
+export function embedCacheKey(identity: string, text: string): string {
+  return `${identity}:${sha256(text)}`;
 }
 
 type Entry = { vector: Float32Array; seenAt: number };
 
 type CacheFile = {
   version: number;
-  modelSha: string;
+  identity: string;
   dim: number;
   entries: Array<{ key: string; seenAt: number; vector: string }>;
 };
@@ -42,8 +67,8 @@ type CacheFile = {
 export type EmbedCacheLoad = {
   entries: number;
   /** Why the whole file was thrown away, if it was. */
-  discarded?: "missing" | "corrupt" | "version" | "model" | "dimension";
-  /** Entries dropped one by one (wrong length, non-finite values, foreign model). */
+  discarded?: "missing" | "corrupt" | "version" | "identity" | "dimension";
+  /** Entries dropped one by one (wrong length, non-finite values, foreign identity). */
   droppedEntries: number;
 };
 
@@ -53,7 +78,7 @@ export class EmbedCache {
 
   constructor(
     private readonly dir: string,
-    private readonly modelSha: string,
+    private readonly identity: string,
     private readonly dim: number,
     private readonly maxEntries = EMBED_CACHE_MAX_ENTRIES,
     private readonly now: () => number = Date.now,
@@ -90,7 +115,7 @@ export class EmbedCache {
       return discard("corrupt");
     }
     if (parsed.version !== EMBED_CACHE_VERSION) return discard("version");
-    if (parsed.modelSha !== this.modelSha) return discard("model");
+    if (parsed.identity !== this.identity) return discard("identity");
     if (parsed.dim !== this.dim) return discard("dimension");
     let dropped = 0;
     for (const entry of parsed.entries) {
@@ -98,7 +123,7 @@ export class EmbedCache {
       if (
         !vector ||
         typeof entry.key !== "string" ||
-        !entry.key.startsWith(`${this.modelSha}:`) ||
+        !entry.key.startsWith(`${this.identity}:`) ||
         typeof entry.seenAt !== "number"
       ) {
         dropped++;
@@ -111,7 +136,7 @@ export class EmbedCache {
   }
 
   get(text: string): Float32Array | undefined {
-    const entry = this.entries.get(embedCacheKey(this.modelSha, text));
+    const entry = this.entries.get(embedCacheKey(this.identity, text));
     if (!entry) return undefined;
     const seenAt = this.now();
     // Recency only needs to be coarse: rewrite the file for it at most hourly.
@@ -122,7 +147,7 @@ export class EmbedCache {
 
   set(text: string, vector: Float32Array): void {
     if (vector.length !== this.dim) return;
-    this.entries.set(embedCacheKey(this.modelSha, text), {
+    this.entries.set(embedCacheKey(this.identity, text), {
       vector: Float32Array.from(vector),
       seenAt: this.now(),
     });
@@ -140,7 +165,7 @@ export class EmbedCache {
     }
     const body: CacheFile = {
       version: EMBED_CACHE_VERSION,
-      modelSha: this.modelSha,
+      identity: this.identity,
       dim: this.dim,
       entries: [...this.entries].map(([key, { vector, seenAt }]) => ({
         key,

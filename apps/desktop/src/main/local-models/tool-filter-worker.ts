@@ -5,7 +5,7 @@
  * crash stay out of the main process. One request at a time is the main side's
  * contract; this side still answers every message it gets.
  */
-import { EmbedCache, rerank03ModelSha } from "./embed-cache";
+import { EmbedCache, rerank03CacheIdentity } from "./embed-cache";
 import { cosine, type LocalEmbedder, loadLocalEmbedder } from "./embedder";
 import { LocalModelError, localModelFailureOf } from "./errors";
 import { RERANK03_MODEL } from "./manifest";
@@ -50,7 +50,8 @@ function resolvePort(): Port {
 export type WorkerHandlerDeps = {
   /** Tests: a fake embedder instead of onnxruntime + the weights in `dir`. */
   loadEmbedder?: (dir: string) => Promise<LocalEmbedder>;
-  modelSha?: string;
+  /** Tests: the cache identity (default: the RERANK-03 manifest's). */
+  cacheIdentity?: string;
 };
 
 export function createWorkerHandler(
@@ -137,7 +138,7 @@ export function createWorkerHandler(
               // another size is discarded, never used.
               cache = new EmbedCache(
                 message.cacheDir,
-                deps.modelSha ?? rerank03ModelSha(),
+                deps.cacheIdentity ?? rerank03CacheIdentity(),
                 probe.length,
               );
               cachedOnLoad = cache.load().entries;

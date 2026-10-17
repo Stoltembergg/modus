@@ -3,13 +3,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  cacheIdentity,
   EMBED_CACHE_FILE,
   EmbedCache,
   embedCacheDir,
   embedCacheKey,
-  rerank03ModelSha,
+  rerank03CacheIdentity,
 } from "./embed-cache";
 import type { LocalEmbedder } from "./embedder";
+import { RERANK03_MODEL } from "./manifest";
 import { createWorkerHandler } from "./tool-filter-worker";
 import type { MainToWorker, WorkerToMain } from "./worker-protocol";
 
@@ -39,8 +41,78 @@ describe("EmbedCache", () => {
     expect(embedCacheKey(MODEL_A, "read: Read a file.")).not.toBe(
       embedCacheKey(MODEL_A, "read: Read files."),
     );
-    expect(rerank03ModelSha()).toMatch(/^[0-9a-f]{64}$/);
+    expect(rerank03CacheIdentity()).toMatch(/^[0-9a-f]{64}$/);
     expect(embedCacheDir("/u")).toBe(join("/u", "local-models", "tool-embed-cache"));
+  });
+
+  it("identity = model.onnx + every pinned tokenizer file + docMaxLength (license files excluded)", () => {
+    const base = { files: RERANK03_MODEL.files, docMaxLength: RERANK03_MODEL.docMaxLength };
+    expect(cacheIdentity(base)).toBe(rerank03CacheIdentity());
+    expect(RERANK03_MODEL.files.filter((f) => f.role === "tokenizer").map((f) => f.name)).toEqual([
+      "tokenizer.json",
+      "tokenizer_config.json",
+      "special_tokens_map.json",
+    ]);
+    const relicensed = RERANK03_MODEL.files.map((f) =>
+      f.role === "license" ? { ...f, sha256: "0".repeat(64) } : f,
+    );
+    expect(cacheIdentity({ ...base, files: relicensed })).toBe(cacheIdentity(base));
+    // Order of the manifest does not matter.
+    expect(cacheIdentity({ ...base, files: [...RERANK03_MODEL.files].reverse() })).toBe(
+      cacheIdentity(base),
+    );
+  });
+
+  const withSha = (name: string) =>
+    RERANK03_MODEL.files.map((f) => (f.name === name ? { ...f, sha256: "f".repeat(64) } : f));
+  const seeded = (identity: string) => {
+    const dir = tempDir();
+    const cache = new EmbedCache(dir, identity, DIM);
+    cache.load();
+    cache.set("read: Read a file.", vec(1));
+    cache.flush();
+    return dir;
+  };
+  const base = () => cacheIdentity({ files: RERANK03_MODEL.files, docMaxLength: 192 });
+
+  it.each([
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+  ])("changing ONLY the %s sha (model sha unchanged) discards the cache and recomputes everything", async (name) => {
+    const dir = seeded(base());
+    const changed = cacheIdentity({ files: withSha(name), docMaxLength: 192 });
+    expect(changed).not.toBe(base());
+    const cache = new EmbedCache(dir, changed, DIM);
+    expect(cache.load()).toMatchObject({ entries: 0, discarded: "identity" });
+    expect(cache.get("read: Read a file.")).toBeUndefined();
+    // The model process recomputes every doc under the new identity.
+    const w = worker(dir, base());
+    await w.send({ type: "load", dir: "/models", cacheDir: dir });
+    await w.send({ type: "warm", docs: CATALOG });
+    const next = worker(dir, changed);
+    expect(await next.send({ type: "load", dir: "/models", cacheDir: dir })).toMatchObject({
+      cachedDocs: 0,
+    });
+    await next.send({ type: "warm", docs: CATALOG });
+    expect(next.docsEmbedded()).toHaveLength(CATALOG.length);
+  });
+
+  it("changing ONLY docMaxLength discards the cache", () => {
+    const dir = seeded(base());
+    const changed = cacheIdentity({ files: RERANK03_MODEL.files, docMaxLength: 256 });
+    expect(changed).not.toBe(base());
+    const cache = new EmbedCache(dir, changed, DIM);
+    expect(cache.load()).toMatchObject({ entries: 0, discarded: "identity" });
+  });
+
+  it("changing ONLY the model.onnx sha discards the cache", () => {
+    const dir = seeded(base());
+    const changed = cacheIdentity({ files: withSha("model.onnx"), docMaxLength: 192 });
+    expect(new EmbedCache(dir, changed, DIM).load()).toMatchObject({
+      entries: 0,
+      discarded: "identity",
+    });
   });
 
   it("survives a restart: written atomically, read back bit-exact, no tmp left behind", () => {
@@ -64,7 +136,7 @@ describe("EmbedCache", () => {
     a.set("read: Read a file.", vec(1));
     a.flush();
     const b = new EmbedCache(dir, MODEL_B, DIM);
-    expect(b.load()).toMatchObject({ entries: 0, discarded: "model" });
+    expect(b.load()).toMatchObject({ entries: 0, discarded: "identity" });
     expect(b.get("read: Read a file.")).toBeUndefined();
     expect(existsSync(join(dir, EMBED_CACHE_FILE))).toBe(false);
   });
@@ -87,7 +159,7 @@ describe("EmbedCache", () => {
     ["truncated", "TRUNCATE", "corrupt"],
     [
       "wrong shape",
-      JSON.stringify({ version: 1, modelSha: MODEL_A, dim: DIM, entries: 3 }),
+      JSON.stringify({ version: 2, identity: MODEL_A, dim: DIM, entries: 3 }),
       "corrupt",
     ],
     ["wrong dimension", "DIM8", "dimension"],
@@ -106,7 +178,7 @@ describe("EmbedCache", () => {
         : content === "DIM8"
           ? good.replace(`"dim":${DIM}`, '"dim":8')
           : content === "V0"
-            ? good.replace('"version":1', '"version":0')
+            ? good.replace('"version":2', '"version":1')
             : content;
     writeFileSync(path, body);
     const b = new EmbedCache(dir, MODEL_A, DIM);
@@ -162,7 +234,7 @@ describe("EmbedCache", () => {
 });
 
 /** The model process with a counting fake embedder: what actually gets recomputed. */
-function worker(_cacheDir: string, modelSha = MODEL_A) {
+function worker(_cacheDir: string, identity = MODEL_A) {
   const embedded: string[] = [];
   const replies: WorkerToMain[] = [];
   const embedder: LocalEmbedder = {
@@ -176,7 +248,7 @@ function worker(_cacheDir: string, modelSha = MODEL_A) {
   };
   const handle = createWorkerHandler((reply) => replies.push(reply), {
     loadEmbedder: async () => embedder,
-    modelSha,
+    cacheIdentity: identity,
   });
   let id = 0;
   const send = async (message: Record<string, unknown>) => {
