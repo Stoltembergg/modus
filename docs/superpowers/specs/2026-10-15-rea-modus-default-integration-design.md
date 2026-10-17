@@ -119,3 +119,7 @@ Automated tests must not require npm network access or real analysis engines; us
 - Pinned package used by this design: `rea-agents@6.5.0` (MIT; Node `^22.19.0 || ^24.11.0 || >=26.0.0`).
 - Modus MCP implementation and permission path: `apps/desktop/src/main/mcp/mcp-config.ts`, `apps/desktop/src/main/mcp/mcp-service.ts`, `apps/desktop/src/main/agent/tools/registry.ts`, and `apps/desktop/src/main/agent/tools/tool-context.ts`.
 - Modus Pi session assembly/lifecycle: `apps/desktop/src/main/agent/pi-sdk-runtime.ts`.
+
+## Update 2026-10-17: locked install replaces `npx -y`
+
+Post-merge review of #249 found that `npx -y rea-agents@6.5.0 mcp` left the transitive tree unpinned and ran install scripts. The supervisor now installs `crates/modus-rea-process-supervisor/rea-runtime/package-lock.json` (embedded in the binary) with `npm ci --ignore-scripts` into `<userData>/rea/runtime/` and runs `node …/rea-agents/scripts/rea.mjs mcp` directly. Prerequisites check `node` and `npm`; `npx` is no longer used. The approval card states that REA runs npm code with the user's permissions and is not a sandbox. Frida's install script stays off, so REA's Frida tools report the provider as unavailable. Details and the bump procedure: `crates/modus-rea-process-supervisor/rea-runtime/README.md`.

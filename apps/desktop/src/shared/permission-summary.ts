@@ -74,9 +74,25 @@ export function editDiff(input: Record<string, unknown>): string {
     .join("\n");
 }
 
+/**
+ * Shown on every REA approval card. REA is third-party code from npm that runs as a local
+ * process with the user's own permissions; the per-session worker is not a sandbox.
+ */
+export const REA_APPROVAL_NOTICE =
+  "REA runs rea-agents code from npm (downloaded on first use) on this computer with your permissions. It is not a sandbox.";
+
 export function describeToolCall(toolName: string, rawInput: unknown): ToolCallDescription {
   const input = record(rawInput);
   if (toolName === "browser_cdp") return describeCdp(input);
+  if (toolName === "rea_tools" || toolName === "rea_call") {
+    const operation = toolName === "rea_call" ? str(input.operation) : undefined;
+    const action = operation
+      ? `Run REA operation ${operation}.`
+      : toolName === "rea_call"
+        ? "Run an REA operation."
+        : "List REA operations.";
+    return { summary: `${action} ${REA_APPROVAL_NOTICE}`, details: JSON.stringify(input, null, 2) };
+  }
   if (toolName === "browser_tabs") {
     const action = str(input.action);
     if (action === "new")
