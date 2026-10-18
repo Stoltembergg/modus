@@ -13,6 +13,7 @@ import type {
 } from "../../../../shared/contracts";
 import { ContentTransition } from "../../components/ui/ContentTransition";
 import { cn } from "../../lib/cn";
+import { motionOffset, motionTransition, tween } from "../../lib/motion";
 import { useSettingsText } from "../../lib/settingsText";
 import { AccountSettingsPanel } from "./sections/account";
 import { AppearanceSettingsPanel } from "./sections/appearance";
@@ -503,12 +504,12 @@ export function SettingsPanel({
 
   return (
     <m.div
-      animate={isClosing ? { opacity: 0, y: -3 } : { opacity: 1, y: 0 }}
+      animate={isClosing ? { opacity: 0, y: motionOffset(-3, reduceMotion) } : { opacity: 1, y: 0 }}
       className={cn(
         "flex min-h-0 flex-1 overflow-hidden",
         navContainer === undefined && "surface-app",
       )}
-      initial={reduceMotion ? false : { opacity: 0, y: 4 }}
+      initial={{ opacity: 0, y: motionOffset(4, reduceMotion) }}
       aria-hidden={isClosing}
       inert={isClosing}
       onAnimationComplete={() => {
@@ -517,7 +518,7 @@ export function SettingsPanel({
         }
       }}
       style={{ pointerEvents: isClosing ? "none" : "auto" }}
-      transition={{ duration: reduceMotion ? 0 : 0.14, ease: [0.22, 1, 0.36, 1] }}
+      transition={motionTransition(tween("base"), reduceMotion)}
     >
       {navContainer
         ? createPortal(

@@ -23,11 +23,12 @@ import type {
 import { EmptyState } from "../../../components/ui/Panel";
 import { Tooltip } from "../../../components/ui/Tooltip";
 import { WorkingText } from "../../../components/ui/WorkingText";
+import { tween } from "../../../lib/motion";
 import { useSettingsText } from "../../../lib/settingsText";
 import { CustomProviderForm } from "../CustomProviderForm";
 import { DefaultModelSetting } from "../DefaultModelSetting";
 import { ProviderLogo } from "../ProviderLogo";
-import { ReadOnlyPill, SettingsPageHeader } from "../settings-layout";
+import { SettingsPageHeader } from "../settings-layout";
 import {
   normalizeSearchValue,
   ProviderCatalogRow,
@@ -147,7 +148,7 @@ export function ModelProviderSettingsPanel({
               </button>
             </Tooltip>
             <button
-              className="flex h-8 items-center gap-1.5 rounded-md bg-fg px-3 text-sm text-canvas transition-colors hover:bg-white"
+              className="flex h-8 items-center gap-1.5 rounded-md bg-accent px-3 text-sm text-on-accent transition-colors hover:bg-accent/90"
               onClick={onCustomOpen}
               type="button"
             >
@@ -176,7 +177,7 @@ export function ModelProviderSettingsPanel({
             exit={{ opacity: 0, y: -4 }}
             initial={{ opacity: 0, y: -4 }}
             key="settings-error"
-            transition={{ duration: 0.14, ease: "easeOut" }}
+            transition={tween("base")}
           >
             {error}
           </m.div>
@@ -269,16 +270,10 @@ function ProviderCatalog({
 
   return (
     <section className="min-w-0">
-      <div className="mb-3 flex items-end justify-between gap-4">
-        <div className="min-w-0">
-          <h3 className="text-md font-normal text-fg">{t("settings.providers.catalogTitle")}</h3>
-          <p className="mt-1 text-xs text-fg-muted">{t("settings.providers.catalogDescription")}</p>
-        </div>
-        <ReadOnlyPill>{t.plural("settings.providers.countShown", visibleCount)}</ReadOnlyPill>
-      </div>
+      <h3 className="mb-3 text-sm font-medium text-fg">{t("settings.providers.catalogTitle")}</h3>
 
-      <div className="overflow-hidden rounded-lg border border-hairline-soft bg-panel">
-        <div className="border-hairline-soft border-b p-3">
+      <div className="overflow-hidden settings-group">
+        <div className="p-3 pb-1">
           <SearchField
             ariaLabel={t("settings.providers.searchProviders")}
             onChange={onQueryChange}
@@ -351,9 +346,9 @@ function ProviderConfigDialogShell({
       open={open}
     >
       <Dialog.Portal>
-        <Dialog.Backdrop className="dialog-scrim fixed inset-0 z-50 transition-opacity duration-150 motion-reduce:transition-none data-ending-style:opacity-0 data-starting-style:opacity-0" />
+        <Dialog.Backdrop className="dialog-scrim fixed inset-0 z-50 transition-opacity duration-(--motion-duration-base) motion-reduce:transition-reduced-fade data-ending-style:opacity-0 data-starting-style:opacity-0" />
         <Dialog.Viewport className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden px-6 py-6">
-          <Dialog.Popup className="popup-chrome flex h-[min(820px,calc(100vh-48px))] w-full max-w-[760px] flex-col overflow-hidden outline-none transition-[opacity,transform] duration-150 motion-reduce:transition-none data-ending-style:translate-y-2 data-ending-style:opacity-0 data-starting-style:translate-y-2 data-starting-style:opacity-0">
+          <Dialog.Popup className="popup-chrome flex h-[min(820px,calc(100vh-48px))] w-full max-w-[760px] flex-col overflow-hidden outline-none transition-[opacity,transform] duration-(--motion-duration-base) motion-reduce:transition-reduced-fade data-ending-style:translate-y-2 data-ending-style:opacity-0 data-starting-style:translate-y-2 data-starting-style:opacity-0">
             <div className="flex h-[52px] items-center justify-between gap-3 px-5">
               <Dialog.Close
                 aria-label={t("settings.providers.backFrom", { title })}
@@ -581,7 +576,7 @@ function ProviderAuthDialog({
         {operation.status === "browser" || operation.status === "device-code" ? (
           <div className="mt-6 space-y-3">
             {operation.userCode ? (
-              <div className="rounded-md border border-hairline-soft bg-panel px-3 py-3">
+              <div className="rounded-md bg-panel px-3 py-3">
                 <div className="text-2xs text-fg-faint">
                   {t("settings.providers.verificationCode")}
                 </div>
@@ -589,10 +584,10 @@ function ProviderAuthDialog({
               </div>
             ) : null}
             {operation.url ? (
-              <div className="rounded-md border border-hairline-soft bg-panel px-3 py-3">
+              <div className="rounded-md bg-panel px-3 py-3">
                 <div className="break-all font-mono text-xs text-fg-muted">{operation.url}</div>
                 <button
-                  className="mt-3 flex h-7 items-center gap-1.5 rounded-md border border-hairline bg-canvas px-2.5 text-xs text-fg-muted transition-colors hover:bg-hover hover:text-fg"
+                  className="mt-3 flex h-7 items-center gap-1.5 rounded-md bg-chip px-2.5 text-xs text-fg-muted transition-colors hover:bg-chip-strong hover:text-fg"
                   onClick={() => copy(operation.url)}
                   type="button"
                 >
@@ -618,14 +613,14 @@ function ProviderAuthDialog({
             }}
           >
             <input
-              className="h-9 min-w-0 flex-1 rounded-md border border-hairline bg-panel px-3 text-sm text-fg outline-none placeholder:text-fg-faint focus:border-hairline-strong"
+              className="h-9 min-w-0 flex-1 rounded-md border border-hairline bg-panel px-3 text-sm text-fg outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
               onChange={(event) => setValue(event.target.value)}
               placeholder={operation.placeholder}
               type="text"
               value={value}
             />
             <button
-              className="h-9 rounded-md bg-fg px-3 text-sm text-canvas transition-colors hover:bg-white disabled:opacity-50"
+              className="h-9 rounded-md bg-accent px-3 text-sm text-on-accent transition-colors hover:bg-accent/90 disabled:opacity-50"
               disabled={busy || !canSubmit}
               type="submit"
             >

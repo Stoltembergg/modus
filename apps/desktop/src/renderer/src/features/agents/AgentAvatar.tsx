@@ -47,6 +47,7 @@ export function AgentAvatar({
       data-color={color}
       data-face={face}
       data-paused={presentation.paused ? "true" : undefined}
+      data-seed={seed}
       data-shape={shape}
       data-size={size}
       data-state={state}

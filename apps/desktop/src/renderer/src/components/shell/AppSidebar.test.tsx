@@ -149,15 +149,15 @@ describe("AppSidebar", () => {
   it("keeps Settings hover-expanded only while the pointer is over an unpinned sidebar", () => {
     renderSidebar({ active: "settings", pinned: false });
     const nav = screen.getByRole("navigation");
-    const sidebar = document.querySelector(".app-animated-sidebar");
+    const sidebar = document.querySelector(".nav-rail");
 
-    expect(sidebar?.getAttribute("data-open")).toBe("false");
+    expect(sidebar?.getAttribute("data-expanded")).toBe("false");
     fireEvent.mouseEnter(nav);
     expect(screen.getByTestId("context-sidebar")).toBeTruthy();
     fireEvent.mouseLeave(nav);
 
     expect(screen.queryByTestId("context-sidebar")).toBeNull();
-    expect(sidebar?.getAttribute("data-open")).toBe("false");
+    expect(sidebar?.getAttribute("data-expanded")).toBe("false");
   });
 
   it("keeps all destinations and actions as links", () => {

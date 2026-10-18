@@ -33,6 +33,7 @@ const AGENT: AgentInfo = {
   avatarColor: "green",
   avatarFace: "happy",
   avatarShape: "blob",
+  avatarSeed: null,
   createdAt: "now",
   updatedAt: "now",
 };

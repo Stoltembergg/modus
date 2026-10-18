@@ -121,7 +121,7 @@ describe("FailureBlacklistView", () => {
     );
 
     expect(markup).toContain("Soft discourage only");
-    expect(markup).toContain("never permanently block");
+    expect(markup).not.toContain("never permanently block");
     expect(markup).toContain("3 active entries");
     expect(markup).toContain("blind_retry");
     expect(markup).toContain("Hypothesis · same_check_failed");

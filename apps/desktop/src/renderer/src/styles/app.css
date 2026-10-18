@@ -197,6 +197,11 @@
   --shadow-popup: 0 1px 2px rgba(0, 0, 0, 0.28), 0 8px 24px -6px rgba(0, 0, 0, 0.55);
 
   --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Tailwind ease-* utilities for the motion tokens (values mirror
+     --motion-ease-* below and lib/motion.ts MOTION_EASE). */
+  --ease-standard: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
 
   /* Update toast offer: the ring around its primary button breathes in opacity only
      (see .update-breathe-ring). ~2.5 s per breath, eased in and out. */
@@ -286,10 +291,26 @@
   --radius-surface: var(--radius-lg);
   --radius-overlay: var(--radius-lg);
   --radius-composer: 14px;
-  --motion-fast: 120ms;
-  --motion-ui: 160ms;
-  --motion-overlay: 180ms;
-  --ease-ui: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Motion tokens: the same scale as lib/motion.ts (MOTION_DURATION /
+     MOTION_EASE); lib/motion.test.ts fails when the two drift apart. */
+  --motion-duration-instant: 80ms;
+  --motion-duration-fast: 120ms;
+  --motion-duration-base: 160ms;
+  --motion-duration-slow: 200ms;
+  --motion-duration-emphasized: 280ms;
+  /* Reduced motion: movement becomes a short opacity fade of this length. */
+  --motion-duration-reduced: 120ms;
+  --motion-ease-standard: cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-ease-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --motion-ease-gentle: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --motion-ease-in-out: cubic-bezier(0.42, 0, 0.58, 1);
+  --motion-ease-linear: linear;
+  /* Older names, kept as aliases of the scale above. */
+  --motion-fast: var(--motion-duration-fast);
+  --motion-ui: var(--motion-duration-base);
+  --motion-overlay: var(--motion-duration-slow);
+  --ease-ui: var(--motion-ease-standard);
   /* Glass tokens (D1). Opacity tiers of the native-glass surfaces, as color-mix
      percentages; one set for every theme (no per-theme override), so the
      reduced-transparency fallback at the end of this file always wins.
@@ -453,18 +474,23 @@
   background-color: var(--color-active);
   color: var(--text-primary);
 }
-/* Animated app sidebar (components/ui/sidebar.tsx): one column, 60px rail <-> 300px. */
-.app-animated-sidebar {
+/* Navigation rail (components/ui/NavRail.tsx): 60px icons, 300px expanded. */
+.nav-rail {
   box-sizing: border-box;
   overflow: hidden;
   background-color: var(--surface-sidebar);
 }
-.app-sidebar-slot[data-pinned="false"] .app-animated-sidebar[data-open="true"] {
-  /* Hover overlay floats over main: keep it opaque even when glass clears panels. */
-  background-color: var(--color-panel);
-  box-shadow: 8px 0 24px -12px rgb(0 0 0 / 0.35);
+/* Expanded over main (unpinned hover, or the narrow-window sheet): frosted glass
+   so the content beneath reads as depth, not clutter. The alpha is the overlay
+   tier, whose text contrast is pinned by glassTokens.test.ts; reduced
+   transparency / more contrast / no backdrop-filter zero it back to solid. */
+.nav-rail[data-overlay="true"] {
+  background-color: color-mix(in srgb, var(--color-panel) var(--glass-alpha-overlay), transparent);
+  -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
+  box-shadow: 10px 0 28px -16px rgb(0 0 0 / 0.4);
 }
-.app-sidebar-link {
+.nav-rail-item {
   display: flex;
   width: 100%;
   min-width: 0;
@@ -485,38 +511,34 @@
     background-color var(--motion-ui) var(--ease-ui),
     color var(--motion-ui) var(--ease-ui);
 }
-.app-sidebar-link:hover:not(:disabled) {
+.nav-rail-item:hover:not(:disabled) {
   background-color: var(--color-hover);
   color: var(--text-primary);
 }
-.app-sidebar-link:focus-visible,
-.app-sidebar-icon-button:focus-visible {
-  outline: 2px solid var(--color-focus-ring-soft);
-  outline-offset: 1px;
-}
-.app-sidebar-link:disabled {
+.nav-rail-item:disabled {
   cursor: default;
   opacity: 0.5;
 }
-.app-sidebar-link[data-active="true"] {
-  background-color: var(--color-active);
-  color: var(--text-primary);
+.nav-rail-item[data-current="true"] {
+  color: var(--accent-text, var(--color-accent));
 }
-.app-sidebar-link-icon {
+.nav-rail-item:focus-visible,
+.nav-rail-icon-button:focus-visible {
+  outline: 2px solid var(--color-focus-ring-soft);
+  outline-offset: 1px;
+}
+.nav-rail-item-icon {
   display: grid;
   width: 20px;
   flex-shrink: 0;
   place-items: center;
 }
-.app-sidebar-link-label {
+.nav-rail-item-label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  transition: transform var(--motion-ui) var(--ease-ui);
 }
-.app-sidebar-link:hover .app-sidebar-link-label {
-  transform: translateX(2px);
-}
-.app-sidebar-icon-button {
+.nav-rail-icon-button {
   display: grid;
   width: 26px;
   height: 26px;
@@ -526,10 +548,23 @@
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
+  transition: color var(--motion-ui) var(--ease-ui);
 }
-.app-sidebar-icon-button:hover {
-  background-color: var(--color-hover);
+.nav-rail-icon-button:hover {
   color: var(--text-primary);
+}
+/* Sidebar row actions (components/Sidebar.tsx) fade in when hover / focus
+   reveals them; opacity only, so it reads the same with reduced motion. */
+.sidebar-row-actions {
+  animation: sidebar-row-actions-in var(--motion-fast) var(--ease-ui);
+}
+@keyframes sidebar-row-actions-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 .menu-bar {
   height: var(--space-native-titlebar);
@@ -594,11 +629,7 @@
     background-color: transparent;
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .modus-line-flash {
-    animation: none;
-  }
-}
+/* No reduced-motion override: the flash is a background-colour fade, nothing moves. */
 .group-composer-toolbar {
   background-color: color-mix(in srgb, var(--surface-raised) 76%, transparent);
 }
@@ -606,7 +637,8 @@
   display: grid;
   grid-template-rows: 1fr;
   margin-bottom: 0.75rem;
-  animation: group-activity-checklist-reveal 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: group-activity-checklist-reveal var(--motion-duration-emphasized)
+    var(--motion-ease-standard) both;
   transform-origin: top;
 }
 @keyframes group-activity-checklist-reveal {
@@ -624,14 +656,13 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
+  /* Rows and offset snap; the checklist still fades in. */
   .group-activity-checklist-enter {
-    animation: none;
-    opacity: 1;
-    transform: none;
+    animation: motion-reduced-fade-in var(--motion-duration-reduced) var(--motion-ease-linear) both;
   }
 }
 .group-message-card-enter {
-  animation: group-message-card-enter 210ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: group-message-card-enter var(--motion-duration-slow) var(--motion-ease-standard) both;
 }
 @keyframes group-message-card-enter {
   from {
@@ -645,9 +676,7 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .group-message-card-enter {
-    animation: none;
-    opacity: 1;
-    transform: none;
+    animation: motion-reduced-fade-in var(--motion-duration-reduced) var(--motion-ease-linear) both;
   }
 }
 .group-empty-beams {
@@ -715,8 +744,17 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
+  /* The beams stay in place and breathe in opacity on the same slow cycle. */
   .group-empty-beam {
-    animation: none;
+    animation-name: group-empty-beam-breathe;
+  }
+}
+@keyframes group-empty-beam-breathe {
+  from {
+    opacity: 0.18;
+  }
+  to {
+    opacity: 0.34;
   }
 }
 .surface-glass {
@@ -1461,13 +1499,18 @@ body {
     opacity: 0;
   }
   @media (prefers-reduced-motion: reduce) {
+    /* Label swaps cross-fade in place; the moving shimmer becomes a highlight
+       that breathes in opacity. */
     .t-think-text {
-      transition: none !important;
+      transition: opacity var(--motion-duration-reduced) var(--motion-ease-linear) !important;
       transform: none !important;
       filter: none !important;
     }
     .t-think-text::before {
-      display: none !important;
+      background-image: none;
+      -webkit-text-fill-color: var(--think-highlight);
+      color: var(--think-highlight);
+      animation: motion-reduced-glow var(--think-shimmer, 2s) var(--motion-ease-in-out) infinite;
     }
   }
 
@@ -1503,7 +1546,7 @@ body {
 
   /* Body mounts after the sheet animation, so it fades in on its own. */
   .subagent-preview-body {
-    animation: subagent-preview-body-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation: subagent-preview-body-in var(--motion-duration-slow) var(--motion-ease-standard) both;
   }
   @keyframes subagent-preview-body-in {
     from {
@@ -1537,16 +1580,16 @@ body {
     background: linear-gradient(90deg, var(--effort-ink-mid), var(--effort-ink));
     opacity: var(--effort-opacity);
     transition:
-      width 210ms var(--ease-out-quint),
-      opacity 180ms var(--ease-out-quint),
-      background 220ms var(--ease-out-quint);
+      width var(--motion-duration-slow) var(--motion-ease-standard),
+      opacity var(--motion-duration-slow) var(--motion-ease-standard),
+      background var(--motion-duration-slow) var(--motion-ease-standard);
   }
 
   .effort-energy-stop {
     z-index: 2;
     background: color-mix(in srgb, var(--effort-ink) 30%, transparent);
     opacity: 1;
-    transition: opacity 120ms var(--ease-out-quint);
+    transition: opacity var(--motion-duration-fast) var(--motion-ease-standard);
   }
 
   .effort-energy-stop[data-unfilled="true"] {
@@ -1563,10 +1606,10 @@ body {
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--effort-ink) 45%, transparent);
     scale: 1;
     transition:
-      inset-inline-start 210ms var(--ease-out-quint),
-      scale 160ms var(--ease-out-quint),
-      background-color 180ms var(--ease-out-quint),
-      box-shadow 180ms var(--ease-out-quint);
+      inset-inline-start var(--motion-duration-slow) var(--motion-ease-standard),
+      scale var(--motion-duration-base) var(--motion-ease-standard),
+      background-color var(--motion-duration-slow) var(--motion-ease-standard),
+      box-shadow var(--motion-duration-slow) var(--motion-ease-standard);
   }
 
   .effort-energy-control:hover:not(:active) .effort-energy-thumb {
@@ -1703,6 +1746,10 @@ body {
     -webkit-text-fill-color: transparent;
     animation: working-text-sweep 2.4s ease-in-out infinite;
   }
+  /* Reduced motion (WorkingText picks it): the same activity, in opacity only. */
+  .working-text--pulse {
+    animation: motion-reduced-pulse 2.4s var(--motion-ease-in-out) infinite;
+  }
   @keyframes working-text-sweep {
     0% {
       background-position: 100% 0;
@@ -1769,8 +1816,8 @@ body {
     stroke: var(--color-fg-muted);
     stroke-width: 1.5;
     transition:
-      fill 120ms ease-out,
-      stroke 120ms ease-out;
+      fill var(--motion-duration-fast) var(--motion-ease-standard),
+      stroke var(--motion-duration-fast) var(--motion-ease-standard);
   }
   .task-check[data-state="checked"] .task-check__box {
     fill: var(--color-accent);
@@ -1784,11 +1831,8 @@ body {
     stroke-dasharray: 1;
     stroke-dashoffset: 0;
   }
-  .task-check[data-pop] {
-    animation: task-check-pop 320ms ease-out;
-  }
   .task-check[data-pop] .task-check__mark {
-    animation: task-check-draw 240ms ease-out 60ms both;
+    animation: task-check-draw var(--motion-duration-slow) var(--motion-ease-standard) 60ms both;
   }
   @keyframes task-check-pop {
     0% {
@@ -1858,7 +1902,7 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    transition: opacity 300ms ease-out;
+    transition: opacity var(--motion-duration-emphasized) var(--motion-ease-standard);
   }
   .work-status-line__label[data-visible="false"] {
     opacity: 0;
@@ -1867,7 +1911,6 @@ body {
   .work-status-line__chevron {
     flex-shrink: 0;
     opacity: 0.7;
-    transition: transform 160ms ease-out;
   }
   .work-status-line__chevron[data-open] {
     transform: rotate(90deg);
@@ -1880,18 +1923,27 @@ body {
     overflow-wrap: anywhere;
   }
 
+  /* Movement-only parts of these indicators run only without reduced motion. */
+  @media (prefers-reduced-motion: no-preference) {
+    .task-check[data-pop] {
+      animation: task-check-pop var(--motion-duration-emphasized) var(--motion-ease-standard);
+    }
+    .work-status-line__chevron {
+      transition: transform var(--motion-duration-base) var(--motion-ease-standard);
+    }
+  }
   @media (prefers-reduced-motion: reduce) {
+    /* Activity indicators keep signalling activity, in opacity only. */
     .working-text--sweep {
-      animation: none;
       background-image: none;
       -webkit-text-fill-color: currentColor;
+      animation: motion-reduced-pulse 2.4s var(--motion-ease-in-out) infinite;
     }
     .streaming-caret {
-      animation: none;
-      opacity: 0.55;
+      animation: motion-reduced-pulse 1.6s var(--motion-ease-in-out) infinite;
     }
     .composer-running-sweep {
-      animation: none;
+      animation: motion-reduced-pulse 2.4s var(--motion-ease-in-out) infinite;
       background-size: 100% 100%;
       background-image: linear-gradient(
         90deg,
@@ -1900,34 +1952,39 @@ body {
         transparent 100%
       );
     }
-    .task-check[data-pop],
-    .task-check[data-pop] .task-check__mark,
-    .work-status-line__glyph[data-working] {
-      animation: none;
+    /* The check mark fades in instead of drawing; the box colour still fades. */
+    .task-check[data-pop] .task-check__mark {
+      animation: motion-reduced-fade-in var(--motion-duration-reduced) var(--motion-ease-linear)
+        both;
     }
-    .task-check__box,
-    .work-status-line__label,
-    .work-status-line__chevron {
-      transition: none;
+    .work-status-line__label {
+      transition: opacity var(--motion-duration-reduced) var(--motion-ease-linear);
     }
   }
 }
 
+/* Streamed Markdown keeps its 80ms token fade under reduced motion (opacity only). */
 @media (prefers-reduced-motion: reduce) {
-  .modus-markdown [data-sd-animate] {
-    animation: none;
-  }
+  /* Max-effort sparks stop travelling and breathe in place instead. */
   .effort-energy[data-maximum="true"] .effort-energy-fill::before,
   .effort-energy[data-maximum="true"] .effort-energy-fill::after {
-    opacity: 0.6;
     transform: none;
-    animation: none;
+    animation: motion-reduced-glow 1.6s var(--motion-ease-in-out) infinite;
   }
 
-  .effort-energy-fill,
-  .effort-energy-stop,
+  /* Width, position and scale snap; opacity and colour still fade. */
+  .effort-energy-fill {
+    transition:
+      opacity var(--motion-duration-reduced) var(--motion-ease-linear),
+      background var(--motion-duration-reduced) var(--motion-ease-linear);
+  }
+  .effort-energy-stop {
+    transition: opacity var(--motion-duration-reduced) var(--motion-ease-linear);
+  }
   .effort-energy-thumb {
-    transition: none;
+    transition:
+      background-color var(--motion-duration-reduced) var(--motion-ease-linear),
+      box-shadow var(--motion-duration-reduced) var(--motion-ease-linear);
   }
 }
 
@@ -2378,7 +2435,7 @@ body {
   > div:has(> [data-streamdown="mermaid-block-actions"]) {
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.15s ease;
+  transition: opacity var(--motion-duration-base) var(--motion-ease-gentle);
 }
 
 .modus-markdown [data-streamdown="table-wrapper"]:is(:hover, :focus-within) > div:not(:has(table)),
@@ -2408,7 +2465,7 @@ body {
 /* ── Global button resets inside markdown ───────────────────────────── */
 .modus-markdown :where(button) {
   color: var(--markdown-fg-subtle);
-  transition: color 0.12s ease;
+  transition: color var(--motion-duration-fast) var(--motion-ease-gentle);
 }
 
 .modus-markdown :where(button:hover) {
@@ -2915,7 +2972,7 @@ body
 }
 
 .inspector-tab-panel {
-  transition: opacity 140ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: opacity var(--motion-duration-base) var(--motion-ease-standard);
 }
 .inspector-tab-panel[data-starting-style],
 .inspector-tab-panel[data-ending-style] {
@@ -2923,11 +2980,7 @@ body
 }
 @media (prefers-reduced-motion: reduce) {
   .inspector-tab-panel {
-    transition: none;
-  }
-  .inspector-tab-panel[data-starting-style],
-  .inspector-tab-panel[data-ending-style] {
-    opacity: 1;
+    transition: opacity var(--motion-duration-reduced) var(--motion-ease-linear);
   }
 }
 
@@ -2954,6 +3007,86 @@ body
 }
 
 /*
+ * Reduced motion (lib/motion.ts): movement is replaced by a short opacity fade,
+ * never removed. Shared keyframes for CSS-driven sites, plus a Tailwind
+ * utility for `motion-reduce:transition-reduced-fade` on transitioned controls.
+ */
+@keyframes motion-reduced-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+/* Activity indicators under reduced motion: breathe in opacity, never move. */
+@keyframes motion-reduced-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+@keyframes motion-reduced-glow {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+@utility transition-reduced-fade {
+  transition-property: opacity;
+  transition-duration: var(--motion-duration-reduced);
+  transition-timing-function: var(--motion-ease-linear);
+}
+
+/*
+ * Disclosure chevrons (expand/collapse): `data-open` turns the chevron 90deg.
+ * Duration/ease come from the site's Tailwind `duration-*` / `ease-*` utilities
+ * (same fallbacks as Tailwind's `transition-transform`). Under reduced motion
+ * the angle snaps and each toggle is a short opacity fade instead: the two
+ * states use different keyframe names, so switching restarts the fade.
+ * `--tint` also fades the chevron's colour (hover tints).
+ */
+@layer components {
+  .disclosure-chevron {
+    transition-property: rotate;
+    transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
+    transition-duration: var(--tw-duration, var(--default-transition-duration));
+  }
+  .disclosure-chevron--tint {
+    transition-property: color, rotate;
+  }
+  .disclosure-chevron[data-open] {
+    rotate: 90deg;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .disclosure-chevron {
+      transition-property: opacity;
+      animation: disclosure-chevron-fade-closed var(--motion-duration-reduced)
+        var(--motion-ease-linear);
+    }
+    .disclosure-chevron--tint {
+      transition-property: color, opacity;
+    }
+    .disclosure-chevron[data-open] {
+      animation-name: disclosure-chevron-fade-open;
+    }
+  }
+}
+@keyframes disclosure-chevron-fade-open {
+  from {
+    opacity: 0.35;
+  }
+}
+@keyframes disclosure-chevron-fade-closed {
+  from {
+    opacity: 0.35;
+  }
+}
+
+/*
  * Floating-surface enter/exit (menus, popovers). Base UI stamps
  * data-starting-style / data-ending-style; we animate from a slightly smaller,
  * nudged-up state on the shared ease-out-quint. Kept to ~120ms so dense desktop
@@ -2962,8 +3095,8 @@ body
 .popup-motion {
   transform-origin: var(--transform-origin, center);
   transition:
-    opacity var(--motion-fast) var(--ease-ui),
-    transform var(--motion-fast) var(--ease-ui);
+    opacity var(--motion-duration-fast) var(--motion-ease-standard),
+    transform var(--motion-duration-fast) var(--motion-ease-standard);
 }
 .popup-motion[data-starting-style],
 .popup-motion[data-ending-style] {
@@ -2971,12 +3104,12 @@ body
   transform: scale(0.97) translateY(-2px);
 }
 @media (prefers-reduced-motion: reduce) {
+  /* Menus fade in place: no scale, no nudge. */
   .popup-motion {
-    transition: none;
+    transition: opacity var(--motion-duration-reduced) var(--motion-ease-linear);
   }
   .popup-motion[data-starting-style],
   .popup-motion[data-ending-style] {
-    opacity: 1;
     transform: none;
   }
 }
@@ -3043,6 +3176,58 @@ body
 }
 
 /*
+ * Visible prompt queue above the composer: one borderless surface on the
+ * composer's own glass tier (--surface-chat, solid unless native glass +
+ * Transparency "full"), rows separated by spacing only, purple accent on hover
+ * and keyboard focus. Text contrast >= 4.5:1 pinned by queuedPromptStrip.test.ts.
+ */
+.queued-prompt-strip {
+  border: 0;
+  border-radius: var(--radius-xl);
+  background: var(--surface-chat);
+  box-shadow: var(--menu-shadow);
+  color: var(--color-fg);
+}
+:root[data-native-glass="true"][data-transparency="full"] .queued-prompt-strip {
+  -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
+}
+.queued-prompt-item {
+  border-radius: var(--radius-lg);
+  transition: background-color var(--motion-duration-fast) var(--motion-ease-standard);
+}
+.queued-prompt-item:hover,
+.queued-prompt-item:focus-within {
+  background-color: color-mix(in srgb, var(--color-accent) 8%, transparent);
+}
+.queued-prompt-text {
+  color: var(--color-fg);
+}
+.queued-prompt-glyph,
+.queued-prompt-meta {
+  color: var(--color-fg-muted);
+}
+.queued-prompt-remove {
+  border-radius: var(--radius-md);
+  color: var(--color-fg-muted);
+  outline: none;
+  transition:
+    opacity var(--motion-duration-fast) var(--motion-ease-standard),
+    color var(--motion-duration-fast) var(--motion-ease-standard),
+    background-color var(--motion-duration-fast) var(--motion-ease-standard);
+}
+.queued-prompt-remove:hover {
+  color: var(--color-fg);
+  background-color: color-mix(in srgb, var(--color-accent) 14%, transparent);
+}
+.queued-prompt-remove:focus-visible {
+  opacity: 1;
+  color: var(--color-fg);
+  box-shadow: 0 0 0 2px var(--color-accent);
+}
+/* No reduced-motion override: only opacity and colour change here. */
+
+/*
  * Composer surface: one continuous rounded field, no border or divider, theme glass fill.
  * Solid fill unless native glass + Transparency "full".
  */
@@ -3052,11 +3237,39 @@ body
   background: var(--surface-chat);
   box-shadow: var(--menu-shadow);
   transition:
-    box-shadow 160ms ease-out,
-    background-color 160ms ease-out;
+    box-shadow var(--motion-duration-base) var(--motion-ease-standard),
+    background-color var(--motion-duration-base) var(--motion-ease-standard);
 }
 :root[data-native-glass="true"][data-transparency="full"] {
   --surface-chat: color-mix(in srgb, var(--color-elevated) var(--glass-alpha-chat), transparent);
+}
+/* Settings glass group (Gabriel 2026-10: minimal, no dividers). One borderless
+   surface per group of rows, a touch more transparent than the solid panel it
+   replaces, with the window blur behind it. Rows inside are separated by spacing.
+   Contrast: the group tints var(--color-surface) at --settings-group-alpha over the
+   settings content, which is opaque (canvas) unless native glass is on; there the
+   rule below swaps in --surface-chat, the tier whose text floor glassTokens and
+   tokensNew already pin; the solid fallback (--glass-filter: none) drops the blur.
+   settingsGlass.test.ts checks fg / fg-muted >= 4.5:1. */
+:root {
+  --settings-group-alpha: 72%;
+}
+.settings-group {
+  border-radius: var(--radius-lg);
+  background-color: color-mix(
+    in srgb,
+    var(--color-surface) var(--settings-group-alpha),
+    transparent
+  );
+  -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
+  transition: background-color var(--motion-duration-base) var(--motion-ease-standard);
+}
+.settings-row {
+  transition: background-color var(--motion-duration-fast) var(--motion-ease-standard);
+}
+:root[data-native-glass="true"][data-transparency="full"] .settings-content .settings-group {
+  background-color: var(--surface-chat);
 }
 /* Settings use the same light tint for lists and fields. Keep selected states,
    warnings and primary actions distinct; the token retains solid OS fallbacks. */
@@ -3083,10 +3296,25 @@ body
     var(--menu-shadow),
     0 0 0 4px color-mix(in srgb, var(--color-accent) 14%, transparent);
 }
-@media (prefers-reduced-motion: reduce) {
-  .composer-glass {
-    transition: none;
-  }
+/* No reduced-motion override: the focus ring and fill change colour, nothing moves. */
+
+/* Composer image chips: borderless glass thumbnails, a glass remove button
+   revealed on hover / keyboard focus. Radius from the shared scale. */
+.composer-image-thumb {
+  background-color: var(--color-chip);
+  box-shadow: var(--shadow-1);
+  transition: box-shadow var(--motion-duration-fast) var(--motion-ease-standard);
+}
+.composer-image-chip:hover .composer-image-thumb {
+  box-shadow:
+    var(--shadow-1),
+    0 0 0 1px color-mix(in srgb, var(--color-accent) 35%, transparent);
+}
+.composer-image-remove {
+  background-color: color-mix(in srgb, var(--color-elevated) 88%, transparent);
+  -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
+  box-shadow: var(--shadow-1);
 }
 
 /*

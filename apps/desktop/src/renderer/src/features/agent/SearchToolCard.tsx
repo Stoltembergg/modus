@@ -270,7 +270,8 @@ function FileRow({
             type="button"
           >
             <IconChevronRight
-              className={cn("transition-transform duration-150 ease-out", expanded && "rotate-90")}
+              className="disclosure-chevron duration-(--motion-duration-base) ease-standard"
+              data-open={expanded ? "" : undefined}
               size={13}
               stroke={1.7}
             />
@@ -423,10 +424,8 @@ export const SearchToolCard = memo(function SearchToolCard({
       <span className="shrink-0 font-medium">{label}</span>
       {expandable ? (
         <IconChevronRight
-          className={cn(
-            "shrink-0 text-fg-faint transition-transform duration-150 ease-out",
-            bodyOpen && "rotate-90",
-          )}
+          className="disclosure-chevron shrink-0 text-fg-faint duration-(--motion-duration-base) ease-standard"
+          data-open={bodyOpen ? "" : undefined}
           size={13}
           stroke={1.7}
         />

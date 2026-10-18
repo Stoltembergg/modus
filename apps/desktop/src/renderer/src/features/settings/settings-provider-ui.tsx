@@ -11,7 +11,7 @@ import {
   IconWorld,
   IconX,
 } from "@tabler/icons-react";
-import { AnimatePresence, m } from "motion/react";
+import { AnimatePresence, m, useReducedMotion } from "motion/react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import type {
   ModelProviderDetail,
@@ -28,6 +28,7 @@ import {
   selectedThinkingLabel,
   selectedThinkingOption,
 } from "../../lib/modelThinking";
+import { tween } from "../../lib/motion";
 import { type SettingsTextFn, settingsTextFor, useSettingsText } from "../../lib/settingsText";
 import { formatUiNumber, uiIntlLocale } from "../../lib/uiIntl";
 import { Field, parsePositiveInteger, SelectField, SwitchControl } from "./form-controls";
@@ -45,10 +46,7 @@ export function ProviderGroup({ children, title }: { children: ReactNode; title:
 
   return (
     <section className="mb-4 last:mb-0">
-      <div className="mb-2 flex items-center justify-between px-2">
-        <h4 className="text-xs font-normal text-fg-faint">{title}</h4>
-        <span className="font-mono text-2xs text-fg-faint">{items.length}</span>
-      </div>
+      <h4 className="mb-1.5 px-3 text-xs font-normal text-fg-muted">{title}</h4>
       <div className="grid gap-1">{items}</div>
     </section>
   );
@@ -76,21 +74,21 @@ export function ProviderRow({
   onClick(): void;
 }) {
   const t = useSettingsText();
+  const reduced = useReducedMotion() ?? false;
   const status = providerStatus(provider);
 
   return (
     <m.button
       aria-current={active ? "true" : undefined}
       className={cn(
-        "group grid min-h-[58px] w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-lg border px-3 text-left outline-none transition-colors",
-        active
-          ? "border-hairline-strong bg-active text-fg"
-          : "border-transparent text-fg-muted hover:border-hairline-soft hover:bg-hover hover:text-fg",
+        "group grid min-h-11 w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-md px-3 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus-ring/50",
+        active ? "bg-selected text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",
       )}
       layout
       onClick={onClick}
+      title={providerSummary(provider, t)}
       type="button"
-      whileTap={{ scale: 0.992 }}
+      {...(reduced ? {} : { whileTap: { scale: 0.992 } })}
     >
       <ProviderLogo framed={false} name={provider.name} provider={provider.id} size="sm" />
       <span className="min-w-0">
@@ -102,9 +100,6 @@ export function ProviderRow({
           {provider.id === "antigravity" ? (
             <UnofficialProviderMark>{t("settings.providerUi.unofficial")}</UnofficialProviderMark>
           ) : null}
-        </span>
-        <span className="mt-0.5 block truncate text-xs text-fg-muted">
-          {providerSummary(provider, t)}
         </span>
       </span>
       <span className="flex items-center gap-2">
@@ -179,7 +174,7 @@ export function ProviderDetail({
       className="flex min-w-0 flex-col"
       exit={{ opacity: 0, y: 8 }}
       initial={{ opacity: 0, y: 8 }}
-      transition={{ duration: 0.24, ease: "easeOut" }}
+      transition={tween("slow")}
     >
       <div className="pb-4">
         <div className="flex items-start justify-between gap-4">
@@ -248,7 +243,8 @@ export function ProviderDetail({
             </span>
           </span>
           <IconChevronRight
-            className={cn("shrink-0 text-fg-faint transition-transform", modelsOpen && "rotate-90")}
+            className="disclosure-chevron shrink-0 text-fg-faint"
+            data-open={modelsOpen ? "" : undefined}
             size={16}
             stroke={1.7}
           />
@@ -307,7 +303,7 @@ export function ProviderDetail({
               />
             </div>
 
-            <div className="mt-4 overflow-hidden rounded-lg border border-hairline-soft bg-panel">
+            <div className="mt-4 overflow-hidden settings-group">
               {filteredModels.length > 0 ? (
                 modelGroups.map((group) => (
                   <ModelGroupSection
@@ -391,7 +387,7 @@ export function ProviderCredentials({
           </button>
           {canDisconnect ? (
             <button
-              className="h-8 rounded-full bg-danger/10 px-3 text-xs text-danger transition-[background-color,transform] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] hover:bg-danger/15 active:scale-[0.97]"
+              className="h-8 rounded-full bg-danger/10 px-3 text-xs text-danger transition-[background-color,transform] duration-(--motion-duration-slow) ease-standard hover:bg-danger/15 active:scale-[0.97]"
               onClick={onDisconnectProvider}
               type="button"
             >
@@ -432,7 +428,7 @@ export function ProviderCredentials({
           </button>
           {canDisconnect ? (
             <button
-              className="h-7 rounded-full bg-danger/10 px-3 text-xs text-danger transition-[background-color,transform] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] hover:bg-danger/15 active:scale-[0.97]"
+              className="h-7 rounded-full bg-danger/10 px-3 text-xs text-danger transition-[background-color,transform] duration-(--motion-duration-slow) ease-standard hover:bg-danger/15 active:scale-[0.97]"
               onClick={onDisconnectProvider}
               type="button"
             >
@@ -489,12 +485,14 @@ export function ProviderCredentials({
           />
         </label>
         <button
-          className="flex h-9 min-w-[92px] items-center justify-center gap-1.5 rounded-md bg-fg px-3 text-sm text-canvas transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex h-9 min-w-[92px] items-center justify-center gap-1.5 rounded-md bg-accent px-3 text-sm text-on-accent transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
           disabled={busy || !canSubmit}
           type="submit"
         >
           {busy ? (
-            <WorkingText className="text-canvas">{t("settings.providerUi.connecting")}</WorkingText>
+            <WorkingText className="text-on-accent">
+              {t("settings.providerUi.connecting")}
+            </WorkingText>
           ) : detail.configured ? (
             t("settings.providerUi.update")
           ) : (
@@ -556,7 +554,7 @@ export function ModelGroupSection({
   return (
     <section>
       <div
-        className="sticky-glass-strip sticky top-0 z-10 flex items-center justify-between gap-3 border-hairline-soft border-b px-5 py-2.5"
+        className="sticky-glass-strip sticky top-0 z-10 flex items-center justify-between gap-3 px-5 py-2.5"
         data-strip="panel"
       >
         <div className="min-w-0">
@@ -657,14 +655,11 @@ export function ModelRow({
   return (
     <m.div
       animate={{ opacity: 1, y: 0 }}
-      className={cn(
-        "border-hairline-soft border-b px-5 py-3 last:border-b-0",
-        model.enabled ? "bg-chip-faint" : "hover:bg-hover",
-      )}
+      className={cn(" px-5 py-3", model.enabled ? "bg-chip-faint" : "hover:bg-hover")}
       exit={{ opacity: 0, y: -4 }}
       initial={{ opacity: 0, y: 4 }}
       layout
-      transition={{ duration: 0.14, ease: "easeOut" }}
+      transition={tween("base")}
     >
       <div className="grid min-h-[44px] grid-cols-[minmax(0,1fr)_auto] items-center gap-4">
         <div className="min-w-0">
@@ -717,7 +712,7 @@ export function ModelRow({
       </div>
 
       <CollapsibleMotion open={open && expandable} preset="default">
-        <div className="mt-3 grid gap-4 border-hairline-soft border-t pt-4">
+        <div className="mt-3 grid gap-4 pt-4">
           {model.thinkingBudget ? (
             <div className="grid max-w-sm grid-cols-[minmax(0,1fr)_auto_auto] items-end gap-2">
               <Field
@@ -729,7 +724,7 @@ export function ModelRow({
                 value={budgetDraft}
               />
               <button
-                className="flex h-10 items-center justify-center rounded-md bg-fg px-3 text-sm text-canvas transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex h-10 items-center justify-center rounded-md bg-accent px-3 text-sm text-on-accent transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={busy}
                 onClick={saveBudget}
                 type="button"
@@ -770,7 +765,7 @@ export function ModelRow({
                 value={maxTokensDraft}
               />
               <button
-                className="flex h-10 items-center justify-center rounded-md bg-fg px-3 text-sm text-canvas transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex h-10 items-center justify-center rounded-md bg-accent px-3 text-sm text-on-accent transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={busy}
                 onClick={saveLimits}
                 type="button"
@@ -804,7 +799,7 @@ export function SegmentedFilter({
   ];
 
   return (
-    <fieldset className="flex shrink-0 items-center gap-1 rounded-lg border border-hairline bg-canvas p-1">
+    <fieldset className="flex shrink-0 items-center gap-1 settings-group p-1">
       <legend className="sr-only">{t("settings.providerUi.filterModelsLegend")}</legend>
       <IconFilter className="ml-1 text-fg-faint" size={14} stroke={1.7} />
       {options.map((option) => (
@@ -837,7 +832,7 @@ export function ProviderDetailLoading() {
       className="flex min-h-[320px] min-w-0 items-center justify-center px-5 py-10"
       exit={{ opacity: 0, y: 8 }}
       initial={{ opacity: 0, y: 8 }}
-      transition={{ duration: 0.16, ease: "easeOut" }}
+      transition={tween("base")}
     >
       <WorkingText className="text-sm">{t("settings.providerUi.loadingProvider")}</WorkingText>
     </m.section>
@@ -897,8 +892,8 @@ export function ProviderStatusPill({ status }: { status: ProviderStatus }) {
 
   if (status === "connected") {
     return (
-      <span className="flex items-center gap-1 rounded-full bg-success/10 px-2 py-1 text-xs text-success">
-        <IconCheck size={12} stroke={2} />
+      <span className="flex items-center gap-1 rounded-full bg-chip px-2 py-1 text-xs text-fg-muted">
+        <IconCheck className="text-success" size={12} stroke={2} />
         {t("settings.providerUi.statusConnected")}
       </span>
     );

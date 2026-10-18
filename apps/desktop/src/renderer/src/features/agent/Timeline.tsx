@@ -887,8 +887,10 @@ export function buildBlocks(
       continue;
     }
 
-    if (event.type === "queue.updated") {
-      // Pi queue noise (steer/follow-up envelopes) — not a user-facing notice.
+    if (event.type === "queue.updated" || event.type === "queue.snapshot") {
+      // Queued prompts live in the strip above the composer (queue.snapshot);
+      // pi's own queue.updated carries composed envelopes. A queued prompt
+      // enters the chat only as the user message main emits once it is sent.
       continue;
     }
 
@@ -1391,7 +1393,7 @@ function TurnFooter({ turn, models }: { turn: TimelineTurn; models?: ModelInfo[]
           coarse pointers). The metadata beside it is always visible. Copy is
           shown only when the turn actually produced answer text. */}
       {answer ? (
-        <span className="pointer-events-none absolute top-1/2 left-1 -translate-y-1/2 opacity-0 transition-opacity duration-150 group-hover/turn:pointer-events-auto group-hover/turn:opacity-100 group-focus-within/turn:pointer-events-auto group-focus-within/turn:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100">
+        <span className="pointer-events-none absolute top-1/2 left-1 -translate-y-1/2 opacity-0 transition-opacity duration-(--motion-duration-base) group-hover/turn:pointer-events-auto group-hover/turn:opacity-100 group-focus-within/turn:pointer-events-auto group-focus-within/turn:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100">
           <CopyButton label="Copy response" text={answer} />
         </span>
       ) : null}

@@ -12,6 +12,7 @@ import {
   MAX_RESTORE_DRAFTS,
   MAX_RESTORE_UI_STATE_BYTES,
 } from "../../shared/update-restore";
+import { avatarSeedSchema } from "./schemas-shared";
 
 const nonEmptyString = z.string().trim().min(1);
 const optionalNonEmptyString = nonEmptyString.optional();
@@ -273,6 +274,12 @@ export const agentListSchema = z
 export const agentRollbackSchema = z.object({
   sessionId: nonEmptyString,
   userMessageId: nonEmptyString,
+});
+
+/** One queued prompt, by the id the main process minted for it. */
+export const agentQueueRemoveSchema = z.object({
+  sessionId: nonEmptyString,
+  id: nonEmptyString,
 });
 
 export const agentSetModelSchema = z.object({
@@ -958,6 +965,7 @@ const agentFields = {
   avatarFace: z.enum(AGENT_AVATAR_FACES),
   avatarColor: z.enum(AGENT_AVATAR_COLORS),
   avatarShape: z.enum(AGENT_AVATAR_SHAPES),
+  avatarSeed: avatarSeedSchema,
 };
 
 export const agentsCreateSchema = z
@@ -974,6 +982,7 @@ export const agentsCreateSchema = z
     avatarFace: agentFields.avatarFace.optional(),
     avatarColor: agentFields.avatarColor.optional(),
     avatarShape: agentFields.avatarShape.optional(),
+    avatarSeed: agentFields.avatarSeed.optional(),
   })
   .strict();
 
@@ -988,6 +997,7 @@ export const agentsUpdateSchema = z
     avatarFace: agentFields.avatarFace.optional(),
     avatarColor: agentFields.avatarColor.optional(),
     avatarShape: agentFields.avatarShape.optional(),
+    avatarSeed: agentFields.avatarSeed.optional(),
   })
   .strict();
 
@@ -1028,6 +1038,7 @@ const newGroupAgentSchema = z
     avatarFace: agentFields.avatarFace.optional(),
     avatarColor: agentFields.avatarColor.optional(),
     avatarShape: agentFields.avatarShape.optional(),
+    avatarSeed: agentFields.avatarSeed.optional(),
     templateId: z.string().min(1).max(128).optional(),
     /** "Copy from another group": main copies this agent's saved work lists. */
     copiedFromAgentId: z.string().min(1).max(128).optional(),

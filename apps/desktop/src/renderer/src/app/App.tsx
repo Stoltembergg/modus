@@ -88,6 +88,7 @@ import { UpdateToast } from "../features/update/UpdateToast";
 import { useSidebarToggleShortcut } from "../hooks/useSidebarToggleShortcut";
 import { describeAgentError } from "../lib/agentErrors";
 import { cn } from "../lib/cn";
+import { motionOffset, reducedSwapFade, swapTransition, tween } from "../lib/motion";
 import { useShellText } from "../lib/shellText";
 import { useGitBranch } from "../lib/useGitBranch";
 import { TOP_BAR_BREAKPOINTS, useWidthTier } from "../lib/useWidthTier";
@@ -1396,21 +1397,23 @@ export function App() {
                           </div>
                         ) : null}
 
+                        {/* Fade-out-then-in swap; reduced motion: both halves
+                            share one 120ms fade (reducedSwapFade). */}
                         <AnimatePresence mode="wait">
                           {visibleSession ? (
                             <m.div
                               animate={{ opacity: 1, y: 0 }}
                               className="flex min-h-0 min-w-0 flex-1"
-                              exit={reduceMotion ? { opacity: 1 } : { opacity: 0, y: -3 }}
-                              initial={reduceMotion ? false : { opacity: 0, y: 4 }}
+                              exit={{ opacity: 0, y: motionOffset(-3, reduceMotion) }}
+                              initial={{ opacity: 0, y: motionOffset(4, reduceMotion) }}
                               key={`conversation:${visibleSession.id}`}
                               layout={reduceMotion ? false : "position"}
                               layoutDependency={responsiveSidebarOpen}
-                              transition={{
-                                ...SIDEBAR_TRANSITION,
-                                duration: reduceMotion ? 0 : SIDEBAR_TRANSITION.duration,
-                                layout: SIDEBAR_TRANSITION,
-                              }}
+                              transition={
+                                reduceMotion
+                                  ? reducedSwapFade
+                                  : { ...SIDEBAR_TRANSITION, layout: SIDEBAR_TRANSITION }
+                              }
                             >
                               {migratedTranscript !== null ? (
                                 <MigratedTranscript body={migratedTranscript} />
@@ -1485,13 +1488,10 @@ export function App() {
                             <m.div
                               animate={{ opacity: 1, y: 0 }}
                               className="relative flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden px-6"
-                              exit={reduceMotion ? { opacity: 1 } : { opacity: 0, y: -3 }}
-                              initial={reduceMotion ? false : { opacity: 0, y: 4 }}
+                              exit={{ opacity: 0, y: motionOffset(-3, reduceMotion) }}
+                              initial={{ opacity: 0, y: motionOffset(4, reduceMotion) }}
                               key="hero"
-                              transition={{
-                                duration: reduceMotion ? 0 : 0.12,
-                                ease: "easeOut",
-                              }}
+                              transition={swapTransition(tween("fast"), reduceMotion)}
                             >
                               <HomeBackground />
                               <div className="relative z-10 w-full max-w-[680px] -translate-y-4">

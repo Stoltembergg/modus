@@ -162,13 +162,13 @@ export function GroupAgentsPopover({
               <AgentAvatar
                 color={avatar.color}
                 face={avatar.face}
-                seed={avatar.agentId}
+                seed={avatar.seed}
                 shape={avatar.shape}
                 size={24}
                 state={agentAvatarState(state, avatar.archived)}
               />
               <AgentPresenceDot
-                className="absolute right-0 bottom-0 transition-colors duration-[var(--motion-ui)]"
+                className="absolute right-0 bottom-0 transition-colors duration-(--motion-duration-base)"
                 state={presence}
               />
             </span>
@@ -246,7 +246,7 @@ export function GroupAgentsPopover({
                         <AgentAvatar
                           color={avatar.color}
                           face={avatar.face}
-                          seed={avatar.agentId}
+                          seed={avatar.seed}
                           shape={avatar.shape}
                           size={16}
                           state={agentAvatarState(state, avatar.archived)}

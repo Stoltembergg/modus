@@ -4,6 +4,14 @@ import { APPROVAL_MODES, DEFAULT_APPROVAL_MODE } from "../../../../shared/approv
 import type { ApprovalMode, ApprovalModeState, WorkspaceInfo } from "../../../../shared/contracts";
 import { cn } from "../../lib/cn";
 import { type SettingsTextFn, settingsTextFor, useSettingsText } from "../../lib/settingsText";
+import { SettingsSegmented } from "./form-controls";
+import {
+  SETTINGS_SELECTED,
+  SettingsList,
+  SettingsNotice,
+  SettingsRow,
+  SettingsSection,
+} from "./settings-layout";
 
 const MODE_ICONS: Record<ApprovalMode, typeof IconHandStop> = {
   "request-approval": IconHandStop,
@@ -47,17 +55,6 @@ function modeLabel(mode: ApprovalMode, t: SettingsTextFn = settingsTextFor()): s
       return t("settings.general.modeAuto");
     case "full-access":
       return t("settings.general.modeFullAccess");
-  }
-}
-
-function modeDescription(mode: ApprovalMode, t: SettingsTextFn = settingsTextFor()): string {
-  switch (mode) {
-    case "request-approval":
-      return t("settings.general.modeRequestApprovalDesc");
-    case "auto":
-      return t("settings.general.modeAutoDesc");
-    case "full-access":
-      return t("settings.general.modeFullAccessDesc");
   }
 }
 
@@ -140,101 +137,71 @@ export function ApprovalModeSettings({ cwd, workspaces = [] }: ApprovalModeSetti
     }
   }
 
+  const scopeValue = isHome ? "user" : effectiveProjectCwd;
   return (
-    <div className="flex flex-col gap-6">
-      {/* Same tab chrome as MCP / Subagents */}
-      <div className="flex flex-wrap items-center gap-1">
-        <button
-          className={cn(
-            "h-8 rounded-md px-3 text-sm transition-colors",
-            isHome ? "bg-active text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",
-          )}
-          onClick={() => setActiveScope("user")}
-          type="button"
-        >
-          {t("settings.general.tabHome")}
-        </button>
-        {projectTabs.map((project) => {
-          const active = !isHome && project.rootPath === effectiveProjectCwd;
-          return (
-            <button
-              className={cn(
-                "h-8 max-w-40 truncate rounded-md px-3 text-sm transition-colors",
-                active ? "bg-active text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",
-              )}
-              key={project.rootPath}
-              onClick={() => {
-                setActiveScope("project");
-                setSelectedProjectCwd(project.rootPath);
-              }}
-              title={project.rootPath}
-              type="button"
-            >
-              {project.displayName}
-            </button>
-          );
-        })}
-      </div>
-
-      {error ? <p className="-mt-2 text-danger text-xs">{error}</p> : null}
-
-      <section className="flex flex-col gap-4">
-        <div>
-          <h3 className="text-md font-normal text-fg">
-            {isHome
-              ? t("settings.general.approvalModeGlobalTitle")
-              : t("settings.general.approvalModeProjectTitle", {
-                  project: selectedProject?.displayName ?? t("settings.general.projectFallback"),
-                })}
-          </h3>
-          <p className="mt-1 text-xs text-fg-muted">
-            {isHome
-              ? t("settings.general.approvalModeGlobalDesc")
-              : followsGlobal
-                ? t("settings.general.approvalModeFollowingGlobal", {
-                    mode: modeLabel(state.global, t),
-                  })
-                : t("settings.general.approvalModeOverrideActiveWorkspace")}
-          </p>
-        </div>
-
+    <SettingsSection
+      actions={
+        projectTabs.length > 0 ? (
+          <SettingsSegmented
+            label={t("settings.general.approvalScopeLabel")}
+            onChange={(next) => {
+              if (next === "user") {
+                setActiveScope("user");
+                return;
+              }
+              setActiveScope("project");
+              setSelectedProjectCwd(next);
+            }}
+            options={[
+              { value: "user", label: t("settings.general.tabHome") },
+              ...projectTabs.map((project) => ({
+                value: project.rootPath,
+                label: project.displayName,
+                title: project.rootPath,
+              })),
+            ]}
+            value={scopeValue}
+          />
+        ) : null
+      }
+      notice={error}
+      noticeTone="danger"
+      title={
+        isHome
+          ? t("settings.general.approvalModeGlobalTitle")
+          : t("settings.general.approvalModeProjectTitle", {
+              project: selectedProject?.displayName ?? t("settings.general.projectFallback"),
+            })
+      }
+    >
+      <SettingsList>
         {!isHome ? (
-          <div className="flex items-center justify-between gap-3 rounded-lg border border-hairline-soft bg-panel px-4 py-3">
-            <div className="min-w-0">
-              <div className="text-sm text-fg">{t("settings.general.followGlobalDefault")}</div>
-              <div className="mt-0.5 truncate text-xs text-fg-muted">
-                {followsGlobal
-                  ? t("settings.general.usingGlobalMode", {
-                      mode: modeLabel(state.global, t),
-                    })
-                  : t("settings.general.overrideActiveProject")}
-              </div>
-            </div>
-            <button
-              className={cn(
-                "h-8 shrink-0 rounded-md px-3 text-xs transition-colors",
-                followsGlobal
-                  ? "bg-active text-fg"
-                  : "border border-hairline bg-elevated text-fg-muted hover:bg-hover hover:text-fg",
-              )}
-              disabled={saving || followsGlobal || !effectiveProjectCwd}
-              onClick={() => void followGlobal()}
-              type="button"
-            >
-              {followsGlobal ? t("settings.general.following") : t("settings.general.useGlobal")}
-            </button>
-          </div>
+          <SettingsRow
+            control={
+              <button
+                className={cn(
+                  "h-8 shrink-0 rounded-md px-3 text-xs transition-colors",
+                  followsGlobal
+                    ? SETTINGS_SELECTED
+                    : "bg-chip text-fg-muted hover:bg-hover hover:text-fg",
+                )}
+                disabled={saving || followsGlobal || !effectiveProjectCwd}
+                onClick={() => void followGlobal()}
+                type="button"
+              >
+                {followsGlobal ? t("settings.general.following") : t("settings.general.useGlobal")}
+              </button>
+            }
+            title={t("settings.general.followGlobalDefault")}
+          />
         ) : null}
-
         <ModeOptionList
           disabled={saving || (!isHome && !effectiveProjectCwd)}
           onSelect={(mode) => void selectMode(mode)}
           selected={selectedMode}
         />
-      </section>
-
-      <p className="text-xs text-fg-muted">{t("settings.general.scopeHint")}</p>
-    </div>
+      </SettingsList>
+    </SettingsSection>
   );
 }
 
@@ -249,42 +216,46 @@ function ModeOptionList({
 }) {
   const t = useSettingsText();
   return (
-    <div className="overflow-hidden rounded-lg border border-hairline-soft bg-panel">
+    <>
       {APPROVAL_MODES.map((item) => {
         const Icon = MODE_ICONS[item.id];
         const danger = item.id === "full-access";
         const active = item.id === selected;
         return (
           <button
+            aria-pressed={active}
             className={cn(
-              "flex w-full items-start gap-3 border-hairline-soft border-b px-4 py-3 text-left transition-colors last:border-b-0",
-              active ? "bg-active" : "hover:bg-hover",
+              "settings-row flex w-full items-start gap-3 rounded-md px-3 py-2.5 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus-ring/50",
+              active ? "bg-selected" : "hover:bg-hover",
               disabled && "pointer-events-none opacity-50",
             )}
+            data-settings-row=""
             disabled={disabled}
             key={item.id}
             onClick={() => onSelect(item.id)}
             type="button"
           >
             <Icon
-              className={cn("mt-0.5 shrink-0", danger ? "text-accent" : "text-fg-subtle")}
+              className={cn("mt-0.5 shrink-0", danger ? "text-danger" : "text-fg-muted")}
               size={16}
               stroke={1.8}
             />
             <span className="min-w-0 flex-1">
-              <span className={cn("block text-sm", danger ? "text-accent" : "text-fg")}>
+              <span className={cn("block text-sm", danger ? "text-danger" : "text-fg")}>
                 {modeLabel(item.id, t)}
               </span>
-              <span className="mt-0.5 block text-xs leading-snug text-fg-muted">
-                {modeDescription(item.id, t)}
-              </span>
+              {danger ? (
+                <SettingsNotice className="mt-0.5" tone="danger">
+                  {t("settings.general.modeFullAccessDesc")}
+                </SettingsNotice>
+              ) : null}
             </span>
-            <span className="mt-0.5 flex w-4 shrink-0 justify-center text-fg">
+            <span className="mt-0.5 flex w-4 shrink-0 justify-center text-(--accent-text,var(--color-accent))">
               {active ? <IconCheck size={14} stroke={2} /> : null}
             </span>
           </button>
         );
       })}
-    </div>
+    </>
   );
 }

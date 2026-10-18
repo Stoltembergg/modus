@@ -1,4 +1,5 @@
 import { m } from "motion/react";
+import { tween } from "../../lib/motion";
 
 /**
  * Composer "running" signal: a thin accent line sweeping along the top edge in a loop
@@ -14,7 +15,7 @@ export function ComposerRunningSweep() {
       data-composer-running=""
       exit={{ opacity: 0 }}
       initial={{ opacity: 0 }}
-      transition={{ duration: 0.25, ease: "easeOut" }}
+      transition={tween("emphasized")}
     />
   );
 }

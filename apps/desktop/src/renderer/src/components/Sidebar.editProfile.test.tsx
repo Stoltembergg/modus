@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentSessionInfo, WorkspaceInfo } from "../../../shared/contracts";
@@ -66,19 +66,33 @@ function renderSidebar(onEditAgentProfile?: (agentId: string) => void) {
 afterEach(cleanup);
 
 describe("Sidebar: edit agent profile", () => {
-  it("shows the action only on an agent's chat and passes its agent id", async () => {
+  function openRowMenu(title: string) {
+    const row = screen.getByRole("button", { name: title }).closest("[data-session-id]");
+    fireEvent.click(within(row as HTMLElement).getByRole("button", { name: "Chat actions" }));
+  }
+
+  it("offers the action only in an agent chat's menu and passes its agent id", async () => {
     const onEdit = vi.fn();
     const { noop } = renderSidebar(onEdit);
-    const buttons = screen.getAllByRole("button", { name: "Edit agent profile" });
-    expect(buttons).toHaveLength(1);
-    await userEvent.setup().click(buttons[0] as HTMLElement);
+    openRowMenu("Plain chat");
+    expect(await screen.findByRole("menuitem", { name: "Rename" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Edit agent profile" })).toBeNull();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+
+    openRowMenu("Agent chat");
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("menuitem", { name: "Edit agent profile" }));
     expect(onEdit).toHaveBeenCalledWith("agent-1");
     // Does not also open the chat.
     expect(noop).not.toHaveBeenCalled();
   });
 
-  it("is hidden when no handler is given", () => {
+  it("is hidden when no handler is given", async () => {
     renderSidebar();
-    expect(screen.queryByRole("button", { name: "Edit agent profile" })).toBeNull();
+    openRowMenu("Agent chat");
+    expect(await screen.findByRole("menuitem", { name: "Rename" })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Edit agent profile" })).toBeNull();
   });
 });

@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest";
+import {
+  AGENT_FACE_SEEDS,
+  avatarEyeIndex,
+  faceForAvatarSeed,
+} from "../../../../shared/agent-avatar-seeds";
 import { AGENT_TEMPLATES, getAgentTemplate } from "../../../../shared/agent-templates";
 import {
   applyCollabPipeline,
@@ -58,6 +63,9 @@ describe("newGroupModel (A4)", () => {
       members(1),
       "c1",
     );
+    // Its face is the random face seed it starts on (never the source's eyes).
+    const face = faceForAvatarSeed(copy.avatarSeed);
+    expect(face).toBeDefined();
     expect(copy).toEqual({
       key: "c1",
       source: "copy",
@@ -66,9 +74,10 @@ describe("newGroupModel (A4)", () => {
       role: "Fixer",
       instructions: "Fix it.",
       modelId: "m-1",
-      avatarFace: "cheeky",
+      avatarFace: face,
       avatarColor: "red",
       avatarShape: "circle",
+      avatarSeed: copy.avatarSeed,
     });
     // A copied template agent on the app default takes the fallback model (it needs one now).
     expect(
@@ -327,5 +336,103 @@ describe("newGroupCreateInput blank-name default follows the room locale (C6)", 
   });
   it("a typed name always wins", () => {
     expect(newGroupCreateInput({ ...blank, name: " Crew " }, "pt").name).toBe("Crew");
+  });
+});
+
+describe("avatar seed in the New group modal (avatar_seed)", () => {
+  const SEED = "face-wink-29";
+  const custom: NewGroupMember = {
+    key: "k-1",
+    source: "custom",
+    name: "Ana",
+    role: "",
+    instructions: "Do.",
+    modelId: "m-1",
+    avatarFace: "wink",
+    avatarColor: "teal",
+    avatarSeed: SEED,
+  };
+
+  it("a dialog member keeps the picked seed and sends it with group:create", () => {
+    const member = dialogMember(
+      { name: "Ana", avatarFace: "wink", avatarSeed: SEED, modelId: "m-1" },
+      [],
+      "k-1",
+      { avatarFace: "happy", avatarColor: "teal" },
+    );
+    expect(member.avatarSeed).toBe(SEED);
+    expect(newGroupMemberInput(member).avatarSeed).toBe(SEED);
+    // A template card added without the dialog gets no seed (drawn with its new id).
+    const card = templateMember(template("planner"), [], "k-2");
+    expect(card.avatarSeed).toBeUndefined();
+    expect("avatarSeed" in newGroupMemberInput(card)).toBe(false);
+  });
+
+  it("an edit without touching the face keeps the seed; a new face seed replaces it; blank clears", () => {
+    expect(editedMember(custom, { name: "Ana B", avatarColor: "pink" }).avatarSeed).toBe(SEED);
+    expect(editedMember(custom, { name: "Ana", avatarSeed: "face-calm-40" }).avatarSeed).toBe(
+      "face-calm-40",
+    );
+    expect(editedMember(custom, { name: "Ana", avatarSeed: null }).avatarSeed).toBeUndefined();
+    expect(editedMember(custom, { name: "Ana", avatarSeed: "" }).avatarSeed).toBeUndefined();
+  });
+
+  const source = {
+    id: "a-src",
+    name: "Src",
+    role: "Fixer",
+    instructions: "Fix.",
+    modelId: "m-1",
+    avatarFace: "wink",
+    avatarColor: "pink",
+    avatarShape: "hexagon",
+    avatarSeed: SEED,
+  } as const;
+  const FACE_SEEDS = Object.values(AGENT_FACE_SEEDS);
+
+  it("a copy starts on a random face seed other than its source's, sent with group:create", () => {
+    // random 0 → first of the pool; the source's own seed (wink) is never in it.
+    const first = copyMember(source, [], "k-3", "", () => 0);
+    expect(first.avatarSeed).toBe(AGENT_FACE_SEEDS.happy);
+    expect(first.avatarFace).toBe("happy");
+    expect(first.avatarColor).toBe("pink");
+    expect(newGroupMemberInput(first).avatarSeed).toBe(AGENT_FACE_SEEDS.happy);
+    // 3/8 would pick the source's seed (wink, 4th of the 8); it is not in the pool.
+    expect(FACE_SEEDS[Math.floor((3 / 8) * FACE_SEEDS.length)]).toBe(SEED);
+    const wouldHitSource = copyMember(source, [], "k-4", "", () => 3 / 8);
+    expect(wouldHitSource.avatarSeed).not.toBe(SEED);
+    expect(wouldHitSource.avatarSeed).toBe(AGENT_FACE_SEEDS.sleepy);
+    // Every random value: one of the 8, never the source's.
+    for (let step = 0; step < 50; step += 1) {
+      const seed = copyMember(source, [], "k", "", () => step / 50).avatarSeed;
+      expect(FACE_SEEDS).toContain(seed);
+      expect(seed).not.toBe(SEED);
+    }
+  });
+
+  it("a copy of a legacy source (no seed) avoids the face seed with its id's eyes", () => {
+    // Find a legacy id whose id-derived eyes are one of the 8 sets.
+    let id = "legacy-0";
+    for (let n = 0; avatarEyeIndex(id) >= 8; n += 1) id = `legacy-${n}`;
+    const sameEyes = FACE_SEEDS[avatarEyeIndex(id)];
+    for (let step = 0; step < 40; step += 1) {
+      const seed = copyMember(
+        { ...source, id, avatarSeed: null },
+        [],
+        "k",
+        "",
+        () => step / 40,
+      ).avatarSeed;
+      expect(FACE_SEEDS).toContain(seed);
+      expect(seed).not.toBe(sameEyes);
+    }
+  });
+
+  it("the copy's seed is kept by an untouched edit, replaced by a picked face", () => {
+    const copy = copyMember(source, [], "k-5", "", () => 0);
+    expect(editedMember(copy, { name: "Src 2" }).avatarSeed).toBe(copy.avatarSeed);
+    const picked = editedMember(copy, { name: "Src 2", avatarSeed: AGENT_FACE_SEEDS.calm });
+    expect(picked.avatarSeed).toBe(AGENT_FACE_SEEDS.calm);
+    expect(newGroupMemberInput(picked).avatarSeed).toBe(AGENT_FACE_SEEDS.calm);
   });
 });

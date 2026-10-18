@@ -144,9 +144,9 @@ export function ModelPicker({
               )
             : cn(
                 "group/model flex h-9 w-full min-w-0 items-center gap-2 rounded-lg border border-hairline bg-canvas/70 pr-2 pl-3 text-left text-sm text-fg outline-none",
-                "transition-[border-color,background-color,transform] duration-150 ease-out-quint",
+                "transition-[border-color,background-color,transform] duration-(--motion-duration-base) ease-standard",
                 "hover:border-hairline-strong focus-visible:border-hairline-strong focus-visible:ring-2 focus-visible:ring-focus-ring/40",
-                "active:scale-[0.99] data-popup-open:border-hairline-strong motion-reduce:transition-none motion-reduce:active:scale-100",
+                "active:scale-[0.99] data-popup-open:border-hairline-strong motion-reduce:transition-reduced-fade motion-reduce:active:scale-100",
               )
         }
         aria-description={description}
@@ -188,7 +188,7 @@ export function ModelPicker({
             aria-label={label}
             className={cn(
               "flex w-[max(var(--anchor-width),18rem)] max-w-[var(--available-width)] origin-(--transform-origin) flex-col overflow-hidden popup-chrome",
-              "transition-[transform,opacity,scale] duration-150 ease-out-quint motion-reduce:transition-none",
+              "transition-[transform,opacity,scale] duration-(--motion-duration-base) ease-standard motion-reduce:transition-reduced-fade",
               "data-ending-style:scale-[0.97] data-ending-style:opacity-0 data-starting-style:scale-[0.97] data-starting-style:opacity-0",
             )}
             data-testid="model-picker-popup"
@@ -233,7 +233,7 @@ export function ModelPicker({
                       <Combobox.Item
                         className={cn(
                           "flex h-8 cursor-default items-center gap-2 rounded-md px-2 text-sm text-fg outline-none select-none",
-                          "transition-colors duration-100 data-highlighted:bg-hover motion-reduce:transition-none",
+                          "transition-colors duration-(--motion-duration-fast) data-highlighted:bg-hover motion-reduce:transition-reduced-fade",
                           item.providerId ? "pl-9" : undefined,
                           item.unavailable ? "text-fg-faint" : undefined,
                         )}

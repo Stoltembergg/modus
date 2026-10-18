@@ -10,8 +10,8 @@ import {
   IconTerminal2,
   IconWorld,
 } from "@tabler/icons-react";
-import { animate, m, useMotionValue } from "motion/react";
-import { lazy, type PointerEvent, Suspense, useEffect, useRef, useState } from "react";
+import { m, useMotionValue, useReducedMotion } from "motion/react";
+import { lazy, type PointerEvent, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { SecurityState } from "../../../../preload/types";
 import type {
   AgentInfo,
@@ -28,6 +28,13 @@ import { PanelHeader } from "../../components/ui/Panel";
 import { TOOLBAR_ICON } from "../../components/ui/ToolbarButton";
 import { Tooltip } from "../../components/ui/Tooltip";
 import { cn } from "../../lib/cn";
+import {
+  animatePanelWidth,
+  MOTION_DURATION,
+  MOTION_EASE,
+  panelWidthMotion,
+  tween,
+} from "../../lib/motion";
 import { beginResizeGesture, endResizeGesture } from "../../lib/resizeGesture";
 import { ActivityTimeline } from "../agent/ActivityTimeline";
 import type { AgentEventHub } from "../agent/agentEventHub";
@@ -84,7 +91,9 @@ type InspectorProps = {
 const INSPECTOR_MAX_WIDTH = 1040;
 const INSPECTOR_BROWSER_PREFERRED_WIDTH = 760;
 const INSPECTOR_COLLAPSED_WIDTH = 0;
-const INSPECTOR_TRANSITION = { duration: 0.18, ease: [0.25, 0.1, 0.25, 1] } as const;
+const INSPECTOR_TRANSITION = { duration: MOTION_DURATION.slow, ease: MOTION_EASE.gentle };
+/** Width tween; content fades in once the width lands (reduced: snap + 120ms fade). */
+const INSPECTOR_MOTION = { width: INSPECTOR_TRANSITION, content: tween("instant", "linear") };
 const INSPECTOR_TAB_PANEL_CLASS =
   "inspector-tab-panel flex min-h-0 flex-1 flex-col overflow-hidden outline-none";
 const loadBrowserPanel = () => import("../browser/BrowserPanel");
@@ -200,6 +209,14 @@ export function Inspector({
   // its heavy Timeline on every pointermove. open/close still animates smoothly;
   // the drag tracks the cursor 1:1 with no layout-property tween fighting it.
   const panelWidth = useMotionValue(open ? width : INSPECTOR_COLLAPSED_WIDTH);
+  // Starts transparent: the content fades in once the first open settles, as it
+  // did when it mounted with `initial={{ opacity: 0 }}`.
+  const contentOpacity = useMotionValue(0);
+  const reducedMotion = useReducedMotion() ?? false;
+  const panelMotion = useMemo(
+    () => panelWidthMotion(INSPECTOR_MOTION, reducedMotion),
+    [reducedMotion],
+  );
 
   // Never strand the body cursor/selection if the panel unmounts mid-drag.
   useEffect(
@@ -242,19 +259,20 @@ export function Inspector({
       return;
     }
     latestWidthRef.current = width;
-    if (!open) {
+    // Full motion hides the content at once on close; reduced motion fades it
+    // out first and hides it once the width has snapped shut.
+    if (!open && !panelMotion.reduced) {
       setContentVisible(false);
     }
-    const controls = animate(panelWidth, open ? width : INSPECTOR_COLLAPSED_WIDTH, {
-      ...INSPECTOR_TRANSITION,
-      onComplete: () => {
-        if (open) {
-          setContentVisible(true);
-        }
-      },
+    const controls = animatePanelWidth(panelWidth, contentOpacity, {
+      open,
+      openWidth: width,
+      closedWidth: INSPECTOR_COLLAPSED_WIDTH,
+      motion: panelMotion,
+      onSettled: setContentVisible,
     });
     return () => controls.stop();
-  }, [open, width, panelWidth]);
+  }, [open, width, panelWidth, contentOpacity, panelMotion]);
 
   function startResize(event: PointerEvent<HTMLButtonElement>): void {
     event.preventDefault();
@@ -324,11 +342,9 @@ export function Inspector({
           />
           {contentVisible ? (
             <m.div
-              animate={{ opacity: 1 }}
               className="flex min-h-0 flex-1 flex-col"
-              initial={{ opacity: 0 }}
-              style={{ width: panelWidth }}
-              transition={{ duration: 0.08, ease: "linear" }}
+              data-panel-content=""
+              style={{ width: panelWidth, opacity: contentOpacity }}
             >
               <Tabs.Root
                 className="flex min-h-0 flex-1 flex-col"
@@ -350,7 +366,7 @@ export function Inspector({
                         </Tabs.Tab>
                       </Tooltip>
                     ))}
-                    <Tabs.Indicator className="absolute top-1/2 left-0 z-0 h-6.5 w-(--active-tab-width) -translate-y-1/2 translate-x-(--active-tab-left) rounded-md bg-active transition-all duration-200 ease-out-quint" />
+                    <Tabs.Indicator className="absolute top-1/2 left-0 z-0 h-6.5 w-(--active-tab-width) -translate-y-1/2 translate-x-(--active-tab-left) rounded-md bg-active transition-all duration-(--motion-duration-slow) ease-standard" />
                   </Tabs.List>
                 </div>
 

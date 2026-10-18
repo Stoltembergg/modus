@@ -73,7 +73,6 @@ const ANCHORS: Record<string, string[]> = {
     '>{t("settings.customProvider.testContacting")}</span>',
   ],
   "../features/settings/sections/SettingsSidebar.tsx": [">{title}</h3>"],
-  "../features/settings/sections/account.tsx": ['>{t("settings.account.orDivider")}</span>'],
   "../features/settings/sections/limits.tsx": [
     ">{row.providerName}</div>",
     ">Window: {metric.window}</div>",
@@ -100,7 +99,8 @@ const HELP_EMPTY_ANCHORS: Record<string, string[]> = {
   "../features/agent/SessionTitlePopover.tsx": ['>{branch ?? "No branch"}</span>'],
   "../features/agent/SubagentRow.tsx": [">{task}</span>"],
   "../features/agent/TodosCard.tsx": ["data-todos-empty>"],
-  "../features/agents/AgentDialog.tsx": [">{subtitle}</p>"],
+  // The New Agent dialog has no visible subtitle any more; its picker labels are readable.
+  "../features/agents/AvatarOptionGroup.tsx": ["id={labelId}>"],
   "../features/agents/ModelPicker.tsx": [">No models match</p>"],
   "../features/composer/SlashMenu.tsx": [
     '{item.kind === "skill" ? "Skills" : "Commands"}',
@@ -149,13 +149,6 @@ const HELP_EMPTY_ANCHORS: Record<string, string[]> = {
   "../features/projects/groupsMigration.tsx": [
     '{t("shell.groupsMoved.backup", { path: notice.backup })}',
   ],
-  "../features/settings/ApprovalModeSettings.tsx": [
-    '>{t("settings.general.scopeHint")}</p>',
-    "{modeDescription(item.id, t)}",
-  ],
-  "../features/settings/AskMissingTargetSetting.tsx": [
-    '>{t("settings.general.askMissingTargetDesc")}</p>',
-  ],
   "../features/settings/UnofficialProviderNotice.tsx": [
     '>{t("settings.providers.antigravityRiskReview")}</p>',
   ],
@@ -168,7 +161,6 @@ const HELP_EMPTY_ANCHORS: Record<string, string[]> = {
     "{limitations.slice(0, 4).map((limitation) => (",
   ],
   "../features/settings/sections/integrations.tsx": [
-    '{t("settings.integrations.allowConsumerRequirements")}',
     '{t("settings.integrations.accountsSubheading")}',
     '{t("settings.integrations.allowedOperationsHint", {',
     '{t("settings.integrations.allowPlatformRequirements")}',
@@ -178,14 +170,11 @@ const HELP_EMPTY_ANCHORS: Record<string, string[]> = {
     "Provider-reported values only. Budgets and balances are not rate limits.",
   ],
   "../features/settings/sections/mcp.tsx": [
-    '{t("settings.mcp.serversFooterHint")}',
     "id={noteId}>",
-    '{t("settings.mcp.reaRetryHint")}',
     'role="status">',
     ">{hint}</span> : null}",
   ],
   "../features/settings/sections/model-provider.tsx": [
-    '>{t("settings.providers.catalogDescription")}</p>',
     '{t("settings.providers.chooseSignInMethod")}',
     ">{operation.instructions}</p>",
     '{t("settings.providers.unofficialProviderRequiredBeforeOAuth")}',
@@ -229,6 +218,7 @@ const FAINT_BUDGET: Record<string, number> = {
   "../features/agent/changes/ChangeStats.tsx": 2,
   "../features/agent/diff/InlineDiff.tsx": 2,
   "../features/agents/AgentDialog.tsx": 3,
+  "../features/agents/AvatarOptionGroup.tsx": 0,
   "../features/agents/ModelPicker.tsx": 5,
   "../features/composer/ContextMentionMenu.tsx": 1,
   "../features/composer/SlashMenu.tsx": 1,
@@ -313,7 +303,7 @@ describe("fg-faint mixed labels", () => {
         checked += 1;
       }
     }
-    expect(checked).toBe(124);
+    expect(checked).toBe(116);
   });
 
   it("touched files do not gain fg-faint uses", () => {

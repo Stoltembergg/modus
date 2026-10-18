@@ -140,7 +140,7 @@ export function GroupDeliveryFooter({
         aria-hidden
         className={cn(
           "size-3 shrink-0",
-          state === "working" && "animate-spin motion-reduce:animate-none",
+          state === "working" && "animate-spin motion-reduce:animate-pulse",
         )}
         stroke={ICON_STROKE.sm}
       />

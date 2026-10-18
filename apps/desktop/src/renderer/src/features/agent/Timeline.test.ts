@@ -797,6 +797,17 @@ describe("buildBlocks", () => {
     expect(blocks.filter((block) => block.type === "notice")).toEqual([]);
   });
 
+  it("keeps queued prompts out of the chat until they are sent (no duplicate bubble)", () => {
+    const blocks = buildBlocks([
+      item("1", {
+        type: "queue.snapshot",
+        sessionId: "s",
+        items: [{ id: "q-1", delivery: "follow-up", text: "Then add a test", imageCount: 0 }],
+      }),
+    ]);
+    expect(blocks).toEqual([]);
+  });
+
   it("upserts compaction started/ended into one tool-like row", () => {
     const blocks = buildBlocks([
       item("1", {

@@ -9,12 +9,16 @@
 import { useReducedMotion } from "motion/react";
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { cn } from "../../lib/cn";
+import { MOTION_DURATION, MOTION_REDUCED_DURATION } from "../../lib/motion";
 
-const SWAP_MS = 150;
+const SWAP_MS = Math.round(MOTION_DURATION.base * 1000);
+/** Reduced motion: the same exit/enter swap, as a short cross-fade (CSS drops travel + blur). */
+const REDUCED_SWAP_MS = Math.round(MOTION_REDUCED_DURATION * 1000);
 const GAP_MS = 50;
 
 export function ThinkingStates({ label, className }: { label: string; className?: string }) {
   const reduce = useReducedMotion();
+  const swapMs = reduce ? REDUCED_SWAP_MS : SWAP_MS;
   const textRef = useRef<HTMLSpanElement>(null);
   const shownRef = useRef(label);
   const pendingRef = useRef<string | null>(null);
@@ -47,16 +51,6 @@ export function ThinkingStates({ label, className }: { label: string; className?
         animatingRef.current = false;
         return;
       }
-      if (reduce) {
-        el.classList.remove("is-exit", "is-enter-start");
-        apply(next);
-        animatingRef.current = false;
-        const queued = pendingRef.current;
-        pendingRef.current = null;
-        if (queued && queued !== shownRef.current) runSwap(queued);
-        return;
-      }
-
       animatingRef.current = true;
       clearTimers();
       el.classList.remove("is-enter-start");
@@ -75,7 +69,7 @@ export function ThinkingStates({ label, className }: { label: string; className?
           if (queued && queued !== shownRef.current) runSwap(queued);
         }, GAP_MS);
         timersRef.current = [enterId];
-      }, SWAP_MS);
+      }, swapMs);
       timersRef.current = [exitId];
     };
 
@@ -92,7 +86,7 @@ export function ThinkingStates({ label, className }: { label: string; className?
       // Don't cancel mid-swap on label churn — pending queue handles it.
       // Only clean up on unmount (detected via el disconnect in a separate effect).
     };
-  }, [label, reduce]);
+  }, [label, swapMs]);
 
   useEffect(() => {
     const el = textRef.current;
@@ -111,7 +105,7 @@ export function ThinkingStates({ label, className }: { label: string; className?
       className={cn("t-think", className)}
       style={
         {
-          "--think-swap": `${SWAP_MS}ms`,
+          "--think-swap": `${swapMs}ms`,
           "--think-distance": "8px",
           "--think-blur": "2px",
           "--think-shimmer": "2s",

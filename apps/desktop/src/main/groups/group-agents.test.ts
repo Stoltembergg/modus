@@ -1174,6 +1174,8 @@ describe("A2 migration (on an A1-shaped database)", () => {
         "created_at",
         "updated_at",
         "archived_at",
+        // Added after the legacy rebuilds (PR #278), nullable, never backfilled.
+        "avatar_seed",
       ]);
       expect(columns.find((column) => column.name === "group_id")?.notnull).toBe(0);
       const memberAgent = (

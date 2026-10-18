@@ -44,6 +44,8 @@ export type AgentGroupMember = Partial<GroupMemberCapabilities> & {
   archived?: true;
   /** The agent's avatar (A3); the renderer falls back to agentAvatarForId(agentId). */
   avatarFace?: AgentAvatarFace;
+  /** Avatar package seed (eyes, tone, ribbons); null/absent: drawn with agentId. */
+  avatarSeed?: string | null;
   avatarColor?: AgentAvatarColor;
   avatarShape?: AgentAvatarShape;
   joinedAt: string;
@@ -125,6 +127,8 @@ export type AgentInfo = Partial<GroupMemberCapabilities> & {
   avatarFace: AgentAvatarFace;
   avatarColor: AgentAvatarColor;
   avatarShape: AgentAvatarShape;
+  /** Avatar package seed (eyes, tone, ribbons); null: drawn with the id (agentAvatarSeed). */
+  avatarSeed: string | null;
   /** The template this agent was copied from (shared/agent-templates.ts), if any. */
   templateId?: string;
   createdAt: string;
@@ -142,10 +146,15 @@ export type CreateAgentInput = {
   instructions?: string;
   modelId?: string | null;
   defaultWorkspaceId?: string | null;
-  /** Default: derived from the agent id (see agentAvatarForId). */
+  /** Default: derived from the agent id (see agentAvatarForId); a face seed sets its face. */
   avatarFace?: AgentAvatarFace;
   avatarColor?: AgentAvatarColor;
   avatarShape?: AgentAvatarShape;
+  /**
+   * Avatar package seed (shared/agent-avatar-seeds.ts). Absent: unchanged (update)
+   * or none (create); null / blank: cleared, the avatar is drawn with the id.
+   */
+  avatarSeed?: string | null;
 };
 
 /**

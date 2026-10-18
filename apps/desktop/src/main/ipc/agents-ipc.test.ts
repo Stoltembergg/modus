@@ -29,6 +29,7 @@ const AGENT: AgentInfo = {
   avatarFace: "happy",
   avatarColor: "blue",
   avatarShape: "circle",
+  avatarSeed: null,
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
 };
@@ -110,6 +111,36 @@ describe("agents IPC", () => {
         /agent-model-required/,
       );
       expect(service.createProfile).toHaveBeenCalledTimes(1);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("passes avatarSeed through (blank as null) and rejects a client id", async () => {
+    const service = mockService();
+    const handlers = await register(service);
+    const { trusted, unregister } = await trustedEvent();
+    try {
+      handlers.get("agents:create")?.(trusted, {
+        name: "Seeded",
+        modelId: MODEL,
+        avatarSeed: " face-wink-29 ",
+      });
+      expect(service.createProfile).toHaveBeenLastCalledWith({
+        name: "Seeded",
+        modelId: MODEL,
+        avatarSeed: "face-wink-29",
+      });
+      handlers.get("agents:update")?.(trusted, { id: "a-1", avatarSeed: "  " });
+      expect(service.updateAgent).toHaveBeenLastCalledWith("a-1", { avatarSeed: null });
+      handlers.get("agents:update")?.(trusted, { id: "a-1", name: "Kept" });
+      expect(service.updateAgent).toHaveBeenLastCalledWith("a-1", { name: "Kept" });
+      expect(() =>
+        handlers.get("agents:create")?.(trusted, { name: "A", modelId: MODEL, id: "client" }),
+      ).toThrow(/Invalid IPC payload/);
+      expect(() =>
+        handlers.get("agents:create")?.(trusted, { name: "A", modelId: MODEL, avatarSeed: "a b" }),
+      ).toThrow(/Invalid IPC payload/);
     } finally {
       unregister();
     }

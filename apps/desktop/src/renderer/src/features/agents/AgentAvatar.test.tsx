@@ -152,7 +152,7 @@ describe("agentAvatarModel", () => {
         avatarColor: "lime",
         avatarShape: "hexagon",
       }),
-    ).toEqual({ face: "wink", color: "lime", shape: "hexagon" });
+    ).toEqual({ face: "wink", color: "lime", shape: "hexagon", seed: "a" });
     render(<AgentAvatar color="lime" face="wink" />);
     expect(wrapper().dataset.face).toBe("wink");
     expect(wrapper().querySelector(".agent-avatar-eyes")).toBeNull();

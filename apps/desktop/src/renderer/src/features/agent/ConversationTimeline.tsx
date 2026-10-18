@@ -10,6 +10,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { createPortal } from "react-dom";
 import { cn } from "../../lib/cn";
 import { formatClock } from "../../lib/formatClock";
+import { MOTION_EASE, tween } from "../../lib/motion";
 import { blockRenderKeys, type TimelineBlock } from "./Timeline";
 
 const DEFAULT_BASE_WIDTH = 8;
@@ -242,7 +243,7 @@ export function ConversationTimeline({
           initial={{ opacity: 0, scale: 0.985, x: previewTarget.left, y: previewTop }}
           ref={previewRef}
           style={{ width: PREVIEW_WIDTH }}
-          transition={{ duration: 0.1, ease: [0.22, 1, 0.36, 1] }}
+          transition={tween("fast")}
         >
           <TimelinePreviewCard entry={previewTarget.entry} />
         </m.div>
@@ -273,7 +274,7 @@ export function ConversationTimeline({
           mouseY.set(event.clientY);
           updatePreviewFromPointer(event.clientY);
         }}
-        transition={{ duration: visible ? 0.2 : 0.4, ease: visible ? "easeOut" : "easeIn" }}
+        transition={visible ? tween("slow") : { duration: 0.4, ease: MOTION_EASE.exit }}
       >
         <div
           className="grid w-full"

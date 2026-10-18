@@ -1,6 +1,7 @@
 import { type AnimationPlaybackControls, useAnimate, useReducedMotion } from "motion/react";
 import { memo, useEffect } from "react";
 import { cn } from "../../lib/cn";
+import { MOTION_EASE, reducedFade } from "../../lib/motion";
 
 /**
  * Animated Modus mascot — a chunky pixel desk-pet rebuilt as an SVG of <rect>
@@ -18,7 +19,8 @@ import { cn } from "../../lib/cn";
  *   walk-in-place → maybe hop, with randomised pauses, so it feels alive instead
  *   of a fixed canned loop. Keyframes always return to rest, so states compose
  *   without drift.
- * - Respects `prefers-reduced-motion`: renders a static sprite, no loop.
+ * - Respects `prefers-reduced-motion`: the bot never moves; while active it
+ *   breathes slowly in opacity instead (lib/motion), and settles with a fade.
  */
 
 const PURPLE = "#863ff5";
@@ -49,7 +51,18 @@ export const ModusBot = memo(function ModusBot({
 
   useEffect(() => {
     if (prefersReduced) {
-      return;
+      const controls = active
+        ? animate(
+            "#mb-root",
+            { opacity: [1, 0.7, 1] },
+            {
+              duration: busy ? 1.4 : 2.1,
+              ease: MOTION_EASE.inOut,
+              repeat: Number.POSITIVE_INFINITY,
+            },
+          )
+        : animate("#mb-root", { opacity: 1 }, reducedFade);
+      return () => controls.stop();
     }
 
     if (!active) {

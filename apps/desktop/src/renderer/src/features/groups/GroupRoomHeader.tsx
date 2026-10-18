@@ -249,8 +249,8 @@ export function GroupRoomHeader({
           <label
             className={
               chrome
-                ? "group-room-header-search-centered app-no-drag flex min-w-0 items-center gap-1.5 rounded-md bg-chip px-2 py-1 text-fg-muted transition-[background-color,box-shadow] duration-[var(--motion-ui)] focus-within:ring-1 focus-within:ring-focus-ring/50"
-                : "app-no-drag flex min-w-0 w-[min(220px,28vw)] shrink-0 items-center gap-1.5 rounded-md bg-chip px-2 py-1 text-fg-muted transition-[background-color,box-shadow] duration-[var(--motion-ui)] focus-within:ring-1 focus-within:ring-focus-ring/50"
+                ? "group-room-header-search-centered app-no-drag flex min-w-0 items-center gap-1.5 rounded-md bg-chip px-2 py-1 text-fg-muted transition-[background-color,box-shadow] duration-(--motion-duration-base) focus-within:ring-1 focus-within:ring-focus-ring/50"
+                : "app-no-drag flex min-w-0 w-[min(220px,28vw)] shrink-0 items-center gap-1.5 rounded-md bg-chip px-2 py-1 text-fg-muted transition-[background-color,box-shadow] duration-(--motion-duration-base) focus-within:ring-1 focus-within:ring-focus-ring/50"
             }
             data-testid="group-conversation-search"
           >

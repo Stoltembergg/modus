@@ -10,12 +10,18 @@ import {
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { type ITheme, Terminal } from "@xterm/xterm";
-import { animate, m, useMotionValue } from "motion/react";
+import { m, useMotionValue, useReducedMotion } from "motion/react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TerminalEvent, TerminalInfo } from "../../../../shared/contracts";
 import { EmptyState } from "../../components/ui/Panel";
 import { Tooltip } from "../../components/ui/Tooltip";
 import { cn } from "../../lib/cn";
+import {
+  animatePanelWidth,
+  MOTION_DURATION,
+  MOTION_EASE,
+  panelWidthMotion,
+} from "../../lib/motion";
 
 /** "C:\\WINDOWS\\system32\\cmd.exe" → "cmd", "/bin/bash" → "bash". */
 function shellLabel(shell: string): string {
@@ -49,7 +55,7 @@ type TerminalSink = {
 type Registry = Map<string, TerminalSink>;
 
 const DEFAULT_TERMINAL_LIST_WIDTH = 240;
-const TERMINAL_LIST_TRANSITION = { duration: 0.2, ease: [0.22, 1, 0.36, 1] } as const;
+const TERMINAL_LIST_TRANSITION = { duration: MOTION_DURATION.slow, ease: MOTION_EASE.standard };
 
 type TerminalPanelProps = {
   workspaceId?: string | undefined;
@@ -319,6 +325,14 @@ export function TerminalPanel({
   const [activeId, setActiveId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const sidebarW = useMotionValue(DEFAULT_TERMINAL_LIST_WIDTH);
+  // List content opacity: stays 1 under full motion (the width clips it); under
+  // reduced motion the width snaps and the content fades (lib/motion.ts).
+  const sidebarContentOpacity = useMotionValue(1);
+  const reducedMotion = useReducedMotion() ?? false;
+  const sidebarMotion = useMemo(
+    () => panelWidthMotion({ width: TERMINAL_LIST_TRANSITION }, reducedMotion),
+    [reducedMotion],
+  );
 
   const addTab = useCallback((info: TerminalTab): void => {
     setTabs((prev) => (prev.some((item) => item.id === info.id) ? prev : [...prev, info]));
@@ -349,13 +363,13 @@ export function TerminalPanel({
   }, [revealTerminalId, addTab, onRevealTerminalConsumed]);
 
   useEffect(() => {
-    const controls = animate(
-      sidebarW,
-      sidebarOpen ? DEFAULT_TERMINAL_LIST_WIDTH : 0,
-      TERMINAL_LIST_TRANSITION,
-    );
+    const controls = animatePanelWidth(sidebarW, sidebarContentOpacity, {
+      open: sidebarOpen,
+      openWidth: DEFAULT_TERMINAL_LIST_WIDTH,
+      motion: sidebarMotion,
+    });
     return () => controls.stop();
-  }, [sidebarOpen, sidebarW]);
+  }, [sidebarOpen, sidebarW, sidebarContentOpacity, sidebarMotion]);
 
   // Subscribe to PTY output exactly once, ahead of any spawn, so the first
   // prompt is parked in the registry until a view claims it.
@@ -539,7 +553,11 @@ export function TerminalPanel({
             className="shrink-0 overflow-hidden border-hairline border-r"
             style={{ width: sidebarW }}
           >
-            <div className="flex h-full min-h-0 flex-col">
+            <m.div
+              className="flex h-full min-h-0 flex-col"
+              data-panel-content=""
+              style={{ opacity: sidebarContentOpacity }}
+            >
               <div className="flex h-10 shrink-0 items-center gap-2 px-2 text-fg-muted text-sm">
                 <span className="min-w-0 flex-1 truncate">
                   {visibleTabs.length} {visibleTabs.length === 1 ? "Terminal" : "Terminals"}
@@ -567,7 +585,7 @@ export function TerminalPanel({
                   <div className="px-3 py-2 text-fg-muted text-xs">No terminals</div>
                 )}
               </div>
-            </div>
+            </m.div>
           </m.div>
 
           <div className="relative flex min-h-0 flex-1 flex-col bg-canvas">

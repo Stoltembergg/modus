@@ -3,7 +3,7 @@ import { useSettingsText } from "../../../lib/settingsText";
 import { ApprovalModeSettings } from "../ApprovalModeSettings";
 import { AskMissingTargetSetting } from "../AskMissingTargetSetting";
 import { LanguageSetting } from "../LanguageSetting";
-import { SettingsPageHeader } from "../settings-layout";
+import { SettingsList, SettingsPageHeader } from "../settings-layout";
 import { ToolFilterSetting } from "../ToolFilterSetting";
 
 export function GeneralSettingsPanel({
@@ -19,8 +19,10 @@ export function GeneralSettingsPanel({
       <SettingsPageHeader title={t("settings.general.title")} />
       <LanguageSetting />
       <ApprovalModeSettings {...(cwd ? { cwd } : {})} workspaces={workspaces} />
-      <AskMissingTargetSetting />
-      <ToolFilterSetting />
+      <SettingsList>
+        <AskMissingTargetSetting />
+        <ToolFilterSetting />
+      </SettingsList>
     </>
   );
 }

@@ -9,6 +9,8 @@
 - `@earendil-works/pi-ai@0.80.6`
 - Desktop Runtime: `apps/desktop/src/main/agent/pi-sdk-runtime.ts`
 
+> **Atenção ao atualizar o pi (versão fixada 0.80.6 em `apps/desktop/package.json`):** o `PromptQueue` (`apps/desktop/src/main/agent/prompt-queue.ts`, fila visível acima do composer) acessa campos **privados** do pi: `agent.steeringQueue.messages` e `agent.followUpQueue.messages`. Qualquer upgrade do pi exige rodar `apps/desktop/src/main/agent/prompt-queue.test.ts`, incluindo os testes contra uma sessão real do pi, antes do merge.
+
 ---
 
 ## 1. Executive Summary & Verdict

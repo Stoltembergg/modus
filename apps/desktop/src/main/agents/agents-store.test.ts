@@ -24,6 +24,7 @@ const {
   createAgent,
   createAgentFromTemplate,
   createGroupWithNewAgents,
+  createProfile,
   deleteAgent,
   getAgent,
   listAgents,
@@ -596,6 +597,31 @@ describe("agent work lists follow the role", () => {
       });
     }
     expectAgentError(() => createAgentFromTemplate("custom-builder"), "invalid-value");
+  });
+
+  it("New Agent dialog: a custom agent saved with role '' handles Custom's work; a template keeps its role's", () => {
+    // The dialog has no Role field: a custom agent is saved with role "" (the generated
+    // role is discarded), which derives Custom, exactly like the old "Generalist" fallback.
+    const blank = createProfile({
+      name: uid("Blank"),
+      role: "",
+      instructions: "Help.",
+      modelId: "m-1",
+    });
+    expect(blank.role).toBe("");
+    expect(savedRow(blank.id)).toMatchObject(CUSTOM_ROLE_CAPABILITIES);
+    const generalist = createProfile({ name: uid("Gen"), role: "Generalist", modelId: "m-1" });
+    expect(savedRow(generalist.id)).toMatchObject(CUSTOM_ROLE_CAPABILITIES);
+    // A template agent keeps sending its template's role, so it keeps the template's lists.
+    const builder = getAgentTemplate("builder");
+    if (!builder) throw new Error("builder template");
+    const fromTemplate = createProfile({
+      name: uid("Build"),
+      role: builder.role,
+      templateId: "builder",
+    });
+    expect(fromTemplate.role).toBe("Builder");
+    expect(savedRow(fromTemplate.id)).toMatchObject(capabilitiesForRole("builder"));
   });
 
   it("changing the role recalculates; keeping it keeps hand-picked lists", () => {

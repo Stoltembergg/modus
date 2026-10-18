@@ -10438,6 +10438,79 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
     }
   });
 
+  it("shows a queued follow-up in chat only when pi sends it, and a removed one never", async () => {
+    const sessionId = `queue-strip-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    let announceStreamStarted!: () => void;
+    let resolveResponse!: () => void;
+    const streamStarted = new Promise<void>((resolve) => {
+      announceStreamStarted = resolve;
+    });
+    const responseGate = new Promise<void>((resolve) => {
+      resolveResponse = resolve;
+    });
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    const { sessionAt, messagesFor } = await createOfflinePiToolSessions({
+      assistantText: "Done.",
+      responseGate,
+      onStream: () => announceStreamStarted(),
+    });
+    const userTexts = () =>
+      listAgentEvents(sessionId)
+        .filter(({ event }) => event.type === "message.delta")
+        .map(({ event }) => (event as { delta: string }).delta);
+    const snapshots = () =>
+      vi
+        .mocked(window.webContents.send)
+        .mock.calls.map(([, event]) => event as AgentEvent)
+        .filter(
+          (event): event is Extract<AgentEvent, { type: "queue.snapshot" }> =>
+            event.type === "queue.snapshot" && event.sessionId === sessionId,
+        );
+
+    try {
+      const promptTask = runtime.prompt(window, {
+        context: [],
+        delivery: "normal",
+        message: "Start the long task.",
+        sessionId,
+      });
+      await streamStarted;
+      for (const message of ["Then add a test.", "Then delete everything."]) {
+        await runtime.prompt(window, { context: [], delivery: "follow-up", message, sessionId });
+      }
+
+      // Queued, not in chat: the strip carries them, each with its own id.
+      const queued = runtime.listQueuedPrompts(sessionId);
+      expect(queued.map(({ text, delivery }) => [text, delivery])).toEqual([
+        ["Then add a test.", "follow-up"],
+        ["Then delete everything.", "follow-up"],
+      ]);
+      expect(new Set(queued.map(({ id }) => id)).size).toBe(2);
+      expect(snapshots().at(-1)?.items).toEqual(queued);
+      expect(userTexts()).not.toContain("Then add a test.");
+
+      expect(runtime.removeQueuedPrompt(sessionId, queued[1]?.id ?? "")).toEqual({ removed: true });
+      expect(runtime.removeQueuedPrompt(sessionId, "unknown")).toEqual({ removed: false });
+
+      resolveResponse();
+      await promptTask;
+      await sessionAt().agent.waitForIdle();
+
+      const sent = JSON.stringify(messagesFor(sessionAt()));
+      expect(sent).toContain("Then add a test.");
+      expect(sent).not.toContain("Then delete everything.");
+      expect(userTexts().filter((text) => text === "Then add a test.")).toHaveLength(1);
+      expect(userTexts()).not.toContain("Then delete everything.");
+      expect(runtime.listQueuedPrompts(sessionId)).toEqual([]);
+      expect(snapshots().at(-1)?.items).toEqual([]);
+    } finally {
+      resolveResponse();
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
   it("counts a no-output Pi SDK turn as failed without a policy pass", async () => {
     setFeatureFlagOverrides({
       MODUS_USE_KERNEL: true,

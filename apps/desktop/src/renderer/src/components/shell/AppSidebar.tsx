@@ -1,17 +1,18 @@
 import { IconEdit, IconPin, IconPinnedOff, IconSettings, IconUserPlus } from "@tabler/icons-react";
-import { type ReactNode, useState } from "react";
+import { m } from "motion/react";
+import type { ReactNode } from "react";
 import { cn } from "../../lib/cn";
 import { useShellText } from "../../lib/shellText";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { ModusBot } from "../ui/ModusBot";
 import {
-  SIDEBAR_COLLAPSED_WIDTH,
-  SIDEBAR_EXPANDED_WIDTH,
-  Sidebar,
-  SidebarBody,
-  SidebarLink,
-  useSidebar,
-} from "../ui/sidebar";
+  NAV_RAIL_COLLAPSED_WIDTH,
+  NAV_RAIL_EXPANDED_WIDTH,
+  NavRail,
+  NavRailItem,
+  NavRailReveal,
+  useNavRail,
+} from "../ui/NavRail";
 import type { PrimaryDestination } from "./navigation-state";
 
 export type AppSidebarProps = {
@@ -57,12 +58,12 @@ export function writeSidebarPinned(pinned: boolean): void {
 
 /** Width the layout reserves for the sidebar (an unpinned hover never reflows main). */
 export function appSidebarReservedWidth(pinned: boolean): number {
-  return pinned ? SIDEBAR_EXPANDED_WIDTH : SIDEBAR_COLLAPSED_WIDTH;
+  return pinned ? NAV_RAIL_EXPANDED_WIDTH : NAV_RAIL_COLLAPSED_WIDTH;
 }
 
 /**
- * The single left sidebar: replaces the old icon rail + context panel pair
- * (a sidebar inside another sidebar) with one animated column.
+ * The single left sidebar: one navigation rail (60px icons, 300px expanded)
+ * holding the primary actions, the contextual list and Settings.
  */
 export function AppSidebar({
   active,
@@ -76,7 +77,6 @@ export function AppSidebar({
   trafficLightClearance = false,
   children,
 }: AppSidebarProps) {
-  const [hoverOpen, setHoverOpen] = useState(false);
   const t = useShellText();
   return (
     <div
@@ -86,57 +86,45 @@ export function AppSidebar({
       data-testid="app-sidebar"
       style={{ width: appSidebarReservedWidth(pinned) }}
     >
-      <Sidebar locked={pinned} open={hoverOpen} setOpen={setHoverOpen}>
-        <SidebarBody
-          aria-label="Primary navigation"
-          className={cn(
-            "app-context-sidebar justify-between gap-3 px-2 pb-2",
-            trafficLightClearance ? "pt-10" : "pt-3",
-            !pinned && "absolute inset-y-0 left-0 z-40",
-          )}
-          mobileLabel={t("shell.menu")}
-          role="navigation"
-        >
-          <div className="flex min-h-0 flex-1 flex-col overflow-x-hidden">
-            <Brand
-              pinned={pinned}
-              onPinnedChange={onPinnedChange}
-              pinLabel={pinned ? t("shell.unpinSidebar") : t("shell.pinSidebar")}
+      <NavRail
+        className={cn("justify-between gap-3 px-2 pb-2", trafficLightClearance ? "pt-10" : "pt-3")}
+        compactMenuLabel={t("shell.menu")}
+        label="Primary navigation"
+        pinned={pinned}
+      >
+        <div className="flex min-h-0 flex-1 flex-col overflow-x-hidden">
+          <Brand
+            pinned={pinned}
+            onPinnedChange={onPinnedChange}
+            pinLabel={pinned ? t("shell.unpinSidebar") : t("shell.pinSidebar")}
+          />
+          <div className="mt-4 flex flex-col gap-0.5">
+            <NavRailItem
+              disabled={!canCreateSession}
+              icon={<IconEdit size={ICON.rail} stroke={ICON_STROKE.rail} />}
+              label={t("shell.newMessage")}
+              onSelect={onNewMessage}
             />
-            <div className="mt-4 flex flex-col gap-0.5">
-              <SidebarLink
-                disabled={!canCreateSession}
-                link={{
-                  label: t("shell.newMessage"),
-                  icon: <IconEdit size={ICON.rail} stroke={ICON_STROKE.rail} />,
-                  onClick: onNewMessage,
-                }}
+            {onNewProfile && active === "direct-messages" ? (
+              <NavRailItem
+                icon={<IconUserPlus size={ICON.rail} stroke={ICON_STROKE.rail} />}
+                label={t("shell.newProfile")}
+                onSelect={onNewProfile}
               />
-              {onNewProfile && active === "direct-messages" ? (
-                <SidebarLink
-                  link={{
-                    label: t("shell.newProfile"),
-                    icon: <IconUserPlus size={ICON.rail} stroke={ICON_STROKE.rail} />,
-                    onClick: onNewProfile,
-                  }}
-                />
-              ) : null}
-            </div>
-            {pinned || hoverOpen ? beforeProjects : null}
-            <ContextList>{children}</ContextList>
+            ) : null}
           </div>
-          <div className="pt-2">
-            <SidebarLink
-              active={active === "settings"}
-              link={{
-                label: t("shell.settings"),
-                icon: <IconSettings size={ICON.rail} stroke={ICON_STROKE.rail} />,
-                onClick: () => onNavigate("settings"),
-              }}
-            />
-          </div>
-        </SidebarBody>
-      </Sidebar>
+          <ExpandedOnly>{beforeProjects}</ExpandedOnly>
+          <ContextList>{children}</ContextList>
+        </div>
+        <div className="pt-2">
+          <NavRailItem
+            current={active === "settings"}
+            icon={<IconSettings size={ICON.rail} stroke={ICON_STROKE.rail} />}
+            label={t("shell.settings")}
+            onSelect={() => onNavigate("settings")}
+          />
+        </div>
+      </NavRail>
     </div>
   );
 }
@@ -150,44 +138,62 @@ function Brand({
   onPinnedChange(pinned: boolean): void;
   pinLabel: string;
 }) {
-  const { open } = useSidebar();
+  const { expanded, compact, motion } = useNavRail();
   return (
     <div className="flex h-8 items-center gap-2 pl-[6px]" data-testid="app-rail-brand">
       <ModusBot className="size-7 shrink-0" motionScale={0.25} />
-      {open ? (
+      {expanded ? (
         <>
-          <span className="min-w-0 flex-1 truncate text-sm font-medium text-fg">Modus</span>
-          <button
-            aria-label={pinLabel}
-            aria-pressed={pinned}
-            className="app-sidebar-icon-button"
-            onClick={() => onPinnedChange(!pinned)}
-            title={pinLabel}
-            type="button"
+          {/* Mounts only while expanded, so it needs its own entrance (`appear`). */}
+          <NavRailReveal
+            appear
+            className="min-w-0 flex-1 truncate text-sm font-medium text-fg"
+            motion={motion}
+            visible
           >
-            {pinned ? (
-              <IconPinnedOff aria-hidden size={ICON.sm} stroke={ICON_STROKE.sm} />
-            ) : (
-              <IconPin aria-hidden size={ICON.sm} stroke={ICON_STROKE.sm} />
-            )}
-          </button>
+            Modus
+          </NavRailReveal>
+          {compact ? null : (
+            <button
+              aria-label={pinLabel}
+              aria-pressed={pinned}
+              className="nav-rail-icon-button"
+              onClick={() => onPinnedChange(!pinned)}
+              title={pinLabel}
+              type="button"
+            >
+              {pinned ? (
+                <IconPinnedOff aria-hidden size={ICON.sm} stroke={ICON_STROKE.sm} />
+              ) : (
+                <IconPin aria-hidden size={ICON.sm} stroke={ICON_STROKE.sm} />
+              )}
+            </button>
+          )}
         </>
       ) : null}
     </div>
   );
 }
 
+function ExpandedOnly({ children }: { children?: ReactNode }) {
+  const { expanded } = useNavRail();
+  return expanded ? children : null;
+}
+
 /** The contextual list only exists while expanded; collapsed shows just the icons. */
 function ContextList({ children }: { children?: ReactNode }) {
-  const { open } = useSidebar();
-  if (!open || !children) return <div className="flex-1" />;
+  const { expanded, motion } = useNavRail();
+  if (!expanded || !children) return <div className="flex-1" />;
   return (
-    <div
+    <m.div
+      animate={{ opacity: 1 }}
       className="mt-3 flex min-h-0 flex-1 flex-col pt-2"
       data-shell-layer="context-sidebar"
       data-testid="context-sidebar"
+      initial={{ opacity: 0 }}
+      transition={motion.content}
     >
       {children}
-    </div>
+    </m.div>
   );
 }

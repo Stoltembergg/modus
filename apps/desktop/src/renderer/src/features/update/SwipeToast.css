@@ -9,7 +9,7 @@
   --st-gap: 10px;
   --st-offset: 32px;
   --st-z: 999999999;
-  --st-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --st-ease-out: var(--motion-ease-standard);
 
   display: grid;
   grid-template-rows: 1fr;
@@ -49,7 +49,7 @@
 }
 
 .swipe-toast[data-inline="true"][data-phase="gone"] {
-  transition-duration: 200ms;
+  transition-duration: var(--motion-duration-slow);
 }
 
 .swipe-toast__gate {
@@ -276,13 +276,13 @@
   height: 100%;
   border-radius: inherit;
   background: var(--color-build);
-  transition: width 200ms;
+  transition: width var(--motion-duration-slow) var(--motion-ease-standard);
 }
 
 @media (prefers-reduced-motion: reduce) {
   .swipe-toast[data-phase][data-mounted] .swipe-toast__lift {
     transform: none;
-    transition: opacity 200ms ease;
+    transition: opacity var(--motion-duration-reduced) var(--motion-ease-linear);
   }
 
   .swipe-toast__action:active,

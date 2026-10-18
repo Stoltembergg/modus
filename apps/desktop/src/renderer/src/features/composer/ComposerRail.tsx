@@ -1,7 +1,6 @@
 import { IconChevronRight } from "@tabler/icons-react";
 import { type MouseEvent, type ReactNode, useCallback } from "react";
 import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
-import { cn } from "../../lib/cn";
 
 /**
  * One homogeneous row in the composer status card (Cursor-style): chevron +
@@ -38,10 +37,8 @@ export function ComposerRail({
           type="button"
         >
           <IconChevronRight
-            className={cn(
-              "shrink-0 text-fg-faint transition-[color,transform] duration-150 group-hover/rail:text-fg-muted",
-              expanded && "rotate-90",
-            )}
+            className="disclosure-chevron disclosure-chevron--tint shrink-0 text-fg-faint duration-(--motion-duration-base) group-hover/rail:text-fg-muted"
+            data-open={expanded ? "" : undefined}
             size={13}
             stroke={1.8}
           />

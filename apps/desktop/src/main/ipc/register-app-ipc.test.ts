@@ -781,3 +781,58 @@ describe("agent workspace move IPC", () => {
     expect(moveSession).not.toHaveBeenCalled();
   });
 });
+
+describe("agent queue IPC", () => {
+  const sender = { mainFrame: { url: "file:///app/index.html" } };
+  const trustedEvent = { sender, senderFrame: sender.mainFrame };
+  const listQueuedPrompts = vi.fn(() => [
+    { id: "q-1", delivery: "follow-up", text: "Then add a test", imageCount: 0 },
+  ]);
+  const removeQueuedPrompt = vi.fn(() => ({ removed: true }));
+  beforeEach(() => {
+    mocks.handlers.clear();
+    listQueuedPrompts.mockClear();
+    removeQueuedPrompt.mockClear();
+    mocks.getAgentSession.mockReset();
+    mocks.getAgentSession.mockReturnValue({ id: "session-1", workspaceId: "workspace-1" });
+    mocks.getAgentRuntime.mockReturnValue({ listQueuedPrompts, removeQueuedPrompt });
+    registerTrustedSender(sender, "file:///app/index.html");
+    registerAppIpc();
+  });
+
+  it("lists the session's queue from the runtime", async () => {
+    await expect(
+      mocks.handlers.get(IPC_CHANNELS.agentQueueList)?.(
+        trustedEvent as never,
+        "session-1" as never,
+      ),
+    ).resolves.toEqual([
+      { id: "q-1", delivery: "follow-up", text: "Then add a test", imageCount: 0 },
+    ]);
+    expect(listQueuedPrompts).toHaveBeenCalledWith("session-1");
+  });
+
+  it("removes one queued prompt by id through the runtime", async () => {
+    await expect(
+      mocks.handlers.get(IPC_CHANNELS.agentQueueRemove)?.(
+        trustedEvent as never,
+        { sessionId: "session-1", id: "q-1" } as never,
+      ),
+    ).resolves.toEqual({ removed: true });
+    expect(removeQueuedPrompt).toHaveBeenCalledWith("session-1", "q-1");
+  });
+
+  it("rejects foreign senders and payloads without an id", async () => {
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentQueueRemove);
+    await expect(
+      handler?.(
+        { senderFrame: { url: "https://foreign.invalid" } } as never,
+        { sessionId: "session-1", id: "q-1" } as never,
+      ),
+    ).rejects.toThrow();
+    await expect(
+      handler?.(trustedEvent as never, { sessionId: "session-1" } as never),
+    ).rejects.toThrow("Invalid IPC payload");
+    expect(removeQueuedPrompt).not.toHaveBeenCalled();
+  });
+});

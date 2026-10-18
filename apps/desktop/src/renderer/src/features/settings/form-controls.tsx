@@ -7,10 +7,11 @@ import {
   IconPlus,
   IconTrash,
 } from "@tabler/icons-react";
-import { AnimatePresence, m } from "motion/react";
-import { type ReactNode, useState } from "react";
+import { AnimatePresence, m, useReducedMotion } from "motion/react";
+import { type ReactNode, useId, useState } from "react";
 import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
 import { cn } from "../../lib/cn";
+import { MOTION_SPRING, motionTransition, tween } from "../../lib/motion";
 import { useSettingsText } from "../../lib/settingsText";
 import type { KeyValueRow } from "./provider-form-mapping";
 
@@ -64,7 +65,7 @@ export function Field({
       <input
         autoComplete={autoComplete}
         className={cn(
-          "h-10 w-full rounded-md border border-hairline bg-canvas px-3 text-sm text-fg outline-none placeholder:text-fg-faint transition-colors hover:border-hairline-strong focus:border-hairline-strong focus:ring-2 focus:ring-white/5",
+          "h-10 w-full rounded-md border border-hairline bg-canvas px-3 text-sm text-fg outline-none placeholder:text-fg-faint transition-colors hover:border-hairline-strong focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35",
           mono && "font-mono",
         )}
         onChange={(event) => onChange(event.target.value)}
@@ -108,7 +109,7 @@ export function SelectField<T extends string>({
       >
         <Select.Trigger
           aria-label={label}
-          className="flex h-10 w-full items-center justify-between gap-3 rounded-md border border-hairline bg-canvas px-3 text-sm text-fg outline-none transition-colors hover:border-hairline-strong focus-visible:border-hairline-strong focus-visible:ring-2 focus-visible:ring-white/5 data-popup-open:border-hairline-strong"
+          className="flex h-10 w-full items-center justify-between gap-3 rounded-md border border-hairline bg-canvas px-3 text-sm text-fg outline-none transition-colors hover:border-hairline-strong focus-visible:border-focus-ring/60 focus-visible:ring-2 focus-visible:ring-focus-ring/35 data-popup-open:border-hairline-strong"
         >
           <Select.Value>{(selected) => optionLabel(options, String(selected))}</Select.Value>
           <Select.Icon>
@@ -123,7 +124,7 @@ export function SelectField<T extends string>({
             side="bottom"
             sideOffset={5}
           >
-            <Select.Popup className="scroll-thin origin-(--transform-origin) min-w-[var(--anchor-width)] overflow-y-auto popup-chrome p-1 transition-[transform,opacity] duration-100 data-[side=bottom]:data-ending-style:translate-y-[-4px] data-[side=bottom]:data-starting-style:translate-y-[-4px] data-[side=top]:data-ending-style:translate-y-[4px] data-[side=top]:data-starting-style:translate-y-[4px] data-ending-style:opacity-0 data-starting-style:opacity-0">
+            <Select.Popup className="scroll-thin origin-(--transform-origin) min-w-[var(--anchor-width)] overflow-y-auto popup-chrome p-1 transition-[transform,opacity] duration-(--motion-duration-fast) data-[side=bottom]:data-ending-style:translate-y-[-4px] data-[side=bottom]:data-starting-style:translate-y-[-4px] data-[side=top]:data-ending-style:translate-y-[4px] data-[side=top]:data-starting-style:translate-y-[4px] data-ending-style:opacity-0 data-starting-style:opacity-0">
               {options.map((option) => (
                 <Select.Item
                   className="grid h-8 cursor-default grid-cols-[minmax(0,1fr)_16px] items-center gap-2 rounded-md px-2 text-sm text-fg-muted outline-none select-none data-highlighted:bg-hover data-highlighted:text-fg"
@@ -164,19 +165,19 @@ export function SwitchControl({
       aria-label={ariaLabel}
       checked={checked}
       className={cn(
-        "relative flex h-5 w-9 shrink-0 items-center rounded-full border border-hairline bg-chip px-0.5 outline-none transition-colors",
-        "data-[checked]:border-fg data-[checked]:bg-fg",
+        "relative flex h-5 w-9 shrink-0 items-center rounded-full border border-transparent bg-chip-strong px-0.5 outline-none transition-colors duration-(--motion-duration-base) ease-standard",
+        "data-[checked]:bg-accent",
         "data-[unchecked]:hover:bg-chip-strong",
         "data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50",
-        "focus-visible:border-hairline-strong focus-visible:ring-2 focus-visible:ring-white/10",
+        "focus-visible:ring-2 focus-visible:ring-focus-ring/50 focus-visible:ring-offset-1 focus-visible:ring-offset-canvas",
       )}
       disabled={disabled}
       onCheckedChange={(nextChecked) => onCheckedChange(nextChecked)}
     >
       <Switch.Thumb
         className={cn(
-          "block size-4 rounded-full bg-fg-muted transition-transform duration-150 ease-out",
-          "data-[checked]:translate-x-4 data-[checked]:bg-canvas",
+          "block size-4 rounded-full bg-fg-muted shadow-sm transition-[translate,background-color] duration-(--motion-duration-base) ease-standard motion-reduce:transition-colors",
+          "data-[checked]:translate-x-4 data-[checked]:bg-on-accent",
           "data-[unchecked]:translate-x-0",
         )}
       />
@@ -184,24 +185,82 @@ export function SwitchControl({
   );
 }
 
+/**
+ * Segmented choice (theme, transparency, scopes). The selected option gets the
+ * accent tint and text; the tint slides between options with the snappy spring,
+ * and fades in place when motion is reduced.
+ */
+export function SettingsSegmented<T extends string>({
+  disabled = false,
+  label,
+  onChange,
+  options,
+  value,
+}: {
+  disabled?: boolean;
+  label: string;
+  onChange(value: T): void;
+  options: ReadonlyArray<{ value: T; label: string; title?: string; icon?: ReactNode }>;
+  value: T;
+}) {
+  const indicatorId = useId();
+  const reduced = useReducedMotion() ?? false;
+  return (
+    <fieldset
+      aria-label={label}
+      className={cn(
+        "flex min-w-0 items-center gap-0.5 rounded-lg bg-chip p-0.5",
+        disabled && "opacity-50",
+      )}
+    >
+      {options.map((option) => {
+        const active = option.value === value;
+        return (
+          <button
+            aria-pressed={active}
+            className={cn(
+              "relative flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs outline-none transition-colors disabled:cursor-not-allowed focus-visible:ring-2 focus-visible:ring-focus-ring/50",
+              active ? "text-(--accent-text,var(--color-accent))" : "text-fg-muted hover:text-fg",
+            )}
+            disabled={disabled}
+            key={option.value}
+            onClick={() => onChange(option.value)}
+            title={option.title}
+            type="button"
+          >
+            {active ? (
+              <m.span
+                aria-hidden
+                className="absolute inset-0 rounded-md bg-selected"
+                data-settings-selected=""
+                layoutId={indicatorId}
+                transition={motionTransition(MOTION_SPRING.snappy, reduced)}
+              />
+            ) : null}
+            <span className="relative flex items-center gap-1.5">
+              {option.icon}
+              {option.label}
+            </span>
+          </button>
+        );
+      })}
+    </fieldset>
+  );
+}
+
 /** Compact labeled switch row — one line, no card chrome. */
 export function ToggleField({
   checked,
-  description,
   label,
   onChange,
 }: {
   checked: boolean;
-  description: string;
   label: string;
   onChange(value: boolean): void;
 }) {
   return (
     <div className="flex items-center justify-between gap-4 py-1">
-      <span className="min-w-0">
-        <span className="block text-sm text-fg">{label}</span>
-        <span className="mt-0.5 block text-xs leading-5 text-fg-muted">{description}</span>
-      </span>
+      <span className="min-w-0 text-sm text-fg">{label}</span>
       <SwitchControl ariaLabel={label} checked={checked} onCheckedChange={onChange} />
     </div>
   );
@@ -226,7 +285,8 @@ export function Disclosure({
         type="button"
       >
         <IconChevronRight
-          className={cn("transition-transform duration-150", open && "rotate-90")}
+          className="disclosure-chevron duration-(--motion-duration-base)"
+          data-open={open ? "" : undefined}
           size={13}
           stroke={1.8}
         />
@@ -242,7 +302,6 @@ export function Disclosure({
 /** Borderless key/value row list with add/remove — used for header editors. */
 export function KeyValueEditor({
   addLabel,
-  description,
   emptyLabel,
   keyPlaceholder,
   rows,
@@ -253,7 +312,6 @@ export function KeyValueEditor({
   onRemove,
 }: {
   addLabel: string;
-  description: string;
   emptyLabel: string;
   keyPlaceholder: string;
   rows: KeyValueRow[];
@@ -267,10 +325,7 @@ export function KeyValueEditor({
   return (
     <section className="grid gap-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="text-xs text-fg-muted">{title}</h3>
-          <p className="mt-0.5 max-w-[560px] text-xs leading-5 text-fg-muted">{description}</p>
-        </div>
+        <h3 className="min-w-0 text-xs text-fg-muted">{title}</h3>
         <button
           className="flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-xs text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
           onClick={onAdd}
@@ -290,18 +345,18 @@ export function KeyValueEditor({
               initial={{ opacity: 0, y: 4 }}
               key={row.rowId}
               layout
-              transition={{ duration: 0.14, ease: "easeOut" }}
+              transition={tween("base")}
             >
               <input
                 aria-label={t("settings.window.keyValueKeyAriaLabel", { title })}
-                className="h-9 rounded-md border border-hairline bg-canvas px-3 font-mono text-xs text-fg outline-none placeholder:text-fg-faint transition-colors hover:border-hairline-strong focus:border-hairline-strong"
+                className="h-9 rounded-md border border-hairline bg-canvas px-3 font-mono text-xs text-fg outline-none placeholder:text-fg-faint transition-colors hover:border-hairline-strong focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
                 onChange={(event) => onChange(row.rowId, { key: event.target.value })}
                 placeholder={keyPlaceholder}
                 value={row.key}
               />
               <input
                 aria-label={t("settings.window.keyValueValueAriaLabel", { title })}
-                className="h-9 rounded-md border border-hairline bg-canvas px-3 font-mono text-xs text-fg outline-none placeholder:text-fg-faint transition-colors hover:border-hairline-strong focus:border-hairline-strong"
+                className="h-9 rounded-md border border-hairline bg-canvas px-3 font-mono text-xs text-fg outline-none placeholder:text-fg-faint transition-colors hover:border-hairline-strong focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
                 onChange={(event) => onChange(row.rowId, { value: event.target.value })}
                 placeholder={valuePlaceholder}
                 value={row.value}

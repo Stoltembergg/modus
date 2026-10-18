@@ -13,6 +13,7 @@ import type { CustomProviderConfig, TestCustomProviderResult } from "../../../..
 import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
 import { WorkingText } from "../../components/ui/WorkingText";
 import { cn } from "../../lib/cn";
+import { tween } from "../../lib/motion";
 import { type SettingsTextFn, settingsTextFor, useSettingsText } from "../../lib/settingsText";
 import { formatUiNumber, uiIntlLocale } from "../../lib/uiIntl";
 import {
@@ -350,7 +351,6 @@ export function CustomProviderForm({
           />
           <ToggleField
             checked={authHeader}
-            description={t("settings.customProvider.authHeaderDescription")}
             label={t("settings.customProvider.authHeader")}
             onChange={(value) => {
               setAuthHeaderTouched(true);
@@ -361,13 +361,11 @@ export function CustomProviderForm({
             <>
               <ToggleField
                 checked={supportsDeveloperRole}
-                description={t("settings.customProvider.developerRoleDescription")}
                 label={t("settings.customProvider.developerRole")}
                 onChange={setSupportsDeveloperRole}
               />
               <ToggleField
                 checked={supportsReasoningEffort}
-                description={t("settings.customProvider.reasoningEffortDescription")}
                 label={t("settings.customProvider.reasoningEffort")}
                 onChange={setSupportsReasoningEffort}
               />
@@ -375,7 +373,6 @@ export function CustomProviderForm({
           ) : null}
           <KeyValueEditor
             addLabel={t("settings.customProvider.addHeader")}
-            description={t("settings.customProvider.providerHeadersDescription")}
             emptyLabel={t("settings.customProvider.providerHeadersEmpty")}
             keyPlaceholder={t("settings.customProvider.headerKeyPlaceholder")}
             onAdd={() => setProviderHeaders((current) => [...current, createKeyValueRow()])}
@@ -419,7 +416,7 @@ export function CustomProviderForm({
         </div>
       </FormSection>
 
-      <div className="sticky bottom-0 z-10 border-hairline-soft border-t bg-canvas pt-3 pb-1">
+      <div className="sticky bottom-0 z-10 bg-canvas pt-3 pb-1">
         {formError ? (
           <p className="mb-2 text-xs leading-5 text-danger" title={formError}>
             {formError}
@@ -454,13 +451,13 @@ export function CustomProviderForm({
             {t("settings.customProvider.cancel")}
           </button>
           <button
-            className="flex h-9 shrink-0 items-center gap-2 rounded-md bg-fg px-3.5 text-sm text-canvas transition-colors hover:bg-fg-muted disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex h-9 shrink-0 items-center gap-2 rounded-md bg-accent px-3.5 text-sm text-on-accent transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
             disabled={busy || Boolean(missingReason)}
             title={missingReason}
             type="submit"
           >
             {busy ? (
-              <WorkingText className="text-canvas">
+              <WorkingText className="text-on-accent">
                 {t("settings.customProvider.saving")}
               </WorkingText>
             ) : (
@@ -526,7 +523,7 @@ function FormSection({
   title: string;
 }) {
   return (
-    <section className="grid gap-4 border-hairline-soft border-t pt-6 first:border-t-0 first:pt-0">
+    <section className="grid gap-4 pt-6 first:border-t-0 first:pt-0">
       <div className="flex items-center justify-between gap-3">
         <h3 className="text-xs text-fg-subtle">{title}</h3>
         {action ?? null}
@@ -580,23 +577,23 @@ function ModelRowEditor({
   return (
     <m.div
       animate={{ opacity: 1, y: 0 }}
-      className="rounded-lg border border-hairline-soft"
+      className="settings-group"
       exit={{ opacity: 0, y: -6 }}
       initial={{ opacity: 0, y: 6 }}
       layout
-      transition={{ duration: 0.16, ease: "easeOut" }}
+      transition={tween("base")}
     >
       <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] items-center gap-2 px-3 py-2.5">
         <input
           aria-label={t("settings.customProvider.modelId")}
-          className="h-9 min-w-0 rounded-md border border-hairline bg-canvas px-3 font-mono text-xs text-fg outline-none placeholder:text-fg-faint transition-colors hover:border-hairline-strong focus:border-hairline-strong"
+          className="h-9 min-w-0 rounded-md border border-hairline bg-canvas px-3 font-mono text-xs text-fg outline-none placeholder:text-fg-faint transition-colors hover:border-hairline-strong focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
           onChange={(event) => onChange({ id: event.target.value })}
           placeholder={t("settings.customProvider.modelIdPlaceholder")}
           value={row.id}
         />
         <input
           aria-label={t("settings.customProvider.modelDisplayName")}
-          className="h-9 min-w-0 rounded-md border border-hairline bg-canvas px-3 text-sm text-fg outline-none placeholder:text-fg-faint transition-colors hover:border-hairline-strong focus:border-hairline-strong"
+          className="h-9 min-w-0 rounded-md border border-hairline bg-canvas px-3 text-sm text-fg outline-none placeholder:text-fg-faint transition-colors hover:border-hairline-strong focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
           onChange={(event) => onChange({ name: event.target.value })}
           placeholder={t("settings.customProvider.modelDisplayNamePlaceholder")}
           value={row.name}
@@ -624,12 +621,13 @@ function ModelRowEditor({
 
       <button
         aria-expanded={open}
-        className="flex w-full items-center gap-1.5 border-hairline-soft border-t px-3 py-2 text-left text-xs text-fg-faint transition-colors hover:text-fg-subtle"
+        className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-xs text-fg-faint transition-colors hover:text-fg-subtle"
         onClick={() => setOpen((value) => !value)}
         type="button"
       >
         <IconChevronRight
-          className={cn("shrink-0 transition-transform duration-150", open && "rotate-90")}
+          className="disclosure-chevron shrink-0 duration-(--motion-duration-base)"
+          data-open={open ? "" : undefined}
           size={12}
           stroke={1.8}
         />
@@ -638,7 +636,7 @@ function ModelRowEditor({
       </button>
 
       <CollapsibleMotion open={open} preset="default">
-        <div className="grid gap-6 border-hairline-soft border-t px-3.5 pt-4 pb-4">
+        <div className="grid gap-6 px-3.5 pt-4 pb-4">
           {row.reasoning ? (
             <OptionGroup
               hint={
@@ -729,13 +727,11 @@ function ModelRowEditor({
                 <div className="grid gap-1">
                   <ToggleField
                     checked={row.adaptiveThinking}
-                    description={t("settings.customProvider.adaptiveThinkingDescription")}
                     label={t("settings.customProvider.adaptiveThinking")}
                     onChange={(value) => onChange({ adaptiveThinking: value })}
                   />
                   <ToggleField
                     checked={row.allowEmptySignature}
-                    description={t("settings.customProvider.allowUnsignedThinkingDescription")}
                     label={t("settings.customProvider.allowUnsignedThinking")}
                     onChange={(value) => onChange({ allowEmptySignature: value })}
                   />
@@ -744,7 +740,6 @@ function ModelRowEditor({
               {isOpenAiCompletions ? (
                 <ToggleField
                   checked={row.supportsUsageInStreaming}
-                  description={t("settings.customProvider.streamingUsageDescription")}
                   label={t("settings.customProvider.streamingUsage")}
                   onChange={(value) => onChange({ supportsUsageInStreaming: value })}
                 />
@@ -758,7 +753,6 @@ function ModelRowEditor({
           >
             <ToggleField
               checked={row.imageInput}
-              description={t("settings.customProvider.imageInputDescription")}
               label={t("settings.customProvider.imageInput")}
               onChange={(value) => onChange({ imageInput: value })}
             />
@@ -841,7 +835,6 @@ function ModelRowEditor({
 
           <KeyValueEditor
             addLabel={t("settings.customProvider.addHeader")}
-            description={t("settings.customProvider.modelHeadersDescription")}
             emptyLabel={t("settings.customProvider.modelHeadersEmpty")}
             keyPlaceholder={t("settings.customProvider.headerKeyPlaceholder")}
             onAdd={() => onChange({ headers: [...row.headers, createKeyValueRow()] })}

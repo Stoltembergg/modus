@@ -99,7 +99,7 @@ export function FailureBlacklistView({
             <>
               {state.status === "loaded" && state.entries.length > 0 && onClearAll ? (
                 <button
-                  className="flex h-8 items-center gap-1.5 rounded-md border border-hairline-soft px-2.5 text-xs text-fg-muted transition-colors hover:bg-hover hover:text-fg disabled:cursor-wait disabled:opacity-50"
+                  className="flex h-8 items-center gap-1.5 rounded-md bg-chip px-2.5 text-xs text-fg-muted transition-colors hover:bg-chip-strong hover:text-fg disabled:cursor-wait disabled:opacity-50"
                   disabled={actionsDisabled}
                   onClick={onClearAll}
                   type="button"
@@ -109,7 +109,7 @@ export function FailureBlacklistView({
               ) : null}
               <button
                 aria-label="Refresh failure blacklist"
-                className="flex h-8 items-center gap-1.5 rounded-md border border-hairline-soft px-2.5 text-xs text-fg-muted transition-colors hover:bg-hover hover:text-fg disabled:cursor-wait disabled:opacity-50"
+                className="flex h-8 items-center gap-1.5 rounded-md bg-chip px-2.5 text-xs text-fg-muted transition-colors hover:bg-chip-strong hover:text-fg disabled:cursor-wait disabled:opacity-50"
                 disabled={actionsDisabled}
                 onClick={onRefresh}
                 type="button"
@@ -118,7 +118,7 @@ export function FailureBlacklistView({
                   aria-hidden
                   className={
                     state.status === "loading" || clearing
-                      ? "animate-spin motion-reduce:animate-none"
+                      ? "animate-spin motion-reduce:animate-pulse"
                       : ""
                   }
                   size={14}
@@ -128,7 +128,6 @@ export function FailureBlacklistView({
             </>
           ) : undefined
         }
-        description="Soft-discouraged strategies for this workspace. Entries expire automatically and never permanently block a changed revision."
         title="Failure blacklist"
       />
       {clearError ? (
@@ -140,16 +139,16 @@ export function FailureBlacklistView({
         </div>
       ) : null}
       {state.status === "unavailable" ? (
-        <div className="rounded-xl border border-hairline-soft bg-panel p-5 text-sm text-fg-muted">
+        <div className="settings-group p-5 text-sm text-fg-muted">
           Choose a workspace to manage the failure blacklist.
         </div>
       ) : state.status === "loading" ? (
         <div
           aria-live="polite"
-          className="flex min-h-28 items-center justify-center gap-2 rounded-xl border border-hairline-soft bg-panel text-sm text-fg-muted"
+          className="flex min-h-28 items-center justify-center gap-2 settings-group text-sm text-fg-muted"
           role="status"
         >
-          <IconRefresh aria-hidden className="animate-spin motion-reduce:animate-none" size={16} />
+          <IconRefresh aria-hidden className="animate-spin motion-reduce:animate-pulse" size={16} />
           Loading failure blacklist…
         </div>
       ) : state.status === "error" ? (
@@ -159,7 +158,7 @@ export function FailureBlacklistView({
         >
           <p className="text-sm text-fg">Failure blacklist could not be loaded.</p>
           <button
-            className="h-8 rounded-md border border-hairline-soft px-3 text-xs text-fg-muted transition-colors hover:bg-hover hover:text-fg disabled:cursor-wait disabled:opacity-50"
+            className="h-8 rounded-md bg-chip px-3 text-xs text-fg-muted transition-colors hover:bg-chip-strong hover:text-fg disabled:cursor-wait disabled:opacity-50"
             disabled={clearing}
             onClick={onRefresh}
             type="button"
@@ -189,7 +188,7 @@ function FailureBlacklistResults({
 }) {
   return (
     <div className="space-y-5">
-      <section className="rounded-xl border border-hairline-soft bg-panel p-4">
+      <section className="settings-group p-4">
         <p className="font-medium text-fg text-sm">Soft discourage only</p>
         <p className="mt-1 text-xs leading-relaxed text-fg-muted">
           Active entries bias Meta Controller away from repeating a failed strategy signature. They
@@ -202,7 +201,7 @@ function FailureBlacklistResults({
       </section>
 
       {entries.length === 0 ? (
-        <section className="rounded-xl border border-hairline-soft bg-panel p-5" role="status">
+        <section className="settings-group p-5" role="status">
           <h3 className="font-medium text-fg text-sm">No active soft-blacklist entries</h3>
           <p className="mt-1 text-xs leading-relaxed text-fg-muted">
             Repeated failure signatures are discouraged here when Failure Intelligence records them.
@@ -239,7 +238,7 @@ function FailureBlacklistRow({
 }) {
   const clearLabel = formatClearStrategyLabel(strategyEntryCount);
   return (
-    <article className="min-w-0 rounded-xl border border-hairline-soft bg-panel p-4">
+    <article className="min-w-0 settings-group p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -257,7 +256,7 @@ function FailureBlacklistRow({
         {onClearStrategy ? (
           <button
             aria-label={`${clearLabel} ${entry.strategyCode}`}
-            className="h-7 shrink-0 rounded-md border border-hairline-soft px-2.5 text-2xs text-fg-muted transition-colors hover:bg-hover hover:text-fg disabled:cursor-wait disabled:opacity-50"
+            className="h-7 shrink-0 rounded-md bg-chip px-2.5 text-2xs text-fg-muted transition-colors hover:bg-chip-strong hover:text-fg disabled:cursor-wait disabled:opacity-50"
             disabled={clearing}
             onClick={() => onClearStrategy(entry.strategyCode)}
             type="button"

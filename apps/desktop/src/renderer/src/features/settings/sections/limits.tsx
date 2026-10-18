@@ -175,20 +175,19 @@ export function LimitsSettingsPanel({ models }: { models: ModelInfo[] }) {
         actions={
           <button
             aria-label="Refresh account usage"
-            className="flex h-8 items-center gap-1.5 rounded-md border border-hairline bg-surface px-2.5 text-xs text-fg transition-colors hover:bg-hover disabled:opacity-50 motion-reduce:transition-none"
+            className="flex h-8 items-center gap-1.5 rounded-md bg-chip px-2.5 text-xs text-fg transition-colors hover:bg-chip-strong disabled:opacity-50 motion-reduce:transition-reduced-fade"
             disabled={loading || refreshing}
             onClick={() => void refreshLimits()}
             type="button"
           >
             <IconRefresh
-              className={refreshing ? "animate-spin motion-reduce:animate-none" : ""}
+              className={refreshing ? "animate-spin motion-reduce:animate-pulse" : ""}
               size={14}
               stroke={1.7}
             />
             {refreshing ? "Refreshing…" : "Refresh"}
           </button>
         }
-        description="Configured model caps are separate from account usage reported by providers."
         title="Limits"
       />
 
@@ -205,10 +204,7 @@ export function LimitsSettingsPanel({ models }: { models: ModelInfo[] }) {
         {modelGroups.length ? (
           <div className="grid gap-3">
             {modelGroups.map(([provider, rows]) => (
-              <section
-                className="overflow-hidden rounded-lg border border-hairline-soft bg-panel"
-                key={provider}
-              >
+              <section className="overflow-hidden settings-group" key={provider}>
                 <h3 className="px-3 py-2 text-xs text-fg-muted">{provider}</h3>
                 <div>
                   {rows.map((row) => (
@@ -241,7 +237,7 @@ export function LimitsSettingsPanel({ models }: { models: ModelInfo[] }) {
         <p className="-mt-2 mb-3 text-xs text-fg-muted">
           Provider-reported values only. Budgets and balances are not rate limits.
         </p>
-        <div className="mb-3 rounded-lg border border-hairline-soft bg-panel px-3 py-3">
+        <div className="mb-3 settings-group px-3 py-3">
           <SettingsRow
             control={
               <SwitchControl
@@ -251,23 +247,19 @@ export function LimitsSettingsPanel({ models }: { models: ModelInfo[] }) {
                 onCheckedChange={(checked) => void toggleCodex(checked)}
               />
             }
-            description="Reads rate-limit windows from the local Codex CLI. Its first-party app-server protocol is not a stable public API."
             title="ChatGPT / Codex"
           />
         </div>
 
         {loading ? (
           <div aria-label="Loading account usage" className="grid gap-2" role="status">
-            <div className="h-20 animate-pulse rounded-lg border border-hairline-soft bg-panel motion-reduce:animate-none" />
+            <div className="h-20 animate-pulse settings-group" />
             <span className="sr-only">Loading account usage…</span>
           </div>
         ) : limits?.accounts.length ? (
           <div className="grid gap-3">
             {limits.accounts.map((account) => (
-              <article
-                className="rounded-lg border border-hairline-soft bg-panel px-4 py-3"
-                key={account.providerId}
-              >
+              <article className="settings-group px-4 py-3" key={account.providerId}>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <h3 className="text-sm text-fg">{account.providerName}</h3>
                   <span

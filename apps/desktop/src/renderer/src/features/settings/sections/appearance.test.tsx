@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppearanceState } from "../../../../../shared/appearance";
 import { getTheme, setTheme } from "../../../lib/theme";
-import { AppearanceSettingsPanel, transparencyDescription } from "./appearance";
+import { AppearanceSettingsPanel, transparencyNotice } from "./appearance";
 
 const base: AppearanceState = {
   theme: "dark",
@@ -64,18 +64,16 @@ describe("Appearance settings — Transparency", () => {
     expect(screen.getByRole("button", { name: "Off" }).hasAttribute("disabled")).toBe(true);
   });
 
-  it("explains why the shell is solid", () => {
-    expect(transparencyDescription({ ...base, blockedBy: "os-reduced-transparency" })).toMatch(
+  it("only notes transparency when the window is kept solid", () => {
+    expect(transparencyNotice({ ...base, blockedBy: "os-reduced-transparency" })).toMatch(
       /Reduce transparency/,
     );
-    expect(transparencyDescription({ ...base, blockedBy: "os-high-contrast" })).toMatch(
-      /high-contrast/,
-    );
-    expect(transparencyDescription(null)).toMatch(/not available/);
-    expect(transparencyDescription(base)).toMatch(/desktop shows through/);
-    expect(transparencyDescription({ ...base, theme: "light", effectiveTheme: "light" })).toMatch(
-      /desktop shows through/,
-    );
+    expect(transparencyNotice({ ...base, blockedBy: "os-high-contrast" })).toMatch(/high-contrast/);
+    expect(transparencyNotice(null)).toMatch(/not available/);
+    expect(transparencyNotice(base)).toBeUndefined();
+    expect(
+      transparencyNotice({ ...base, theme: "light", effectiveTheme: "light" }),
+    ).toBeUndefined();
   });
 });
 

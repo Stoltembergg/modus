@@ -23,6 +23,7 @@ import {
   useIsCodeFenceIncomplete,
 } from "streamdown";
 import { cn } from "../../lib/cn";
+import { MOTION_DURATION } from "../../lib/motion";
 import { type EffectiveThemeMode, useEffectiveTheme } from "../../lib/theme";
 import { isMentionHref } from "../groups/groupMentions";
 import { MentionChip } from "../groups/MentionChip";
@@ -133,8 +134,9 @@ const LINK_SAFETY: NonNullable<StreamdownProps["linkSafety"]> = { enabled: false
 
 const ANIMATED: AnimateOptions = {
   animation: "fadeIn",
-  duration: 70,
-  easing: "ease-out",
+  // Opacity-only token fade; it keeps running under reduced motion.
+  duration: Math.round(MOTION_DURATION.instant * 1000),
+  easing: "var(--motion-ease-standard)",
   stagger: 0,
 };
 

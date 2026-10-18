@@ -13,7 +13,7 @@ import {
   IconLoader2,
   IconSearch,
 } from "@tabler/icons-react";
-import { animate, m, useMotionValue } from "motion/react";
+import { m, useMotionValue, useReducedMotion } from "motion/react";
 import {
   type PointerEvent,
   type ReactNode,
@@ -33,6 +33,12 @@ import { type CodeSelectionRange, CodeViewer } from "../../components/code/CodeV
 import { EmptyState } from "../../components/ui/Panel";
 import { Tooltip } from "../../components/ui/Tooltip";
 import { cn } from "../../lib/cn";
+import {
+  animatePanelWidth,
+  MOTION_DURATION,
+  MOTION_EASE,
+  panelWidthMotion,
+} from "../../lib/motion";
 import { beginResizeGesture, endResizeGesture } from "../../lib/resizeGesture";
 import { MarkdownExcerptPreview } from "../preview/MarkdownExcerptPreview";
 import { PreviewHost } from "../preview/PreviewHost";
@@ -82,7 +88,7 @@ function fileNameOf(file: FileReadResult | undefined): string {
 const DEFAULT_TREE_WIDTH = 240;
 const MIN_TREE_WIDTH = 180;
 const MAX_TREE_WIDTH = 480;
-const TREE_TRANSITION = { duration: 0.32, ease: [0.25, 0.1, 0.25, 1] } as const;
+const TREE_TRANSITION = { duration: MOTION_DURATION.emphasized, ease: MOTION_EASE.gentle };
 
 function isMarkdown(path: string): boolean {
   return /\.(md|markdown|mdx)$/i.test(path);
@@ -163,6 +169,14 @@ export function FilesPanel({
   const [treeOpen, setTreeOpen] = useState(true);
   const [treeWidth, setTreeWidth] = useState(DEFAULT_TREE_WIDTH);
   const treeW = useMotionValue(DEFAULT_TREE_WIDTH);
+  // Tree content opacity: stays 1 under full motion (the width clips it); under
+  // reduced motion the width snaps and the content fades (lib/motion.ts).
+  const treeContentOpacity = useMotionValue(1);
+  const reducedMotion = useReducedMotion() ?? false;
+  const treeMotion = useMemo(
+    () => panelWidthMotion({ width: TREE_TRANSITION }, reducedMotion),
+    [reducedMotion],
+  );
   const dragRef = useRef<{ x: number; width: number } | null>(null);
   const latestWidthRef = useRef(DEFAULT_TREE_WIDTH);
   const resizeHandleRef = useRef<HTMLButtonElement | null>(null);
@@ -178,9 +192,13 @@ export function FilesPanel({
     if (dragRef.current) {
       return;
     }
-    const controls = animate(treeW, treeOpen ? treeWidth : 0, TREE_TRANSITION);
+    const controls = animatePanelWidth(treeW, treeContentOpacity, {
+      open: treeOpen,
+      openWidth: treeWidth,
+      motion: treeMotion,
+    });
     return () => controls.stop();
-  }, [treeOpen, treeWidth, treeW]);
+  }, [treeOpen, treeWidth, treeW, treeContentOpacity, treeMotion]);
 
   // Never strand the body cursor/selection if the divider unmounts mid-drag.
   useEffect(
@@ -668,7 +686,11 @@ export function FilesPanel({
           className="shrink-0 overflow-hidden border-hairline border-r"
           style={{ width: treeW }}
         >
-          <div className="flex h-full min-h-0 flex-col">
+          <m.div
+            className="flex h-full min-h-0 flex-col"
+            data-panel-content=""
+            style={{ opacity: treeContentOpacity }}
+          >
             <div className="shrink-0 px-2 pt-2 pb-1">
               <label className="relative block">
                 <IconSearch
@@ -709,7 +731,7 @@ export function FilesPanel({
                 ))
               )}
             </div>
-          </div>
+          </m.div>
         </m.div>
 
         {treeOpen ? (
@@ -957,16 +979,14 @@ function FileRow({
       {isDir ? (
         loading ? (
           <IconLoader2
-            className="shrink-0 animate-spin text-fg-faint motion-reduce:animate-none"
+            className="shrink-0 animate-spin text-fg-faint motion-reduce:animate-pulse"
             size={12}
             stroke={1.5}
           />
         ) : (
           <IconChevronRight
-            className={cn(
-              "shrink-0 text-fg-faint transition-transform duration-150",
-              expanded && "rotate-90",
-            )}
+            className="disclosure-chevron shrink-0 text-fg-faint duration-(--motion-duration-base)"
+            data-open={expanded ? "" : undefined}
             size={12}
             stroke={1.5}
           />

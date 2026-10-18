@@ -16,7 +16,6 @@
  * rendered by the caller (ToolCard etc.) instead of a tool registry.
  */
 import { IconChevronRight } from "@tabler/icons-react";
-import { m } from "motion/react";
 import { Children, type ReactNode, useEffect, useId, useRef } from "react";
 import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
 import { WorkingText } from "../../components/ui/WorkingText";
@@ -81,13 +80,14 @@ export function ToolGroup({
               {detail}
             </span>
           ) : null}
-          <m.span
-            animate={{ rotate: open ? 90 : 0 }}
-            className="flex size-4 shrink-0 items-center justify-center text-fg-faint"
-            transition={{ duration: 0.16, ease: "easeOut" }}
-          >
-            <IconChevronRight size={12} stroke={1.8} />
-          </m.span>
+          <span className="flex size-4 shrink-0 items-center justify-center text-fg-faint">
+            <IconChevronRight
+              className="disclosure-chevron duration-(--motion-duration-base) ease-standard"
+              data-open={open ? "" : undefined}
+              size={12}
+              stroke={1.8}
+            />
+          </span>
         </button>
       </div>
       <CollapsibleMotion id={contentId} open={open} preset="timeline">

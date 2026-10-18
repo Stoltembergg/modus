@@ -65,6 +65,8 @@ export type WorkingMemberAvatar = {
   face: AgentAvatarFace;
   color: AgentAvatarColor;
   shape: AgentAvatarShape;
+  /** Package seed the avatar is drawn with (`avatarSeed ?? agentId`). */
+  seed: string;
   archived: boolean;
 };
 
@@ -716,7 +718,7 @@ export function GroupMessageRow({
                 <AgentAvatar
                   color={avatar.color}
                   face={avatar.face}
-                  seed={avatar.agentId}
+                  seed={avatar.seed}
                   shape={avatar.shape}
                   size={16}
                   state={

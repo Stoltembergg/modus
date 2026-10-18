@@ -7,7 +7,7 @@ type StreamingCaretProps = {
 
 /**
  * Thin muted bar placed right after streaming text. Blinks on/off (~1 s, CSS steps);
- * under reduced motion it holds still at reduced opacity. Renders nothing when idle.
+ * under reduced motion it breathes softly in opacity instead of blinking. Renders nothing when idle.
  */
 export function StreamingCaret({ active, className }: StreamingCaretProps) {
   if (!active) return null;

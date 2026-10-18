@@ -1,5 +1,6 @@
 import { AnimatePresence, m, useReducedMotion } from "motion/react";
 import type { ReactNode } from "react";
+import { motionOffset, swapTransition, tween } from "../../lib/motion";
 
 type ContentTransitionProps = {
   children: ReactNode;
@@ -7,10 +8,13 @@ type ContentTransitionProps = {
   transitionKey: string;
 };
 
-const EASE_OUT = [0.22, 1, 0.36, 1] as const;
 const DISTANCE = 4;
-const DURATION = 0.14;
+const TRANSITION = tween("base");
 
+/**
+ * Fade-out-then-in swap keyed by `transitionKey`. Under reduced motion both
+ * halves use `reducedSwapFade`, so the whole swap is one 120ms fade.
+ */
 export function ContentTransition({ children, className, transitionKey }: ContentTransitionProps) {
   const reduceMotion = useReducedMotion();
 
@@ -19,10 +23,10 @@ export function ContentTransition({ children, className, transitionKey }: Conten
       <m.div
         animate={{ opacity: 1, y: 0 }}
         className={className}
-        exit={reduceMotion ? { opacity: 1 } : { opacity: 0, y: -2 }}
-        initial={reduceMotion ? false : { opacity: 0, y: DISTANCE }}
+        exit={{ opacity: 0, y: motionOffset(-2, reduceMotion) }}
+        initial={{ opacity: 0, y: motionOffset(DISTANCE, reduceMotion) }}
         key={transitionKey}
-        transition={{ duration: reduceMotion ? 0 : DURATION, ease: EASE_OUT }}
+        transition={swapTransition(TRANSITION, reduceMotion)}
       >
         {children}
       </m.div>

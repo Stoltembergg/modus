@@ -1,6 +1,7 @@
 import { m, useReducedMotion } from "motion/react";
 import type { ReactNode } from "react";
 import { cn } from "../../lib/cn";
+import { motionOffset, motionTransition, tween } from "../../lib/motion";
 
 /** 面板小标题栏，右侧可放操作按钮（正常大小写、无分隔线、不加粗）。 */
 export function PanelHeader({ title, children }: { title: string; children?: ReactNode }) {
@@ -48,8 +49,8 @@ export function EmptyState({
         compact ? "gap-1 px-5 py-10" : "h-full gap-3 px-6",
         className,
       )}
-      initial={reduce ? false : { opacity: 0, y: compact ? 4 : 6 }}
-      transition={{ duration: reduce ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] }}
+      initial={{ opacity: 0, y: motionOffset(compact ? 4 : 6, reduce) }}
+      transition={motionTransition(tween("slow"), reduce)}
     >
       {icon ? (
         <span
