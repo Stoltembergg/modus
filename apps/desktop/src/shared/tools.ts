@@ -332,6 +332,25 @@ export const TOOLS_EXPAND_TOOL_UI: ToolUiMeta = {
   primaryArgKey: "reason",
 };
 
+/** define-goal skill tools: one goal per session, active once the skill is used. */
+export const GOAL_TOOL_NAMES = ["get_goal", "create_goal", "complete_goal"] as const;
+
+export type GoalToolName = (typeof GOAL_TOOL_NAMES)[number];
+
+export function isGoalToolName(name: string): name is GoalToolName {
+  return (GOAL_TOOL_NAMES as readonly string[]).includes(name);
+}
+
+export const GOAL_TOOL_UI: Record<GoalToolName, ToolUiMeta> = {
+  get_goal: { verb: "Checked goal", activeVerb: "Checking goal" },
+  create_goal: { verb: "Set goal", activeVerb: "Setting goal", primaryArgKey: "objective" },
+  complete_goal: {
+    verb: "Completed goal",
+    activeVerb: "Completing goal",
+    primaryArgKey: "summary",
+  },
+};
+
 export const WAIT_TOOL_UI: ToolUiMeta = {
   verb: "Waited",
   primaryArgKey: "timeout_ms",
@@ -434,6 +453,9 @@ export function getToolUiMeta(name: string): ToolUiMeta | undefined {
   }
   if (name === WAIT_TOOL_NAME) {
     return WAIT_TOOL_UI;
+  }
+  if (isGoalToolName(name)) {
+    return GOAL_TOOL_UI[name];
   }
   return (
     getBuiltinToolUiMeta(name) ??
