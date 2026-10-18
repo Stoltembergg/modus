@@ -86,7 +86,7 @@ export const APPEARANCE_TEXT_PT: Record<keyof typeof APPEARANCE_TEXT_EN, string>
   "settings.appearance.customInstructionsPlaceholder": "Adicionar instruções personalizadas...",
   "settings.appearance.instructionFiles": "Arquivos de instruções",
   "settings.appearance.activeFile": "Arquivo ativo",
-  "settings.appearance.fileOverride": "Substituição",
+  "settings.appearance.fileOverride": "Arquivo próprio",
   "settings.appearance.fileBase": "Arquivo base",
   "settings.appearance.statusActive": "Ativo",
   "settings.appearance.statusInactive": "Inativo",

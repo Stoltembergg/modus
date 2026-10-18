@@ -119,8 +119,14 @@ describe("#258 polish", () => {
       "depois Free",
       "De volta do faturamento",
       "Autoaplicado",
+      "Substituição",
     ]) {
       expect(pt).not.toContain(phrase);
     }
+  });
+
+  it("names the instruction-file pill like the general.ts \"modo próprio\" wording", () => {
+    expect(SETTINGS_TEXT_PT["settings.appearance.fileOverride"]).toBe("Arquivo próprio");
+    expect(SETTINGS_TEXT_PT["settings.appearance.fileBase"]).toBe("Arquivo base");
   });
 });
