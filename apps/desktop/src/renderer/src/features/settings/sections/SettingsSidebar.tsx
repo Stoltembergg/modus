@@ -127,9 +127,6 @@ export function SettingsSidebar({
       <div className="px-2 pt-3 pb-1 text-xs text-fg-muted">
         <div>{t("settings.window.appTitle")}</div>
         {version ? <div className="mt-1">v{version}</div> : null}
-        <p className="mt-2 leading-snug" data-testid="model-attribution">
-          {t("settings.window.modelAttribution")}
-        </p>
       </div>
     </aside>
   );
