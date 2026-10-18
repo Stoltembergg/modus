@@ -100,3 +100,27 @@ describe("settings text", () => {
     expect(settingsPluralText("settings.question.asked", 3, "pt-BR")).toBe("Fez 3 perguntas");
   });
 });
+
+describe("#258 polish", () => {
+  it("cites the exact approval button label in the MCP footer hint (EN and PT)", () => {
+    // ApprovalPanel's button is "Yes, always allow in this project" (not localized).
+    for (const table of [SETTINGS_TEXT_EN, SETTINGS_TEXT_PT]) {
+      expect(table["settings.mcp.serversFooterHint"]).toContain(
+        "“Yes, always allow in this project”",
+      );
+    }
+  });
+
+  it("keeps the reviewed literal pt-BR phrasings out of the catalog", () => {
+    const pt = Object.values(SETTINGS_TEXT_PT).join("\n");
+    for (const phrase of [
+      "Substituição ativa",
+      "Substituição de endpoint",
+      "depois Free",
+      "De volta do faturamento",
+      "Autoaplicado",
+    ]) {
+      expect(pt).not.toContain(phrase);
+    }
+  });
+});

@@ -12,6 +12,7 @@ import type { ReaIntegrationState, ReaIntegrationStatus } from "../../shared/con
 import { createPlatformProcessOps } from "../process/platform-process-ops";
 import {
   checkReaPrerequisites,
+  REA_NPM_NOT_FOUND_NOTE,
   REA_SUPPORTED_NODE_RANGE,
   type ReaPrerequisiteResult,
 } from "./rea-prerequisites";
@@ -54,6 +55,9 @@ const MAX_REA_DIAGNOSTIC_BYTES = 8 * 1024;
  */
 const REA_NETWORK_FAILURE_PATTERN =
   /enotfound|etimedout|econnrefused|econnreset|eai_again|getaddrinfo|fetch failed|network|offline|registry/;
+/** The supervisor found no `npm` for the locked install (POSIX ENOENT or cmd.exe's message). */
+const REA_MISSING_NPM_PATTERN =
+  /spawn npm(?:\.cmd)? enoent|npm(?:\.cmd)?: command not found|'npm(?:\.cmd)?' is not recognized/;
 const REA_MISSING_RUNTIME_PATTERN =
   /spawn (?:npm|npx|node)(?:\.cmd|\.exe)? enoent|(?:npm|npx)(?:\.cmd)?: command not found|node(?:\.exe)?: command not found|'(?:npm|npx|node)(?:\.cmd|\.exe)?' is not recognized|ebadengine|unsupported engine/;
 const CLEANUP_FAILURE_MESSAGE =
@@ -679,10 +683,19 @@ export class ReaSessionManager {
       // Classify real startup failures even when the worker was already retired by its own
       // transport closing (the SDK emits close before rejecting connect). Only an external
       // dispose/disable/cancel, or a newer worker for the same key, suppresses classification.
-      if (!worker.externallyRetired && !superseded) {
+      const classify = !worker.externallyRetired && !superseded;
+      if (classify) {
         this.setFailureStatus(error, worker);
       }
       await this.retireWorker(worker);
+      // A missing npm is otherwise only a bare "Connection closed"; give the caller the note.
+      if (
+        classify &&
+        !(error instanceof ReaStartupError) &&
+        this.lifecycleNote === REA_NPM_NOT_FOUND_NOTE
+      ) {
+        throw new ReaStartupError("needs_node", REA_NPM_NOT_FOUND_NOTE);
+      }
       throw error;
     }
   }
@@ -714,6 +727,9 @@ export class ReaSessionManager {
       this.lifecycleStatus = "network_error";
       this.lifecycleNote =
         "REA could not acquire or connect to its pinned package; check network access and retry.";
+    } else if (REA_MISSING_NPM_PATTERN.test(message)) {
+      this.lifecycleStatus = "needs_node";
+      this.lifecycleNote = REA_NPM_NOT_FOUND_NOTE;
     } else if (REA_MISSING_RUNTIME_PATTERN.test(message)) {
       this.lifecycleStatus = "needs_node";
       this.lifecycleNote = `REA needs Node.js ${REA_SUPPORTED_NODE_RANGE} and npm. Install a supported runtime and retry.`;

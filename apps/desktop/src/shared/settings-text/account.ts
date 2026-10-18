@@ -196,7 +196,8 @@ export const ACCOUNT_TEXT_PT: Record<keyof typeof ACCOUNT_TEXT_EN, string> = {
   "settings.account.returnNoticeSuccess":
     "Pagamento recebido. Seus créditos serão adicionados assim que o Mercado Pago confirmar o pagamento.",
   "settings.account.returnNoticeCancel": "O checkout foi cancelado. Nada foi cobrado.",
-  "settings.account.returnNoticePortal": "De volta do faturamento. Mostrando o plano mais recente.",
+  "settings.account.returnNoticePortal":
+    "Você voltou da página de faturamento. Mostrando seu plano atualizado.",
   "settings.account.creditCount_one": "{count} crédito",
   "settings.account.creditCount_other": "{count} créditos",
   "settings.account.packTitle": "{credits} por {price}",
@@ -276,7 +277,7 @@ export const ACCOUNT_TEXT_PT: Record<keyof typeof ACCOUNT_TEXT_EN, string> = {
   "settings.account.billingTitle": "Faturamento",
   "settings.account.cancelSubscription": "Cancelar assinatura",
   "settings.account.cancelSubscriptionKeepsPlanDescription":
-    "Interrompe cobranças futuras do Mercado Pago. Você mantém o plano {plan} até {date}, depois Free. Sem reembolso; seus créditos continuam.",
+    "Interrompe cobranças futuras do Mercado Pago. Você mantém o plano {plan} até {date}; depois disso, passa para o plano Free. Sem reembolso; seus créditos continuam.",
   "settings.account.cancelSubscriptionDescription":
     "Interrompe cobranças futuras do Mercado Pago. Sem reembolso; seus créditos continuam.",
   "settings.account.tryAgain": "Tentar de novo",

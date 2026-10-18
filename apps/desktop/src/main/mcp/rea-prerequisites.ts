@@ -8,6 +8,9 @@ export const REA_SUPPORTED_NODE_RANGE = "^22.19.0 || ^24.11.0 || >=26.0.0";
 
 const PREREQUISITE_TIMEOUT_MS = 10_000;
 
+/** Shown in REA status and returned to the agent when Node.js is present but npm is not. */
+export const REA_NPM_NOT_FOUND_NOTE = `REA could not find npm on the PATH Modus uses (Node.js was found). REA installs its pinned package with npm, so install npm (it ships with Node.js ${REA_SUPPORTED_NODE_RANGE}) and restart Modus. On macOS, apps opened from the Dock may not see Homebrew or nvm paths.`;
+
 export type ReaPrerequisiteResult =
   | { ok: true }
   | { ok: false; status: "needs_node"; note: string };
@@ -84,11 +87,7 @@ export async function checkReaPrerequisites(
     // The supervisor installs REA with `npm ci` from its lockfile; `npx` is no longer used.
     await run("npm", ["--version"]);
   } catch {
-    return {
-      ok: false,
-      status: "needs_node",
-      note: `REA needs npm alongside Node.js ${REA_SUPPORTED_NODE_RANGE}. Install npm and retry; Modus does not install a runtime.`,
-    };
+    return { ok: false, status: "needs_node", note: REA_NPM_NOT_FOUND_NOTE };
   }
 
   return { ok: true };

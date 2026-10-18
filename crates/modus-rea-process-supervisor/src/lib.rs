@@ -180,6 +180,52 @@ fn sweep_stale_staging(root: &Path) {
     }
 }
 
+/// True for a directory name this supervisor publishes: `rea-agents-<version>-<16 hex>`.
+fn is_runtime_dir_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("rea-agents-") else {
+        return false;
+    };
+    let Some((version, hash)) = rest.rsplit_once('-') else {
+        return false;
+    };
+    !version.is_empty()
+        && version
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '+')
+        && hash.len() == 16
+        && hash
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+}
+
+/// Removes runtimes published for an older manifest or lockfile (`rea-agents-<old>-<hash>/`),
+/// which otherwise pile up under `root` after every bump. Only real directories whose name
+/// matches our exact pattern are touched; `keep` (the runtime in use) never is, nor are
+/// symlinks, files or anything else in `root`. Each one is renamed aside first so a removal
+/// that stops halfway never leaves a directory under a runtime name.
+fn sweep_stale_runtimes(root: &Path, keep: &str) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if name == keep || !is_runtime_dir_name(name) {
+            continue;
+        }
+        let is_dir = fs::symlink_metadata(entry.path()).is_ok_and(|meta| meta.file_type().is_dir());
+        if !is_dir {
+            continue;
+        }
+        let aside = root.join(format!("{STAGING_PREFIX}old-{}", unique_suffix()));
+        if fs::rename(entry.path(), &aside).is_ok() {
+            let _ = fs::remove_dir_all(&aside);
+        }
+    }
+}
+
 /// Ensures the locked runtime is installed under `root` and returns its directory.
 ///
 /// `run_npm_ci` must run `npm` with [`NPM_CI_ARGS`] in the given directory. Installs go to a
@@ -190,8 +236,10 @@ where
     F: FnMut(&Path) -> io::Result<ExitStatus>,
 {
     create_private_dir(root)?;
-    let final_dir = root.join(runtime_key());
+    let key = runtime_key();
+    let final_dir = root.join(&key);
     if is_complete(&final_dir) {
+        sweep_stale_runtimes(root, &key);
         return Ok(final_dir);
     }
     if final_dir.exists() {
@@ -229,10 +277,14 @@ where
         return Err(error);
     }
     match fs::rename(&staging, &final_dir) {
-        Ok(()) => Ok(final_dir),
+        Ok(()) => {
+            sweep_stale_runtimes(root, &key);
+            Ok(final_dir)
+        }
         Err(error) => {
             let _ = fs::remove_dir_all(&staging);
             if is_complete(&final_dir) {
+                sweep_stale_runtimes(root, &key);
                 Ok(final_dir)
             } else {
                 Err(error)
@@ -333,5 +385,111 @@ mod tests {
         assert!(key.starts_with("rea-agents-6.5.0-"));
         assert_eq!(key, runtime_key());
         assert_ne!(fnv1a64(b"a"), fnv1a64(b"b"));
+    }
+
+    fn temp_root(label: &str) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("modus-rea-sweep-{label}-{}", unique_suffix()));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn fake_install(dir: &Path) -> io::Result<ExitStatus> {
+        let entry = entry_path(dir);
+        fs::create_dir_all(entry.parent().unwrap())?;
+        fs::write(entry, "// rea")?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            Ok(ExitStatus::from_raw(0))
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::ExitStatusExt;
+            Ok(ExitStatus::from_raw(0))
+        }
+    }
+
+    #[test]
+    fn runtime_dir_names_match_only_our_exact_pattern() {
+        assert!(is_runtime_dir_name(&runtime_key()));
+        assert!(is_runtime_dir_name("rea-agents-6.4.0-0123456789abcdef"));
+        assert!(is_runtime_dir_name(
+            "rea-agents-7.0.0-beta.1-0123456789abcdef"
+        ));
+        for other in [
+            "rea-agents",
+            "rea-agents-",
+            "rea-agents-6.4.0",
+            "rea-agents-6.4.0-0123456789ABCDEF",
+            "rea-agents-6.4.0-0123456789abcde",
+            "rea-agents-6.4.0-0123456789abcdef0",
+            "rea-agents-6.4.0-0123456789abcdeg",
+            "rea-agents-x/y-0123456789abcdef",
+            "my-rea-agents-6.4.0-0123456789abcdef",
+            ".staging-123",
+            "node_modules",
+        ] {
+            assert!(!is_runtime_dir_name(other), "{other}");
+        }
+    }
+
+    #[test]
+    fn stale_runtimes_are_removed_and_the_active_one_and_everything_else_kept() {
+        let root = temp_root("stale");
+        let old = root.join("rea-agents-6.4.0-0123456789abcdef");
+        let older = root.join("rea-agents-6.3.1-fedcba9876543210");
+        fs::create_dir_all(entry_path(&old).parent().unwrap()).unwrap();
+        fs::create_dir_all(&older).unwrap();
+        let lookalike_file = root.join("rea-agents-6.2.0-aaaaaaaaaaaaaaaa");
+        fs::write(&lookalike_file, "not a dir").unwrap();
+        let unrelated = root.join("rea-agents-notes");
+        fs::create_dir_all(&unrelated).unwrap();
+        let user_dir = root.join("something-else");
+        fs::create_dir_all(&user_dir).unwrap();
+
+        let active = ensure_installed(&root, fake_install).unwrap();
+        assert_eq!(active, root.join(runtime_key()));
+        assert!(is_complete(&active));
+        assert!(!old.exists());
+        assert!(!older.exists());
+        assert!(lookalike_file.is_file(), "files are never removed");
+        assert!(unrelated.is_dir());
+        assert!(user_dir.is_dir());
+
+        // Reuse path: the active runtime survives and a new stale one is swept.
+        let stale_again = root.join("rea-agents-6.0.0-1111111111111111");
+        fs::create_dir_all(&stale_again).unwrap();
+        let reused =
+            ensure_installed(&root, |_| panic!("must reuse the complete install")).unwrap();
+        assert_eq!(reused, active);
+        assert!(is_complete(&active));
+        assert!(!stale_again.exists());
+        assert!(
+            fs::read_dir(&root)
+                .unwrap()
+                .flatten()
+                .all(|e| !e.file_name().to_string_lossy().starts_with(".staging-old-")),
+            "nothing left aside"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_runtime_names_are_not_followed() {
+        let root = temp_root("symlink");
+        let outside = temp_root("outside");
+        fs::write(outside.join("keep.txt"), "user data").unwrap();
+        let link = root.join("rea-agents-6.4.0-0123456789abcdef");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        ensure_installed(&root, fake_install).unwrap();
+        assert!(
+            link.symlink_metadata().is_ok(),
+            "the link itself is left alone"
+        );
+        assert!(outside.join("keep.txt").is_file());
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&outside);
     }
 }

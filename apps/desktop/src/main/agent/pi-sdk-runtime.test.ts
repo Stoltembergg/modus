@@ -13226,8 +13226,8 @@ describe("PiSdkRuntime per-request token stability", () => {
       allowed: new Set(activeToolNamesForSession(info, profile)),
       allowedOutsidePlan: new Set(activeToolNamesForSession(info, "chat")),
     });
-    const GENERIC =
-      "is not available in this turn (for example in Plan Mode). Use the tools this turn allows.";
+    // Used only when Plan Mode is NOT the cause, so it must not mention Plan Mode.
+    const GENERIC = "is not available in this turn. Use the tools this turn allows.";
 
     it("explains Plan Mode only when Plan Mode is the cause", () => {
       new PiSdkRuntime(); // registers the process-wide tools
@@ -13244,9 +13244,9 @@ describe("PiSdkRuntime per-request token stability", () => {
       const groupTool = GROUP_TOOL_NAMES[0] as string;
       expect(activeToolNamesForSession(notAMember, "chat")).not.toContain(groupTool);
       for (const profile of ["chat", "plan"] as const) {
-        expect(disallowedToolReason(groupTool, limitsFor(notAMember, profile))).toBe(
-          `${groupTool} ${GENERIC}`,
-        );
+        const reason = disallowedToolReason(groupTool, limitsFor(notAMember, profile));
+        expect(reason).toBe(`${groupTool} ${GENERIC}`);
+        expect(reason).not.toContain("Plan Mode");
       }
     });
 

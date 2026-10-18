@@ -748,7 +748,7 @@ export function ChatPane({
       updateEventHistoryPage({
         snapshotCursor: page.snapshotCursor,
         ...(page.nextCursor === undefined ? {} : { beforeCursor: page.nextCursor }),
-        hasOlder: page.hasMore,
+        hasOlder: page.hasMore && page.nextCursor !== undefined,
         loadingOlder: false,
       });
       hub.seedHistory(sessionId, events, page.snapshotCursor);

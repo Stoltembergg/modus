@@ -28,6 +28,14 @@ function pageCursor(item: AgentEventItem): number | undefined {
   return item.event.eventCursor;
 }
 
+/**
+ * Older history is only reachable through a cursor. `hasMore` without a `nextCursor` (or with
+ * the cursor just used) would re-request the newest/same page, so it does not count as "older".
+ */
+function hasOlderPage(page: AgentEventPage, usedCursor?: number): boolean {
+  return page.hasMore && page.nextCursor !== undefined && page.nextCursor !== usedCursor;
+}
+
 /** Full per-session execution history, kept outside the durable chat transcript. */
 export function ActivityTimeline({
   assistantAgent,
@@ -99,7 +107,7 @@ export function ActivityTimeline({
         updateHistoryPage({
           snapshotCursor: page.snapshotCursor,
           ...(page.nextCursor === undefined ? {} : { beforeCursor: page.nextCursor }),
-          hasOlder: page.hasMore && page.nextCursor !== current.beforeCursor,
+          hasOlder: hasOlderPage(page, current.beforeCursor),
           loadingOlder: false,
           error: false,
           fillStalled: merged.length === previousLength,
@@ -154,7 +162,7 @@ export function ActivityTimeline({
           updateHistoryPage({
             snapshotCursor: page.snapshotCursor,
             ...(page.nextCursor === undefined ? {} : { beforeCursor: page.nextCursor }),
-            hasOlder: page.hasMore,
+            hasOlder: hasOlderPage(page),
             loadingOlder: false,
             error: false,
           });
