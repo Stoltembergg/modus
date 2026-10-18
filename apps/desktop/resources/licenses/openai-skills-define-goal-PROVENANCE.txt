@@ -1,0 +1,6 @@
+Vendored from https://github.com/openai/skills
+Pinned commit: 49f948faa9258a0c61caceaf225e179651397431
+Copied from: skills/.curated/define-goal (SKILL.md, LICENSE.txt; agents/openai.yaml not included)
+License: Apache-2.0 (upstream LICENSE.txt, sha256
+4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9; no NOTICE file upstream).
+Modified for Modus: adds complete_goal and the one-goal-per-session model.
