@@ -224,12 +224,10 @@ export function AgentDialog(props: AgentDialogProps) {
   // drawn with the id). Creating starts on the default face's seed, so the
   // preview is exactly the saved avatar. Picking a face sets its seed.
   const editing = agent !== undefined || target?.mode === "edit";
-  // A copy of an existing agent never gets a seed: it is drawn with its new id,
-  // so its face can't be picked here (the preview would not be what is saved).
-  const isCopy = target?.sourceAgent !== undefined;
   const [avatarSeed, setAvatarSeed] = useState<string | null>(() => {
     if (agent) return agent.avatarSeed;
-    if (editing || isCopy) return (!isCopy && initial?.avatarSeed) || null;
+    // A draft member (a copy too: its random face seed) keeps the seed it was drawn with.
+    if (editing) return initial?.avatarSeed || null;
     return initial?.avatarSeed || AGENT_FACE_SEEDS[initialAvatar.avatarFace];
   });
   // Edit: the seed (and face) are only sent once the face was changed.
@@ -239,7 +237,6 @@ export function AgentDialog(props: AgentDialogProps) {
     avatarSeed,
   });
   function pickFace(next: AgentAvatarFace): void {
-    if (isCopy) return;
     setFace(next);
     setAvatarSeed(AGENT_FACE_SEEDS[next]);
     setFaceTouched(true);
@@ -578,8 +575,6 @@ export function AgentDialog(props: AgentDialogProps) {
         </label>
 
         <AvatarOptionGroup
-          disabledTitle="A copy gets its own face from its new id"
-          isDisabled={() => isCopy}
           label="Face"
           onChange={pickFace}
           optionLabel={humanizeOption}

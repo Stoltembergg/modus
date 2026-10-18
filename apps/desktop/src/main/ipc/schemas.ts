@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { AGENT_AVATAR_SEED_MAX, AGENT_AVATAR_SEED_PATTERN } from "../../shared/agent-avatar-seeds";
 import { MAX_AGENT_EVENT_PAGE_SIZE } from "../../shared/agent-events";
 import {
   AGENT_AVATAR_COLORS,
@@ -13,6 +12,7 @@ import {
   MAX_RESTORE_DRAFTS,
   MAX_RESTORE_UI_STATE_BYTES,
 } from "../../shared/update-restore";
+import { avatarSeedSchema } from "./schemas-shared";
 
 const nonEmptyString = z.string().trim().min(1);
 const optionalNonEmptyString = nonEmptyString.optional();
@@ -959,14 +959,7 @@ const agentFields = {
   avatarFace: z.enum(AGENT_AVATAR_FACES),
   avatarColor: z.enum(AGENT_AVATAR_COLORS),
   avatarShape: z.enum(AGENT_AVATAR_SHAPES),
-  /**
-   * Avatar package seed (shared/agent-avatar-seeds.ts). Blank parses as null
-   * (cleared / none), never "": the store normalizes the same way.
-   */
-  avatarSeed: z.preprocess(
-    (value) => (typeof value === "string" && value.trim() === "" ? null : value),
-    z.string().trim().min(1).max(AGENT_AVATAR_SEED_MAX).regex(AGENT_AVATAR_SEED_PATTERN).nullable(),
-  ),
+  avatarSeed: avatarSeedSchema,
 };
 
 export const agentsCreateSchema = z

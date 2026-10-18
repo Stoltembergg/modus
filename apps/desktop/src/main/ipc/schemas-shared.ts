@@ -13,6 +13,16 @@ import {
 
 export const nonEmptyString = z.string().trim().min(1);
 
+/**
+ * Avatar package seed (shared/agent-avatar-seeds.ts), the one definition the
+ * agent schemas share. Blank parses as null (cleared / none), never "": the
+ * store normalizes the same way.
+ */
+export const avatarSeedSchema = z.preprocess(
+  (value) => (typeof value === "string" && value.trim() === "" ? null : value),
+  z.string().trim().min(1).max(AGENT_AVATAR_SEED_MAX).regex(AGENT_AVATAR_SEED_PATTERN).nullable(),
+);
+
 export const optionalNonEmptyString = nonEmptyString.optional();
 
 export const MAX_PLAN_CONTENT_BYTES = 64 * 1024;
@@ -199,14 +209,7 @@ export const agentFields = {
   avatarFace: z.enum(AGENT_AVATAR_FACES),
   avatarColor: z.enum(AGENT_AVATAR_COLORS),
   avatarShape: z.enum(AGENT_AVATAR_SHAPES),
-  /**
-   * Avatar package seed (shared/agent-avatar-seeds.ts). Blank parses as null
-   * (cleared / none), never "": the store normalizes the same way.
-   */
-  avatarSeed: z.preprocess(
-    (value) => (typeof value === "string" && value.trim() === "" ? null : value),
-    z.string().trim().min(1).max(AGENT_AVATAR_SEED_MAX).regex(AGENT_AVATAR_SEED_PATTERN).nullable(),
-  ),
+  avatarSeed: avatarSeedSchema,
 };
 
 /** Cap on `roles` (the modal holds at most a few more than the 10-member limit). */

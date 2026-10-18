@@ -1,4 +1,8 @@
-import { agentAvatarSeed } from "../../../../shared/agent-avatar-seeds";
+import {
+  agentAvatarSeed,
+  copyAvatarSeed,
+  faceForAvatarSeed,
+} from "../../../../shared/agent-avatar-seeds";
 import {
   AGENT_TEMPLATES,
   type AgentTemplate,
@@ -45,9 +49,9 @@ export type NewGroupMember = {
   avatarColor: AgentAvatarColor;
   avatarShape?: AgentAvatarShape;
   /**
-   * The face seed picked in the agent dialog (shared/agent-avatar-seeds.ts),
-   * saved as the agent's avatar_seed. Absent: the agent is drawn with its id.
-   * Copies never carry one.
+   * The face seed (shared/agent-avatar-seeds.ts) saved as the agent's
+   * avatar_seed: picked in the agent dialog, or for a copy a random one of
+   * the eight other than its source's (copyAvatarSeed). Absent: drawn with its id.
    */
   avatarSeed?: string;
 };
@@ -165,11 +169,14 @@ export function copyMember(
     | "avatarFace"
     | "avatarColor"
     | "avatarShape"
-  >,
+  > & { avatarSeed?: string | null | undefined },
   members: readonly NewGroupMember[],
   key: string,
   fallbackModelId = "",
+  random: () => number = Math.random,
 ): NewGroupMember {
+  // Picked once, when the copy is added (stable across renders); the dialog can change it.
+  const avatarSeed = copyAvatarSeed(agent, random);
   return {
     key,
     source: "copy",
@@ -181,9 +188,10 @@ export function copyMember(
     role: agent.role,
     instructions: agent.instructions,
     modelId: agent.modelId ?? fallbackModelId,
-    avatarFace: agent.avatarFace,
+    avatarFace: faceForAvatarSeed(avatarSeed) ?? agent.avatarFace,
     avatarColor: agent.avatarColor,
     avatarShape: agent.avatarShape,
+    avatarSeed,
   };
 }
 
@@ -273,12 +281,8 @@ export function leadAfterRemoval(
  */
 export function editedMember(member: NewGroupMember, input: NewGroupAgentInput): NewGroupMember {
   // A new face seed replaces the old one, null / "" clears it, absent keeps it.
-  // A copy never carries a seed (it is drawn with its new id).
-  const avatarSeed = member.copiedFromAgentId
-    ? undefined
-    : input.avatarSeed === undefined
-      ? member.avatarSeed
-      : input.avatarSeed || undefined;
+  const avatarSeed =
+    input.avatarSeed === undefined ? member.avatarSeed : input.avatarSeed || undefined;
   return {
     key: member.key,
     source: member.source,
@@ -360,7 +364,7 @@ export function newGroupMemberInput(member: NewGroupMember): NewGroupAgentInput 
     avatarFace: member.avatarFace,
     avatarColor: member.avatarColor,
     ...(member.avatarShape ? { avatarShape: member.avatarShape } : {}),
-    ...(member.avatarSeed && !member.copiedFromAgentId ? { avatarSeed: member.avatarSeed } : {}),
+    ...(member.avatarSeed ? { avatarSeed: member.avatarSeed } : {}),
   };
 }
 

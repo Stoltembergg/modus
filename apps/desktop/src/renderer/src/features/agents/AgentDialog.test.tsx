@@ -1180,43 +1180,57 @@ describe("AgentDialog avatar seed (avatar_seed)", () => {
     });
   });
 
-  it("a copy of an existing agent gets no seed (its face can't be picked)", async () => {
+  it("a copy previews its random face seed, saves it untouched, and saves a picked face", async () => {
     const user = userEvent.setup();
-    const onAdd = vi.fn();
     const source: AgentInfo = { ...ANA, avatarSeed: AGENT_FACE_SEEDS.bright, avatarFace: "bright" };
-    render(
-      <AgentDialog
-        draft={{
-          title: "Draft",
-          seed: "copy-key",
-          takenNames: [],
-          roles: [],
-          onAdd,
-          mode: "edit",
-          sourceAgent: source,
-          initial: {
-            name: "Ana 2",
-            instructions: "Review.",
-            copiedFromAgentId: "a-1",
-            avatarFace: "bright",
-            modelId: "m-1",
-          },
-        }}
-        models={MODELS}
-        onGenerate={async () => GENERATED}
-        onOpenChange={vi.fn()}
-        open
-        surface="plain"
-      />,
-    );
-    const dialog = screen.getByTestId("agent-dialog");
-    // Drawn like its modal card (the draft key), never with the source's seed.
-    expect(seedOf(preview(dialog))).toBe("copy-key");
-    expect(option(dialog, "Face", "Calm").disabled).toBe(true);
-    await user.click(option(dialog, "Face", "Bright"));
+    const renderCopy = (onAdd: (member: NewGroupAgentInput) => void) =>
+      render(
+        <AgentDialog
+          draft={{
+            title: "Draft",
+            seed: "copy-key",
+            takenNames: [],
+            roles: [],
+            onAdd,
+            mode: "edit",
+            sourceAgent: source,
+            initial: {
+              name: "Ana 2",
+              instructions: "Review.",
+              copiedFromAgentId: "a-1",
+              avatarFace: "cheeky",
+              avatarColor: "teal",
+              avatarSeed: AGENT_FACE_SEEDS.cheeky,
+              modelId: "m-1",
+            },
+          }}
+          models={MODELS}
+          onGenerate={async () => GENERATED}
+          onOpenChange={vi.fn()}
+          open
+          surface="plain"
+        />,
+      );
+    const untouched = vi.fn((_member: NewGroupAgentInput) => undefined);
+    renderCopy(untouched);
+    let dialog = screen.getByTestId("agent-dialog");
+    // The copy's own (random) seed, never the source's.
+    expect(seedOf(preview(dialog))).toBe(AGENT_FACE_SEEDS.cheeky);
+    expect(option(dialog, "Face", "Cheeky").getAttribute("aria-checked")).toBe("true");
     await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
-    expect(onAdd).toHaveBeenCalledTimes(1);
-    expect("avatarSeed" in (onAdd.mock.calls[0]?.[0] as object)).toBe(false);
+    // Untouched: the member keeps the seed it was drawn with (editedMember), face as shown.
+    expect(untouched.mock.calls[0]?.[0]).toMatchObject({ avatarFace: "cheeky" });
+    expect("avatarSeed" in (untouched.mock.calls[0]?.[0] as object)).toBe(false);
+    cleanup();
+
+    const picked = vi.fn((_member: NewGroupAgentInput) => undefined);
+    renderCopy(picked);
+    dialog = screen.getByTestId("agent-dialog");
+    await user.click(option(dialog, "Face", "Calm"));
+    const shown = seedOf(preview(dialog));
+    expect(shown).toBe(AGENT_FACE_SEEDS.calm);
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    expect(picked.mock.calls[0]?.[0]).toMatchObject({ avatarSeed: shown, avatarFace: "calm" });
   });
 
   it("group draft: Add sends the previewed seed", async () => {

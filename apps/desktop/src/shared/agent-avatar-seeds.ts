@@ -30,6 +30,43 @@ export const AGENT_FACE_SEEDS: Readonly<Record<AgentAvatarFace, string>> = {
   bright: "face-bright-46",
 };
 
+/** Eye sets in the avatar package (0.2.0): `Object.keys(avatarEyeMasks).length`. */
+export const AVATAR_EYE_SET_COUNT = 27;
+
+/**
+ * The eye set index the avatar package draws for a seed: a copy of its
+ * `pick(seed, "eyes", n)` (fnv1a, then a mix). Pinned against the package's
+ * rendered output by agent-avatar-seeds.test.ts.
+ */
+export function avatarEyeIndex(seed: string): number {
+  let hash = 2166136261;
+  for (const char of `${seed}/eyes`) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  let h = hash >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 73244475);
+  h = Math.imul(h ^ (h >>> 13), 3266489909);
+  return ((h ^ (h >>> 16)) >>> 0) % AVATAR_EYE_SET_COUNT;
+}
+
+/**
+ * A copy's starting face seed: one of the eight, picked at random, never the
+ * one that draws the same eyes as the source (its stored face seed, or the
+ * eyes its id gives it when that is one of the eight sets).
+ */
+export function copyAvatarSeed(
+  source: { id: string; avatarSeed?: string | null | undefined },
+  random: () => number = Math.random,
+): string {
+  const sourceEyes = avatarEyeIndex(agentAvatarSeed(source));
+  const all = Object.values(AGENT_FACE_SEEDS);
+  const options = all.filter((seed) => avatarEyeIndex(seed) !== sourceEyes);
+  const pool = options.length > 0 ? options : all;
+  const index = Math.min(pool.length - 1, Math.floor(random() * pool.length));
+  return pool[index] as string;
+}
+
 /** The face a picker seed stands for (undefined for any other seed). */
 export function faceForAvatarSeed(seed: string | null | undefined): AgentAvatarFace | undefined {
   if (!seed) return undefined;

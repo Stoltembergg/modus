@@ -8,7 +8,10 @@ import { describe, expect, it } from "vitest";
 import {
   AGENT_AVATAR_SEED_MAX,
   AGENT_FACE_SEEDS,
+  AVATAR_EYE_SET_COUNT,
   agentAvatarSeed,
+  avatarEyeIndex,
+  copyAvatarSeed,
   faceForAvatarSeed,
   normalizeAvatarSeed,
 } from "./agent-avatar-seeds";
@@ -74,6 +77,46 @@ describe("AGENT_FACE_SEEDS", () => {
     expect(faceForAvatarSeed("face-wink-30")).toBeUndefined();
     expect(faceForAvatarSeed(null)).toBeUndefined();
     expect(faceForAvatarSeed("")).toBeUndefined();
+  });
+});
+
+describe("avatarEyeIndex / copyAvatarSeed", () => {
+  it("avatarEyeIndex matches the eye set the package renders", async () => {
+    const { masks, keys } = await packageEyeMasks();
+    expect(keys).toHaveLength(AVATAR_EYE_SET_COUNT);
+    for (const seed of [
+      "a-1",
+      "judas",
+      "8c0e7c4e-5d0a-4b8e-9d55-6f1d2b7a0c11",
+      "x",
+      "face-wink-29",
+    ]) {
+      const key = keys[avatarEyeIndex(seed)];
+      expect(key && masks[key], seed).toBe(renderedMask(seed));
+    }
+    AGENT_AVATAR_FACES.forEach((face, index) => {
+      expect(avatarEyeIndex(AGENT_FACE_SEEDS[face])).toBe(index);
+    });
+  });
+
+  it("picks one of the 8 seeds, never the source's eyes (stored seed or id-derived)", () => {
+    const all = Object.values(AGENT_FACE_SEEDS);
+    for (const face of AGENT_AVATAR_FACES) {
+      const avatarSeed = AGENT_FACE_SEEDS[face];
+      for (let step = 0; step < 16; step += 1) {
+        const seed = copyAvatarSeed({ id: "src", avatarSeed }, () => step / 16);
+        expect(all).toContain(seed);
+        expect(seed).not.toBe(avatarSeed);
+      }
+    }
+    // random → 1 (out of range) stays in range.
+    expect(all).toContain(copyAvatarSeed({ id: "src", avatarSeed: null }, () => 0.999999));
+    // A legacy source whose id draws one of the 8 eye sets: that face seed is excluded.
+    let id = "legacy-0";
+    for (let n = 0; avatarEyeIndex(id) >= 8; n += 1) id = `legacy-${n}`;
+    for (let step = 0; step < 16; step += 1) {
+      expect(copyAvatarSeed({ id }, () => step / 16)).not.toBe(all[avatarEyeIndex(id)]);
+    }
   });
 });
 

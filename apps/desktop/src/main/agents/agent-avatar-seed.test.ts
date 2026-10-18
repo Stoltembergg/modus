@@ -163,7 +163,7 @@ describe("avatar_seed store rules", () => {
     expect(updateAgent(agent.id, { avatarSeed: null }).avatarSeed).toBeNull();
   });
 
-  it("a copy of an existing agent never carries a seed; group members read the stored seed", () => {
+  it("a copy never inherits its source's seed but saves the seed it is given; members read it", () => {
     const source = createGroupWithNewAgents({
       name: uid("Source"),
       workspaceId: insertWorkspace(),
@@ -185,24 +185,29 @@ describe("avatar_seed store rules", () => {
       name: uid("Copies"),
       workspaceId: insertWorkspace(),
       members: [
-        // Even if a seed is sent with a copy, it is dropped: drawn with the new id.
+        // The modal's picked seed (the previewed one) is saved, with its face.
         {
           name: "Copy",
           modelId: "openai/gpt-5",
           copiedFromAgentId: seeded.agentId,
           avatarColor: "teal",
-          avatarSeed: AGENT_FACE_SEEDS.bright,
+          avatarSeed: AGENT_FACE_SEEDS.sleepy,
         },
+        // No seed sent: nothing is inherited from the source, drawn with the new id.
         { name: "Copy plain", modelId: "openai/gpt-5", copiedFromAgentId: seeded.agentId },
       ],
     });
-    for (const copy of copies.members) {
-      expect(copy.avatarSeed).toBeNull();
-      expect(getAgent(copy.agentId)?.avatarSeed).toBeNull();
-      expect(agentAvatarSeed({ id: copy.agentId, avatarSeed: copy.avatarSeed })).toBe(copy.agentId);
-    }
-    // Color (and shape) may still be copied.
-    expect(copies.members[0]?.avatarColor).toBe("teal");
+    const [copy, copyPlain] = copies.members;
+    expect(copy).toMatchObject({
+      avatarSeed: AGENT_FACE_SEEDS.sleepy,
+      avatarFace: "sleepy",
+      avatarColor: "teal",
+    });
+    expect(getAgent(copy?.agentId ?? "")?.avatarSeed).toBe(AGENT_FACE_SEEDS.sleepy);
+    expect(copyPlain?.avatarSeed).toBeNull();
+    expect(
+      agentAvatarSeed({ id: copyPlain?.agentId ?? "", avatarSeed: copyPlain?.avatarSeed }),
+    ).toBe(copyPlain?.agentId);
   });
 
   it("a template agent gets no seed unless one is picked", () => {

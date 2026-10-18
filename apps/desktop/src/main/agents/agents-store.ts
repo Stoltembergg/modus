@@ -321,11 +321,9 @@ export function createAgent(input: AgentCreateFields): AgentInfo {
  * role, instructions and avatar; explicit fields win.
  */
 function newAgentFields(input: NewGroupAgentInput, groupId: string | undefined): AgentCreateFields {
-  const { templateId, copiedFromAgentId, ...rest } = input;
-  // A copy of an existing agent never carries an avatar seed: it is drawn with
-  // its own new id (color and shape may still be copied).
-  const { avatarSeed: _copySeed, ...copyFields } = rest;
-  const fields = copiedFromAgentId !== undefined ? copyFields : rest;
+  // A copy never inherits its source's avatar seed; the modal picks it a new
+  // face seed (copyAvatarSeed), saved like any other seed.
+  const { templateId, copiedFromAgentId, ...fields } = input;
   const base = { ...fields, ...(groupId !== undefined ? { groupId } : {}) };
   if (templateId === undefined) {
     // A copy handles what its source handles (empty lists derived, as shown) unless its
