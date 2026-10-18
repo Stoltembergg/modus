@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentEventItem } from "./agentEventHub";
-import type { TimelineBlock, WorkFoldBlockItem } from "./Timeline";
+import type { TimelineBlock, ToolBlockItem, WorkFoldBlockItem } from "./Timeline";
 import { buildVisibleTimelineBlocks } from "./Timeline";
 import { splitTimelinePresentation } from "./timelinePresentation";
 
@@ -43,6 +43,119 @@ function fold(status: WorkFoldBlockItem["run"]["status"]): WorkFoldBlockItem {
 }
 
 describe("splitTimelinePresentation", () => {
+  it("replays visual updates into one chat viewer with the latest content", () => {
+    const events: AgentEventItem[] = [
+      {
+        id: "start",
+        event: { type: "run.started", sessionId: "s", runId: "r", delivery: "normal" },
+      },
+      ...["first", "updated"].flatMap((content): AgentEventItem[] => [
+        {
+          id: `${content}-start`,
+          event: {
+            type: "tool.started",
+            sessionId: "s",
+            toolCallId: content,
+            toolName: "visual_write",
+            args: { visualId: "dog", title: "Dog", kind: "svg", content: `<svg>${content}</svg>` },
+          },
+        },
+        {
+          id: `${content}-end`,
+          event: { type: "tool.ended", sessionId: "s", toolCallId: content, isError: false },
+        },
+      ]),
+      { id: "end", event: { type: "run.completed", sessionId: "s", runId: "r" } },
+    ];
+    const project = (history: AgentEventItem[]) =>
+      splitTimelinePresentation(buildVisibleTimelineBlocks(history)).transcriptBlocks;
+
+    const transcript = project(events);
+    expect(transcript).toHaveLength(1);
+    expect(transcript[0]).toMatchObject({
+      type: "tool",
+      name: "visual_write",
+      args: { visualId: "dog", content: "<svg>updated</svg>" },
+      isComplete: true,
+    });
+    expect(project(structuredClone(events))).toEqual(transcript);
+  });
+
+  it.each([
+    "running",
+    "completed",
+  ] as const)("keeps visuals in chat and only their execution record in Activity (%s)", (status) => {
+    const visual: ToolBlockItem = {
+      id: "picture",
+      type: "tool",
+      name: "visual_write",
+      args: { title: "Sleeping dog", kind: "svg", content: "<svg><circle r='10'/></svg>" },
+      output: "Rendered visual: Sleeping dog",
+      isComplete: status === "completed",
+    };
+    const work = fold(status);
+    const group = work.items[0];
+    if (group?.type !== "work-activity-group") throw new Error("Missing fixture group");
+    group.items.push(visual);
+    const source: TimelineBlock[] = [
+      userMessage,
+      work,
+      { id: "answer", type: "message", role: "assistant", content: "Here is your image." },
+    ];
+    const before = structuredClone(source);
+
+    const result = splitTimelinePresentation(source);
+
+    expect(result.transcriptBlocks.map((block) => block.id)).toEqual([
+      "prompt",
+      "picture",
+      "answer",
+    ]);
+    expect(result.transcriptBlocks[1]).toBe(visual);
+    const activityFold = result.activityBlocks[0];
+    if (activityFold?.type !== "work-fold") throw new Error("Missing Activity fold");
+    const activityGroup = activityFold.items[0];
+    if (activityGroup?.type !== "work-activity-group") throw new Error("Missing Activity group");
+    expect(activityGroup.items.at(-1)).toMatchObject({
+      id: visual.id,
+      name: visual.name,
+      output: visual.output,
+      isComplete: visual.isComplete,
+      summaryOnly: true,
+    });
+    expect(source).toEqual(before);
+  });
+
+  it("handles standalone and ungrouped visuals without promoting failed visuals or other tools", () => {
+    const visual: ToolBlockItem = {
+      id: "picture",
+      type: "tool",
+      name: "visual_write",
+      args: { title: "Dog", kind: "svg", content: "<svg/>" },
+      output: "Rendered visual: Dog",
+      isComplete: true,
+    };
+    const failed = { ...visual, id: "failed-picture", isError: true, output: "Rendering failed" };
+    const work = fold("completed");
+    work.items.push({ ...visual, id: "ungrouped-picture" }, failed);
+
+    const result = splitTimelinePresentation([visual, work]);
+
+    expect(result.transcriptBlocks.map((block) => block.id)).toEqual([
+      "picture",
+      "ungrouped-picture",
+    ]);
+    expect(result.activityBlocks[0]).toMatchObject({ id: "picture", summaryOnly: true });
+    const activityFold = result.activityBlocks[1];
+    if (activityFold?.type !== "work-fold") throw new Error("Missing Activity fold");
+    expect(activityFold.items.at(-1)).toMatchObject({
+      id: "failed-picture",
+      isError: true,
+      output: "Rendering failed",
+      summaryOnly: true,
+    });
+  });
+
   it("projects real event streams into a clean prompt and final answer transcript", () => {
     const events: AgentEventItem[] = [
       { id: "1", event: { type: "message.started", sessionId: "s", messageId: "u", role: "user" } },
