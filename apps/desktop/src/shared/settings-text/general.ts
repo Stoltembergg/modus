@@ -54,10 +54,10 @@ export const GENERAL_TEXT_PT: Record<keyof typeof GENERAL_TEXT_EN, string> = {
   "settings.general.approvalModeFollowingGlobal":
     "Seguindo o padrão global ({mode}). Escolha um modo para substituir.",
   "settings.general.approvalModeOverrideActiveWorkspace":
-    "Substituição ativa para este workspace. Use o global para limpá-la.",
+    "Este workspace usa um modo próprio. Clique em “Usar global” para voltar ao padrão.",
   "settings.general.followGlobalDefault": "Seguir padrão global",
   "settings.general.usingGlobalMode": "Usando {mode}",
-  "settings.general.overrideActiveProject": "Substituição ativa para este projeto",
+  "settings.general.overrideActiveProject": "Modo próprio ativo neste projeto",
   "settings.general.following": "Seguindo",
   "settings.general.useGlobal": "Usar global",
   "settings.general.scopeHint":

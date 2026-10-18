@@ -54,7 +54,7 @@ export const MCP_TEXT_EN = {
   "settings.mcp.saveGlobally": "Save globally for every workspace",
   "settings.mcp.openWorkspaceToConfigure": "Open a workspace to configure MCP servers",
   "settings.mcp.serversFooterHint":
-    "Global servers are available in every workspace. Project servers live in the selected workspace. “Always allow” trusts a tool for this workspace.",
+    "Global servers are available in every workspace. Project servers live in the selected workspace. “Yes, always allow in this project” trusts a tool for this workspace.",
   "settings.mcp.editJsonTitle": "Advanced: edit the underlying project mcp.json directly",
   "settings.mcp.editJsonButton": "Edit JSON",
   "settings.mcp.formTitleAdd": "Add MCP server",

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   checkReaPrerequisites,
   isSupportedNodeVersion,
+  REA_NPM_NOT_FOUND_NOTE,
   REA_SUPPORTED_NODE_RANGE,
 } from "./rea-prerequisites";
 
@@ -53,8 +54,9 @@ describe("REA prerequisite checks", () => {
         return "v24.21.0";
       },
     });
-    expect(result).toMatchObject({ ok: false, status: "needs_node" });
-    if (!result.ok) expect(result.note).toContain(REA_SUPPORTED_NODE_RANGE);
+    expect(result).toEqual({ ok: false, status: "needs_node", note: REA_NPM_NOT_FOUND_NOTE });
+    expect(REA_NPM_NOT_FOUND_NOTE).toContain("could not find npm on the PATH Modus uses");
+    expect(REA_NPM_NOT_FOUND_NOTE).toContain(REA_SUPPORTED_NODE_RANGE);
   });
 
   it("passes when Node and npm are both available and supported", async () => {
