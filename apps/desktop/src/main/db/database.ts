@@ -280,6 +280,8 @@ export function migrateDatabase(db: DatabaseSync): void {
   // L2: the session's chosen branch (session state; NULL = adopt the repo's current branch
   // at the next run) and the branch each run snapshotted at its start (immutable).
   addColumn(db, "agent_sessions", "branch", "text");
+  // define-goal: the session's single goal and whether its tools are active (JSON; NULL = never).
+  addColumn(db, "agent_sessions", "goal_json", "text");
   addColumn(db, "agent_runs", "branch", "text");
   addColumn(db, "model_configs", "thinking_variant", "text");
 

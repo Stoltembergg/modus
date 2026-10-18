@@ -445,6 +445,20 @@ export function setAgentSessionBranch(sessionId: string, branch: string): void {
   getDatabase().prepare("update agent_sessions set branch = ? where id = ?").run(branch, sessionId);
 }
 
+/** define-goal: the session's raw goal state JSON, or undefined when never set. */
+export function getAgentSessionGoalJson(sessionId: string): string | undefined {
+  const row = getDatabase()
+    .prepare("select goal_json from agent_sessions where id = ?")
+    .get(sessionId) as { goal_json: string | null } | undefined;
+  return row?.goal_json ?? undefined;
+}
+
+export function setAgentSessionGoalJson(sessionId: string, goalJson: string): void {
+  getDatabase()
+    .prepare("update agent_sessions set goal_json = ? where id = ?")
+    .run(goalJson, sessionId);
+}
+
 /** Location metadata only: transcript, model, run evidence and timestamps remain unchanged. */
 export function moveAgentSessionWorkspace(
   sessionId: string,
