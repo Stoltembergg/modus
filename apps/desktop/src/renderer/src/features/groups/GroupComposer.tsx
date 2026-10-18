@@ -325,7 +325,7 @@ export function GroupComposer({
           role="status"
         >
           {groupRoomLabel("ready", locale)}
-          <span className="text-fg-faint">
+          <span className="text-fg-muted">
             {" · "}
             {waitingSessionIds
               .map((id) => labels.get(id)?.title ?? id)
@@ -341,7 +341,7 @@ export function GroupComposer({
           data-testid="group-composer-reply"
         >
           <span className="min-w-0 flex-1 truncate">
-            {t("composer.replying")} · <span className="text-fg-faint">{replyTo.preview}</span>
+            {t("composer.replying")} · <span className="text-fg-muted">{replyTo.preview}</span>
           </span>
           <button
             className="shrink-0 text-fg-faint hover:text-fg"
@@ -590,7 +590,7 @@ export function GroupComposer({
                   {t("composer.complement")}
                 </button>
                 {executionMode === "complement" ? (
-                  <span className="text-fg-faint" data-testid="group-composer-active-execution">
+                  <span className="text-fg-muted" data-testid="group-composer-active-execution">
                     · {activeExecutionTitle ?? activeExecutionId.slice(0, 8)}
                   </span>
                 ) : null}

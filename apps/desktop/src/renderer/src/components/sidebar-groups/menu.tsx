@@ -61,7 +61,7 @@ export function GroupMenuItems({
           </span>
           Coordinator mode
           {coordinator.disabled ? (
-            <span className="ml-auto text-2xs text-fg-faint">Needs a Lead</span>
+            <span className="ml-auto text-2xs text-fg-muted">Needs a Lead</span>
           ) : null}
         </Menu.CheckboxItem>
       ) : null}

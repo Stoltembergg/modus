@@ -635,7 +635,7 @@ function ProviderAuthDialog({
         ) : null}
 
         {operation.status === "pending" ? (
-          <div className="mt-6 text-sm text-fg-faint">
+          <div className="mt-6 text-sm text-fg-muted">
             <WorkingText>{t("settings.providers.waitingForProvider")}</WorkingText>
           </div>
         ) : null}

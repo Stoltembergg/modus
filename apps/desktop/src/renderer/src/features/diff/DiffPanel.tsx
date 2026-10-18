@@ -949,7 +949,7 @@ function ReviewToolbar({
         </span>
       ) : null}
       {scope === "last-turn" && reviewTurn ? (
-        <span className="text-2xs text-fg-faint capitalize">{reviewTurn.status}</span>
+        <span className="text-2xs text-fg-muted capitalize">{reviewTurn.status}</span>
       ) : null}
       <BranchSwitcher
         cwd={cwd}
@@ -1077,7 +1077,7 @@ function OverflowMenu({
             <Menu.SubmenuRoot>
               <Menu.SubmenuTrigger className="flex cursor-default items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-fg text-sm outline-none select-none data-highlighted:bg-hover data-popup-open:bg-hover">
                 Layout
-                <span className="flex items-center gap-1 text-fg-faint text-xs">
+                <span className="flex items-center gap-1 text-fg-muted text-xs">
                   {layout === "split" ? "Split" : "Unified"}
                   <IconChevronRight size={13} stroke={1.7} />
                 </span>
@@ -1185,7 +1185,7 @@ function MenuChoice({
 }
 
 function MenuEmpty({ children }: { children: ReactNode }) {
-  return <div className="px-2.5 py-1.5 text-fg-faint text-xs">{children}</div>;
+  return <div className="px-2.5 py-1.5 text-fg-muted text-xs">{children}</div>;
 }
 
 function ScopeSubmenu({
@@ -1208,7 +1208,7 @@ function ScopeSubmenu({
           {selected ? <IconCheck size={14} stroke={2} /> : null}
         </span>
         <span className="flex-1">{label}</span>
-        {value ? <span className="max-w-24 truncate text-2xs text-fg-faint">{value}</span> : null}
+        {value ? <span className="max-w-24 truncate text-2xs text-fg-muted">{value}</span> : null}
         <IconChevronRight size={13} stroke={1.7} />
       </Menu.SubmenuTrigger>
       <Menu.Portal>
@@ -1381,7 +1381,7 @@ const ChangeRow = memo(function ChangeRow({
           </span>
           <ChangeFileIcon path={change.path} />
           <span className="min-w-0 flex-1 truncate">
-            {display === "full" && dir ? <span className="text-fg-faint">{dir}</span> : null}
+            {display === "full" && dir ? <span className="text-fg-muted">{dir}</span> : null}
             <span>{name}</span>
           </span>
           <ChangeMeta badge={badge} stat={stat} />
@@ -1592,7 +1592,7 @@ function CommitRow({
         <CommitGraphLane isFirst={isFirst} isHead={isHead} isLast={isLast} isMerge={isMerge} />
         <span className="flex min-w-0 flex-1 items-baseline gap-2 text-[12.5px] leading-none">
           <span className="min-w-0 truncate text-fg">{commit.subject}</span>
-          <span className="shrink-0 text-fg-faint">{commit.author}</span>
+          <span className="shrink-0 text-fg-muted">{commit.author}</span>
         </span>
         <span className="flex shrink-0 items-center gap-1.5">
           {isHead && branch ? (
@@ -1627,7 +1627,7 @@ function CommitRow({
         {files === undefined ? (
           <div className="py-2 pr-3 pl-9 text-fg-faint text-xs">Loading files…</div>
         ) : files.length === 0 ? (
-          <div className="py-2 pr-3 pl-9 text-fg-faint text-xs">No files changed.</div>
+          <div className="py-2 pr-3 pl-9 text-fg-muted text-xs">No files changed.</div>
         ) : (
           files.map((file) => {
             const key = `${commit.hash}:${file.path}`;

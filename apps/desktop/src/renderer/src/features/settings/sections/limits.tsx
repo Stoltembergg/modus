@@ -218,7 +218,7 @@ export function LimitsSettingsPanel({ models }: { models: ModelInfo[] }) {
                     >
                       <div className="min-w-0">
                         <div className="truncate text-sm text-fg">{row.modelName}</div>
-                        <div className="text-2xs text-fg-faint">{row.providerName}</div>
+                        <div className="text-2xs text-fg-muted">{row.providerName}</div>
                       </div>
                       <LimitValue label="Context window" value={row.contextWindow} />
                       <LimitValue label="Max output" value={row.maxTokens} />
@@ -277,7 +277,7 @@ export function LimitsSettingsPanel({ models }: { models: ModelInfo[] }) {
                         ? "bg-danger/10 text-danger"
                         : account.status === "stale"
                           ? "bg-warning/10 text-warning"
-                          : "bg-surface text-fg-faint",
+                          : "bg-surface text-fg-muted",
                     )}
                   >
                     {accountStatusLabel(account.status, account.message)}
@@ -292,7 +292,7 @@ export function LimitsSettingsPanel({ models }: { models: ModelInfo[] }) {
                           {usageMetricText(metric)}
                         </dd>
                         {metric.window ? (
-                          <div className="mt-1 text-2xs text-fg-faint">Window: {metric.window}</div>
+                          <div className="mt-1 text-2xs text-fg-muted">Window: {metric.window}</div>
                         ) : null}
                       </div>
                     ))}

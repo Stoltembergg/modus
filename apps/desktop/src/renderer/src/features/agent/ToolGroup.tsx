@@ -75,7 +75,7 @@ export function ToolGroup({
           )}
           {detail ? (
             <span
-              className="min-w-0 shrink truncate font-normal text-fg-faint"
+              className="min-w-0 shrink truncate font-normal text-fg-muted"
               data-tool-group-detail
             >
               {detail}

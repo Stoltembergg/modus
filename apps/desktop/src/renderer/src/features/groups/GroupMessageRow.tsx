@@ -284,7 +284,7 @@ function MessageMeta({
   if (!status || status === "running" || status === "writing") {
     if (!executionChip && !tokenLabel) return null;
     return (
-      <span className="ml-auto inline-flex flex-wrap items-center gap-x-1.5 font-normal text-2xs text-fg-faint">
+      <span className="ml-auto inline-flex flex-wrap items-center gap-x-1.5 font-normal text-2xs text-fg-muted">
         {executionChip}
         {tokenLabel ? (
           <span
@@ -313,7 +313,7 @@ function MessageMeta({
   );
   const warning = status === "failed" || status === "interrupted";
   return (
-    <span className="ml-auto inline-flex flex-wrap items-center gap-x-1.5 font-normal text-2xs text-fg-faint">
+    <span className="ml-auto inline-flex flex-wrap items-center gap-x-1.5 font-normal text-2xs text-fg-muted">
       {executionChip}
       {tokenLabel ? (
         <span
@@ -747,7 +747,7 @@ export function GroupMessageRow({
             trailing={
               <>
                 {toLabel ? (
-                  <span className="font-normal text-fg-faint" data-testid="group-message-to">
+                  <span className="font-normal text-fg-muted" data-testid="group-message-to">
                     → <MemberName label={toLabel} />
                   </span>
                 ) : null}

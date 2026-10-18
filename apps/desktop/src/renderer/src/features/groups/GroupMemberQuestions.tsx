@@ -57,7 +57,7 @@ export function GroupMemberQuestions({
         const name = label ? memberLabelText(label) : sessionId;
         return (
           <div data-member-session={sessionId} key={request.id}>
-            <div className="mb-1.5 text-2xs text-fg-faint">
+            <div className="mb-1.5 text-2xs text-fg-muted">
               {name} · {groupStatusLabel("waitingForYou", locale)}
             </div>
             <QuestionCard

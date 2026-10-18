@@ -65,7 +65,7 @@ export const InlineDiffView = memo(function InlineDiffView({ diff, path }: Inlin
         ))}
       </div>
       {diff.truncated ? (
-        <div className="border-hairline-soft border-t px-3 py-1.5 text-2xs text-fg-faint">
+        <div className="border-hairline-soft border-t px-3 py-1.5 text-2xs text-fg-muted">
           … {diff.hiddenLineCount} more line{diff.hiddenLineCount === 1 ? "" : "s"} hidden
         </div>
       ) : null}

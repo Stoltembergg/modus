@@ -301,7 +301,7 @@ function FlatToolRow({
         <>
           <WorkingText className="shrink-0">{view.verb}</WorkingText>
           {status ? (
-            <span className="min-w-0 flex-1 truncate text-fg-faint" title={status}>
+            <span className="min-w-0 flex-1 truncate text-fg-muted" title={status}>
               {status}
             </span>
           ) : null}

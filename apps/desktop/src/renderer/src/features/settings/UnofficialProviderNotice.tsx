@@ -97,7 +97,7 @@ export function UnofficialProviderRiskInterstitial({
         />
         <span className="grid gap-1">
           <span>{t("settings.providers.acknowledgeTermsLabel")}</span>
-          <span className="text-2xs text-fg-faint">
+          <span className="text-2xs text-fg-muted">
             {t("settings.providers.modusGuaranteeAccountWarning")}
           </span>
         </span>

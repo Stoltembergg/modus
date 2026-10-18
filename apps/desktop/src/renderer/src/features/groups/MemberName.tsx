@@ -6,7 +6,7 @@ export function MemberName({ label }: { label: MemberLabel }) {
     <>
       {label.title}
       {label.suffix ? (
-        <span className="text-fg-faint" data-testid="member-id-suffix">
+        <span className="text-fg-muted" data-testid="member-id-suffix">
           {" "}
           · {label.suffix}
         </span>

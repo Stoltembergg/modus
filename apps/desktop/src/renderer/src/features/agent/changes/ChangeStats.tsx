@@ -91,7 +91,7 @@ export function ChangeFileList({
         <ChangeFileRow file={file} key={file.path} onOpen={onOpenFile} />
       ))}
       {stats.truncated ? (
-        <div className="px-2 py-1 text-2xs text-fg-faint">
+        <div className="px-2 py-1 text-2xs text-fg-muted">
           …and {stats.fileCount - stats.files.length} more file(s)
         </div>
       ) : null}

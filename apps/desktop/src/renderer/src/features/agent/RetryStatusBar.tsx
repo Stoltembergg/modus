@@ -37,7 +37,7 @@ export function RetryStatusBar({
         <span className="truncate" title={status.message}>
           {status.message}
         </span>
-        <WorkingText className="ml-2 text-fg-faint">{`retrying${info ? ` · ${info}` : ""}`}</WorkingText>
+        <WorkingText className="ml-2 text-fg-muted">{`retrying${info ? ` · ${info}` : ""}`}</WorkingText>
       </div>
     </div>
   );

@@ -315,7 +315,7 @@ export function GroupTaskDetails({
         aria-label={t("taskDetails.aria")}
         className="mt-3 rounded-md border border-hairline p-3"
       >
-        <button className="float-right text-xs text-fg-faint" onClick={onClose} type="button">
+        <button className="float-right text-xs text-fg-muted" onClick={onClose} type="button">
           {t("taskDetails.close")}
         </button>
         {error ? (
@@ -360,11 +360,11 @@ export function GroupTaskDetails({
         </div>
         <div className="mt-2 grid grid-cols-2 gap-2 text-2xs">
           <div>
-            <span className="text-fg-faint">{t("taskDetails.owner")}</span>
+            <span className="text-fg-muted">{t("taskDetails.owner")}</span>
             <div>{displayName(task.ownerSessionId, labels, t)}</div>
           </div>
           <div>
-            <span className="text-fg-faint">{t("taskDetails.reviewer")}</span>
+            <span className="text-fg-muted">{t("taskDetails.reviewer")}</span>
             <div>{displayName(task.reviewerSessionId, labels, t)}</div>
           </div>
         </div>
@@ -390,7 +390,7 @@ export function GroupTaskDetails({
               {details.dependencies.map((dependency) => (
                 <li className="flex justify-between gap-2" key={dependency.id}>
                   <span>{dependency.title}</span>
-                  <span className="text-fg-faint">{statusLabel(dependency.status, t)}</span>
+                  <span className="text-fg-muted">{statusLabel(dependency.status, t)}</span>
                 </li>
               ))}
             </ul>
@@ -412,7 +412,7 @@ export function GroupTaskDetails({
                 </div>
                 {criterion.evidence.map((evidence, index) => (
                   <div
-                    className="mt-1 flex items-center justify-between gap-2 text-2xs text-fg-faint"
+                    className="mt-1 flex items-center justify-between gap-2 text-2xs text-fg-muted"
                     key={`${criterion.criterionId}:${evidence.runId}:${evidence.checkName ?? index}`}
                   >
                     <span>
@@ -444,7 +444,7 @@ export function GroupTaskDetails({
         {transitions.length > 0 ? (
           <div className="mt-3">
             <h5 className="font-medium text-fg-muted">{t("taskDetails.history")}</h5>
-            <ul className="mt-1 flex flex-col gap-1 text-2xs text-fg-faint">
+            <ul className="mt-1 flex flex-col gap-1 text-2xs text-fg-muted">
               {transitions
                 .slice(-8)
                 .reverse()
@@ -528,7 +528,7 @@ export function GroupTaskDetails({
                     type="checkbox"
                   />
                   <span>{dependency.title}</span>
-                  <span className="text-fg-faint">{statusLabel(dependency.status, t)}</span>
+                  <span className="text-fg-muted">{statusLabel(dependency.status, t)}</span>
                 </label>
               ))}
               {details.omittedDependencyOptionCount > 0 ? (

@@ -134,7 +134,7 @@ export function CommitDialog({ open, onOpenChange, cwd, status, onRefresh }: Com
             >
               <span>
                 <span className="block text-fg-muted">Include unstaged</span>
-                <span className="block text-2xs text-fg-faint">
+                <span className="block text-2xs text-fg-muted">
                   {includedCount} file{includedCount === 1 ? "" : "s"} will be committed
                 </span>
               </span>

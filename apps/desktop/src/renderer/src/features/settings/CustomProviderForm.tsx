@@ -483,7 +483,7 @@ function ConnectionTestStatus({
   const t = useSettingsText();
   if (testing) {
     return (
-      <span className="text-xs text-fg-faint">{t("settings.customProvider.testContacting")}</span>
+      <span className="text-xs text-fg-muted">{t("settings.customProvider.testContacting")}</span>
     );
   }
   if (!result) {

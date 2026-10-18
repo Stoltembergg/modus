@@ -46,7 +46,7 @@ export function PromptSources({
                       title={source.href}
                     >
                       <SourceLabel source={source} />
-                      <span className="shrink-0 text-fg-faint">Open</span>
+                      <span className="shrink-0 text-fg-muted">Open</span>
                     </a>
                   ) : source.path ? (
                     <button
@@ -56,12 +56,12 @@ export function PromptSources({
                       type="button"
                     >
                       <SourceLabel source={source} />
-                      <span className="shrink-0 text-fg-faint">File</span>
+                      <span className="shrink-0 text-fg-muted">File</span>
                     </button>
                   ) : (
                     <div className="flex min-w-0 items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs text-fg-muted">
                       <SourceLabel source={source} />
-                      <span className="shrink-0 text-fg-faint">Connection</span>
+                      <span className="shrink-0 text-fg-muted">Connection</span>
                     </div>
                   )}
                 </li>
@@ -87,12 +87,12 @@ function SourceLabel({ source }: { source: RunSource }) {
             : "Web";
   return (
     <span className="flex min-w-0 items-center gap-2">
-      <span className="shrink-0 rounded bg-elevated px-1 py-0.5 text-[9px] text-fg-faint">
+      <span className="shrink-0 rounded bg-elevated px-1 py-0.5 text-[9px] text-fg-muted">
         {kindLabel}
       </span>
       <span className="min-w-0 truncate font-medium text-fg">{source.label}</span>
       {source.detail ? (
-        <span className="min-w-0 truncate text-fg-faint">{source.detail}</span>
+        <span className="min-w-0 truncate text-fg-muted">{source.detail}</span>
       ) : null}
     </span>
   );

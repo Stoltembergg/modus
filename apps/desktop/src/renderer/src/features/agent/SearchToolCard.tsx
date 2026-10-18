@@ -185,7 +185,7 @@ function FileRow({
       <FileIcon isDir={isDir} />
       <PathLabel path={result.path} />
       {outside ? (
-        <span className="shrink-0 whitespace-nowrap text-fg-faint text-xs">
+        <span className="shrink-0 whitespace-nowrap text-fg-muted text-xs">
           {t("search.outsideWorkspace")}
         </span>
       ) : meta ? (
@@ -357,7 +357,7 @@ function WebRow({ result }: { result: Extract<SearchResultItem, { kind: "web" }>
         <Favicon url={result.url} />
       </span>
       <span className="min-w-0 flex-1 truncate text-fg-muted text-sm">{result.title}</span>
-      <span className="shrink-0 whitespace-nowrap text-fg-faint text-xs">{result.source}</span>
+      <span className="shrink-0 whitespace-nowrap text-fg-muted text-xs">{result.source}</span>
     </div>
   );
 }
@@ -490,7 +490,7 @@ export const SearchToolCard = memo(function SearchToolCard({
             </div>
           ) : null}
           {parsed.notice ? (
-            <div className="border-hairline border-t px-2.5 py-1.5 text-fg-faint text-xs">
+            <div className="border-hairline border-t px-2.5 py-1.5 text-fg-muted text-xs">
               {parsed.notice}
             </div>
           ) : null}

@@ -182,13 +182,13 @@ function ActivityLiveSection({
             >
               <div className="font-medium text-fg-muted">
                 <MemberName label={label} />
-                <span className="ml-1.5 font-normal text-fg-faint">{row.live.phase}</span>
+                <span className="ml-1.5 font-normal text-fg-muted">{row.live.phase}</span>
               </div>
               {row.live.presence.activity ? (
-                <div className="mt-0.5 text-2xs text-fg-faint">{row.live.presence.activity}</div>
+                <div className="mt-0.5 text-2xs text-fg-muted">{row.live.presence.activity}</div>
               ) : null}
               {row.live.tools.length > 0 ? (
-                <ul className="mt-1 flex flex-col gap-0.5 text-2xs text-fg-faint">
+                <ul className="mt-1 flex flex-col gap-0.5 text-2xs text-fg-muted">
                   {row.live.tools.map((tool) => (
                     <li data-done={tool.done || undefined} key={tool.id}>
                       {tool.done ? "✓" : "·"} {tool.label}
@@ -224,7 +224,7 @@ function ActivityDetailsSection({ fields }: { fields: readonly HandoffPacketFiel
             // biome-ignore lint/suspicious/noArrayIndexKey: packet fields can repeat keys
             key={`${field.key}-${index}`}
           >
-            <dt className="w-20 shrink-0 text-fg-faint">{field.key}</dt>
+            <dt className="w-20 shrink-0 text-fg-muted">{field.key}</dt>
             <dd className="min-w-0 flex-1 text-fg-muted">{field.value || "—"}</dd>
           </div>
         ))}

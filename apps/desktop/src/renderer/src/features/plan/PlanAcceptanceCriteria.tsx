@@ -118,10 +118,10 @@ function EvidenceList({ evidence }: { evidence: PlanEvidenceRef[] }) {
       {evidence.slice(0, 4).map((item) => (
         <li className="min-w-0 text-xs leading-snug" key={item.id}>
           <span className="font-medium text-fg-subtle">{item.label}</span>
-          <span className="ml-1 text-fg-faint">({item.kind})</span>
+          <span className="ml-1 text-fg-muted">({item.kind})</span>
           <span className="ml-1 text-fg-muted">· {evidenceStatusLabel(item.status)}</span>
           {item.runId || item.eventId || item.revision ? (
-            <span className="ml-1 break-all text-fg-faint">
+            <span className="ml-1 break-all text-fg-muted">
               {[
                 item.runId ? `Run ${item.runId}` : undefined,
                 item.eventId ? `Event ${item.eventId}` : undefined,
@@ -132,14 +132,14 @@ function EvidenceList({ evidence }: { evidence: PlanEvidenceRef[] }) {
             </span>
           ) : null}
           {item.paths?.length ? (
-            <span className="mt-0.5 block break-all text-fg-faint">
+            <span className="mt-0.5 block break-all text-fg-muted">
               {item.paths.slice(0, 3).join(" · ")}
             </span>
           ) : null}
         </li>
       ))}
       {evidence.length > 4 ? (
-        <li className="text-2xs text-fg-faint">+{evidence.length - 4} more references</li>
+        <li className="text-2xs text-fg-muted">+{evidence.length - 4} more references</li>
       ) : null}
     </ul>
   );
