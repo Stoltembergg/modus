@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { LocalModelError } from "./errors";
-import type { LocalModelManifest } from "./manifest";
+import { type LocalModelManifest, RERANK03_MODEL } from "./manifest";
 import { ensureModelFiles, sha256File, verifyModelFiles } from "./model-download";
 
 type RecordedRequest = {
@@ -131,6 +131,42 @@ describe("model-download", () => {
     expect(requests[0]?.range).toBeNull();
     expect(requests[1]?.url).toBe(`${baseUrl}${file2Name}`);
     expect(requests[1]?.range).toBeNull();
+  });
+
+  it("ships LICENSE and NOTICE with the RERANK-03 weights (Apache-2.0): downloaded and required by verify", async () => {
+    const licenseNames = RERANK03_MODEL.files
+      .filter((f) => f.role === "license")
+      .map((f) => f.name);
+    expect(licenseNames).toEqual(["LICENSE", "NOTICE"]);
+
+    // Same file list as the real manifest, fake contents (the real hashes pin the real files).
+    const contents = new Map(RERANK03_MODEL.files.map((f) => [f.name, `fake ${f.name}`]));
+    const manifest: LocalModelManifest = {
+      id: RERANK03_MODEL.id,
+      files: RERANK03_MODEL.files.map((f) => ({
+        name: f.name,
+        role: f.role,
+        sha256: sha256Hex(contents.get(f.name) ?? ""),
+      })),
+    };
+    const served = new Map([...contents].map(([name, body]) => [`${baseUrl}${name}`, body]));
+    const requests: RecordedRequest[] = [];
+    await ensureModelFiles({
+      manifest,
+      dir: tempDir,
+      baseUrl,
+      fetchImpl: createFakeFetch(served, requests),
+      sleep: noopSleep,
+    });
+
+    expect(requests.map((r) => r.url)).toEqual(
+      expect.arrayContaining([`${baseUrl}LICENSE`, `${baseUrl}NOTICE`]),
+    );
+    expect(readFileSync(join(tempDir, "NOTICE"), "utf8")).toBe("fake NOTICE");
+    expect(readFileSync(join(tempDir, "LICENSE"), "utf8")).toBe("fake LICENSE");
+
+    rmSync(join(tempDir, "NOTICE"));
+    await expect(verifyModelFiles(manifest, tempDir)).rejects.toMatchObject({ code: "missing" });
   });
 
   it("b. second call with valid files does no fetch at all", async () => {

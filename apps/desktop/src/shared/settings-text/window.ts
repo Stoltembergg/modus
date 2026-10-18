@@ -5,8 +5,6 @@ export const WINDOW_TEXT_EN = {
   "settings.window.searchPlaceholder": "Search settings...",
   "settings.window.noSettingsMatch": "No settings match",
   "settings.window.appTitle": "Modus Desktop",
-  "settings.window.modelAttribution":
-    "Tool search model: RERANK-03 weights, modified from IBM Granite Embedding (ibm-granite/granite-embedding-97m-multilingual-r2, Copyright IBM), Apache License 2.0. Downloaded on demand with its LICENSE and NOTICE.",
 
   // Navigation groups
   "settings.window.navGroupWorkspace": "Workspace",
@@ -44,8 +42,6 @@ export const WINDOW_TEXT_PT: Record<keyof typeof WINDOW_TEXT_EN, string> = {
   "settings.window.searchPlaceholder": "Buscar configurações...",
   "settings.window.noSettingsMatch": "Nenhuma configuração encontrada",
   "settings.window.appTitle": "Modus Desktop",
-  "settings.window.modelAttribution":
-    "Modelo de busca de ferramentas: pesos RERANK-03, modificados a partir do IBM Granite Embedding (ibm-granite/granite-embedding-97m-multilingual-r2, Copyright IBM), Licença Apache 2.0. Baixado sob demanda com seus arquivos LICENSE e NOTICE.",
 
   // Navigation groups
   "settings.window.navGroupWorkspace": "Workspace",
