@@ -106,52 +106,8 @@ describe("ToolFilterSetting", () => {
     expect(toggle.hasAttribute("disabled")).toBe(false);
   });
 
-  it("toggling on opens the prompt with the size and does not call enable", async () => {
-    const { api } = setupBridge({ enabled: false, downloadBytes: 390_000_000 });
-    const user = userEvent.setup();
-    render(<ToolFilterSetting />);
-
-    const toggle = await screen.findByRole("switch", { name: "Local tool filter" });
-    await user.click(toggle);
-
-    expect(await screen.findByRole("heading", { name: "Turn on local tool filter" })).toBeTruthy();
-    expect(screen.getByText(/390 MB/)).toBeTruthy();
-    expect(api.enable).not.toHaveBeenCalled();
-    expect(toggle.getAttribute("aria-checked")).toBe("false");
-  });
-
-  it("confirm in prompt calls enable", async () => {
-    const { api } = setupBridge({ enabled: false, downloadBytes: 390_000_000 });
-    const user = userEvent.setup();
-    render(<ToolFilterSetting />);
-
-    const toggle = await screen.findByRole("switch", { name: "Local tool filter" });
-    await user.click(toggle);
-
-    const confirmBtn = await screen.findByRole("button", { name: "Download and turn on" });
-    await user.click(confirmBtn);
-
-    expect(api.enable).toHaveBeenCalledTimes(1);
-  });
-
-  it("cancel in the prompt keeps it off", async () => {
-    const { api } = setupBridge({ enabled: false, downloadBytes: 390_000_000 });
-    const user = userEvent.setup();
-    render(<ToolFilterSetting />);
-
-    const toggle = await screen.findByRole("switch", { name: "Local tool filter" });
-    await user.click(toggle);
-
-    const cancelBtn = await screen.findByRole("button", { name: "Cancel" });
-    await user.click(cancelBtn);
-
-    expect(api.enable).not.toHaveBeenCalled();
-    expect(screen.queryByRole("heading", { name: "Turn on local tool filter" })).toBeNull();
-    expect(toggle.getAttribute("aria-checked")).toBe("false");
-  });
-
-  it("partialBytes shows the resume line in prompt", async () => {
-    setupBridge({
+  it("toggling on from off calls enable directly, with no confirmation dialog", async () => {
+    const { api } = setupBridge({
       enabled: false,
       downloadBytes: 390_000_000,
       partialBytes: 120_000_000,
@@ -162,7 +118,12 @@ describe("ToolFilterSetting", () => {
     const toggle = await screen.findByRole("switch", { name: "Local tool filter" });
     await user.click(toggle);
 
-    expect(await screen.findByText("120 MB already downloaded; it will resume.")).toBeTruthy();
+    expect(api.enable).toHaveBeenCalledTimes(1);
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Turn on local tool filter" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Download and turn on" })).toBeNull();
+    expect(screen.queryByText(/already downloaded/)).toBeNull();
   });
 
   it("downloading shows a progressbar and Cancel download calls cancelDownload", async () => {
@@ -316,7 +277,7 @@ describe("ToolFilterSetting", () => {
 
   it("renders Portuguese strings when document language is pt-BR", async () => {
     document.documentElement.lang = "pt-BR";
-    setupBridge({
+    const { api } = setupBridge({
       enabled: false,
       downloadBytes: 390_000_000,
       partialBytes: 120_000_000,
@@ -336,13 +297,9 @@ describe("ToolFilterSetting", () => {
     const toggle = screen.getByRole("switch", { name: "Filtro local de ferramentas" });
     await user.click(toggle);
 
-    expect(
-      await screen.findByRole("heading", { name: "Ativar filtro local de ferramentas" }),
-    ).toBeTruthy();
-    expect(screen.getByText("Baixar e ativar")).toBeTruthy();
-    expect(screen.getByText("Cancelar")).toBeTruthy();
-    expect(
-      screen.getByText("120 MB já baixados; o download continuará de onde parou."),
-    ).toBeTruthy();
+    expect(api.enable).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByText("Ativar filtro local de ferramentas")).toBeNull();
+    expect(screen.queryByText("Baixar e ativar")).toBeNull();
   });
 });

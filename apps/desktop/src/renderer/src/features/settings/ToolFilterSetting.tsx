@@ -1,4 +1,3 @@
-import { Dialog } from "@base-ui/react/dialog";
 import { useEffect, useState } from "react";
 import {
   DEFAULT_TOOL_FILTER_STATE,
@@ -6,7 +5,6 @@ import {
   type ToolFilterState,
   type ToolFilterUnavailableReason,
 } from "../../../../shared/tool-filter";
-import { cn } from "../../lib/cn";
 import { useSettingsText } from "../../lib/settingsText";
 import { SwitchControl } from "./form-controls";
 
@@ -18,7 +16,6 @@ function formatMb(bytes: number, locale?: string): string {
 export function ToolFilterSetting() {
   const t = useSettingsText();
   const [state, setState] = useState<ToolFilterState>(DEFAULT_TOOL_FILTER_STATE);
-  const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -87,8 +84,9 @@ export function ToolFilterSetting() {
   }
 
   function handleToggle(checked: boolean): void {
+    // No confirmation: turning it on enables and starts the background download/load.
     if (checked) {
-      setConfirmOpen(true);
+      void handleEnable();
     } else {
       void handleDisable();
     }
@@ -123,9 +121,6 @@ export function ToolFilterSetting() {
   const title = t("settings.toolFilter.title");
   const isAvailable = state.availability.available;
   const isBridgeAvailable = typeof window !== "undefined" && Boolean(window.modus?.app?.toolFilter);
-
-  const downloadBytesFormatted = formatMb(state.downloadBytes, t.locale);
-  const partialBytesFormatted = formatMb(state.partialBytes, t.locale);
 
   let downloadPercent = 0;
   let receivedFormatted = "0";
@@ -236,62 +231,6 @@ export function ToolFilterSetting() {
           ) : null}
         </div>
       ) : null}
-
-      <Dialog.Root
-        onOpenChange={(open) => {
-          if (!open) setConfirmOpen(false);
-        }}
-        open={confirmOpen}
-      >
-        <Dialog.Portal>
-          <Dialog.Backdrop
-            className={cn(
-              "fixed inset-0 z-50 bg-black/50 transition-opacity duration-150 ease-out-quint motion-reduce:transition-none",
-              "data-ending-style:opacity-0 data-starting-style:opacity-0",
-            )}
-          />
-          <Dialog.Popup
-            className={cn(
-              "-translate-x-1/2 -translate-y-1/2 fixed top-1/2 left-1/2 z-50 w-[min(440px,calc(100vw-2rem))]",
-              "origin-center overflow-hidden popup-chrome surface-glass rounded-lg p-5 outline-none",
-              "transition-[transform,opacity,scale] duration-150 ease-out-quint motion-reduce:transition-none",
-              "data-ending-style:scale-[0.96] data-ending-style:opacity-0",
-              "data-starting-style:scale-[0.96] data-starting-style:opacity-0",
-            )}
-          >
-            <Dialog.Title className="font-medium text-fg text-sm">
-              {t("settings.toolFilter.confirmTitle")}
-            </Dialog.Title>
-            <Dialog.Description className="mt-2 text-xs leading-relaxed text-fg-muted">
-              {t("settings.toolFilter.confirmDesc", { size: downloadBytesFormatted })}
-            </Dialog.Description>
-            {state.partialBytes > 0 ? (
-              <p className="mt-2 text-xs leading-relaxed text-fg-muted">
-                {t("settings.toolFilter.resumeLine", { size: partialBytesFormatted })}
-              </p>
-            ) : null}
-            <div className="mt-4 flex items-center justify-end gap-2">
-              <button
-                className="h-8 rounded-md px-3 text-xs text-fg-muted outline-none transition-colors hover:bg-hover hover:text-fg focus-visible:ring-2 focus-visible:ring-focus-ring/35"
-                onClick={() => setConfirmOpen(false)}
-                type="button"
-              >
-                {t("settings.toolFilter.cancelButton")}
-              </button>
-              <button
-                className="h-8 rounded-md bg-[var(--color-accent)] px-3 text-xs font-medium text-white shadow-sm outline-none transition-[background-color,opacity] hover:brightness-110 active:brightness-95 focus-visible:ring-2 focus-visible:ring-focus-ring/35"
-                onClick={() => {
-                  setConfirmOpen(false);
-                  void handleEnable();
-                }}
-                type="button"
-              >
-                {t("settings.toolFilter.confirmButton")}
-              </button>
-            </div>
-          </Dialog.Popup>
-        </Dialog.Portal>
-      </Dialog.Root>
     </section>
   );
 }

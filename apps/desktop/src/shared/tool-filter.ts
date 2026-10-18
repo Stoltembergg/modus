@@ -33,7 +33,7 @@ export type ToolFilterState = {
   availability: ToolFilterAvailability;
   download: ToolFilterDownload;
   model: ToolFilterModel;
-  /** Total download size in bytes (shown in the confirmation prompt). */
+  /** Total download size in bytes. */
   downloadBytes: number;
   /** Bytes already on disk from an earlier, cancelled download (it resumes from here). */
   partialBytes: number;
@@ -51,7 +51,7 @@ export const DEFAULT_TOOL_FILTER_STATE: ToolFilterState = {
 /** Preload bridge (`window.modus.toolFilter`). */
 export type ToolFilterApi = {
   get(): Promise<ToolFilterState>;
-  /** Turn the filter on (after the user confirmed the download) and start/resume the download. */
+  /** Turn the filter on and start/resume the background download (no confirmation). */
   enable(): Promise<ToolFilterState>;
   /** Turn the filter off. Stops the model process; downloaded files are kept. */
   disable(): Promise<ToolFilterState>;
