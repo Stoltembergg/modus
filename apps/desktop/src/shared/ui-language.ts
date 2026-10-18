@@ -21,7 +21,10 @@ export type UiLanguageOption = {
   id: UiLanguageId;
   /** Shown in its own language, never translated into the current UI language. */
   nativeName: string;
-  /** `Intl` tag used when the OS region does not apply (explicit choice, or another region). */
+  /**
+   * Fallback `Intl` tag, used only when the OS lists no tag in this language. Otherwise the OS
+   * tag wins (en-GB, pt-PT), under "system" and with an explicit choice alike.
+   */
   intlLocale: string;
 };
 
@@ -47,7 +50,11 @@ export type UiLanguageState = {
   preference: UiLanguagePreference;
   /** Catalog language in use. */
   language: UiLanguageId;
-  /** BCP-47 tag for `<html lang>` and `Intl` (keeps the OS region under "system": en-GB, pt-PT). */
+  /**
+   * BCP-47 tag for `<html lang>`, `Intl` and the native menu. Keeps the OS region whenever the OS
+   * lists this language (en-GB, pt-PT), under "system" or an explicit choice; else the
+   * language's own `intlLocale`.
+   */
   intlLocale: string;
   /** OS preferred languages as reported by the OS, most preferred first. */
   systemLocales: string[];

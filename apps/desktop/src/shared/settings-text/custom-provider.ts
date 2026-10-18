@@ -226,7 +226,7 @@ export const CUSTOM_PROVIDER_TEXT_PT: Record<keyof typeof CUSTOM_PROVIDER_TEXT_E
   "settings.customProvider.imageInputDescription": "Permite anexar imagens para este modelo.",
   "settings.customProvider.contextWindow": "Janela de contexto",
   "settings.customProvider.maxOutputTokens": "Máximo de tokens de saída",
-  "settings.customProvider.endpointOverride": "Substituição de endpoint",
+  "settings.customProvider.endpointOverride": "Endpoint personalizado",
   "settings.customProvider.endpointOverrideHint":
     "Necessário apenas quando este modelo estiver em um endpoint ou protocolo diferente.",
   "settings.customProvider.placeholderProviderDefault": "padrão do provedor",

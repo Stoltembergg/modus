@@ -109,7 +109,7 @@ export const SKILLS_RULES_TEXT_PT: Record<keyof typeof SKILLS_RULES_TEXT_EN, str
   "settings.skillsRules.noRuleFiles":
     "Nenhum arquivo de regras no disco ainda. Salve o exemplo acima para criar o {agents} ou adicione {cursorRules} com {alwaysApply}.",
   "settings.skillsRules.globs": "globs: {globs}",
-  "settings.skillsRules.autoAppliedTitle": "Autoaplicado",
+  "settings.skillsRules.autoAppliedTitle": "Aplicação automática",
   "settings.skillsRules.autoAppliedDescription_one":
     "{count} arquivo de regras injetado no prompt do sistema a cada nova sessão de agente neste workspace.",
   "settings.skillsRules.autoAppliedDescription_other":

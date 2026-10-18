@@ -70,7 +70,7 @@ export const MAIN_TEXT_PT: Record<MainTextKey, string> = {
   "main.menu.selectAll": "Selecionar Tudo",
   "main.menu.view": "Visualizar",
   "main.menu.reload": "Recarregar",
-  "main.menu.forceReload": "Forçar Recarga",
+  "main.menu.forceReload": "Forçar Recarregamento",
   "main.menu.toggleDevTools": "Ferramentas do Desenvolvedor",
   "main.menu.resetZoom": "Tamanho Real",
   "main.menu.zoomIn": "Aumentar Zoom",
