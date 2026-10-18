@@ -1,135 +1,162 @@
 <p align="center">
-  English | <a href="./README.zh-CN.md">简体中文</a>
+  English · <a href="./README.zh-CN.md">简体中文</a>
 </p>
 
 <p align="center">
-  <img alt="Modus logo" src="./docs/media/modus-logo.png" width="96" height="96">
+  <img src="./docs/media/modus-logo.png" alt="Modus logo" width="80" height="80">
+</p>
+
+<h1 align="center">Modus</h1>
+
+<p align="center">
+  A minimal desktop workspace for AI-assisted development.<br>
+  Your projects. Your models. One place to work.
 </p>
 
 <p align="center">
-  Local-first desktop workspace for AI coding agents.
+  <a href="https://github.com/Stoltembergg/modus/releases/latest"><img src="https://img.shields.io/github/v/release/Stoltembergg/modus?style=flat-square&amp;color=8b5cf6" alt="Latest release"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-8b5cf6?style=flat-square" alt="Apache 2.0 license"></a>
 </p>
 
 <p align="center">
   <a href="#download">Download</a> ·
-  <a href="#features">Features</a> ·
-  <a href="#getting-started">Build from source</a> ·
-  <a href="./docs/architecture/desktop-security.md">Security</a>
+  <a href="#what-you-can-do">Features</a> ·
+  <a href="#build-from-source">Build from source</a> ·
+  <a href="./CONTRIBUTING.md">Contribute</a>
 </p>
 
-![Modus desktop UI](./docs/media/modus-ui.png)
+![Modus desktop workspace with project navigation and the prompt composer](./docs/media/modus-ui.png)
 
-## About
-
-Modus is an open-source desktop app for running AI coding agents inside real local projects.
-
-Open a workspace, connect your own model provider, plan or build, inspect changes, approve risky actions, and keep the full workflow in one window.
+Open a project, choose your model, and describe the result you want. Modus brings the conversation, agent tools, code, terminal, browser, and Git into one desktop workspace, with activity available when you need to inspect it.
 
 ## Download
 
-The latest published release is [v0.1.1](https://github.com/Stoltembergg/modus/releases/tag/v0.1.1). Download the installer for your platform:
+**[Get the latest stable release →](https://github.com/Stoltembergg/modus/releases/latest)**
 
-- **Windows:** [x64 installer](https://github.com/Stoltembergg/modus/releases/download/v0.1.1/Modus-0.1.1-win-x64-setup.exe)
-- **macOS:** [Apple Silicon (ARM64)](https://github.com/Stoltembergg/modus/releases/download/v0.1.1/Modus-0.1.1-mac-arm64.dmg) · [Intel (x64)](https://github.com/Stoltembergg/modus/releases/download/v0.1.1/Modus-0.1.1-mac-x64.dmg)
-- **Linux:** [AppImage (x86_64)](https://github.com/Stoltembergg/modus/releases/download/v0.1.1/Modus-0.1.1-linux-x86_64.AppImage) · [.deb (amd64)](https://github.com/Stoltembergg/modus/releases/download/v0.1.1/Modus-0.1.1-linux-amd64.deb)
+Choose the installer for your system from the release assets:
 
-The current installers are unsigned. Windows SmartScreen may warn on first install; macOS Gatekeeper may require right-clicking the app and choosing **Open**. See the [release notes](https://github.com/Stoltembergg/modus/releases/tag/v0.1.1) for details.
+| Platform | Architecture | Package |
+| --- | --- | --- |
+| Windows | x64 | `.exe` installer |
+| macOS | Apple Silicon or Intel | `.dmg` for your architecture |
+| Linux | x64 | `.AppImage` or `.deb` |
 
-## Features
+Windows installers are unsigned; macOS builds are ad-hoc signed and not notarized. Your OS may require confirmation on first launch. See [signing and update details](./docs/releasing.md#unsigned-builds).
 
-- **Workspaces and sessions** - Open local projects, switch recent workspaces, pin projects, and keep separate agent sessions per repo.
-- **Bring your own models** - Configure built-in or custom PI-compatible providers, defaults, reasoning effort, thinking variants, and model limits.
-- **Git workflow** - Review working tree changes, file diffs, branches, commit history, commits, pushes, and session change stats.
-- **Terminal, browser, and files** - Use a real PTY terminal, an in-app browser with tabs and DevTools, and a workspace file explorer.
-- **Fast Codebase** - Let the agent build a compact local code map before reading files, reducing broad grep/read exploration.
-- **Subagents** - Create specialized subagents, track their activity, and apply or clean up their worktrees.
-- **Agent Groups** - Create multi-agent rooms, with Coordinator enabled by default for new groups. A chronological timeline gives each user and agent message its own card, keeps internal coordination out of the conversation, and shows compact progress with retry/resume actions for interrupted or failed work.
-- **Plan and build modes** - Start with a reviewable plan, answer structured questions, then move into implementation.
-- **Context and images** - Attach files, folders, docs, Git diffs, terminal output, browser state, selected page elements, rules, and images.
-- **MCP, skills, and rules** - Load Modus MCP servers, invoke local skills with `/`, and apply project rules from AGENTS/Claude/Cursor-style files.
-- **Permissioned execution** - Route shell, Git, browser, MCP, file, and external actions through one approval flow.
-- **Checkpoints and rollback** - Snapshot the workspace before agent runs and restore from the timeline when needed.
+## What you can do
 
-## Repo layout
+- **Choose your models.** Connect supported providers, configure custom compatible endpoints, or use account-backed Modus models when signed in. You control the model, provider, and available reasoning settings.
+- **Plan, then build.** Develop a reviewable plan, answer structured questions, and move into implementation. The built-in `define-goal` skill can keep an objective, completion criteria, and evidence attached to a session.
+- **Work with agents.** Reuse agents with animated avatars, delegate to specialized subagents, review their worktrees, or collaborate in Agent Groups with a coordinator and shared conversation.
+- **Keep the project in context.** Attach files, folders, images, documents, diffs, terminal output, browser state, and selected page elements. Fast Codebase provides a local code map; project memory and context compaction help carry work across turns.
+- **Review and act in one window.** Browse files, inspect changes and commit history, switch branches, commit or push, use a PTY terminal, and open the integrated browser with tabs and DevTools. Workspace checkpoints support restoration from the timeline.
+- **Extend your workflow.** Configure MCP servers and connected apps, invoke skills with `/`, and apply project instructions from supported AGENTS, Claude, and Cursor rule files. REA adds reverse-engineering tools when its runtime and analysis providers are available.
+- **Keep the interface yours.** Use light, dark, or system appearance, configurable transparency, and an English or Brazilian Portuguese interface with a live language selector.
 
-```text
-apps/desktop/     Electron product (main / preload / renderer)
-crates/pty-host/  Rust PTY sidecar (modus-pty-host)
-catalog/          Generated model provider catalog
-docs/             Architecture notes and media
-scripts/          Model catalog generator
-```
+The Harness coordinates context, task state, verification evidence, and recovery behind the conversation. Session data is stored locally. Model requests go to the provider you select, and enabled integrations can communicate with their respective services.
 
-The desktop app is self-contained under `apps/desktop`. Shared types and tools live in `apps/desktop/src/shared`, not in separate workspace packages.
+## Start working
 
-## Getting Started
+1. Open a local project or start a standalone chat.
+2. Select your model and connect its provider in **Settings → Model & Provider**. Modus account features are in **Settings → Account**.
+3. Send your prompt in **Build**, or switch to **Plan** first. Review changes and activity as the agent works.
 
-Requirements:
+Approval settings are available globally and per project in **Settings → General**.
 
-- Node.js `>= 22.22.3`
-- npm
-- Rust + Cargo (recent stable; crate uses edition 2024)
-- Git
+## Local models and integrations
 
-```bash
-git clone https://github.com/Stoltembergg/modus.git
-cd modus
-npm install
-npm run dev
-```
+### Local tool filter
 
-Then open a workspace folder and configure a model provider in Settings.
+RERANK-03 uses ONNX Runtime on CPU in a separate model process to rank the tools a request is likely to need. Core tools stay available, and the agent can expand the selection. If the model is unavailable, busy, or too slow, Modus sends the full allowed tool set.
 
-## Development
+The filter is **enabled by default on supported machines** and prepares in the background. Its first setup downloads approximately **415 MB** of model, tokenizer, and license files, checked against pinned SHA-256 hashes. Inference runs locally after setup. Turn it off or cancel the download in **Settings → General → Local tool filter**.
 
-```bash
-npm run dev
-npm run check
-npm run test
-npm --workspace @modus/desktop run typecheck
-npm --workspace @modus/desktop run build:pty
-npm --workspace @modus/desktop run build
-```
+Local tool filtering is unavailable on Intel Macs. Windows requires the Microsoft Visual C++ Redistributable (2015–2022). The coding model and provider remain the ones you choose.
 
-### Build locally
+### REA
 
-```bash
-npm run check
-npm run test
-npm --workspace @modus/desktop run package:win -- --publish never
-npm --workspace @modus/desktop run package:mac -- --publish never
-npm --workspace @modus/desktop run package:linux -- --publish never
-```
+REA is enabled by default and starts on the first REA tool call. It requires Node.js and npm on the app's `PATH`; the pinned runtime supports Node **22.19+ in the 22.x series**, **24.11+ in the 24.x series**, or **26+**. Analysis engines such as Ghidra, IDA, and JADX have their own setup requirements.
 
-Run the platform-matching package command on that OS. Packaged releases are also available in the [GitHub Releases page](https://github.com/Stoltembergg/modus/releases).
+On first use, Modus installs REA's pinned npm dependency tree with install scripts disabled. REA runs with your normal user permissions, without a separate approval prompt for each call; its session process is not a sandbox. You can disable it in **Settings → MCP & Integrations**.
 
-Releases are built by CI from `v*` tags; see [docs/releasing.md](docs/releasing.md).
+### MCP, connected apps, and skills
 
-## MCP Config
-
-Modus only auto-loads its own MCP config files:
+Configure integrations in **Settings → MCP & Integrations**. Modus reads its MCP server configuration from:
 
 ```text
 ~/.modus/mcp.json
 <workspace>/.modus/mcp.json
 ```
 
-It does not silently import Cursor, Claude, Warp, or other agent configs.
+MCP configuration from other apps is not imported automatically. Connected-app authentication uses Composio when configured. Manage skills and project rules in their respective Settings sections.
 
-## Tech Stack
+See the [desktop security baseline](./docs/architecture/desktop-security.md) and [security policy](./SECURITY.md) for the current boundaries and reporting process.
 
-Electron, React, TypeScript, Tailwind CSS, Base UI, Motion, Monaco, xterm.js, Streamdown, Node SQLite, Rust `portable-pty`, `@earendil-works/pi-coding-agent`, and the MCP SDK.
+## Build from source
 
-## Contributing
+You need **Node.js 24 LTS** (recommended; repository minimum `22.22.3`), npm, Git, and a recent stable Rust/Cargo toolchain with edition 2024 support. Native builds also require your OS's C/C++ build tools.
 
-Contributions are welcome. Before opening a pull request:
+```bash
+git clone https://github.com/Stoltembergg/modus.git
+cd modus
+npm ci
+npm --workspace @modus/desktop run prepare:fast-codebase
+npm --workspace @modus/desktop run build
+npm run dev
+```
 
-1. Read [CONTRIBUTING.md](./CONTRIBUTING.md) for the setup, checks, and PR expectations.
-2. For a bug, use the bug report template. For an idea, use the feature request template. Please search existing reports first.
-3. Keep pull requests focused and small, use Conventional Commits, and run `npm run check` and `npm run test`.
+The initial build creates the native PTY and supervisor binaries. For subsequent application changes, use `npm run dev`; rebuild the relevant native component after Rust changes.
 
-Questions and project discussion: use the repository's issue tracker once it is enabled. Security issues should follow [SECURITY.md](./SECURITY.md).
+<details>
+<summary><strong>Development commands and installer builds</strong></summary>
+
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Start the desktop development app |
+| `npm run check` | Run Biome and workspace TypeScript checks |
+| `npm --workspace @modus/desktop run build` | Build desktop assets and native components |
+| `npm --workspace @modus/desktop run build:pty` | Rebuild the PTY host |
+| `npm --workspace @modus/desktop run build:rea-supervisor` | Rebuild the REA supervisor |
+
+Run targeted tests for the code you change. See [Contributing](./CONTRIBUTING.md) and the [CI configuration](./.github/workflows/ci.yml) for the existing checks. Security probes and adversarial workflows retain their manual authorization gates.
+
+Build the app, then run **one** package command on its matching operating system:
+
+```bash
+npm --workspace @modus/desktop run build
+
+# Windows
+npm --workspace @modus/desktop run package:win -- --publish never
+
+# macOS
+npm --workspace @modus/desktop run package:mac -- --publish never
+
+# Linux
+npm --workspace @modus/desktop run package:linux -- --publish never
+```
+
+Installers are written to `apps/desktop/dist/`. Release automation, update channels, and signing limitations are documented in [Releasing Modus](./docs/releasing.md).
+
+</details>
+
+## Repository
+
+| Path | Contents |
+| --- | --- |
+| `apps/desktop/` | Electron app: main process, preload bridge, React UI, and shared contracts |
+| `apps/site/` | Website and billing pages |
+| `crates/` | Rust PTY host, REA supervisor, and plugin isolation components |
+| `catalog/` | Generated model and provider catalog |
+| `supabase/` | Account and billing backend, migrations, functions, and tests |
+| `scripts/` | Catalog generation and development utilities |
+| `docs/` | Architecture, security and release notes, and media |
+
+Built with Electron, React, TypeScript, the Pi SDK, Rust, SQLite, ONNX Runtime, Tailwind CSS, Monaco, xterm.js, and the MCP SDK.
+
+## Contribute
+
+Read [CONTRIBUTING.md](./CONTRIBUTING.md) for setup and PR expectations. Use [issues](https://github.com/Stoltembergg/modus/issues) for bugs and feature requests, and follow [SECURITY.md](./SECURITY.md) for private vulnerability reports.
 
 ## License
 
-Apache-2.0. See [LICENSE](./LICENSE).
+Modus is licensed under [Apache-2.0](./LICENSE). Bundled components and built-in skills retain their own licenses; see [Third-party notices](./THIRD_PARTY_NOTICES.md).
