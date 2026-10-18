@@ -1,5 +1,5 @@
 /**
- * model-router against the REAL migrated Postgres (supabase/tests/run.sh, CI job
+ * model-router against the REAL migrated Postgres (docs/db/tests/run.sh, CI job
  * "supabase · pgTAP · integration"): the real handler + createPostgresRouterDb, a
  * fake OpenAI-compatible upstream on 127.0.0.1. Not a *.test.ts (needs the cluster).
  */

@@ -108,7 +108,7 @@ Deno.test("max duration: default 120 s, cap + settle retries + margin < 150 s wa
 
 Deno.test("no code references the old single upstream key", async () => {
   const old = ["MODUS", "UPSTREAM", "API", "KEY"].join("_");
-  const root = new URL("../../", import.meta.url); // supabase/
+  const root = new URL("../../", import.meta.url); // docs/db/
   const hits: string[] = [];
   async function walk(dir: URL) {
     for await (const entry of Deno.readDir(dir)) {
@@ -121,7 +121,7 @@ Deno.test("no code references the old single upstream key", async () => {
     }
   }
   await walk(root);
-  const workflows = new URL("../.github/workflows/", root);
+  const workflows = new URL("../../.github/workflows/", root);
   try {
     await walk(workflows);
   } catch (error) {

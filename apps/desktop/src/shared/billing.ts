@@ -88,7 +88,7 @@ export type BillingWallet = {
   /**
    * Purchased credits left: the sum of `remaining` over the caller's lots with status
    * 'credited'. The server uses the same rule since #199
-   * (supabase/migrations/20261012003000_l5a_refunded_lot_rule.sql): private.non_purchased_credits,
+   * (docs/db/migrations/20261012003000_l5a_refunded_lot_rule.sql): private.non_purchased_credits,
    * consume_credit_lots and purchase_access_plan only count credited lots, and a full refund or
    * chargeback zeroes its lot. Before #199 the server also counted a 'refunded' lot whose
    * remainder was held by a reservation. Absent when the lots could not be read.

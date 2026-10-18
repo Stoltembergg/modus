@@ -10,7 +10,7 @@
 | `mp-buy-credits` | One-off Mercado Pago credit pack: Checkout Pro (Pix + card, 1 installment, link expires in 30 min) (L5b), `verify_jwt = true` | no |
 | `model-router` | Modus model router (B4a) | no |
 
-Secrets are listed in [`.env.example`](.env.example). For the local stack, copy it to `supabase/functions/.env`. For the hosted project, set them with `supabase secrets set`.
+Secrets are listed in [`.env.example`](.env.example). For local development, copy it to `docs/db/functions/.env` and supply the file explicitly to your configured local CLI stack. See the [repository layout notes](../README.md#supabase-cli-layout). For the hosted project, set them with `supabase secrets set` in your configured CLI workspace.
 
 ## `STRIPE_ENABLED` (L1b)
 
@@ -66,7 +66,7 @@ If the two flags disagree, nothing is sold through Stripe:
 
 To disable Stripe, turn off both, starting with the env, which is the hard block.
 
-**Tests and CI:** no test needs `STRIPE_ENABLED`. Handler tests inject `stripeEnabled`, and the SQL / integration tests (`supabase/tests/run.sh`) call `db.ts` and the RPCs directly, never the HTTP Functions. The desktop app's billing tests mock the backend.
+**Tests and CI:** no test needs `STRIPE_ENABLED`. Handler tests inject `stripeEnabled`, and the SQL / integration tests (`docs/db/tests/run.sh`) call `db.ts` and the RPCs directly, never the HTTP Functions. The desktop app's billing tests mock the backend.
 
 ## `mp-cancel` (L1e)
 

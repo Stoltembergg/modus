@@ -1,5 +1,5 @@
 /**
- * mp-webhook + mp-checkout against the REAL migrated Postgres (supabase/tests/run.sh, CI job
+ * mp-webhook + mp-checkout against the REAL migrated Postgres (docs/db/tests/run.sh, CI job
  * "supabase · pgTAP · integration"): real handlers, real createPostgresBillingDb, real
  * signature, a fake Mercado Pago API (never the real one, no secrets). Not a *.test.ts.
  */

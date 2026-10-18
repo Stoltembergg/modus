@@ -739,15 +739,15 @@ describe("live subscription set (paused included)", () => {
   });
 
   it("matches the Edge Functions, mp_cancel_targets and the DB unique index (minus incomplete)", () => {
-    const db = read("supabase/functions/_shared/db.ts");
+    const db = read("docs/db/functions/_shared/db.ts");
     const edge = db.match(/export const LIVE_SUBSCRIPTION_STATUSES = \[([^\]]*)\]/);
     expect(quoted(edge?.[1] ?? "").sort()).toEqual([...LIVE_SUBSCRIPTION_STATUSES].sort());
 
-    const l1e = read("supabase/migrations/20261003230000_l1e_mp_cancel.sql");
+    const l1e = read("docs/db/migrations/20261003230000_l1e_mp_cancel.sql");
     const targets = l1e.match(/su\.status in \(([^)]*)\)/);
     expect(quoted(targets?.[1] ?? "").sort()).toEqual([...LIVE_SUBSCRIPTION_STATUSES].sort());
 
-    const index = read("supabase/migrations/20261004000000_paused_live.sql");
+    const index = read("docs/db/migrations/20261004000000_paused_live.sql");
     const predicate = index.match(
       /create unique index subscriptions_one_live_per_user[^;]*status in \(([^)]*)\)/,
     );

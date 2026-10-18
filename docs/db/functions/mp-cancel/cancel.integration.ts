@@ -1,5 +1,5 @@
 /**
- * L1e mp-cancel against the REAL migrated Postgres (supabase/tests/run.sh): real handlers
+ * L1e mp-cancel against the REAL migrated Postgres (docs/db/tests/run.sh): real handlers
  * (mp-checkout, mp-webhook, mp-cancel), real createPostgresBillingDb, a fake Mercado Pago API.
  * Not a *.test.ts.
  */

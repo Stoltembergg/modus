@@ -147,7 +147,7 @@ Installers are written to `apps/desktop/dist/`. Release automation, update chann
 | `apps/site/` | Website and billing pages |
 | `crates/` | Rust PTY host, REA supervisor, and plugin isolation components |
 | `catalog/` | Generated model and provider catalog |
-| `supabase/` | Account and billing backend, migrations, functions, and tests |
+| [`docs/db/`](./docs/db/README.md) | Account and billing backend, migrations, functions, and tests |
 | `scripts/` | Catalog generation and development utilities |
 | `docs/` | Architecture, security and release notes, and media |
 

@@ -253,7 +253,7 @@ jobs:
     # (Deno + npm:postgres) against a throwaway local Postgres 17. Never talks to
     # the hosted project and needs no secrets. Runs on every PR / push to main
     # (no path filter), so it can be a required check without hanging PRs that
-    # don't touch supabase/**.
+    # don't touch docs/db/**.
     name: supabase · pgTAP · integration
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -279,7 +279,7 @@ jobs:
           deno-version: v2.9.7
           cache: true
           # deno.json has lock:false, so key the module cache on the sources
-          cache-hash: ${{ hashFiles('supabase/functions/**/*.ts', 'supabase/functions/deno.json') }}
+          cache-hash: ${{ hashFiles('docs/db/functions/**/*.ts', 'docs/db/functions/deno.json') }}
 
       - name: Versions
         run: |
@@ -288,7 +288,7 @@ jobs:
           deno --version
 
       - name: SQL tests (pgTAP + concurrency + db.ts integration)
-        # supabase/tests/run.sh: unix socket in a private dir, scram-sha-256 with a
+        # docs/db/tests/run.sh: unix socket in a private dir, scram-sha-256 with a
         # random per-run password on 127.0.0.1 (never printed), no trust over TCP
         run: npm run test:supabase
 

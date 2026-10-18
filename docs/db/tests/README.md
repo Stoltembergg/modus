@@ -1,10 +1,10 @@
 # Supabase SQL tests (B1)
 
-`run.sh` checks the migrations in `supabase/migrations/` against a **throwaway
+`run.sh` checks the migrations in `docs/db/migrations/` against a **throwaway
 local Postgres**. It never connects to the Supabase project.
 
 ```sh
-npm run test:supabase      # or: bash supabase/tests/run.sh
+npm run test:supabase      # or: bash docs/db/tests/run.sh
 ```
 
 The script:
@@ -16,14 +16,14 @@ The script:
    generated per run and never printed. The script checks that a TCP
    connection without the password is refused.
 2. Loads `shim/supabase_shim.sql`.
-3. Applies every `supabase/migrations/*.sql` in order.
+3. Applies every `docs/db/migrations/*.sql` in order.
 4. Loads `shim/test_helpers.sql`.
 5. Runs the pgTAP files in `database/` with `pg_prove`.
 6. Runs `concurrency.sh`.
-7. Runs `supabase/functions/_shared/db.integration.ts`,
-   `supabase/functions/model-router/router.integration.ts`,
-   `supabase/functions/mp-webhook/mp.integration.ts` and
-   `supabase/functions/mp-cancel/cancel.integration.ts` with Deno: the real
+7. Runs `docs/db/functions/_shared/db.integration.ts`,
+   `docs/db/functions/model-router/router.integration.ts`,
+   `docs/db/functions/mp-webhook/mp.integration.ts` and
+   `docs/db/functions/mp-cancel/cancel.integration.ts` with Deno: the real
    `db.ts` / `router-db.ts` (`npm:postgres`) against this cluster, over
    `127.0.0.1` (the router with a fake OpenAI-compatible upstream, Mercado Pago
    with a fake MP API: the real one is never called).
@@ -102,10 +102,10 @@ It is never part of a migration.
   - `01_rpc_privileges` now counts 26 private functions.
 - `concurrency.sh`: concurrent reservations from separate connections (2 sessions, a burst of 20, and 5 calls with the same `request_id`), and `release_expired_reservations` racing `settle_usage` (a forced interleaving that deadlocks if the release does not lock the wallet first, plus a burst of 20 + 20), and 6 concurrent deliveries of one approved Mercado Pago payment (credited once), and the Free monthly renewal racing itself (per-user calls + the cron batch while one session holds the wallet: topped up 0 -> 1000 once, the others `busy` / skipped, then `not_due`).
 
-- `supabase/functions/model-router/router.integration.ts`: the model-router handler with the real `router-db.ts`: a call reserves and settles the real usage (the rest refunded, `usage_events` billed), a repeated key is 409 replay / conflict, a model outside the plan is refused before any reservation, an upstream failure refunds everything, a stream cut by the client settles the partial estimate (capped), 402 reserves nothing, 6 concurrent calls never go negative, no reservation is left active, and every seeded `allowed_models` id is in the server model table.
-- `supabase/functions/model-router/router.integration.ts` (paused): a Starter subscription unlocks a paid-only model; while `paused` the router resolves the Free plan (its two models), the paid model is `403 model_not_in_plan` before any reservation (credits untouched) and Free models still work; resumed -> paid again. `PLAN_STATUSES` never includes `paused`. L1g: a Mercado Pago row `canceled` with `cancel_at_period_end` and a future `current_period_end` keeps the paid model (200); once `current_period_end` passed it is Free (paid model 403, Free model 200); `canceled` without the flag, `blocked` and `paused` are Free; a canceled Stripe row with `cancel_at_period_end` is Free.
-- `supabase/functions/mp-webhook/mp.integration.ts`: `mp-checkout` (record, preapproval, link; a second call reuses it) and `mp-webhook` with real signatures: `authorized` -> `incomplete`, a DB failure on the first delivery leaves the notification unprocessed (500), the MP retry with the same `x-request-id` credits exactly once, later deliveries are `duplicate` / `already_credited`, a partial then full refund debits proportionally and cancels, an unlinked payment credits nothing.
-- `supabase/functions/mp-cancel/cancel.integration.ts` (L1e): `mp-checkout` + `mp-webhook` + `mp-cancel` with a fake MP API: an `incomplete` subscription, another user gets `no_subscription` and no MP call, an unconfirmed cancel is `cancel_requested` (row still `incomplete`, `cancel_requested_at` set, `cancel_at_period_end` untouched), a late `authorized` webhook keeps the flag, the confirmed one is `canceled` through `process_mp_preapproval`, a repeat is a no-op, a late `authorized` webhook does not revive it, and a fresh checkout works. L1g: another user with a grace row gets `409 cancel_grace_active` from `mp-checkout` (no preapproval), and `200` once `current_period_end` passed.
-- `supabase/functions/_shared/db.integration.ts`: the Functions' real `db.ts` through `npm:postgres`. `process_stripe_event` receives a jsonb object (not a JSON string), `customer.subscription.created` and Starter `invoice.paid` (+20000) are processed and recorded in `stripe_events`, a repeated `invoice.paid` grants nothing, and an upgrade invoice grants the difference.
+- `docs/db/functions/model-router/router.integration.ts`: the model-router handler with the real `router-db.ts`: a call reserves and settles the real usage (the rest refunded, `usage_events` billed), a repeated key is 409 replay / conflict, a model outside the plan is refused before any reservation, an upstream failure refunds everything, a stream cut by the client settles the partial estimate (capped), 402 reserves nothing, 6 concurrent calls never go negative, no reservation is left active, and every seeded `allowed_models` id is in the server model table.
+- `docs/db/functions/model-router/router.integration.ts` (paused): a Starter subscription unlocks a paid-only model; while `paused` the router resolves the Free plan (its two models), the paid model is `403 model_not_in_plan` before any reservation (credits untouched) and Free models still work; resumed -> paid again. `PLAN_STATUSES` never includes `paused`. L1g: a Mercado Pago row `canceled` with `cancel_at_period_end` and a future `current_period_end` keeps the paid model (200); once `current_period_end` passed it is Free (paid model 403, Free model 200); `canceled` without the flag, `blocked` and `paused` are Free; a canceled Stripe row with `cancel_at_period_end` is Free.
+- `docs/db/functions/mp-webhook/mp.integration.ts`: `mp-checkout` (record, preapproval, link; a second call reuses it) and `mp-webhook` with real signatures: `authorized` -> `incomplete`, a DB failure on the first delivery leaves the notification unprocessed (500), the MP retry with the same `x-request-id` credits exactly once, later deliveries are `duplicate` / `already_credited`, a partial then full refund debits proportionally and cancels, an unlinked payment credits nothing.
+- `docs/db/functions/mp-cancel/cancel.integration.ts` (L1e): `mp-checkout` + `mp-webhook` + `mp-cancel` with a fake MP API: an `incomplete` subscription, another user gets `no_subscription` and no MP call, an unconfirmed cancel is `cancel_requested` (row still `incomplete`, `cancel_requested_at` set, `cancel_at_period_end` untouched), a late `authorized` webhook keeps the flag, the confirmed one is `canceled` through `process_mp_preapproval`, a repeat is a no-op, a late `authorized` webhook does not revive it, and a fresh checkout works. L1g: another user with a grace row gets `409 cancel_grace_active` from `mp-checkout` (no preapproval), and `200` once `current_period_end` passed.
+- `docs/db/functions/_shared/db.integration.ts`: the Functions' real `db.ts` through `npm:postgres`. `process_stripe_event` receives a jsonb object (not a JSON string), `customer.subscription.created` and Starter `invoice.paid` (+20000) are processed and recorded in `stripe_events`, a repeated `invoice.paid` grants nothing, and an upgrade invoice grants the difference.
 
 Each pgTAP file runs inside a transaction and rolls back. `concurrency.sh` commits, but only into the throwaway cluster.

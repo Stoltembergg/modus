@@ -8,7 +8,7 @@ import {
   UPSTREAM_GROUPS,
 } from "./model-catalog.ts";
 
-const root = new URL("../../../", import.meta.url);
+const root = new URL("../../../../", import.meta.url);
 type NativeModel = {
   id: string;
   contextWindow: number;
@@ -26,7 +26,7 @@ function native(id: string): NativeModel | undefined {
 
 /** Every plan's allowed_models array as the migrations leave it (plan -> ids). */
 async function seededAllowedModelsByPlan(): Promise<Map<string, string[]>> {
-  const dir = new URL("supabase/migrations/", root);
+  const dir = new URL("docs/db/migrations/", root);
   const files = [...Deno.readDirSync(dir)]
     .map((e) => e.name)
     .filter((n) => n.endsWith(".sql"))

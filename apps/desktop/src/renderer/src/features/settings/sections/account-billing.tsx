@@ -107,7 +107,7 @@ function planLabel(plans: readonly BillingPlan[], plan: string): string {
 /**
  * The Credits row, from real numbers only. `allowance` / `purchased` are absent when the lots
  * could not be read; then the row says only how the two kinds are spent. Server rules
- * (supabase/migrations/20261004040000_l5a_credit_packs.sql): the plan allowance is spent
+ * (docs/db/migrations/20261004040000_l5a_credit_packs.sql): the plan allowance is spent
  * first, then purchased lots oldest first; lots never expire.
  */
 export function creditsDescription(
