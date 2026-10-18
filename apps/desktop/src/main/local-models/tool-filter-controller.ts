@@ -24,7 +24,7 @@ import {
 
 /**
  * tool_filter.enabled and everything the Settings row shows: the persisted
- * preference (OFF by default), availability on this machine, download
+ * preference (ON by default), availability on this machine, download
  * progress, and the model process state. Owns the ranker and its model host.
  */
 export const TOOL_FILTER_FILE_NAME = "tool-filter.json";
@@ -38,6 +38,14 @@ export const VC_RUNTIME_DLLS = [
   "vcruntime140_1.dll",
 ] as const;
 
+/**
+ * `read()` is the effective preference. The filter is ON unless the user turned
+ * it off: only a file with `userSet: true` and `enabled: false` reads as off.
+ * A missing or unreadable file, and a legacy file without `userSet` (written
+ * before the default flipped, when a failed load probe could also store
+ * `false`), read as the default, ON. `write()` is only called from an explicit
+ * user action (switch, cancel download) and always stores `userSet: true`.
+ */
 export type ToolFilterStore = { read(): boolean; write(enabled: boolean): void };
 
 export function createToolFilterStore(userDataDir: string): ToolFilterStore {
@@ -45,18 +53,21 @@ export function createToolFilterStore(userDataDir: string): ToolFilterStore {
   return {
     read() {
       try {
-        return (
-          (JSON.parse(readFileSync(filePath, "utf8")) as { enabled?: unknown }).enabled === true
-        );
+        const value = JSON.parse(readFileSync(filePath, "utf8")) as {
+          enabled?: unknown;
+          userSet?: unknown;
+        };
+        if (value?.userSet !== true) return true;
+        return value.enabled !== false;
       } catch {
-        return false;
+        return true;
       }
     },
     write(enabled) {
       const tmp = `${filePath}.tmp`;
       try {
         mkdirSync(dirname(filePath), { recursive: true });
-        writeFileSync(tmp, `${JSON.stringify({ enabled })}\n`, "utf8");
+        writeFileSync(tmp, `${JSON.stringify({ enabled, userSet: true })}\n`, "utf8");
         renameSync(tmp, filePath);
       } catch (error) {
         console.warn("[modus] Unable to persist the tool filter preference.", error);
@@ -103,6 +114,13 @@ function downloadOf(status: ToolRankerStatus): ToolFilterDownload {
         totalBytes: status.totalBytes,
       };
     case "failed":
+      // A failure that retries on its own (offline, low disk space, server error)
+      // stays silent: requests keep carrying all tools and the retry runs later.
+      if (status.retryAt !== undefined) {
+        return status.failure === "download-failed" || status.failure === "missing"
+          ? { phase: "idle" }
+          : { phase: "ready" };
+      }
       return status.failure === "download-failed" ||
         status.failure === "hash-mismatch" ||
         status.failure === "missing"
@@ -124,6 +142,7 @@ function modelOf(status: ToolRankerStatus): ToolFilterModel {
     case "ready":
       return "ready";
     case "failed":
+      if (status.retryAt !== undefined) return "stopped";
       return downloadOf(status).phase === "failed" ? "stopped" : "failed";
     default:
       return "stopped";
@@ -230,7 +249,8 @@ export function createToolFilterController(deps: ToolFilterControllerDeps): Tool
     const status = ranker.status();
     return {
       ...DEFAULT_TOOL_FILTER_STATE,
-      enabled: enabled || forced(),
+      // Unavailable machines show the switch off: the filter is silently inactive there.
+      enabled: (enabled || forced()) && availability.available,
       availability,
       download: downloadOf(status),
       model: modelOf(status),
@@ -289,10 +309,9 @@ export function createToolFilterController(deps: ToolFilterControllerDeps): Tool
       ranker.reset();
       emit();
       await turnOn();
-      if (!availability.available) {
-        enabled = false;
-        store.write(false);
-      }
+      // A failed load probe is not a user choice: nothing is persisted, so the
+      // next launch checks again (e.g. after the VC++ runtime is installed).
+      if (!availability.available) enabled = false;
       return getState();
     },
     async disable() {

@@ -348,7 +348,11 @@ export function registerReaTools(
       entry: {
         name: definition.name,
         profiles: ["chat"],
-        permission: { danger: "dangerous", action: "mcp.call" },
+        // No approval card (product decision): REA runs with zero prompts. It stays a
+        // `write` capability, so Plan Mode and read-only allowlists still exclude it.
+        // Install safeguards are in the supervisor: pinned lockfile, `npm ci
+        // --ignore-scripts`, sha512 integrity, one worker per chat session.
+        permission: { danger: "safe", action: "mcp.call" },
         capabilities: ["write"],
         ui: { verb: "REA", activeVerb: "Using REA", primaryArgKey: "operation" },
       },

@@ -114,7 +114,7 @@ async function executeTool(
 afterEach(() => vi.restoreAllMocks());
 
 describe("REA broker tools", () => {
-  it("registers stable chat-only dangerous mcp.call wrappers without dynamic registry churn", async () => {
+  it("registers stable chat-only mcp.call wrappers that need no approval card, without dynamic registry churn", async () => {
     const { registry, manager, tools } = createHarness();
     const revision = registry.revision;
     const callTool = tools.rea_call;
@@ -135,12 +135,15 @@ describe("REA broker tools", () => {
     for (const name of ["rea_tools", "rea_call"]) {
       expect(registry.getEntry(name)).toMatchObject({
         profiles: ["chat"],
-        permission: { danger: "dangerous", action: "mcp.call" },
+        permission: { danger: "safe", action: "mcp.call" },
+        capabilities: ["write"],
       });
       expect(registry.classify({ toolName: name, input: {} } as never)).toEqual({
         action: "mcp.call",
-        dangerous: true,
+        dangerous: false,
       });
+      // Still a write capability: Plan Mode and read-only allowlists keep excluding it.
+      expect(registry.isReadOnlySafe(name)).toBe(false);
     }
     expect(tools.rea_call).toBe(callTool);
     expect(manager.disposeAll).not.toHaveBeenCalled();

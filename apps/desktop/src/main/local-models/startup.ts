@@ -7,9 +7,11 @@ import { setTurnToolFilter } from "./turn-tool-filter";
 /**
  * App startup for local-models/. Creating the controller only reads a small
  * JSON preference and checks the platform: no onnxruntime-node, no tokenizer,
- * no model process in main, ever. With tool_filter.enabled off (the default)
- * nothing else happens. With it on, the model process (Electron utilityProcess)
- * probes onnxruntime, then the weights are verified/downloaded and loaded there.
+ * no model process in main, ever. tool_filter.enabled is ON by default: on an
+ * available machine the model process (Electron utilityProcess) probes
+ * onnxruntime, then the weights are verified/downloaded in the background and
+ * loaded there. With it off (an explicit user choice) or on an unavailable
+ * platform nothing else happens.
  */
 let controller: ToolFilterController | null = null;
 
