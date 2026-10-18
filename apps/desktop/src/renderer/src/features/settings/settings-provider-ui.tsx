@@ -243,7 +243,8 @@ export function ProviderDetail({
             </span>
           </span>
           <IconChevronRight
-            className={cn("shrink-0 text-fg-faint transition-transform", modelsOpen && "rotate-90")}
+            className="disclosure-chevron shrink-0 text-fg-faint"
+            data-open={modelsOpen ? "" : undefined}
             size={16}
             stroke={1.7}
           />

@@ -76,6 +76,18 @@ const TSX_OFF: { pattern: RegExp; why: string }[] = [
   },
 ];
 
+/** Movement that keeps going under reduced motion because nothing guards it. */
+const TSX_UNGUARDED: { pattern: RegExp; why: string }[] = [
+  {
+    pattern: /animate=\{\{\s*rotate:/,
+    why: "Motion rotate with no reduced-motion guard (chevrons: .disclosure-chevron + data-open)",
+  },
+  {
+    pattern: /&&\s*"[^"]*\brotate-\d+\b/,
+    why: "toggled Tailwind rotation keeps turning under reduced motion (use .disclosure-chevron + data-open)",
+  },
+];
+
 describe("reduced motion is a fade, never off", () => {
   it("scans a meaningful set of files", () => {
     expect(files.length).toBeGreaterThan(200);
@@ -111,6 +123,20 @@ describe("reduced motion is a fade, never off", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("no TSX site rotates on toggle without a reduced-motion guard", () => {
+    const offenders: string[] = [];
+    for (const { path, rel } of files) {
+      if (!/\.tsx?$/.test(rel)) continue;
+      const lines = readFileSync(path, "utf8").split("\n");
+      lines.forEach((line, index) => {
+        for (const { pattern, why } of TSX_UNGUARDED) {
+          if (pattern.test(line)) offenders.push(`${rel}:${index + 1}: ${why}`);
+        }
+      });
+    }
+    expect(offenders).toEqual([]);
+  });
+
   it("the scanner catches what it should", () => {
     const css = `@media (prefers-reduced-motion: reduce) { .a { animation: none; } .b { transition: none; } }`;
     const [block] = reducedMotionBlocks(css);
@@ -131,5 +157,18 @@ describe("reduced motion is a fade, never off", () => {
       ).toBe(true);
     }
     expect(TSX_OFF.some(({ pattern }) => pattern.test("duration: 0.12"))).toBe(false);
+    for (const sample of [
+      "animate={{ rotate: open ? 90 : 0 }}",
+      // Concatenated so Tailwind's source scan does not pick the sample up.
+      `open && "${"rotate-90"}",`,
+    ]) {
+      expect(
+        TSX_UNGUARDED.some(({ pattern }) => pattern.test(sample)),
+        sample,
+      ).toBe(true);
+    }
+    expect(
+      TSX_UNGUARDED.some(({ pattern }) => pattern.test('className="-rotate-90 shrink-0"')),
+    ).toBe(false);
   });
 });

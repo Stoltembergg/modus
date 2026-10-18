@@ -1,5 +1,4 @@
 import { IconChevronRight } from "@tabler/icons-react";
-import { m } from "motion/react";
 import { memo, type ReactNode, useEffect, useId, useState } from "react";
 import type { AgentInfo, ModelInfo, PlanRef } from "../../../../shared/contracts";
 import { getToolUiMeta, type ToolSummaryMeta } from "../../../../shared/tools";
@@ -8,7 +7,6 @@ import { ThinkingStates } from "../../components/ui/ThinkingStates";
 import { WorkingText } from "../../components/ui/WorkingText";
 import { WorkStatusLine } from "../../components/ui/WorkStatusLine";
 import { cn } from "../../lib/cn";
-import { tween } from "../../lib/motion";
 import { MessageBlock } from "./MessageBlock";
 import { SubagentRow } from "./SubagentRow";
 import { subagentActivityLabel } from "./subagentUi";
@@ -372,13 +370,14 @@ export const WorkFold = memo(function WorkFold({
           onClick={() => setDisclosure({ active, open: !open })}
           type="button"
         >
-          <m.span
-            animate={{ rotate: open ? 90 : 0 }}
-            className="flex size-4 items-center justify-center"
-            transition={tween("base")}
-          >
-            <IconChevronRight size={12} stroke={1.8} />
-          </m.span>
+          <span className="flex size-4 items-center justify-center">
+            <IconChevronRight
+              className="disclosure-chevron duration-(--motion-duration-base) ease-standard"
+              data-open={open ? "" : undefined}
+              size={12}
+              stroke={1.8}
+            />
+          </span>
         </button>
       </div>
       <CollapsibleMotion id={contentId} open={open} preset="timeline">

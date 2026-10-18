@@ -88,7 +88,7 @@ import { UpdateToast } from "../features/update/UpdateToast";
 import { useSidebarToggleShortcut } from "../hooks/useSidebarToggleShortcut";
 import { describeAgentError } from "../lib/agentErrors";
 import { cn } from "../lib/cn";
-import { motionOffset, motionTransition, reducedFade, tween } from "../lib/motion";
+import { motionOffset, reducedSwapFade, swapTransition, tween } from "../lib/motion";
 import { useShellText } from "../lib/shellText";
 import { useGitBranch } from "../lib/useGitBranch";
 import { TOP_BAR_BREAKPOINTS, useWidthTier } from "../lib/useWidthTier";
@@ -1397,6 +1397,8 @@ export function App() {
                           </div>
                         ) : null}
 
+                        {/* Fade-out-then-in swap; reduced motion: both halves
+                            share one 120ms fade (reducedSwapFade). */}
                         <AnimatePresence mode="wait">
                           {visibleSession ? (
                             <m.div
@@ -1409,7 +1411,7 @@ export function App() {
                               layoutDependency={responsiveSidebarOpen}
                               transition={
                                 reduceMotion
-                                  ? reducedFade
+                                  ? reducedSwapFade
                                   : { ...SIDEBAR_TRANSITION, layout: SIDEBAR_TRANSITION }
                               }
                             >
@@ -1489,7 +1491,7 @@ export function App() {
                               exit={{ opacity: 0, y: motionOffset(-3, reduceMotion) }}
                               initial={{ opacity: 0, y: motionOffset(4, reduceMotion) }}
                               key="hero"
-                              transition={motionTransition(tween("fast"), reduceMotion)}
+                              transition={swapTransition(tween("fast"), reduceMotion)}
                             >
                               <HomeBackground />
                               <div className="relative z-10 w-full max-w-[680px] -translate-y-4">

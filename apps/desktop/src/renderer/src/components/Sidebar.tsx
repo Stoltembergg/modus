@@ -1447,13 +1447,14 @@ function ProjectRow({
               <FolderIcon size={SB_ICON} stroke={SB_STROKE} />
             </span>
             <span className="min-w-0 truncate">{children}</span>
-            <m.span
-              animate={{ rotate: expanded ? 90 : 0 }}
-              className="flex size-3 shrink-0 items-center justify-center text-fg-faint opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
-              transition={tween("base", "gentle")}
-            >
-              <IconChevronRight size={ICON.xs} stroke={ICON_STROKE.xs} />
-            </m.span>
+            <span className="flex size-3 shrink-0 items-center justify-center text-fg-faint opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+              <IconChevronRight
+                className="disclosure-chevron duration-(--motion-duration-base) ease-(--motion-ease-gentle)"
+                data-open={expanded ? "" : undefined}
+                size={ICON.xs}
+                stroke={ICON_STROKE.xs}
+              />
+            </span>
           </button>
           <span
             className={cn(
@@ -1792,13 +1793,14 @@ function SectionHeader({
         type="button"
       >
         <span>{children}</span>
-        <m.span
-          animate={{ rotate: expanded ? 90 : 0 }}
-          className="flex size-3 items-center justify-center opacity-0 transition-opacity duration-(--motion-duration-base) group-hover:opacity-100 group-focus-within:opacity-100"
-          transition={tween("slow")}
-        >
-          <IconChevronRight size={ICON.xs} stroke={ICON_STROKE.xs} />
-        </m.span>
+        <span className="flex size-3 items-center justify-center opacity-0 transition-opacity duration-(--motion-duration-base) group-hover:opacity-100 group-focus-within:opacity-100">
+          <IconChevronRight
+            className="disclosure-chevron duration-(--motion-duration-slow) ease-standard"
+            data-open={expanded ? "" : undefined}
+            size={ICON.xs}
+            stroke={ICON_STROKE.xs}
+          />
+        </span>
       </button>
       {action ? <span className="ml-auto">{action}</span> : null}
     </div>

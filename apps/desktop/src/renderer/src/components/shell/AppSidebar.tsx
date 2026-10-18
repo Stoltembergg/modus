@@ -144,7 +144,9 @@ function Brand({
       <ModusBot className="size-7 shrink-0" motionScale={0.25} />
       {expanded ? (
         <>
+          {/* Mounts only while expanded, so it needs its own entrance (`appear`). */}
           <NavRailReveal
+            appear
             className="min-w-0 flex-1 truncate text-sm font-medium text-fg"
             motion={motion}
             visible

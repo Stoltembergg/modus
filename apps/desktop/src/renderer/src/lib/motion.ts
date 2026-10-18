@@ -1,4 +1,10 @@
-import type { TargetAndTransition, Transition } from "motion/react";
+import {
+  type AnimationPlaybackControls,
+  animate,
+  type MotionValue,
+  type TargetAndTransition,
+  type Transition,
+} from "motion/react";
 
 /**
  * Modus motion tokens: the one scale every animation in the renderer uses.
@@ -240,6 +246,156 @@ export function navRailMotion(reduced: boolean): NavRailMotion {
         sheetOffsetX: -24,
         reduced: false,
       };
+}
+
+/* Content swaps (AnimatePresence mode="wait": old view fades out, then the new one in). */
+
+/**
+ * One half of a reduced-motion content swap. A `mode="wait"` swap chains the
+ * exit and the enter, so each half takes half of `MOTION_REDUCED_DURATION` and
+ * the whole swap is a single 120ms fade, not 120ms out + 120ms in.
+ */
+export const reducedSwapFade: Transition = Object.freeze({
+  duration: MOTION_REDUCED_DURATION / 2,
+  ease: MOTION_EASE.linear,
+  layout: layoutSnap,
+});
+
+/** `transition` for both halves of a fade-out-then-in swap: its own, or `reducedSwapFade`. */
+export function swapTransition(
+  transition: Transition,
+  reduced: boolean | null | undefined,
+): Transition {
+  return reduced ? reducedSwapFade : transition;
+}
+
+/* Image viewer (disclosure chevrons are CSS: `.disclosure-chevron` in styles/app.css). */
+
+export type ImageViewerMotion = {
+  backdrop: MotionPreset;
+  stage: MotionPreset;
+  toolbar: MotionPreset;
+};
+
+/** Lightbox enter/exit: the stage zooms and the toolbar drops in; reduced motion only fades. */
+export function imageViewerMotion(reduced: boolean | null | undefined): ImageViewerMotion {
+  const full: ImageViewerMotion = {
+    backdrop: {
+      initial: { opacity: 0 },
+      animate: { opacity: 1 },
+      exit: { opacity: 0 },
+      transition: tween("slow"),
+    },
+    stage: {
+      initial: { opacity: 0, scale: 0.98 },
+      animate: { opacity: 1, scale: 1 },
+      exit: { opacity: 0, scale: 0.98 },
+      transition: tween("slow", "emphasized"),
+    },
+    toolbar: {
+      initial: { opacity: 0, y: -4 },
+      animate: { opacity: 1, y: 0 },
+      exit: { opacity: 0 },
+      transition: tween("base", "standard", { delay: 0.04 }),
+    },
+  };
+  if (!reduced) return full;
+  const fade = (preset: MotionPreset): MotionPreset => ({
+    initial: reducedTarget(preset.initial, true),
+    animate: reducedTarget(preset.animate, true),
+    exit: reducedTarget(preset.exit, true),
+    transition: reducedFade,
+  });
+  return { backdrop: fade(full.backdrop), stage: fade(full.stage), toolbar: fade(full.toolbar) };
+}
+
+/* Panels whose width opens/closes (Files tree, terminal list, Inspector). */
+
+export type PanelWidthMotion = {
+  /** Transition for the panel width (snaps when motion is reduced). */
+  width: Transition;
+  /**
+   * Fade for the panel content. Under full motion it is the panel's own content
+   * fade (or `null`: content stays opaque and is just clipped by the width).
+   */
+  content: Transition | null;
+  reduced: boolean;
+};
+
+/** Width/content recipe for a panel; reduced motion snaps the width and fades content (120ms). */
+export function panelWidthMotion(
+  full: { width: Transition; content?: Transition | null },
+  reduced: boolean | null | undefined,
+): PanelWidthMotion {
+  return reduced
+    ? { width: layoutSnap, content: reducedFade, reduced: true }
+    : { width: full.width, content: full.content ?? null, reduced: false };
+}
+
+type Animator = (
+  value: MotionValue<number>,
+  target: number,
+  transition: Transition & { onComplete?: () => void },
+) => Pick<AnimationPlaybackControls, "stop">;
+
+/**
+ * Open or close a width-animated panel.
+ *
+ * Full motion: the width tweens; content with its own fade fades in once the
+ * width has landed and hides at once on close (`onSettled` runs after the width).
+ * Reduced motion, same pattern as the NavRail: opening snaps the width and fades
+ * the content in; closing fades the content out, then snaps the width.
+ * `onSettled(open)` runs once the panel has reached its final state.
+ */
+export function animatePanelWidth(
+  width: MotionValue<number>,
+  content: MotionValue<number>,
+  options: {
+    open: boolean;
+    openWidth: number;
+    closedWidth?: number;
+    motion: PanelWidthMotion;
+    onSettled?: (open: boolean) => void;
+  },
+  animator: Animator = animate as unknown as Animator,
+): { stop(): void } {
+  const { open, openWidth, closedWidth = 0, motion, onSettled } = options;
+  const running: Pick<AnimationPlaybackControls, "stop">[] = [];
+  const run = (...args: Parameters<Animator>) => {
+    running.push(animator(...args));
+  };
+  const fadeContent = motion.content;
+  if (!motion.reduced) {
+    if (!fadeContent) content.set(1);
+    else if (!open) content.set(0);
+    run(width, open ? openWidth : closedWidth, {
+      ...motion.width,
+      onComplete: () => {
+        onSettled?.(open);
+        if (open && fadeContent && content.get() < 1) {
+          content.set(0);
+          run(content, 1, fadeContent);
+        }
+      },
+    });
+  } else if (open) {
+    run(width, openWidth, motion.width);
+    onSettled?.(true);
+    run(content, 1, fadeContent ?? reducedFade);
+  } else {
+    run(content, 0, {
+      ...(fadeContent ?? reducedFade),
+      onComplete: () => {
+        run(width, closedWidth, motion.width);
+        onSettled?.(false);
+      },
+    });
+  }
+  return {
+    stop: () => {
+      for (const controls of running) controls.stop();
+    },
+  };
 }
 
 /* CSS mirror (consumed by lib/motion.test.ts). */

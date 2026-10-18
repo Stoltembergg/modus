@@ -132,10 +132,8 @@ export function TodosCard({
         ) : null}
         <span className="min-w-0 flex-1" />
         <IconChevronRight
-          className={cn(
-            "shrink-0 text-fg-faint transition-transform duration-(--motion-duration-base)",
-            open && "rotate-90",
-          )}
+          className="disclosure-chevron shrink-0 text-fg-faint duration-(--motion-duration-base)"
+          data-open={open ? "" : undefined}
           size={14}
           stroke={1.7}
         />

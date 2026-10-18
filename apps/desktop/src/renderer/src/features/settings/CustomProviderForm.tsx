@@ -626,10 +626,8 @@ function ModelRowEditor({
         type="button"
       >
         <IconChevronRight
-          className={cn(
-            "shrink-0 transition-transform duration-(--motion-duration-base)",
-            open && "rotate-90",
-          )}
+          className="disclosure-chevron shrink-0 duration-(--motion-duration-base)"
+          data-open={open ? "" : undefined}
           size={12}
           stroke={1.8}
         />

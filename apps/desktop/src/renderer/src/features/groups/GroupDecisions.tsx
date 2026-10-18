@@ -67,7 +67,8 @@ export function GroupDecisionsSection({
         type="button"
       >
         <IconChevronRight
-          className={cn("transition-transform", open && "rotate-90")}
+          className="disclosure-chevron"
+          data-open={open ? "" : undefined}
           size={ICON.xs}
           stroke={ICON_STROKE.xs}
         />

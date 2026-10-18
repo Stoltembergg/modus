@@ -3042,6 +3042,51 @@ body
 }
 
 /*
+ * Disclosure chevrons (expand/collapse): `data-open` turns the chevron 90deg.
+ * Duration/ease come from the site's Tailwind `duration-*` / `ease-*` utilities
+ * (same fallbacks as Tailwind's `transition-transform`). Under reduced motion
+ * the angle snaps and each toggle is a short opacity fade instead: the two
+ * states use different keyframe names, so switching restarts the fade.
+ * `--tint` also fades the chevron's colour (hover tints).
+ */
+@layer components {
+  .disclosure-chevron {
+    transition-property: rotate;
+    transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
+    transition-duration: var(--tw-duration, var(--default-transition-duration));
+  }
+  .disclosure-chevron--tint {
+    transition-property: color, rotate;
+  }
+  .disclosure-chevron[data-open] {
+    rotate: 90deg;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .disclosure-chevron {
+      transition-property: opacity;
+      animation: disclosure-chevron-fade-closed var(--motion-duration-reduced)
+        var(--motion-ease-linear);
+    }
+    .disclosure-chevron--tint {
+      transition-property: color, opacity;
+    }
+    .disclosure-chevron[data-open] {
+      animation-name: disclosure-chevron-fade-open;
+    }
+  }
+}
+@keyframes disclosure-chevron-fade-open {
+  from {
+    opacity: 0.35;
+  }
+}
+@keyframes disclosure-chevron-fade-closed {
+  from {
+    opacity: 0.35;
+  }
+}
+
+/*
  * Floating-surface enter/exit (menus, popovers). Base UI stamps
  * data-starting-style / data-ending-style; we animate from a slightly smaller,
  * nudged-up state on the shared ease-out-quint. Kept to ~120ms so dense desktop
