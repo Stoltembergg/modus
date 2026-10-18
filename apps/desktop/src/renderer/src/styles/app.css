@@ -1048,6 +1048,44 @@
   background: transparent;
 }
 
+/*
+ * Activity panel (inspector "Activity" tab): one glass surface, no dividers.
+ * Scoped to .activity-panel so the shared .timeline-wire / bg-card boxes keep
+ * their chrome everywhere else. Inner surfaces are a soft borderless inset on
+ * the glass; a failed tool keeps a faint danger tint instead of a red border.
+ */
+.activity-panel {
+  --activity-inset-bg: color-mix(in srgb, var(--color-fg) 4%, transparent);
+  --activity-inset-error-bg: color-mix(in srgb, var(--color-danger) 7%, transparent);
+  --tool-group-mask-from: var(--surface-sidebar);
+}
+/* Light glass: a lighter (not darker) inset keeps faint/danger text >= 4.5:1. */
+:root:not([data-theme="dark"]) .activity-panel {
+  --activity-inset-bg: color-mix(in srgb, #fff 60%, transparent);
+  --activity-inset-error-bg: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--color-danger) 5%, #fff) 70%,
+    transparent
+  );
+}
+.activity-panel .timeline-wire,
+.activity-panel [data-activity-inset] {
+  border-color: transparent;
+  border-width: 0;
+  border-radius: var(--radius-lg);
+  background-color: var(--activity-inset-bg);
+}
+.activity-panel [data-activity-inset="error"] {
+  background-color: var(--activity-inset-error-bg);
+}
+/* A new-file diff keeps its add fill; only the border goes. */
+.activity-panel [data-activity-inset="keep-fill"] {
+  background-color: var(--color-diff-add-bg);
+}
+.activity-panel [data-activity-divider] {
+  border-width: 0;
+}
+
 /* 全局默认行高与字重，避免某些控件回退到浏览器默认（16px / bold） */
 html,
 body,

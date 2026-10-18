@@ -188,6 +188,7 @@ export const DiffToolCard = memo(
               "scroll-thin mt-1 max-h-96 overflow-auto rounded-md border border-hairline bg-card",
               isNewFileDiff && "bg-diff-add-bg",
             )}
+            data-activity-inset={isNewFileDiff ? "keep-fill" : ""}
           >
             {diff ? <InlineDiffView diff={diff} path={path} /> : null}
           </div>

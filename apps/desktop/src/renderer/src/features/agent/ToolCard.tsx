@@ -269,6 +269,7 @@ function LiveToolCard({
             "whitespace-pre-wrap wrap-break-word text-xs text-fg-muted leading-relaxed",
             isError && "text-danger/90",
           )}
+          data-activity-divider=""
           ref={scrollRef}
         >
           {detail}
@@ -347,6 +348,7 @@ function FlatToolRow({
             "whitespace-pre-wrap wrap-break-word text-xs text-fg-muted leading-relaxed",
             isError && "border-danger/25 text-danger/90",
           )}
+          data-activity-inset={isError ? "error" : ""}
         >
           {clampDetail(detail)}
         </pre>

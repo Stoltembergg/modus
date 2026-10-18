@@ -449,8 +449,14 @@ export const SearchToolCard = memo(function SearchToolCard({
       )}
 
       <CollapsibleMotion open={bodyOpen} preset="timeline">
-        <div className="mt-1.5 overflow-hidden rounded-md border border-hairline bg-card">
-          <div className="flex h-7 min-w-0 items-center gap-1.5 border-hairline border-b px-2.5 text-xs">
+        <div
+          className="mt-1.5 overflow-hidden rounded-md border border-hairline bg-card"
+          data-activity-inset=""
+        >
+          <div
+            className="flex h-7 min-w-0 items-center gap-1.5 border-hairline border-b px-2.5 text-xs"
+            data-activity-divider=""
+          >
             <span className="shrink-0 font-medium text-fg-muted">{t("search.searchedFor")}</span>
             <span className="min-w-0 truncate font-mono text-fg-subtle" title={query}>
               {query}
@@ -489,7 +495,10 @@ export const SearchToolCard = memo(function SearchToolCard({
             </div>
           ) : null}
           {parsed.notice ? (
-            <div className="border-hairline border-t px-2.5 py-1.5 text-fg-muted text-xs">
+            <div
+              className="border-hairline border-t px-2.5 py-1.5 text-fg-muted text-xs"
+              data-activity-divider=""
+            >
               {parsed.notice}
             </div>
           ) : null}

@@ -128,15 +128,18 @@ describe("ActivityTimeline", () => {
       fireEvent.scroll(button.parentElement as HTMLElement);
     }
     if (mode === "retry") {
-      await screen.findByText("Unable to load activity history. Try again.");
+      const button = await screen.findByRole("button", {
+        name: "Couldn't load activity. Retry",
+      });
       expect(olderAttempts).toBe(1);
-      const button = screen.getByRole("button", { name: "Load earlier activity" });
+      // One control, no explanatory sentence.
+      expect(screen.queryByRole("button", { name: "Load earlier activity" })).toBeNull();
       fireEvent.scroll(button.parentElement as HTMLElement);
       expect(olderAttempts).toBe(1);
       fireEvent.click(button);
     }
     await waitFor(() =>
-      expect(screen.getByTestId("activity-event-count").textContent).toBe("3 events"),
+      expect(screen.getByTestId("activity-timeline").dataset.eventCount).toBe("3"),
     );
     expect(listEventPage).toHaveBeenCalledWith(
       "s",
@@ -237,8 +240,8 @@ describe("ActivityTimeline", () => {
     });
     expect(listEventPage).toHaveBeenCalledTimes(expectedCalls);
     expect(screen.queryByRole("button", { name: "Load earlier activity" })).toBeNull();
-    expect(screen.getByTestId("activity-event-count").textContent).toBe(
-      where === "first page" ? "1 event" : "2 events",
+    expect(screen.getByTestId("activity-timeline").dataset.eventCount).toBe(
+      where === "first page" ? "1" : "2",
     );
   });
 
@@ -285,7 +288,7 @@ describe("ActivityTimeline", () => {
       finishOlder({ ...run("first"), hasMore: false });
     });
     expect(screen.getByTestId("activity-blocks").textContent).not.toContain("first-run");
-    expect(screen.getByTestId("activity-event-count").textContent).toBe("1 event");
+    expect(screen.getByTestId("activity-timeline").dataset.eventCount).toBe("1");
   });
 
   it("drops the previous session history when the selected session changes", async () => {
@@ -299,13 +302,13 @@ describe("ActivityTimeline", () => {
       },
     ]);
     await waitFor(() =>
-      expect(screen.getByTestId("activity-event-count").textContent).toBe("1 event"),
+      expect(screen.getByTestId("activity-timeline").dataset.eventCount).toBe("1"),
     );
 
     view.rerender(<ActivityTimeline cwd="/repo" hub={hub} sessionId="second" />);
 
     await waitFor(() =>
-      expect(screen.getByTestId("activity-event-count").textContent).toBe("0 events"),
+      expect(screen.getByTestId("activity-timeline").dataset.eventCount).toBe("0"),
     );
   });
 
@@ -315,7 +318,7 @@ describe("ActivityTimeline", () => {
 
     const panel = screen.getByRole("region", { name: "Activity" });
     expect(panel.getAttribute("data-ui-surface")).toBe("sidebar");
-    expect(screen.getByTestId("activity-event-count").textContent).toBe("0 events");
+    expect(screen.getByTestId("activity-timeline").dataset.eventCount).toBe("0");
 
     hub.seedHistory("s", [
       {
@@ -325,7 +328,7 @@ describe("ActivityTimeline", () => {
       },
     ]);
     await waitFor(() =>
-      expect(screen.getByTestId("activity-event-count").textContent).toBe("1 event"),
+      expect(screen.getByTestId("activity-timeline").dataset.eventCount).toBe("1"),
     );
 
     hub.publish({
@@ -334,7 +337,7 @@ describe("ActivityTimeline", () => {
       event: { type: "run.completed", sessionId: "s", runId: "run-1" },
     });
     await waitFor(() =>
-      expect(screen.getByTestId("activity-event-count").textContent).toBe("2 events"),
+      expect(screen.getByTestId("activity-timeline").dataset.eventCount).toBe("2"),
     );
   });
 
@@ -387,7 +390,7 @@ describe("ActivityTimeline", () => {
       },
     ]);
     await waitFor(() =>
-      expect(screen.getByTestId("activity-event-count").textContent).toMatch(/1/),
+      expect(screen.getByTestId("activity-timeline").dataset.eventCount).toBe("1"),
     );
     expect(screen.queryByText("Write tests")).toBeNull();
   });
