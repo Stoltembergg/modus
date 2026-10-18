@@ -90,6 +90,58 @@ export function migrateDatabase(db: DatabaseSync): void {
       error text
     );
 
+    create table if not exists automations (
+      id text primary key,
+      revision integer not null check(revision >= 1),
+      name text not null check(length(name) between 1 and 120),
+      instruction text not null check(length(instruction) between 1 and 65536),
+      schedule_json text not null,
+      time_zone text not null,
+      next_occurrence_at text,
+      workspace_id text not null,
+      cwd text not null,
+      agent_id text,
+      provider_id text not null,
+      model_id text not null,
+      thinking_level text not null,
+      thinking_variant text,
+      enabled integer not null check(enabled in (0, 1)),
+      created_at text not null,
+      updated_at text not null,
+      deleted_at text
+    );
+    create index if not exists idx_automations_due
+      on automations(enabled, next_occurrence_at) where deleted_at is null;
+
+    create table if not exists automation_executions (
+      id text primary key,
+      automation_id text not null references automations(id) on delete restrict,
+      automation_revision integer not null check(automation_revision >= 1),
+      trigger_key text not null unique,
+      trigger_kind text not null check(trigger_kind in ('scheduled', 'manual', 'missed_interval')),
+      scheduled_for text,
+      config_snapshot_json text not null,
+      status text not null check(status in (
+        'claimed', 'running', 'waiting_for_you', 'cancelling', 'cleanup_failed',
+        'completed', 'failed', 'cancelled', 'interrupted', 'skipped', 'missed'
+      )),
+      session_id text,
+      run_id text,
+      created_at text not null,
+      started_at text,
+      completed_at text,
+      error text,
+      missed_first text,
+      missed_last text,
+      missed_count integer check(missed_count is null or missed_count > 0)
+    );
+    create index if not exists idx_automation_executions_history
+      on automation_executions(automation_id, created_at desc);
+    create index if not exists idx_automation_executions_active
+      on automation_executions(status) where status in (
+        'claimed', 'running', 'waiting_for_you', 'cancelling', 'cleanup_failed'
+      );
+
     create table if not exists tool_result_spills (
       id text primary key,
       session_id text not null references agent_sessions(id) on delete cascade,
