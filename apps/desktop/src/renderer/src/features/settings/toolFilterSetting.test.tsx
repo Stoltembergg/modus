@@ -98,8 +98,8 @@ describe("ToolFilterSetting", () => {
 
     expect(await screen.findByRole("heading", { name: "Local tool filter" })).toBeTruthy();
     expect(
-      screen.getByText("Sends only the tools a request likely needs, computed on this device."),
-    ).toBeTruthy();
+      screen.queryByText("Sends only the tools a request likely needs, computed on this device."),
+    ).toBeNull();
 
     const toggle = screen.getByRole("switch", { name: "Local tool filter" });
     expect(toggle.getAttribute("aria-checked")).toBe("false");
@@ -218,7 +218,7 @@ describe("ToolFilterSetting", () => {
     ).toBeTruthy();
   });
 
-  it("shows each model status when ready", async () => {
+  it("shows only the failed model status when ready (no info lines otherwise)", async () => {
     const modelStatuses: Record<ToolFilterModel, string> = {
       starting: "Starting the on-device model…",
       ready: "On. Requests send only the relevant tools.",
@@ -226,17 +226,16 @@ describe("ToolFilterSetting", () => {
       stopped: "On. The model starts with the next request.",
     };
 
-    for (const [model, expectedText] of Object.entries(modelStatuses) as [
-      ToolFilterModel,
-      string,
-    ][]) {
+    for (const [model, text] of Object.entries(modelStatuses) as [ToolFilterModel, string][]) {
       setupBridge({
         enabled: true,
         download: { phase: "ready" },
         model,
       });
       const { unmount } = render(<ToolFilterSetting />);
-      expect(await screen.findByText(expectedText)).toBeTruthy();
+      await screen.findByRole("switch", { name: "Local tool filter" });
+      if (model === "failed") expect(await screen.findByText(text)).toBeTruthy();
+      else expect(screen.queryByText(text)).toBeNull();
       unmount();
       cleanup();
     }
@@ -272,7 +271,7 @@ describe("ToolFilterSetting", () => {
     });
 
     expect(toggle.getAttribute("aria-checked")).toBe("true");
-    expect(screen.getByText("On. Requests send only the relevant tools.")).toBeTruthy();
+    expect(screen.queryByText("On. Requests send only the relevant tools.")).toBeNull();
   });
 
   it("renders Portuguese strings when document language is pt-BR", async () => {
@@ -289,10 +288,10 @@ describe("ToolFilterSetting", () => {
       await screen.findByRole("heading", { name: "Filtro local de ferramentas" }),
     ).toBeTruthy();
     expect(
-      screen.getByText(
+      screen.queryByText(
         "Envia só as ferramentas de que cada solicitação provavelmente precisa, escolhidas neste dispositivo.",
       ),
-    ).toBeTruthy();
+    ).toBeNull();
 
     const toggle = screen.getByRole("switch", { name: "Filtro local de ferramentas" });
     await user.click(toggle);

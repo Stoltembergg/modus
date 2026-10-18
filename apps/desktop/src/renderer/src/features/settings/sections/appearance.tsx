@@ -10,10 +10,9 @@ import {
 import type { AppearanceState, TransparencyPreference } from "../../../../../shared/appearance";
 import type { SettingsTextKey } from "../../../../../shared/settings-text";
 import { setTransparency, useAppearanceState } from "../../../lib/appearance";
-import { cn } from "../../../lib/cn";
 import { type SettingsTextFn, settingsTextFor, useSettingsText } from "../../../lib/settingsText";
 import { type ThemeMode, useTheme } from "../../../lib/theme";
-import { Disclosure } from "../form-controls";
+import { Disclosure, SettingsSegmented } from "../form-controls";
 import {
   ReadOnlyPill,
   SettingsList,
@@ -59,7 +58,7 @@ export function AppearanceSettingsPanel() {
                 value={appearance?.transparency ?? "sidebar"}
               />
             }
-            description={transparencyDescription(appearance, t)}
+            notice={transparencyNotice(appearance, t)}
             title={t("settings.appearance.transparency")}
           />
         </SettingsList>
@@ -68,7 +67,6 @@ export function AppearanceSettingsPanel() {
         <SettingsList>
           <SettingsRow
             control={<ReadOnlyPill>{t("settings.appearance.fontFamilyValue")}</ReadOnlyPill>}
-            description={t("settings.appearance.fontFamilyDescription")}
             title={t("settings.appearance.fontFamily")}
           />
         </SettingsList>
@@ -77,11 +75,11 @@ export function AppearanceSettingsPanel() {
   );
 }
 
-/** Row description: why the app is solid despite Full/Sidebar, or what the modes do. */
-export function transparencyDescription(
+/** Row notice, only when the OS or platform keeps the window solid (the options are blocked). */
+export function transparencyNotice(
   appearance: AppearanceState | null,
   t: SettingsTextFn = settingsTextFor(),
-): string {
+): string | undefined {
   switch (appearance?.blockedBy) {
     case undefined:
     case "platform":
@@ -91,7 +89,7 @@ export function transparencyDescription(
     case "os-high-contrast":
       return t("settings.appearance.transparencyBlockedHighContrast");
     default:
-      return t("settings.appearance.transparencyDescription");
+      return undefined;
   }
 }
 
@@ -154,44 +152,28 @@ function Segmented<T extends string>({
   value,
   onChange,
   options,
-  label: _label,
+  label,
   disabled = false,
 }: {
   value: T;
   onChange: (value: T) => void;
   options: ReadonlyArray<SegmentOption<T>>;
-  label?: string;
+  label: string;
   disabled?: boolean;
 }) {
   const t = useSettingsText();
   return (
-    <div
-      className={cn(
-        "flex items-center gap-0.5 rounded-lg border border-hairline-soft bg-canvas p-0.5",
-        disabled && "opacity-50",
-      )}
-    >
-      {options.map(({ value: option, labelKey, titleKey, icon: Icon }) => {
-        const active = option === value;
-        const optionLabel = t(labelKey);
-        return (
-          <button
-            aria-pressed={active}
-            className={cn(
-              "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition-colors disabled:cursor-not-allowed",
-              active ? "bg-active text-fg shadow-composer" : "text-fg-subtle hover:text-fg-muted",
-            )}
-            disabled={disabled}
-            key={option}
-            onClick={() => onChange(option)}
-            title={t(titleKey)}
-            type="button"
-          >
-            <Icon size={14} stroke={1.8} />
-            {optionLabel}
-          </button>
-        );
-      })}
-    </div>
+    <SettingsSegmented
+      disabled={disabled}
+      label={label}
+      onChange={onChange}
+      options={options.map(({ value: option, labelKey, titleKey, icon: Icon }) => ({
+        value: option,
+        label: t(labelKey),
+        title: t(titleKey),
+        icon: <Icon size={14} stroke={1.8} />,
+      }))}
+      value={value}
+    />
   );
 }

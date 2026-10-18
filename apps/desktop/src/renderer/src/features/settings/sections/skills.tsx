@@ -79,7 +79,7 @@ export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
         actions={
           <>
             <button
-              className="flex h-8 items-center gap-1.5 rounded-md border border-hairline bg-surface px-2.5 text-xs text-fg transition-colors hover:bg-hover disabled:opacity-40"
+              className="flex h-8 items-center gap-1.5 rounded-md bg-chip px-2.5 text-xs text-fg transition-colors hover:bg-chip-strong disabled:opacity-40"
               disabled={!cwd}
               onClick={() => void window.modus.skills.openDir(cwd as string)}
               type="button"
@@ -88,7 +88,7 @@ export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
               {t("settings.skillsRules.openFolder")}
             </button>
             <button
-              className="flex h-8 items-center gap-1.5 rounded-md bg-fg px-2.5 text-canvas text-xs transition-colors hover:bg-fg-muted disabled:opacity-40"
+              className="flex h-8 items-center gap-1.5 rounded-md bg-accent px-2.5 text-on-accent text-xs transition-colors hover:bg-accent/90 disabled:opacity-40"
               disabled={!cwd}
               onClick={() => setCreating((value) => !value)}
               type="button"
@@ -98,18 +98,17 @@ export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
             </button>
           </>
         }
-        singleLineDescription
         title={t("settings.skillsRules.skillsTitle")}
       />
 
       {skillsError ? <p className="-mt-4 text-danger text-xs">{skillsError}</p> : null}
 
       <CollapsibleMotion open={creating && Boolean(cwd)} preset="default">
-        <div className="flex flex-col gap-3 rounded-lg border border-hairline-soft bg-panel px-5 py-4">
+        <div className="flex flex-col gap-3 settings-group px-5 py-4">
           <label className="flex flex-col gap-1.5">
             <span className="text-xs text-fg-subtle">{t("settings.skillsRules.name")}</span>
             <input
-              className="h-8 rounded-md border border-hairline bg-surface px-2.5 text-sm text-fg outline-none focus:border-focus-ring"
+              className="h-8 rounded-md border border-hairline bg-surface px-2.5 text-sm text-fg outline-none focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
               onChange={(event) => setDraftName(event.target.value)}
               placeholder={t("settings.skillsRules.namePlaceholder")}
               value={draftName}
@@ -118,7 +117,7 @@ export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
           <label className="flex flex-col gap-1.5">
             <span className="text-xs text-fg-subtle">{t("settings.skillsRules.description")}</span>
             <textarea
-              className="scroll-thin min-h-[68px] resize-none rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-fg leading-5 outline-none focus:border-focus-ring"
+              className="scroll-thin min-h-[68px] resize-none rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-fg leading-5 outline-none focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
               maxLength={280}
               onChange={(event) => setDraftDescription(event.target.value)}
               placeholder={t("settings.skillsRules.descriptionPlaceholder")}
@@ -128,7 +127,7 @@ export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
           <label className="flex flex-col gap-1.5">
             <span className="text-xs text-fg-subtle">{t("settings.skillsRules.instructions")}</span>
             <textarea
-              className="scroll-thin min-h-48 resize-y rounded-md border border-hairline bg-surface px-3 py-2 font-mono text-xs text-fg leading-5 outline-none placeholder:text-fg-faint focus:border-focus-ring"
+              className="scroll-thin min-h-48 resize-y rounded-md border border-hairline bg-surface px-3 py-2 font-mono text-xs text-fg leading-5 outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
               onChange={(event) => setDraftBody(event.target.value)}
               placeholder={t("settings.skillsRules.instructionsPlaceholder")}
               value={draftBody}
@@ -136,20 +135,20 @@ export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
           </label>
           <div className="flex items-center justify-end gap-2">
             <button
-              className="flex h-8 items-center rounded-md border border-hairline bg-surface px-3 text-xs text-fg-muted transition-colors hover:bg-hover"
+              className="flex h-8 items-center rounded-md bg-chip px-3 text-xs text-fg-muted transition-colors hover:bg-chip-strong"
               onClick={() => setCreating(false)}
               type="button"
             >
               {t("settings.skillsRules.cancel")}
             </button>
             <button
-              className="flex h-8 items-center gap-1.5 rounded-md bg-fg px-3 text-canvas text-xs transition-colors hover:bg-fg-muted disabled:opacity-40"
+              className="flex h-8 items-center gap-1.5 rounded-md bg-accent px-3 text-on-accent text-xs transition-colors hover:bg-accent/90 disabled:opacity-40"
               disabled={!draftName.trim() || !draftBody.trim() || saving}
               onClick={() => void saveSkill()}
               type="button"
             >
               {saving ? (
-                <WorkingText className="text-canvas">
+                <WorkingText className="text-on-accent">
                   {t("settings.skillsRules.creating")}
                 </WorkingText>
               ) : (
@@ -162,15 +161,15 @@ export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
 
       <SettingsSection title={t("settings.skillsRules.availableSkills")}>
         {!cwd ? (
-          <div className="rounded-lg border border-hairline-soft bg-panel px-5 py-6">
+          <div className="settings-group px-5 py-6">
             <p className="text-sm text-fg-muted">{t("settings.skillsRules.noWorkspaceSkills")}</p>
           </div>
         ) : loading && skills.length === 0 ? (
-          <div className="rounded-lg border border-hairline-soft bg-panel px-5 py-6 text-sm text-fg-muted">
+          <div className="settings-group px-5 py-6 text-sm text-fg-muted">
             <WorkingText>{t("settings.skillsRules.discoveringSkills")}</WorkingText>
           </div>
         ) : skills.length === 0 ? (
-          <div className="flex flex-col items-start gap-2 rounded-lg border border-hairline-soft bg-panel px-5 py-6">
+          <div className="flex flex-col items-start gap-2 settings-group px-5 py-6">
             <p className="text-sm text-fg-muted">
               {textWithNodes(t("settings.skillsRules.noSkills"), {
                 file: <span className="font-mono text-xs">SKILL.md</span>,
@@ -182,7 +181,7 @@ export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
           <SettingsList>
             {skills.map((skill) => (
               <div
-                className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-hairline-soft border-b px-4 py-3 last:border-b-0"
+                className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-4 py-3"
                 key={skill.path}
               >
                 <div className="flex min-w-0 items-center gap-2.5">

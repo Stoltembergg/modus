@@ -75,7 +75,7 @@ export function PersonalizationSettingsPanel() {
         actions={
           <>
             <button
-              className="flex h-8 items-center gap-1.5 rounded-md border border-hairline bg-surface px-2.5 text-xs text-fg transition-colors hover:bg-hover disabled:opacity-40"
+              className="flex h-8 items-center gap-1.5 rounded-md bg-chip px-2.5 text-xs text-fg transition-colors hover:bg-chip-strong disabled:opacity-40"
               disabled={loading || saving}
               onClick={() => void openFile()}
               type="button"
@@ -84,14 +84,16 @@ export function PersonalizationSettingsPanel() {
               {t("settings.appearance.openFile")}
             </button>
             <button
-              className="flex h-8 items-center gap-1.5 rounded-md bg-fg px-2.5 text-canvas text-xs transition-colors hover:bg-fg-muted disabled:opacity-40"
+              className="flex h-8 items-center gap-1.5 rounded-md bg-accent px-2.5 text-on-accent text-xs transition-colors hover:bg-accent/90 disabled:opacity-40"
               disabled={!dirty || loading || saving}
               onClick={() => void save()}
               type="button"
             >
               <IconCheck size={13} stroke={2} />
               {saving ? (
-                <WorkingText className="text-canvas">{t("settings.appearance.saving")}</WorkingText>
+                <WorkingText className="text-on-accent">
+                  {t("settings.appearance.saving")}
+                </WorkingText>
               ) : (
                 t("settings.appearance.save")
               )}
@@ -106,7 +108,7 @@ export function PersonalizationSettingsPanel() {
 
       <SettingsSection title={t("settings.appearance.customInstructions")}>
         <textarea
-          className="scroll-thin min-h-[320px] resize-y rounded-lg border border-hairline-soft bg-panel px-4 py-3 font-mono text-sm text-fg leading-6 outline-none placeholder:text-fg-faint focus:border-focus-ring disabled:opacity-60"
+          className="scroll-thin min-h-[320px] resize-y settings-group px-4 py-3 font-mono text-sm text-fg leading-6 outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35 disabled:opacity-60"
           disabled={loading}
           onChange={(event) => {
             setDraft(event.target.value);
@@ -128,7 +130,7 @@ export function PersonalizationSettingsPanel() {
                     : t("settings.appearance.fileBase")}
                 </ReadOnlyPill>
               }
-              description={state.activePath}
+              notice={state.activePath}
               title={t("settings.appearance.activeFile")}
             />
             <SettingsRow
@@ -139,7 +141,7 @@ export function PersonalizationSettingsPanel() {
                     : t("settings.appearance.statusInactive")}
                 </ReadOnlyPill>
               }
-              description={state.overridePath}
+              notice={state.overridePath}
               title={t("settings.appearance.agentsOverrideTitle")}
             />
           </SettingsList>

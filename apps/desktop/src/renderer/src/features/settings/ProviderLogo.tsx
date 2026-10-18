@@ -1,8 +1,8 @@
 import { IconCube, IconSparkles } from "@tabler/icons-react";
-import { AnimatePresence, m } from "motion/react";
+import { AnimatePresence, m, useReducedMotion } from "motion/react";
 import { useEffect, useMemo, useState } from "react";
 import { cn } from "../../lib/cn";
-import { tween } from "../../lib/motion";
+import { type MotionPreset, reducedFade, tween } from "../../lib/motion";
 import {
   createProviderLogoResolver,
   providerLogoColor,
@@ -10,6 +10,28 @@ import {
 } from "./providerLogoRegistry";
 
 type ProviderLogoSize = "sm" | "md" | "lg";
+
+const LOGO_ENTER_FULL: MotionPreset = {
+  initial: { opacity: 0, scale: 0.94 },
+  animate: { opacity: 1, scale: 1 },
+  exit: { opacity: 0, scale: 0.94 },
+  transition: tween("base"),
+};
+
+const LOGO_ENTER_REDUCED: MotionPreset = {
+  initial: { opacity: 0 },
+  animate: { opacity: 1 },
+  exit: { opacity: 0 },
+  transition: reducedFade,
+};
+
+/**
+ * Logo/fallback swap: a small scale-in with full motion; under reduced motion an
+ * opacity-only `reducedFade` (120ms linear), never a scale.
+ */
+export function providerLogoMotion(reduced: boolean | null | undefined): MotionPreset {
+  return reduced ? LOGO_ENTER_REDUCED : LOGO_ENTER_FULL;
+}
 type ProviderLogoState = "loading" | "ready" | "fallback";
 
 type ProviderLogoProps = {
@@ -89,13 +111,15 @@ export function ProviderLogo({ provider, name, size = "md", framed = true }: Pro
     };
   }, [logoKey]);
 
+  const reduced = useReducedMotion() ?? false;
+  const logoMotion = providerLogoMotion(reduced);
+
   return (
     <span
       aria-label={`${name ?? provider} provider logo`}
       className={cn(
         "relative flex shrink-0 items-center justify-center overflow-hidden text-fg-muted",
-        framed &&
-          "rounded-md border border-hairline bg-chip shadow-composer transition-colors group-hover:border-hairline-strong",
+        framed && "rounded-md bg-chip shadow-composer transition-colors group-hover:bg-chip-strong",
         boxClass,
       )}
       data-logo-state={state}
@@ -104,10 +128,10 @@ export function ProviderLogo({ provider, name, size = "md", framed = true }: Pro
       <AnimatePresence initial={false} mode="wait">
         {state === "ready" && asset ? (
           <m.span
-            animate={{ opacity: 1, scale: 1 }}
+            animate={logoMotion.animate}
             className={cn("flex size-full items-center justify-center text-fg-muted", readyPad)}
-            exit={{ opacity: 0, scale: 0.94 }}
-            initial={{ opacity: 0, scale: 0.94 }}
+            exit={logoMotion.exit}
+            initial={logoMotion.initial}
             key={asset.key}
             style={{
               WebkitMaskImage: `url("${asset.url}")`,
@@ -120,7 +144,7 @@ export function ProviderLogo({ provider, name, size = "md", framed = true }: Pro
               maskRepeat: "no-repeat",
               maskSize: "contain",
             }}
-            transition={tween("base")}
+            transition={logoMotion.transition}
           />
         ) : state === "loading" ? (
           <m.span
@@ -129,19 +153,19 @@ export function ProviderLogo({ provider, name, size = "md", framed = true }: Pro
             exit={{ opacity: 0 }}
             initial={{ opacity: 0 }}
             key="loading"
-            transition={tween("base")}
+            transition={reduced ? reducedFade : tween("base")}
           />
         ) : (
           <m.span
-            animate={{ opacity: 1, scale: 1 }}
+            animate={logoMotion.animate}
             className={cn(
               "flex items-center justify-center",
               size === "sm" ? "text-[9px]" : "text-xs",
             )}
-            exit={{ opacity: 0, scale: 0.94 }}
-            initial={{ opacity: 0, scale: 0.94 }}
+            exit={logoMotion.exit}
+            initial={logoMotion.initial}
             key="fallback"
-            transition={tween("base")}
+            transition={logoMotion.transition}
           >
             {provider === "synthetic" || provider === "custom" ? (
               <IconSparkles size={fallbackIconSize} stroke={1.7} />

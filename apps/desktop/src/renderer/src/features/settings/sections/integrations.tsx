@@ -440,11 +440,6 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
             </button>
           ) : null
         }
-        description={
-          consumerMode
-            ? t("settings.integrations.headerDescriptionConsumer")
-            : t("settings.integrations.headerDescription")
-        }
         title={
           standalone
             ? t("settings.integrations.titleConnections")
@@ -452,10 +447,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
         }
       />
 
-      <SettingsSection
-        description={t("settings.integrations.apiKeySectionDescription")}
-        title={t("settings.integrations.apiKeySectionTitle")}
-      >
+      <SettingsSection title={t("settings.integrations.apiKeySectionTitle")}>
         <SettingsList>
           <div className="px-4 pt-3">
             <Disclosure label={t("settings.integrations.whereToFindKey")}>
@@ -472,7 +464,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
               <span className="mb-1.5 block">{t("settings.integrations.apiKeyLabel")}</span>
               <input
                 autoComplete="new-password"
-                className="h-9 w-full rounded-md border border-hairline-soft bg-canvas px-3 text-sm text-fg outline-none placeholder:text-fg-faint focus-visible:ring-2 focus-visible:ring-focus-ring/35"
+                className="h-9 w-full rounded-md bg-canvas px-3 text-sm text-fg outline-none placeholder:text-fg-faint focus-visible:ring-2 focus-visible:ring-focus-ring/35"
                 onChange={(event) => setApiKey(event.target.value)}
                 placeholder={
                   settings?.apiKeyConfigured
@@ -508,7 +500,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
             </div>
           </form>
           {settings?.apiKeyConfigured ? (
-            <div className="border-hairline-soft border-t px-4 py-3 text-xs text-success">
+            <div className=" px-4 py-3 text-xs text-success">
               <p>{t("settings.integrations.keySavedForProfile")}</p>
               <p className="mt-1">
                 {t("settings.integrations.connectedMode", {
@@ -520,7 +512,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
             </div>
           ) : null}
           {showRemoveKey ? (
-            <div className="flex items-center justify-between gap-3 border-hairline-soft border-t px-4 py-3">
+            <div className="flex items-center justify-between gap-3 px-4 py-3">
               <p className="text-xs text-fg-muted">
                 {t("settings.integrations.removeKeyConfirmPrompt")}
               </p>
@@ -546,14 +538,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
         </SettingsList>
       </SettingsSection>
 
-      <SettingsSection
-        description={
-          consumerMode
-            ? t("settings.integrations.diagnosticsDescriptionConsumer")
-            : t("settings.integrations.diagnosticsDescription")
-        }
-        title={t("settings.integrations.diagnosticsTitle")}
-      >
+      <SettingsSection title={t("settings.integrations.diagnosticsTitle")}>
         <SettingsList>
           <div className="flex flex-wrap items-center gap-3 p-4">
             <button
@@ -610,19 +595,11 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
       ) : null}
 
       {settings?.apiKeyConfigured && consumerMode ? (
-        <SettingsSection
-          description={t("settings.integrations.consumerToolsDescription")}
-          title={t("settings.integrations.consumerToolsTitle")}
-        >
+        <SettingsSection title={t("settings.integrations.consumerToolsTitle")}>
           <SettingsList>
             <div className="flex flex-wrap items-center justify-between gap-3 p-4">
               <div>
                 <p className="text-xs text-fg">{t("settings.integrations.allowedMcpTools")}</p>
-                <p className="mt-1 text-xs text-fg-muted">
-                  {t("settings.integrations.consumerSelectedHint", {
-                    count: consumerSelectedToolSlugs.length,
-                  })}
-                </p>
               </div>
               <div className="flex items-center gap-2">
                 <button
@@ -654,18 +631,18 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
                 </button>
               </div>
             </div>
-            <div className="border-hairline-soft border-t px-4 py-3">
+            <div className=" px-4 py-3">
               <label className="block">
                 <span className="sr-only">{t("settings.integrations.searchConsumerTools")}</span>
                 <input
-                  className="h-8 w-full rounded-md border border-hairline-soft bg-canvas px-2.5 text-xs text-fg outline-none placeholder:text-fg-faint focus-visible:ring-2 focus-visible:ring-focus-ring/35"
+                  className="h-8 w-full rounded-md bg-canvas px-2.5 text-xs text-fg outline-none placeholder:text-fg-faint focus-visible:ring-2 focus-visible:ring-focus-ring/35"
                   onChange={(event) => setConsumerQuery(event.target.value)}
                   placeholder={t("settings.integrations.searchConsumerToolsPlaceholder")}
                   value={consumerQuery}
                 />
               </label>
               {visibleConsumerTools.length ? (
-                <div className="mt-2 max-h-72 divide-y divide-hairline-soft overflow-y-auto rounded-md border border-hairline-soft">
+                <div className="mt-2 max-h-72 overflow-y-auto rounded-md bg-chip-faint">
                   {visibleConsumerTools.map((tool) => (
                     <label
                       className="flex cursor-pointer items-start gap-2.5 px-3 py-2.5 hover:bg-hover"
@@ -702,13 +679,10 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
                 </p>
               )}
             </div>
-            <div className="flex flex-wrap items-center justify-between gap-3 border-hairline-soft border-t p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 p-4">
               <div>
                 <p className="text-xs text-fg">
                   {t("settings.integrations.allowConsumerForAgents")}
-                </p>
-                <p className="mt-1 text-[11px] text-fg-muted">
-                  {t("settings.integrations.allowConsumerRequirements")}
                 </p>
               </div>
               <label className="inline-flex items-center gap-2 text-xs text-fg">
@@ -728,14 +702,11 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
           </SettingsList>
         </SettingsSection>
       ) : settings?.apiKeyConfigured ? (
-        <SettingsSection
-          description={t("settings.integrations.platformsAndPermissionsDescription")}
-          title={t("settings.integrations.platformsAndPermissionsTitle")}
-        >
+        <SettingsSection title={t("settings.integrations.platformsAndPermissionsTitle")}>
           <label className="relative block">
             <span className="sr-only">{t("settings.integrations.searchPlatforms")}</span>
             <input
-              className="h-9 w-full rounded-md border border-hairline-soft bg-panel px-3 text-sm text-fg outline-none placeholder:text-fg-faint focus-visible:ring-2 focus-visible:ring-focus-ring/35"
+              className="h-9 w-full rounded-md bg-panel px-3 text-sm text-fg outline-none placeholder:text-fg-faint focus-visible:ring-2 focus-visible:ring-focus-ring/35"
               onChange={(event) => setCatalogQuery(event.target.value)}
               placeholder={t("settings.integrations.searchPlatformsPlaceholder")}
               value={catalogQuery}
@@ -758,7 +729,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
                 return (
                   <section
                     aria-label={toolkit.name}
-                    className="overflow-hidden rounded-lg border border-hairline-soft bg-panel"
+                    className="overflow-hidden settings-group"
                     key={toolkit.slug}
                   >
                     <div className="flex items-center gap-3 px-4 py-3">
@@ -788,7 +759,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
                       </button>
                     </div>
                     {expanded ? (
-                      <div className="border-hairline-soft border-t p-4">
+                      <div className=" p-4">
                         <div className="flex flex-wrap items-center justify-between gap-3">
                           <div>
                             <h5 className="text-xs font-medium text-fg">
@@ -814,7 +785,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
                         </div>
 
                         {toolkit.accounts.length ? (
-                          <div className="mt-3 divide-y divide-hairline-soft rounded-md border border-hairline-soft">
+                          <div className="mt-3 rounded-md bg-chip-faint">
                             {toolkit.accounts.map((account) => (
                               <div
                                 className="flex flex-wrap items-center gap-3 px-3 py-2.5"
@@ -930,14 +901,14 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
                             ))}
                           </div>
                         ) : (
-                          <p className="mt-3 rounded-md border border-dashed border-hairline-soft px-3 py-4 text-center text-xs text-fg-muted">
+                          <p className="mt-3 rounded-md bg-chip-faint px-3 py-4 text-center text-xs text-fg-muted">
                             {t("settings.integrations.noConnectedAccountsYet")}
                           </p>
                         )}
 
                         {connectionToolkit === toolkit.slug ? (
                           <form
-                            className="mt-3 flex flex-wrap items-end gap-2 rounded-md border border-hairline-soft bg-canvas p-3"
+                            className="mt-3 flex flex-wrap items-end gap-2 rounded-md bg-canvas p-3"
                             onSubmit={(event) => void startConnection(event)}
                           >
                             <label className="min-w-[180px] flex-1 text-xs text-fg-muted">
@@ -945,7 +916,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
                                 {t("settings.integrations.accountNameLabel")}
                               </span>
                               <input
-                                className="h-8 w-full rounded-md border border-hairline-soft bg-panel px-2.5 text-sm text-fg outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/35"
+                                className="h-8 w-full rounded-md bg-panel px-2.5 text-sm text-fg outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/35"
                                 maxLength={80}
                                 onChange={(event) => setConnectionAlias(event.target.value)}
                                 value={connectionAlias}
@@ -1041,7 +1012,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
                                 })}
                               </span>
                               <input
-                                className="h-8 w-full rounded-md border border-hairline-soft bg-canvas px-2.5 text-xs text-fg outline-none placeholder:text-fg-faint focus-visible:ring-2 focus-visible:ring-focus-ring/35"
+                                className="h-8 w-full rounded-md bg-canvas px-2.5 text-xs text-fg outline-none placeholder:text-fg-faint focus-visible:ring-2 focus-visible:ring-focus-ring/35"
                                 onChange={(event) =>
                                   setToolQueries((current) => ({
                                     ...current,
@@ -1053,7 +1024,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
                               />
                             </label>
                             {visibleTools.length ? (
-                              <div className="mt-2 max-h-72 divide-y divide-hairline-soft overflow-y-auto rounded-md border border-hairline-soft">
+                              <div className="mt-2 max-h-72 overflow-y-auto rounded-md bg-chip-faint">
                                 {visibleTools.map((tool) => (
                                   <label
                                     className="flex cursor-pointer items-start gap-2.5 px-3 py-2.5 hover:bg-hover"
@@ -1093,7 +1064,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
                             {t("settings.integrations.noOperationsAvailable")}
                           </p>
                         )}
-                        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-hairline-soft pt-3">
+                        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 pt-3">
                           <div>
                             <p className="text-xs text-fg">
                               {t("settings.integrations.allowPlatformForAgents")}
@@ -1132,23 +1103,19 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
               })}
             </div>
           ) : (
-            <div className="rounded-lg border border-dashed border-hairline-soft bg-panel px-5 py-8 text-center">
+            <div className="settings-group px-5 py-8 text-center">
               <p className="text-sm text-fg">
                 {settings?.toolkits.length
                   ? t("settings.integrations.noMatchingPlatforms")
                   : t("settings.integrations.noPlatformsLoaded")}
               </p>
-              <p className="mt-1 text-xs text-fg-muted">
-                {t("settings.integrations.refreshCatalogHint")}
-              </p>
             </div>
           )}
         </SettingsSection>
       ) : (
-        <div className="rounded-lg border border-dashed border-hairline-soft bg-panel px-5 py-8 text-center">
+        <div className="settings-group px-5 py-8 text-center">
           <IconPlugConnected className="mx-auto text-fg-faint" size={22} />
           <p className="mt-3 text-sm text-fg">{t("settings.integrations.addKeyPrompt")}</p>
-          <p className="mt-1 text-xs text-fg-muted">{t("settings.integrations.genericMcpHint")}</p>
         </div>
       )}
 

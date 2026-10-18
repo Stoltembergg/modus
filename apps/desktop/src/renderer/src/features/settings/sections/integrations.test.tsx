@@ -116,7 +116,7 @@ describe("IntegrationsSettingsPanel", () => {
 
     const keyInput = await screen.findByLabelText("Composio API Key");
     expect((keyInput as HTMLInputElement).type).toBe("password");
-    expect(screen.getByText(/stored securely on this device/i)).toBeTruthy();
+    expect(screen.queryByText(/stored securely on this device/i)).toBeNull();
   });
 
   it("submits and clears the key without reading it back into the interface", async () => {

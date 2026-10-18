@@ -13,19 +13,20 @@ import { type SettingsTextFn, settingsTextFor, useSettingsText } from "../../../
 import { Field } from "../form-controls";
 import {
   ReadOnlyPill,
+  SETTINGS_PRIMARY_BUTTON,
+  SETTINGS_SECONDARY_BUTTON,
   SettingsList,
+  SettingsNotice,
   SettingsPageHeader,
   SettingsRow,
   SettingsSection,
 } from "../settings-layout";
 import { AccountBillingSection } from "./account-billing";
 
-const SECONDARY_BUTTON =
-  "flex h-8 items-center gap-1.5 rounded-md border border-hairline bg-surface px-2.5 text-xs text-fg transition-colors hover:bg-hover disabled:opacity-40";
-const PRIMARY_BUTTON =
-  "flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-fg px-3 text-canvas text-sm font-medium transition-colors hover:bg-fg-muted disabled:opacity-40";
+const SECONDARY_BUTTON = `${SETTINGS_SECONDARY_BUTTON} h-8 px-2.5 text-xs`;
+const PRIMARY_BUTTON = `${SETTINGS_PRIMARY_BUTTON} h-10 w-full px-3 text-sm font-medium`;
 const OAUTH_BUTTON =
-  "flex min-h-10 min-w-0 items-center justify-center gap-2 rounded-lg border border-hairline bg-surface/40 px-3 text-xs text-fg transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-40";
+  "flex min-h-10 min-w-0 items-center justify-center gap-2 rounded-md bg-chip px-3 text-xs text-fg transition-colors hover:bg-chip-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/50 disabled:opacity-40";
 
 const OAUTH_ICONS: Record<AuthOAuthProviderId, ReactNode> = {
   github: <IconBrandGithub size={14} stroke={1.7} />,
@@ -156,15 +157,6 @@ export function AccountSettingsPanel({
             </span>
           ) : null
         }
-        description={
-          signedIn
-            ? ""
-            : unavailable
-              ? t("settings.account.unconfiguredDescription")
-              : mode === "sign-up"
-                ? t("settings.account.passwordMinLength", { min: AUTH_PASSWORD_MIN_LENGTH })
-                : ""
-        }
         title={
           signedIn
             ? t("settings.account.title")
@@ -173,12 +165,20 @@ export function AccountSettingsPanel({
               : t("settings.account.createAccount")
         }
       />
+      {!signedIn && unavailable ? (
+        <SettingsNotice>{t("settings.account.unconfiguredDescription")}</SettingsNotice>
+      ) : null}
+      {!signedIn && !unavailable && mode === "sign-up" ? (
+        <SettingsNotice>
+          {t("settings.account.passwordMinLength", { min: AUTH_PASSWORD_MIN_LENGTH })}
+        </SettingsNotice>
+      ) : null}
 
-      {shownError ? <p className="text-danger text-xs">{shownError}</p> : null}
+      {shownError ? <SettingsNotice tone="danger">{shownError}</SettingsNotice> : null}
       {state?.notice === "session-expired" ? (
-        <p className="text-danger text-xs" role="status">
+        <SettingsNotice role="status" tone="danger">
           {modusText("modus.sessionExpired", t.locale)}
-        </p>
+        </SettingsNotice>
       ) : null}
       {state?.notice === "confirm-email" ? (
         <p className="text-success text-xs">{t("settings.account.confirmEmailNotice")}</p>
@@ -190,7 +190,7 @@ export function AccountSettingsPanel({
             <SettingsList>
               <SettingsRow
                 control={<ReadOnlyPill>{state.user.provider}</ReadOnlyPill>}
-                description={state.user.email ?? t("settings.account.noEmail")}
+                notice={state.user.email ?? t("settings.account.noEmail")}
                 title={state.user.displayName ?? t("settings.account.profileSignedIn")}
               />
               <SettingsRow
@@ -201,7 +201,6 @@ export function AccountSettingsPanel({
                       : t("settings.account.emailPending")}
                   </ReadOnlyPill>
                 }
-                description={t("settings.account.emailConfirmationDescription")}
                 title={t("settings.account.emailConfirmationTitle")}
               />
               <SettingsRow
@@ -212,11 +211,12 @@ export function AccountSettingsPanel({
                       : t("settings.account.persistenceSessionOnly")}
                   </ReadOnlyPill>
                 }
-                description={
+                notice={
                   state.persistence === "encrypted"
-                    ? t("settings.account.persistenceEncryptedDescription")
+                    ? undefined
                     : t("settings.account.persistenceSessionOnlyDescription")
                 }
+                noticeTone="warning"
                 title={t("settings.account.rememberMeTitle")}
               />
               {modusStatus && modusStatus !== "off" ? (
@@ -224,7 +224,8 @@ export function AccountSettingsPanel({
                   control={
                     <ReadOnlyPill>{modusStatusText(modusStatus, t.locale).label}</ReadOnlyPill>
                   }
-                  description={modusStatusText(modusStatus, t.locale).detail}
+                  notice={modusStatusText(modusStatus, t.locale).detail || undefined}
+                  noticeTone="warning"
                   title={modusText("modus.status.title", t.locale)}
                 />
               ) : null}
@@ -265,7 +266,9 @@ export function AccountSettingsPanel({
               >
                 <IconMail size={13} stroke={2} />
                 {busy ? (
-                  <WorkingText className="text-canvas">{t("settings.account.working")}</WorkingText>
+                  <WorkingText className="text-on-accent">
+                    {t("settings.account.working")}
+                  </WorkingText>
                 ) : mode === "sign-in" ? (
                   t("settings.account.signIn")
                 ) : (
@@ -285,11 +288,6 @@ export function AccountSettingsPanel({
             </div>
           </form>
           <div className="space-y-4">
-            <div className="flex items-center gap-3" aria-hidden="true">
-              <span className="h-px flex-1 bg-hairline" />
-              <span className="text-xs text-fg-muted">{t("settings.account.orDivider")}</span>
-              <span className="h-px flex-1 bg-hairline" />
-            </div>
             <fieldset className="grid min-w-0 grid-cols-1 gap-2">
               <legend className="sr-only">{t("settings.account.otherSignInMethods")}</legend>
               {AUTH_PROVIDERS.flatMap((provider) =>

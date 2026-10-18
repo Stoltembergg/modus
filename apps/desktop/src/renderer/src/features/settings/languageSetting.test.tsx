@@ -2,7 +2,7 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SETTINGS_TEXT_EN, SETTINGS_TEXT_PT } from "../../../../shared/settings-text";
+import { SETTINGS_TEXT_PT } from "../../../../shared/settings-text";
 import {
   resolveUiLanguage,
   type UiLanguagePreference,
@@ -68,7 +68,8 @@ describe("Settings > General > Language", () => {
     expect(document.documentElement.lang).toBe("pt-PT");
     render(<LanguageSetting />);
     expect(screen.getByRole("combobox", { name: "Idioma" })).toBeTruthy();
-    expect(screen.getByText(/^Muda na hora/)).toBeTruthy();
+    // Minimal Settings: the row is the label and the select, no help line.
+    expect(screen.queryByText(/^Muda na hora/)).toBeNull();
     expect(screen.getByText("Sistema (Português (Brasil))")).toBeTruthy();
   });
 
@@ -128,16 +129,16 @@ describe("Settings > General > Language", () => {
   });
 
   it("a key missing from pt falls back to English alone, the rest of the row stays pt", () => {
-    const key = "settings.general.languageDesc" as const;
+    const key = "settings.general.languageSystemResolved" as const;
     const saved = SETTINGS_TEXT_PT[key];
     delete (SETTINGS_TEXT_PT as Partial<typeof SETTINGS_TEXT_PT>)[key];
     try {
       fakeMain(["pt-BR"]);
       initUiLanguage();
       render(<LanguageSetting />);
-      expect(screen.getByText(SETTINGS_TEXT_EN[key])).toBeTruthy();
       expect(screen.getByRole("combobox", { name: "Idioma" })).toBeTruthy();
-      expect(screen.getByText("Sistema (Português (Brasil))")).toBeTruthy();
+      expect(screen.getByText("System (Português (Brasil))")).toBeTruthy();
+      expect(screen.queryByText("Sistema (Português (Brasil))")).toBeNull();
     } finally {
       SETTINGS_TEXT_PT[key] = saved;
     }
