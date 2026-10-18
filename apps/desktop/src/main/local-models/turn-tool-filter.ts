@@ -1,4 +1,5 @@
 import type { LocalModelFailure } from "./errors";
+import { emitLocalModelsLine } from "./local-models-log-file";
 import type { TurnToolFilter } from "./tool-filter-controller";
 
 /**
@@ -109,5 +110,26 @@ export function setTurnToolFilterClock(now: (() => number) | null): void {
 }
 
 export function logTurnToolFilter(entry: TurnToolFilterLogEntry): void {
-  console.info(formatTurnToolFilterLog(entry));
+  emitLocalModelsLine(formatTurnToolFilterLog(entry));
+}
+
+/**
+ * tools_expand line: the session's turn (1 = the turn the filter decided, counted in
+ * this app run), how many tools the call added (0 = everything was already exposed)
+ * and that session's first-turn decision (`filtered` or `fallback`). Counts only.
+ */
+export type ToolsExpandLogEntry = {
+  turn: number;
+  added: number;
+  after: TurnToolFilterLogEntry["mode"];
+};
+
+export function formatToolsExpandLog(entry: ToolsExpandLogEntry): string {
+  const turn = Math.max(0, Math.trunc(entry.turn));
+  const added = Math.max(0, Math.trunc(entry.added));
+  return `[local-models] tool filter: expand turn=${turn} added=${added} after=${entry.after}`;
+}
+
+export function logToolsExpand(entry: ToolsExpandLogEntry): void {
+  emitLocalModelsLine(formatToolsExpandLog(entry));
 }
