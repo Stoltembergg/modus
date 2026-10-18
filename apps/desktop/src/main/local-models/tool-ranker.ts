@@ -40,7 +40,11 @@ export const DOWNLOAD_RETRY_DELAYS_MS = [15_000, 60_000, 5 * 60_000, 15 * 60_000
 export const CRASH_WINDOW_MS = 10 * 60_000;
 export const CRASHES_BEFORE_BACKOFF = 3;
 
-/** tool_filter.enabled developer override: the Harness flag MODUS_LOCAL_TOOL_FILTER (off by default). */
+/**
+ * tool_filter.enabled developer override: the Harness flag MODUS_LOCAL_TOOL_FILTER
+ * (off by default). It only forces the filter on, even over a user "off"; the
+ * product default (ON) lives in the tool-filter.json preference store.
+ */
 export function localToolFilterForced(): boolean {
   return isFeatureFlagEnabled("MODUS_LOCAL_TOOL_FILTER");
 }
@@ -190,6 +194,12 @@ export function createLocalToolRanker(deps: LocalToolRankerDeps): LocalToolRanke
     retryTimer = setTimeout(
       () => {
         retryTimer = null;
+        // Node timers can fire a fraction of a millisecond before `at` on the
+        // performance.now() clock; the retry is due now, so don't let the
+        // `now() < retryAt` gate in prepare() skip it (it would never reschedule).
+        if (status.state === "failed" && status.retryAt !== undefined) {
+          status = { ...status, retryAt: Math.min(status.retryAt, now()) };
+        }
         void prepare();
       },
       Math.max(0, at - now()),
@@ -226,6 +236,15 @@ export function createLocalToolRanker(deps: LocalToolRankerDeps): LocalToolRanke
               setStatus({ state: "downloading", receivedBytes, totalBytes: total });
             }
           },
+        }).catch((error: unknown) => {
+          // A raw filesystem error (e.g. ENOSPC creating the folder) is a failed
+          // download, retried with backoff like any other.
+          if (error instanceof LocalModelError) throw error;
+          throw new LocalModelError(
+            "download-failed",
+            error instanceof Error ? error.message : String(error),
+            { cause: error },
+          );
         });
         abort = null;
         // ensureModelFiles hashed every file (existing or downloaded) before
