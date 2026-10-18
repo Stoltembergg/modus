@@ -248,6 +248,44 @@ export function navRailMotion(reduced: boolean): NavRailMotion {
       };
 }
 
+/* Visible prompt queue above the composer. */
+
+export type QueuedPromptMotion = {
+  /** The strip itself, appearing with the first queued prompt and leaving with the last. */
+  strip: MotionPreset;
+  /** One queued prompt: enter, exit, and the layout reflow when a sibling leaves. */
+  item: MotionPreset;
+};
+
+/**
+ * Strip and rows rise in a few px and reflow with layout motion. Reduced motion
+ * only fades (120ms) and layout snaps; nothing slides.
+ */
+export function queuedPromptMotion(reduced: boolean | null | undefined): QueuedPromptMotion {
+  const full: QueuedPromptMotion = {
+    strip: {
+      initial: { opacity: 0, y: 6 },
+      animate: { opacity: 1, y: 0 },
+      exit: { opacity: 0, y: 6 },
+      transition: { ...tween("base"), layout: tween("base") },
+    },
+    item: {
+      initial: { opacity: 0, y: 4 },
+      animate: { opacity: 1, y: 0 },
+      exit: { opacity: 0, y: -4 },
+      transition: { ...tween("base"), layout: tween("base") },
+    },
+  };
+  if (!reduced) return full;
+  const fade = (preset: MotionPreset): MotionPreset => ({
+    initial: reducedTarget(preset.initial, true),
+    animate: reducedTarget(preset.animate, true),
+    exit: reducedTarget(preset.exit, true),
+    transition: reducedFade,
+  });
+  return { strip: fade(full.strip), item: fade(full.item) };
+}
+
 /* Content swaps (AnimatePresence mode="wait": old view fades out, then the new one in). */
 
 /**

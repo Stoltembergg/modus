@@ -97,6 +97,7 @@ import type {
   ProviderLimitsState,
   QuestionAnswer,
   QuestionResponse,
+  QueuedPromptItem,
   RawMcpEntry,
   ReaIntegrationStatus,
   ResolvedContext,
@@ -410,6 +411,13 @@ export type ModusApi = {
     }): Promise<PlanBuildStart>;
     compact(sessionId: string): Promise<void>;
     abort(sessionId: string): Promise<void>;
+    /** Prompts waiting for the running turn, in arrival order. */
+    listQueue(sessionId: string): Promise<QueuedPromptItem[]>;
+    /**
+     * Remove one queued prompt by its id. `removed: false` when the agent
+     * already took it to send (it is then delivered as usual).
+     */
+    removeQueued(input: { sessionId: string; id: string }): Promise<{ removed: boolean }>;
     /**
      * Rewind the session to just before one of its user messages: restores
      * workspace files from the pre-run snapshot and removes the conversation

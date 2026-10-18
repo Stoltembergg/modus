@@ -144,10 +144,13 @@ describe("splitTimelinePresentation", () => {
     expect(source.map((block) => block.id)).toEqual(["prompt", "fold:run-1", "final", "failure"]);
   });
 
-  it("keeps queued prompts in chat and hides active assistant output with the technical activity", () => {
+  it("keeps a sent queued prompt in chat and hides active assistant output with the technical activity", () => {
+    // A queued prompt waits in the strip above the composer and is not in the
+    // timeline at all; main emits its user message only when pi sends it into
+    // the running turn, which is the message this fold now carries.
     const activeFold = fold("running");
     activeFold.items.push({
-      id: "queued-prompt",
+      id: "sent-queued-prompt",
       type: "message",
       role: "user",
       content: "Then add a test",
@@ -166,13 +169,18 @@ describe("splitTimelinePresentation", () => {
       streaming,
     ]);
 
-    expect(transcriptBlocks.map((block) => block.id)).toEqual(["prompt", "queued-prompt"]);
+    expect(transcriptBlocks.map((block) => block.id)).toEqual(["prompt", "sent-queued-prompt"]);
+    expect(
+      transcriptBlocks.filter(
+        (block) => block.type === "message" && block.content === "Then add a test",
+      ),
+    ).toHaveLength(1);
     expect(activityBlocks.map((block) => block.id)).toEqual(["fold:run-1", "streaming"]);
     const [activityFold] = activityBlocks;
     expect(activityFold?.type).toBe("work-fold");
     if (activityFold?.type === "work-fold") {
       expect(activityFold.run.status).toBe("running");
-      expect(activityFold.items.some((item) => item.id === "queued-prompt")).toBe(false);
+      expect(activityFold.items.some((item) => item.id === "sent-queued-prompt")).toBe(false);
     }
   });
 });

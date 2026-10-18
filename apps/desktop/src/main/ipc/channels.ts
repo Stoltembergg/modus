@@ -76,6 +76,8 @@ export const IPC_CHANNELS = {
   agentStartPlanBuild: "agent:start-plan-build",
   agentCompact: "agent:compact",
   agentAbort: "agent:abort",
+  agentQueueList: "agent:queue-list",
+  agentQueueRemove: "agent:queue-remove",
   agentRollback: "agent:rollback",
   agentMove: "agent:move",
   agentPin: "agent:pin",

@@ -27,6 +27,18 @@ import type { MessageContextChip } from "./contracts-part-05";
 import type { AgentReviewResult, PlanRef } from "./contracts-part-06";
 import type { SkillSelection } from "./contracts-part-07";
 
+/**
+ * A prompt waiting in a chat's queue. `id` is minted by the main process when
+ * the prompt arrives and is the only handle used to remove it.
+ */
+export type QueuedPromptItem = {
+  id: string;
+  delivery: Exclude<PromptDelivery, "normal">;
+  /** What the user typed (not the composed turn message). */
+  text: string;
+  imageCount: number;
+};
+
 /** Durable SQLite event position, used to merge history with live IPC safely. */
 export type AgentEvent = AgentEventPayload & { eventCursor?: number };
 
@@ -166,6 +178,11 @@ type AgentEventPayload =
       skipped: boolean;
     }
   | { type: "queue.updated"; sessionId: string; steering: string[]; followUp: string[] }
+  /**
+   * The chat's visible prompt queue (volatile, never persisted): prompts sent
+   * while a turn streams, in arrival order, until pi sends them.
+   */
+  | { type: "queue.snapshot"; sessionId: string; items: QueuedPromptItem[] }
   | { type: "compaction.started"; sessionId: string; reason: CompactionReason }
   | {
       type: "compaction.ended";

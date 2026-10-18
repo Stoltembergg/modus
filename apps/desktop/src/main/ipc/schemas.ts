@@ -276,6 +276,12 @@ export const agentRollbackSchema = z.object({
   userMessageId: nonEmptyString,
 });
 
+/** One queued prompt, by the id the main process minted for it. */
+export const agentQueueRemoveSchema = z.object({
+  sessionId: nonEmptyString,
+  id: nonEmptyString,
+});
+
 export const agentSetModelSchema = z.object({
   sessionId: nonEmptyString,
   model: nonEmptyString,
