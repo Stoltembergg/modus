@@ -2333,6 +2333,36 @@ function listAgentRunAssistantMessageRows(
   }
 }
 
+/**
+ * Runs in this session whose `run.started` has no later terminal event. Used to
+ * close runs that are no longer live (app quit/crash mid-run) before a new run
+ * starts, so a stale open run never makes later run-scoped reads fail closed.
+ */
+export function listUnterminatedAgentRunIds(sessionId: string, limit = 64): string[] {
+  const rows = getDatabase()
+    .prepare(
+      `select json_extract(started.payload_json, '$.runId') as run_id
+       from agent_events as started
+       where started.session_id = ? and started.type = 'run.started'
+         and json_valid(started.payload_json)
+         and json_type(started.payload_json, '$.runId') = 'text'
+         and not exists (
+           select 1
+           from agent_events as terminal
+           where terminal.session_id = started.session_id
+             and terminal.rowid > started.rowid
+             and terminal.type in ('run.completed', 'run.failed', 'run.blocked', 'run.cancelled')
+             and json_valid(terminal.payload_json)
+             and json_extract(terminal.payload_json, '$.runId') =
+               json_extract(started.payload_json, '$.runId')
+         )
+       order by started.rowid asc
+       limit ?`,
+    )
+    .all(sessionId, limit) as Array<{ run_id: string }>;
+  return [...new Set(rows.map((row) => row.run_id))];
+}
+
 function getAgentRunEventRange(
   sessionId: string,
   runId: string,

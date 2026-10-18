@@ -5704,6 +5704,360 @@ describe("PiSdkRuntime", () => {
     ).toBe(true);
   });
 
+  describe("one run per session (run boundaries overlap)", () => {
+    function runLifecycle(sessionId: string): Array<{ type: string; runId: string }> {
+      return (
+        getDatabase()
+          .prepare(
+            `select type, payload_json from agent_events
+             where session_id = ? and type like 'run.%' order by rowid`,
+          )
+          .all(sessionId) as Array<{ type: string; payload_json: string }>
+      ).map(({ type, payload_json }) => ({
+        type,
+        runId: (JSON.parse(payload_json) as { runId: string }).runId,
+      }));
+    }
+    function maxOpenRuns(sessionId: string, ignore: string[] = []): number {
+      const open = new Set<string>();
+      let max = 0;
+      for (const { type, runId } of runLifecycle(sessionId)) {
+        if (ignore.includes(runId)) continue;
+        if (type === "run.started") open.add(runId);
+        else open.delete(runId);
+        max = Math.max(max, open.size);
+      }
+      return max;
+    }
+    function runPrompts(sessionId: string): string[] {
+      return (
+        getDatabase()
+          .prepare("select prompt from agent_runs where session_id = ? order by rowid")
+          .all(sessionId) as Array<{ prompt: string }>
+      ).map(({ prompt }) => prompt);
+    }
+    const reply = (text: string) => {
+      mocks.emitPiEvent({ type: "message_start", message: { role: "assistant" } });
+      mocks.emitPiEvent({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: { type: "text_delta", delta: text },
+      });
+      mocks.emitPiEvent({ type: "message_end", message: { role: "assistant" } });
+    };
+
+    it("closes a run left open by a quit mid-run and lets the next prompts run", async () => {
+      const sessionId = `orphan-run-${crypto.randomUUID()}`;
+      insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+      // Previous app process: a long rea_tools run started and never recorded an outcome.
+      const orphan = createAgentRun({ sessionId, prompt: "chame rea_tools e liste o catálogo" });
+      recordAgentEvent({ type: "run.started", sessionId, runId: orphan.id, delivery: "normal" });
+      recordAgentEvent({
+        type: "tool.started",
+        sessionId,
+        runId: orphan.id,
+        toolCallId: "rea-call",
+        toolName: "rea_tools",
+      });
+      let replies = 0;
+      const session = createMockPiSession({
+        prompt: () => {
+          replies += 1;
+          reply(`resposta ${replies}`);
+        },
+      });
+      mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+      const runtime = new PiSdkRuntime();
+      const window = createWindowStub();
+
+      await expect(
+        runtime.prompt(window, { context: [], delivery: "normal", message: "oi", sessionId }),
+      ).resolves.toEqual({ outcome: "ok", finalText: "resposta 1" });
+      await expect(
+        runtime.prompt(window, {
+          context: [],
+          delivery: "normal",
+          message: "Sincronize o projeto com o upstream",
+          sessionId,
+        }),
+      ).resolves.toEqual({ outcome: "ok", finalText: "resposta 2" });
+
+      const lifecycle = runLifecycle(sessionId);
+      expect(lifecycle.map(({ type }) => type)).toEqual([
+        "run.started",
+        "run.cancelled",
+        "run.started",
+        "run.completed",
+        "run.started",
+        "run.completed",
+      ]);
+      expect(lifecycle[1]).toEqual({ type: "run.cancelled", runId: orphan.id });
+      expect(getAgentRun(orphan.id)?.status).toBe("cancelled");
+      expect(getActiveAgentRun(sessionId)).toBeUndefined();
+      expect(maxOpenRuns(sessionId)).toBe(1);
+    });
+
+    it("never cancels a live run when another prompt arrives while it streams", async () => {
+      const sessionId = `live-run-${crypto.randomUUID()}`;
+      insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+      let notifyStreaming!: () => void;
+      const streaming = new Promise<void>((resolve) => {
+        notifyStreaming = resolve;
+      });
+      let releaseFirst!: () => void;
+      const firstGate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const deliveries: Array<{ message: string; behavior: string | undefined }> = [];
+      const session = createMockPiSession({
+        isStreaming: false,
+        prompt: async (message: string, options?: { streamingBehavior?: string }) => {
+          deliveries.push({ message, behavior: options?.streamingBehavior });
+          if (deliveries.length > 1) return;
+          session.isStreaming = true;
+          reply("primeira");
+          notifyStreaming();
+          await firstGate;
+          session.isStreaming = false;
+        },
+      });
+      mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+      const runtime = new PiSdkRuntime();
+      const window = createWindowStub();
+      const first = runtime.prompt(window, {
+        context: [],
+        delivery: "normal",
+        message: "first",
+        sessionId,
+      });
+      await streaming;
+      const liveRunId = getActiveAgentRun(sessionId)?.id;
+      expect(liveRunId).toBeDefined();
+
+      await expect(
+        runtime.prompt(window, { context: [], delivery: "normal", message: "second", sessionId }),
+      ).resolves.toEqual({ outcome: "ok" });
+      await expect(
+        runtime.prompt(window, { context: [], delivery: "steer", message: "steer", sessionId }),
+      ).resolves.toEqual({ outcome: "ok" });
+      expect(getAgentRun(liveRunId ?? "")?.status).toBe("running");
+      expect(runLifecycle(sessionId).filter(({ type }) => type === "run.cancelled")).toEqual([]);
+
+      releaseFirst();
+      await expect(first).resolves.toEqual({ outcome: "ok", finalText: "primeira" });
+      expect(runLifecycle(sessionId).map(({ type }) => type)).toEqual([
+        "run.started",
+        "run.completed",
+      ]);
+      expect(deliveries.slice(1)).toEqual([
+        { message: expect.stringContaining("second"), behavior: "followUp" },
+        { message: expect.stringContaining("steer"), behavior: "steer" },
+      ]);
+    });
+
+    it("holds a message sent as the run finishes until its terminal event is persisted", async () => {
+      await initGitRepo();
+      const sessionId = `finish-race-${crypto.randomUUID()}`;
+      insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+      vi.spyOn(gitMemoryContext, "getChangeStatsSinceStrict").mockResolvedValue({
+        files: [],
+        added: 0,
+        removed: 0,
+        fileCount: 0,
+        truncated: false,
+      });
+      let notifyTail!: () => void;
+      const tailStarted = new Promise<void>((resolve) => {
+        notifyTail = resolve;
+      });
+      let releaseTail!: () => void;
+      const tailGate = new Promise<void>((resolve) => {
+        releaseTail = resolve;
+      });
+      let turnEnds = 0;
+      const createCheckpoint = checkpointService.createCheckpoint;
+      vi.spyOn(checkpointService, "createCheckpoint").mockImplementation(
+        async (checkpointInput) => {
+          if (checkpointInput.kind === "turn-end" && ++turnEnds === 1) {
+            notifyTail();
+            await tailGate;
+          }
+          return await createCheckpoint(checkpointInput);
+        },
+      );
+      let replies = 0;
+      const session = createMockPiSession({
+        isStreaming: false,
+        prompt: () => {
+          replies += 1;
+          // pi reports idle as soon as its agent loop ends; Modus still owns the run tail.
+          session.isStreaming = true;
+          reply(`resposta ${replies}`);
+          session.isStreaming = false;
+        },
+      });
+      mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+      const runtime = new PiSdkRuntime();
+      const window = createWindowStub();
+      const first = runtime.prompt(window, {
+        context: [],
+        delivery: "normal",
+        message: "rea_tools",
+        sessionId,
+      });
+      await tailStarted;
+      const firstRunId = getActiveAgentRun(sessionId)?.id;
+      expect(session.isStreaming).toBe(false);
+      expect(getAgentRun(firstRunId ?? "")?.status).toBe("running");
+
+      // The composer still shows the run as active, so this is a follow-up.
+      const second = runtime.prompt(window, {
+        context: [],
+        delivery: "follow-up",
+        message: "oi",
+        sessionId,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(runLifecycle(sessionId).map(({ type }) => type)).toEqual(["run.started"]);
+
+      releaseTail();
+      await expect(first).resolves.toEqual({ outcome: "ok", finalText: "resposta 1" });
+      await expect(second).resolves.toEqual({ outcome: "ok", finalText: "resposta 2" });
+      const lifecycle = runLifecycle(sessionId);
+      expect(lifecycle.map(({ type }) => type)).toEqual([
+        "run.started",
+        "run.completed",
+        "run.started",
+        "run.completed",
+      ]);
+      expect(lifecycle[0]?.runId).toBe(firstRunId);
+      expect(lifecycle[1]?.runId).toBe(firstRunId);
+      expect(maxOpenRuns(sessionId)).toBe(1);
+      expect(runPrompts(sessionId)).toEqual(["rea_tools", "oi"]);
+    });
+
+    it("delivers three follow-ups sent during a long run in order, in that run", async () => {
+      const sessionId = `three-follow-ups-${crypto.randomUUID()}`;
+      insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+      let notifyStreaming!: () => void;
+      const streaming = new Promise<void>((resolve) => {
+        notifyStreaming = resolve;
+      });
+      let releaseFirst!: () => void;
+      const firstGate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const deliveries: Array<{ message: string; behavior: string | undefined }> = [];
+      const session = createMockPiSession({
+        isStreaming: false,
+        prompt: async (message: string, options?: { streamingBehavior?: string }) => {
+          deliveries.push({ message, behavior: options?.streamingBehavior });
+          if (deliveries.length > 1) return;
+          session.isStreaming = true;
+          reply("longa");
+          notifyStreaming();
+          await firstGate;
+          session.isStreaming = false;
+        },
+      });
+      mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+      const runtime = new PiSdkRuntime();
+      const window = createWindowStub();
+      const first = runtime.prompt(window, {
+        context: [],
+        delivery: "normal",
+        message: "long run",
+        sessionId,
+      });
+      await streaming;
+      const followUps = ["um", "dois", "três"].map((message) =>
+        runtime.prompt(window, { context: [], delivery: "follow-up", message, sessionId }),
+      );
+      await expect(Promise.all(followUps)).resolves.toEqual([
+        { outcome: "ok" },
+        { outcome: "ok" },
+        { outcome: "ok" },
+      ]);
+      releaseFirst();
+      await expect(first).resolves.toEqual({ outcome: "ok", finalText: "longa" });
+
+      expect(deliveries.slice(1)).toEqual([
+        { message: expect.stringContaining("um"), behavior: "followUp" },
+        { message: expect.stringContaining("dois"), behavior: "followUp" },
+        { message: expect.stringContaining("três"), behavior: "followUp" },
+      ]);
+      expect(runLifecycle(sessionId).map(({ type }) => type)).toEqual([
+        "run.started",
+        "run.completed",
+      ]);
+    });
+
+    it("runs three messages sent during a run's tail one run at a time, in order", async () => {
+      await initGitRepo();
+      const sessionId = `three-in-tail-${crypto.randomUUID()}`;
+      insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+      vi.spyOn(gitMemoryContext, "getChangeStatsSinceStrict").mockResolvedValue({
+        files: [],
+        added: 0,
+        removed: 0,
+        fileCount: 0,
+        truncated: false,
+      });
+      let notifyTail!: () => void;
+      const tailStarted = new Promise<void>((resolve) => {
+        notifyTail = resolve;
+      });
+      let releaseTail!: () => void;
+      const tailGate = new Promise<void>((resolve) => {
+        releaseTail = resolve;
+      });
+      let turnEnds = 0;
+      const createCheckpoint = checkpointService.createCheckpoint;
+      vi.spyOn(checkpointService, "createCheckpoint").mockImplementation(
+        async (checkpointInput) => {
+          if (checkpointInput.kind === "turn-end" && ++turnEnds === 1) {
+            notifyTail();
+            await tailGate;
+          }
+          return await createCheckpoint(checkpointInput);
+        },
+      );
+      let replies = 0;
+      const session = createMockPiSession({
+        isStreaming: false,
+        prompt: () => {
+          replies += 1;
+          reply(`resposta ${replies}`);
+        },
+      });
+      mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+      const runtime = new PiSdkRuntime();
+      const window = createWindowStub();
+      const first = runtime.prompt(window, {
+        context: [],
+        delivery: "normal",
+        message: "long run",
+        sessionId,
+      });
+      await tailStarted;
+      const queued = ["um", "dois", "três"].map((message) =>
+        runtime.prompt(window, { context: [], delivery: "follow-up", message, sessionId }),
+      );
+      releaseTail();
+      await expect(first).resolves.toEqual({ outcome: "ok", finalText: "resposta 1" });
+      await expect(Promise.all(queued)).resolves.toEqual([
+        { outcome: "ok", finalText: "resposta 2" },
+        { outcome: "ok", finalText: "resposta 3" },
+        { outcome: "ok", finalText: "resposta 4" },
+      ]);
+      expect(runPrompts(sessionId)).toEqual(["long run", "um", "dois", "três"]);
+      expect(maxOpenRuns(sessionId)).toBe(1);
+      expect(runLifecycle(sessionId).filter(({ type }) => type === "run.completed")).toHaveLength(
+        4,
+      );
+    });
+  });
+
   it("gets a fresh memory digest for a distinct user follow-up after the previous run ends", async () => {
     const sessionId = `session-${crypto.randomUUID()}`;
     insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));

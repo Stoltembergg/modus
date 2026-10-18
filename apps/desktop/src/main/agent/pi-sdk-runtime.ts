@@ -121,6 +121,7 @@ import {
   getRunToolEvidence,
   getRunWorkspaceRevision,
   getSessionCodeGraphDiscoveries,
+  listUnterminatedAgentRunIds,
   recordAgentEvent,
 } from "./agent-event-store";
 import {
@@ -1080,6 +1081,11 @@ export class PiSdkRuntime implements AgentRuntime {
   >();
   private cancellingRuns = new Set<string>();
   private preflightReservations = new Map<string, symbol>();
+  /**
+   * One run per session: prompts that cannot join a streaming turn wait here,
+   * in arrival order, until the previous turn has persisted its terminal event.
+   */
+  private turnLanes = new Map<string, { tail: Promise<void>; holders: number; waiting: number }>();
   private pendingIntentGates = new Map<string, { runId: string; controller: AbortController }>();
   private parentSessionByChild = new Map<string, string | null>();
   /**
@@ -4021,7 +4027,95 @@ export class PiSdkRuntime implements AgentRuntime {
     }
   }
 
+  /**
+   * Serializes turns per session. A prompt joins the live turn only while pi is
+   * streaming it (and nothing is already waiting, to keep arrival order); any
+   * other prompt waits until the previous turn's executePrompt has settled,
+   * i.e. after its run terminal event was persisted. pi flips `isStreaming` off
+   * before Modus finishes the turn tail (QA, checkpoints, terminal event), so
+   * `isStreaming` alone is not a safe "previous run is closed" signal.
+   */
   private async executePrompt(
+    window: BrowserWindowType,
+    input: PromptAgentInput,
+    exclusiveStart?: ExclusiveStartHooks,
+    probe?: PromptProbe,
+  ): Promise<void> {
+    const sessionId = input.sessionId;
+    const delivery = input.delivery ?? "normal";
+    const lane = this.turnLanes.get(sessionId);
+    const joinsStreamingTurn =
+      !exclusiveStart &&
+      this.sessions.get(sessionId)?.session.isStreaming === true &&
+      (delivery !== "normal" || this.runOutputTrackers.has(sessionId)) &&
+      (lane?.waiting ?? 0) === 0;
+    if (joinsStreamingTurn) return this.executePromptInTurn(window, input, exclusiveStart, probe);
+    // PlanBuild starts carry their own busy guards and replay contract; they never wait here.
+    const mustWait = !exclusiveStart && (lane?.holders ?? 0) > 0;
+    if (mustWait && this.preflightReservations.has(sessionId)) {
+      // The live turn is still before its preflight (or waiting on an intent-gate
+      // answer): keep the existing explicit refusal instead of queueing behind it.
+      return this.executePromptInTurn(window, input, exclusiveStart, probe);
+    }
+    const entry = lane ?? { tail: Promise.resolve(), holders: 0, waiting: 0 };
+    this.turnLanes.set(sessionId, entry);
+    const previous = entry.tail;
+    let release!: () => void;
+    const mine = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    entry.tail = previous.then(() => mine);
+    entry.holders += 1;
+    if (mustWait) {
+      entry.waiting += 1;
+      try {
+        await previous;
+      } finally {
+        entry.waiting -= 1;
+      }
+    }
+    try {
+      await this.executePromptInTurn(window, input, exclusiveStart, probe);
+    } finally {
+      entry.holders -= 1;
+      release();
+      if (entry.holders === 0 && this.turnLanes.get(sessionId) === entry) {
+        this.turnLanes.delete(sessionId);
+      }
+    }
+  }
+
+  /**
+   * Close runs that still have an open `run.started` in the event history but
+   * are not live in this process (app quit/crash mid-run, or a terminal event
+   * that failed to persist). Without this, every later run-scoped read in the
+   * session fails closed with "run boundaries overlap". A run owned by a live
+   * output tracker is never touched.
+   */
+  private closeOrphanedRuns(sessionId: string, emit: EmitAgentEvent, keepRunId?: string): void {
+    const liveRunId = this.runOutputTrackers.get(sessionId)?.runId;
+    let orphanRunIds: string[];
+    try {
+      orphanRunIds = listUnterminatedAgentRunIds(sessionId);
+    } catch (error) {
+      console.warn("[modus] open run lookup failed:", error);
+      return;
+    }
+    for (const runId of orphanRunIds) {
+      if (runId === liveRunId || runId === keepRunId) continue;
+      try {
+        if (getAgentRun(runId)?.status === "running") {
+          updateAgentRunStatus(runId, "cancelled", "The run ended without a recorded outcome.");
+          finalizeProjectMemoryRunBestEffort({ sessionId, runId, outcome: "cancelled" });
+        }
+        emit({ type: "run.cancelled", sessionId, runId });
+      } catch (error) {
+        console.warn("[modus] open run could not be closed:", error);
+      }
+    }
+  }
+
+  private async executePromptInTurn(
     window: BrowserWindowType,
     input: PromptAgentInput,
     exclusiveStart?: ExclusiveStartHooks,
@@ -4334,6 +4428,8 @@ export class PiSdkRuntime implements AgentRuntime {
     // no live turn to join), so the anchor is always meaningful.
     runInput.piLeafBefore = runtimeSession.session.sessionManager.getLeafId() ?? PI_ROOT_LEAF;
     clearTodoSessionCache(input.sessionId);
+    // A new run must never open on top of a stale one in the event history.
+    this.closeOrphanedRuns(input.sessionId, emitForStart, startInput?.existingRunId);
     let run: ReturnType<typeof getAgentRun>;
     try {
       run = startInput?.existingRunId
