@@ -1,3 +1,11 @@
+/*
+ * PI VERSION PIN: written against @earendil-works/pi-coding-agent 0.80.6
+ * (pinned in apps/desktop/package.json). PromptQueue reads and splices pi's
+ * PRIVATE fields `agent.steeringQueue.messages` and
+ * `agent.followUpQueue.messages`. Upgrading pi therefore requires running
+ * `src/main/agent/prompt-queue.test.ts` (including the "real pi session"
+ * suites) against the new version before merge.
+ */
 import type { QueuedPromptItem } from "../../shared/contracts";
 
 /**

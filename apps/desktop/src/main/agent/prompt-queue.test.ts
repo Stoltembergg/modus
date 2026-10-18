@@ -352,3 +352,161 @@ describe("PromptQueue on a real pi session", () => {
     session.dispose();
   });
 });
+
+/**
+ * Aborting the running turn with prompts still queued (pi 0.80.6).
+ *
+ * pi's `AgentSession.abort()` only aborts the active run: it does not clear
+ * `steeringQueue` / `followUpQueue` (only `clearQueue()` / `reset()` do). The
+ * aborted run ends with `agent_end`, and pi's post-run check
+ * (`_handlePostAgentRun` → `agent.hasQueuedMessages()`) then continues the
+ * session with the prompts that are still queued. So the strip must keep them
+ * through the aborted run's `agent_end` (reconcile) and drop each one when pi
+ * actually sends it, ending empty and consistent with pi.
+ */
+describe("PromptQueue when the turn is aborted with prompts queued", () => {
+  it("reconcile on agent_end keeps prompts pi still holds and drops ones pi cleared", async () => {
+    const { pi, queue, snapshots, add } = setup();
+    await add("a", "follow-up a");
+    await add("b", "follow-up b");
+    // Abort: pi keeps its queues, so agent_end's reconcile changes nothing.
+    queue.reconcile();
+    expect(queue.items().map(({ id }) => id)).toEqual(["a", "b"]);
+    // If pi (or a later Modus change) clears its queue on abort, the strip follows.
+    pi.agent.followUpQueue.messages = [];
+    queue.reconcile();
+    expect(queue.items()).toEqual([]);
+    expect(snapshots.at(-1)).toEqual([]);
+  });
+
+  let dir: string | undefined;
+  afterEach(async () => {
+    if (dir) await rm(dir, { recursive: true, force: true });
+    dir = undefined;
+  });
+
+  it("on a real pi session: abort keeps the queue, pi then sends each prompt once and the strip ends empty", async () => {
+    dir = await mkdtemp(join(tmpdir(), "modus-prompt-queue-abort-"));
+    const authStorage = AuthStorage.inMemory({
+      mock: { type: "api_key", key: "offline-test-only" },
+    });
+    const { session } = await createAgentSession({
+      cwd: dir,
+      agentDir: join(dir, "agent"),
+      authStorage,
+      modelRegistry: ModelRegistry.inMemory(authStorage),
+      sessionManager: SessionManager.inMemory(dir),
+      settingsManager: SettingsManager.inMemory({}),
+      model: {
+        id: "offline",
+        name: "offline",
+        provider: "mock",
+        api: "openai-completions",
+        baseUrl: "https://offline.invalid",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 100_000,
+        maxTokens: 1000,
+      },
+    });
+    let calls = 0;
+    const lastUserText: string[] = [];
+    session.agent.streamFn = (model, context, options) => {
+      calls += 1;
+      const users = context.messages.filter((message) => message.role === "user");
+      const last = users.at(-1);
+      lastUserText.push(
+        !last
+          ? ""
+          : typeof last.content === "string"
+            ? last.content
+            : last.content.map((part) => (part.type === "text" ? part.text : "")).join(""),
+      );
+      const stream = createAssistantMessageEventStream();
+      const base: AssistantMessage = {
+        role: "assistant",
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        content: [{ type: "text", text: "ok" }],
+        stopReason: "stop",
+        usage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        timestamp: Date.now(),
+      };
+      if (calls === 1) {
+        // The first turn streams until the user aborts it.
+        stream.push({ type: "start", partial: { ...base, content: [] } });
+        const signal = options?.signal;
+        const onAbort = () => {
+          const aborted: AssistantMessage = { ...base, content: [], stopReason: "aborted" };
+          stream.push({ type: "error", reason: "aborted", error: aborted });
+        };
+        if (signal?.aborted) onAbort();
+        else signal?.addEventListener("abort", onAbort, { once: true });
+      } else {
+        queueMicrotask(() => {
+          stream.push({ type: "start", partial: { ...base, content: [] } });
+          stream.push({ type: "done", reason: "stop", message: base });
+        });
+      }
+      return stream as unknown as ReturnType<AgentSession["agent"]["streamFn"]>;
+    };
+
+    const snapshots: string[][] = [];
+    const queue = PromptQueue.attach<Payload>(session, (items) =>
+      snapshots.push(items.map(({ id }) => id)),
+    );
+    if (!queue) throw new Error("pi's queue shape changed; see prompt-queue.ts");
+    const consumed: string[] = [];
+    const queuedAtFirstAgentEnd: string[][] = [];
+    // Same wiring as PiSdkRuntime: consume on message_start, reconcile on agent_end.
+    session.subscribe((event) => {
+      if (event.type === "message_start") {
+        const payload = queue.consume(event.message);
+        if (payload) consumed.push(payload.text);
+      } else if (event.type === "agent_end") {
+        queue.reconcile();
+        if (queuedAtFirstAgentEnd.length === 0)
+          queuedAtFirstAgentEnd.push(queue.items().map(({ id }) => id));
+      }
+    });
+
+    const running = session.prompt("start");
+    await vi.waitFor(() => expect(session.isStreaming).toBe(true));
+    for (const [id, text] of [
+      ["a", "follow-up a"],
+      ["b", "follow-up b"],
+    ] as const) {
+      queue.add(item(id, text), { text });
+      await queue.deliver(
+        id,
+        async () => () => session.prompt(text, { streamingBehavior: "followUp" }),
+      );
+    }
+    expect(queue.items().map(({ id }) => id)).toEqual(["a", "b"]);
+
+    await session.abort();
+    await running;
+    await session.agent.waitForIdle();
+
+    // The aborted run's agent_end kept both: pi still held them.
+    expect(queuedAtFirstAgentEnd[0]).toEqual(["a", "b"]);
+    // pi then continued with them, each sent exactly once, in order.
+    expect(consumed).toEqual(["follow-up a", "follow-up b"]);
+    expect(lastUserText.slice(1)).toEqual(["follow-up a", "follow-up b"]);
+    // Strip and pi agree at the end: nothing queued anywhere.
+    expect(queue.items()).toEqual([]);
+    expect(snapshots.at(-1)).toEqual([]);
+    expect(session.agent.hasQueuedMessages()).toBe(false);
+    expect(session.getFollowUpMessages()).toEqual([]);
+    session.dispose();
+  });
+});
