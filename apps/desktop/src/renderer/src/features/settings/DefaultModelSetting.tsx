@@ -35,7 +35,7 @@ export function DefaultModelSetting({
         control={
           <select
             aria-label={t("settings.providers.defaultModel")}
-            className="h-8 max-w-[320px] rounded-md border border-hairline bg-canvas px-2 text-sm text-fg outline-none focus:border-hairline-strong"
+            className="h-8 max-w-[320px] rounded-md border border-hairline bg-canvas px-2 text-sm text-fg outline-none focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
             disabled={busy || selectable.length === 0}
             onChange={(event) => onSetDefaultModel(event.target.value)}
             value={defaultModel ?? ""}
@@ -50,7 +50,6 @@ export function DefaultModelSetting({
             <ModelOptions models={pickable} savedModelId={defaultModel} />
           </select>
         }
-        description={t("settings.providers.defaultModelDescription")}
         title={t("settings.providers.defaultModel")}
       />
     </SettingsList>

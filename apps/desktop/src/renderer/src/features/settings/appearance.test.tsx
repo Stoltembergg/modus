@@ -41,9 +41,9 @@ describe("Appearance settings", () => {
   it("offers a System theme option alongside the explicit palettes", () => {
     const markup = renderToStaticMarkup(<AppearanceSettingsPanel />);
 
-    expect(markup).toContain(">System</button>");
-    expect(markup).toContain(">Light</button>");
-    expect(markup).toContain(">Dark</button>");
+    expect(markup).toContain(">System</span></button>");
+    expect(markup).toContain(">Light</span></button>");
+    expect(markup).toContain(">Dark</span></button>");
   });
 
   it("has no Look switch and no Eye-care Dark option", () => {

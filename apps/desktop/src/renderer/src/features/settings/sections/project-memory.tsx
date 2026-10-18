@@ -284,10 +284,7 @@ export function ProjectMemorySettingsPanel({ workspaceId }: { workspaceId?: stri
 
   return (
     <>
-      <SettingsPageHeader
-        description="Keep useful project knowledge visible and under your control."
-        title="Project memory"
-      />
+      <SettingsPageHeader title="Project memory" />
 
       {error ? (
         <div className="flex items-center justify-between gap-3 rounded-lg border border-danger/30 bg-danger/8 px-3 py-2 text-xs text-danger">
@@ -303,7 +300,7 @@ export function ProjectMemorySettingsPanel({ workspaceId }: { workspaceId?: stri
       ) : null}
 
       {loading ? (
-        <div className="rounded-lg border border-hairline-soft bg-panel px-4 py-5 text-sm text-fg-muted">
+        <div className="settings-group px-4 py-5 text-sm text-fg-muted">
           Loading project memory…
         </div>
       ) : snapshot ? (
@@ -375,8 +372,8 @@ function ProjectMemoryScopeSection({
   onRemove(memoryId: string, action: "obsolete" | "delete"): void;
 }) {
   return (
-    <section className="overflow-hidden rounded-lg border border-hairline-soft bg-panel">
-      <div className="flex items-center justify-between gap-4 border-hairline-soft border-b px-4 py-3">
+    <section className="overflow-hidden settings-group">
+      <div className="flex items-center justify-between gap-4 px-4 py-3">
         <div className="min-w-0">
           <h3 className="text-md font-normal text-fg">{title}</h3>
           <p className="mt-1 text-xs text-fg-muted">{description}</p>
@@ -391,7 +388,7 @@ function ProjectMemoryScopeSection({
       {records.length === 0 ? (
         <p className="px-4 py-4 text-xs text-fg-muted">No memories in this scope yet.</p>
       ) : (
-        <div className="divide-y divide-hairline-soft">
+        <div className="">
           {records.map((memory) => (
             <ProjectMemoryRow
               key={memory.id}
@@ -473,7 +470,7 @@ export function ProjectMemoryRow({
         <div className="flex shrink-0 items-center gap-1">
           {projectMemoryVerifyVisible(memory.status) ? (
             <button
-              className="flex h-7 items-center gap-1.5 rounded-md border border-hairline-soft px-2 text-xs text-fg-muted transition-colors hover:bg-hover hover:text-fg disabled:opacity-50"
+              className="flex h-7 items-center gap-1.5 rounded-md bg-chip px-2 text-xs text-fg-muted transition-colors hover:bg-chip-strong hover:text-fg disabled:opacity-50"
               disabled={busy}
               onClick={onVerify}
               type="button"

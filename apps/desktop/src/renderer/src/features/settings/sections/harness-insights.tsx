@@ -85,7 +85,7 @@ export function HarnessInsightsView({
         actions={
           state.status !== "unavailable" ? (
             <>
-              <label className="flex h-8 items-center gap-1.5 rounded-md border border-hairline-soft px-2 text-xs text-fg-muted">
+              <label className="flex h-8 items-center gap-1.5 rounded-md bg-chip-faint px-2 text-xs text-fg-muted">
                 <span className="sr-only">Insights time window</span>
                 <select
                   aria-label="Insights time window"
@@ -102,7 +102,7 @@ export function HarnessInsightsView({
               </label>
               <button
                 aria-label="Refresh Harness Insights"
-                className="flex h-8 items-center gap-1.5 rounded-md border border-hairline-soft px-2.5 text-xs text-fg-muted transition-colors hover:bg-hover hover:text-fg disabled:cursor-wait disabled:opacity-50"
+                className="flex h-8 items-center gap-1.5 rounded-md bg-chip px-2.5 text-xs text-fg-muted transition-colors hover:bg-chip-strong hover:text-fg disabled:cursor-wait disabled:opacity-50"
                 disabled={state.status === "loading"}
                 onClick={onRefresh}
                 type="button"
@@ -119,17 +119,16 @@ export function HarnessInsightsView({
             </>
           ) : undefined
         }
-        description="A local, on-demand summary of patterns in this workspace. Findings are hypotheses, not proof."
         title="Harness Insights"
       />
       {state.status === "unavailable" ? (
-        <div className="rounded-xl border border-hairline-soft bg-panel p-5 text-sm text-fg-muted">
+        <div className="settings-group p-5 text-sm text-fg-muted">
           Choose a workspace to view local insights.
         </div>
       ) : state.status === "loading" ? (
         <div
           aria-live="polite"
-          className="flex min-h-28 items-center justify-center gap-2 rounded-xl border border-hairline-soft bg-panel text-sm text-fg-muted"
+          className="flex min-h-28 items-center justify-center gap-2 settings-group text-sm text-fg-muted"
           role="status"
         >
           <IconRefresh aria-hidden className="animate-spin motion-reduce:animate-pulse" size={16} />
@@ -142,7 +141,7 @@ export function HarnessInsightsView({
         >
           <p className="text-sm text-fg">Insights could not be loaded.</p>
           <button
-            className="h-8 rounded-md border border-hairline-soft px-3 text-xs text-fg-muted transition-colors hover:bg-hover hover:text-fg"
+            className="h-8 rounded-md bg-chip px-3 text-xs text-fg-muted transition-colors hover:bg-chip-strong hover:text-fg"
             onClick={onRefresh}
             type="button"
           >
@@ -174,7 +173,7 @@ function HarnessInsightsResults({
 
   return (
     <div className="space-y-5">
-      <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-hairline-soft bg-panel p-4">
+      <section className="flex flex-wrap items-center justify-between gap-3 settings-group p-4">
         <div className="min-w-0">
           <p className="font-medium text-fg text-sm">Local evidence</p>
           <p className="mt-1 text-xs text-fg-muted">
@@ -188,7 +187,7 @@ function HarnessInsightsResults({
           </span>
           {onClearBlacklist ? (
             <button
-              className="h-7 rounded-md border border-hairline-soft px-2.5 text-2xs text-fg-muted transition-colors hover:bg-hover hover:text-fg"
+              className="h-7 rounded-md bg-chip px-2.5 text-2xs text-fg-muted transition-colors hover:bg-chip-strong hover:text-fg"
               onClick={onClearBlacklist}
               type="button"
             >
@@ -204,11 +203,7 @@ function HarnessInsightsResults({
       </p>
 
       {insufficient ? (
-        <section
-          aria-live="polite"
-          className="rounded-xl border border-hairline-soft bg-panel p-5"
-          role="status"
-        >
+        <section aria-live="polite" className="settings-group p-5" role="status">
           <h3 className="font-medium text-fg text-sm">Not enough comparable activity yet</h3>
           <p className="mt-1 text-xs leading-relaxed text-fg-muted">
             At least {MIN_COMPARABLE_INSIGHT_EPISODES} similar task episodes are needed before
@@ -218,7 +213,7 @@ function HarnessInsightsResults({
           <HarnessInsightLimitations limitations={result.limitations} />
         </section>
       ) : result.insights.length === 0 ? (
-        <section className="rounded-xl border border-hairline-soft bg-panel p-5">
+        <section className="settings-group p-5">
           <h3 className="font-medium text-fg text-sm">No findings for this period.</h3>
           <p className="mt-1 text-xs text-fg-muted">
             No clear pattern was surfaced from these episodes.
@@ -230,10 +225,7 @@ function HarnessInsightsResults({
           <HarnessInsightLimitations limitations={result.limitations} />
           <div className="grid min-w-0 gap-3">
             {result.insights.map((insight) => (
-              <article
-                className="min-w-0 rounded-xl border border-hairline-soft bg-panel p-4"
-                key={insight.id}
-              >
+              <article className="min-w-0 settings-group p-4" key={insight.id}>
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="font-medium text-fg text-sm">
                     {harnessInsightKindLabel(insight.kind)}
@@ -257,7 +249,7 @@ function HarnessInsightsResults({
                   <span>Period · {harnessInsightPeriod(insight.period)}</span>
                   {onPromote ? (
                     <button
-                      className="ml-auto h-7 rounded-md border border-hairline-soft px-2.5 text-2xs text-fg-muted transition-colors hover:bg-hover hover:text-fg"
+                      className="ml-auto h-7 rounded-md bg-chip px-2.5 text-2xs text-fg-muted transition-colors hover:bg-chip-strong hover:text-fg"
                       onClick={() => onPromote(insight)}
                       type="button"
                     >
@@ -267,7 +259,7 @@ function HarnessInsightsResults({
                 </div>
                 <HarnessInsightLimitations limitations={insight.limitations} />
                 {insight.sourceRefs.length ? (
-                  <div className="mt-3 border-hairline-soft border-t pt-2.5">
+                  <div className="mt-3 pt-2.5">
                     <p className="text-2xs font-medium text-fg-muted">Source references</p>
                     <ul className="mt-1 flex flex-wrap gap-1.5">
                       {insight.sourceRefs.slice(0, 6).map((reference) => (

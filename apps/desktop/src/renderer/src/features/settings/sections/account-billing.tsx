@@ -11,15 +11,20 @@ import type {
 import type { SettingsTextKey } from "../../../../../shared/settings-text";
 import { type SettingsTextFn, settingsTextFor, useSettingsText } from "../../../lib/settingsText";
 import { uiIntlLocale } from "../../../lib/uiIntl";
-import { ReadOnlyPill, SettingsList, SettingsRow, SettingsSection } from "../settings-layout";
+import {
+  ReadOnlyPill,
+  SETTINGS_DANGER_BUTTON,
+  SETTINGS_PRIMARY_BUTTON,
+  SETTINGS_SECONDARY_BUTTON,
+  SettingsList,
+  SettingsNotice,
+  SettingsRow,
+  SettingsSection,
+} from "../settings-layout";
 
-const SECONDARY_BUTTON =
-  "flex h-8 items-center gap-1.5 rounded-md border border-hairline bg-surface px-2.5 text-xs text-fg transition-colors hover:bg-hover disabled:opacity-40";
-const PRIMARY_BUTTON =
-  "flex h-8 items-center gap-1.5 rounded-md bg-fg px-2.5 text-canvas text-xs transition-colors hover:bg-fg-muted disabled:opacity-40";
-
-const DANGER_BUTTON =
-  "flex h-8 items-center gap-1.5 rounded-md border border-hairline bg-surface px-2.5 text-danger text-xs transition-colors hover:bg-hover disabled:opacity-40";
+const SECONDARY_BUTTON = `${SETTINGS_SECONDARY_BUTTON} h-8 px-2.5 text-xs`;
+const PRIMARY_BUTTON = `${SETTINGS_PRIMARY_BUTTON} h-8 px-2.5 text-xs`;
+const DANGER_BUTTON = `${SETTINGS_DANGER_BUTTON} h-8 px-2.5 text-xs`;
 
 /**
  * L1e/L1g: confirm copy for cancelling a Mercado Pago subscription. `accessUntil` is the
@@ -345,17 +350,17 @@ export function BillingSectionView({
 
   return (
     <SettingsSection
-      description={
+      notice={
         plansOnSale
           ? t("settings.account.sectionPlansOnSaleDescription")
           : t("settings.account.sectionPacksOnlyDescription")
       }
       title={t("settings.account.sectionPlanAndCreditsTitle")}
     >
-      {state.error ? <p className="mb-3 text-danger text-xs">{state.error}</p> : null}
-      {returnNotice ? <p className="mb-3 text-success text-xs">{t(returnNotice)}</p> : null}
+      {state.error ? <SettingsNotice tone="danger">{state.error}</SettingsNotice> : null}
+      {returnNotice ? <SettingsNotice>{t(returnNotice)}</SettingsNotice> : null}
       {state.pending ? (
-        <p className="mb-3 text-fg-muted text-xs">{t("settings.account.pendingBrowserNotice")}</p>
+        <SettingsNotice>{t("settings.account.pendingBrowserNotice")}</SettingsNotice>
       ) : null}
       <SettingsList>
         <SettingsRow
@@ -379,7 +384,7 @@ export function BillingSectionView({
               </button>
             </div>
           }
-          description={
+          notice={
             ending
               ? renews
                 ? t("settings.account.planEndingWithDate", { plan: planName, date: renews })
@@ -402,7 +407,7 @@ export function BillingSectionView({
         />
         <SettingsRow
           control={<ReadOnlyPill>{formatCredits(state.wallet?.balance ?? 0)}</ReadOnlyPill>}
-          description={
+          notice={
             state.wallet
               ? creditsDescription(
                   state.wallet,
@@ -429,13 +434,12 @@ export function BillingSectionView({
                   {t("settings.account.manageBilling")}
                 </button>
               }
-              description={t("settings.account.changePlanStripeDescription")}
               title={t("settings.account.changePlanTitle")}
             />
           ) : ending ? (
             <SettingsRow
               control={null}
-              description={t("settings.account.subscriptionEndedDescription", {
+              notice={t("settings.account.subscriptionEndedDescription", {
                 plan: planName,
                 until: renews ?? t("settings.account.thePeriodEnds"),
               })}
@@ -455,7 +459,7 @@ export function BillingSectionView({
                     : t("settings.account.checkAgain")}
                 </button>
               }
-              description={
+              notice={
                 state.cancelling
                   ? t("settings.account.cancellingWithMercadoPago")
                   : keepsPlan && renews
@@ -479,7 +483,7 @@ export function BillingSectionView({
                   {t("settings.account.cancelAndTryAgain")}
                 </button>
               }
-              description={t("settings.account.paymentPendingDescription")}
+              notice={t("settings.account.paymentPendingDescription")}
               title={t("settings.account.statusPaymentPending")}
             />
           ) : (
@@ -487,13 +491,13 @@ export function BillingSectionView({
               {paused ? (
                 <SettingsRow
                   control={null}
-                  description={t("settings.account.subscriptionPausedDescription")}
+                  notice={t("settings.account.subscriptionPausedDescription")}
                   title={t("settings.account.statusSubscriptionPaused")}
                 />
               ) : (
                 <SettingsRow
                   control={null}
-                  description={t("settings.account.subscriptionBilledByMpDescription")}
+                  notice={t("settings.account.subscriptionBilledByMpDescription")}
                   title={t("settings.account.billingTitle")}
                 />
               )}
@@ -512,7 +516,7 @@ export function BillingSectionView({
                     {t("settings.account.cancelSubscription")}
                   </button>
                 }
-                description={
+                notice={
                   keepsPlan && renews
                     ? t("settings.account.cancelSubscriptionKeepsPlanDescription", {
                         plan: planName,
@@ -536,7 +540,7 @@ export function BillingSectionView({
                 {t("settings.account.tryAgain")}
               </button>
             }
-            description={t("settings.account.catalogFailedDescription")}
+            notice={t("settings.account.catalogFailedDescription")}
             title={t("settings.account.catalogFailedTitle")}
           />
         ) : catalog.length === 0 ? (
@@ -551,7 +555,7 @@ export function BillingSectionView({
                 {t("settings.account.refresh")}
               </button>
             }
-            description={t("settings.account.catalogEmptyDescription")}
+            notice={t("settings.account.catalogEmptyDescription")}
             title={t("settings.account.catalogEmptyTitle")}
           />
         ) : (
@@ -575,7 +579,7 @@ export function BillingSectionView({
                   ))}
                 </div>
               }
-              description={t("settings.account.creditsPerMonth", {
+              notice={t("settings.account.creditsPerMonth", {
                 credits: creditCount(plan.monthlyCredits, undefined, t),
               })}
               key={plan.plan}
@@ -598,9 +602,9 @@ export function BillingSectionView({
           <h3 className="mb-2 font-medium text-fg text-xs">
             {t("settings.account.creditPacksHeading")}
           </h3>
-          <p className="mb-3 text-xs leading-4 text-fg-muted">
+          <SettingsNotice className="mb-3">
             {t("settings.account.creditPacksDescription")}
-          </p>
+          </SettingsNotice>
           <SettingsList>
             <CreditPackRows
               disabled={busy || loading || Boolean(state.pending)}

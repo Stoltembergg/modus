@@ -7,6 +7,7 @@ import {
 } from "../../../../shared/tool-filter";
 import { useSettingsText } from "../../lib/settingsText";
 import { SwitchControl } from "./form-controls";
+import { SettingsRow } from "./settings-layout";
 
 function formatMb(bytes: number, locale?: string): string {
   const mb = Math.round(bytes / 1e6);
@@ -141,96 +142,96 @@ export function ToolFilterSetting() {
   }
 
   return (
-    <section className="mt-6 rounded-lg bg-panel px-4 py-3">
-      <div className="flex items-center justify-between gap-4">
-        <div className="min-w-0">
-          <h3 className="text-md font-normal text-fg">{title}</h3>
-          <p className="mt-1 text-xs text-fg-faint">{t("settings.toolFilter.desc")}</p>
-          {!isAvailable ? (
-            <p className="mt-1 text-xs text-fg-muted">
-              {getUnavailableText(state.availability.reason)}
-            </p>
-          ) : null}
-          {isAvailable && state.enabled && state.download.phase === "ready" ? (
-            <p className="mt-1 text-xs text-fg-muted">{getModelStatusText(state.model)}</p>
-          ) : null}
-        </div>
-        <SwitchControl
-          ariaLabel={title}
-          checked={state.enabled}
-          disabled={!isAvailable || !isBridgeAvailable || busy}
-          onCheckedChange={handleToggle}
-        />
-      </div>
-
-      {isAvailable && state.download.phase === "downloading" ? (
-        <div className="mt-3 flex flex-col gap-2">
-          <div
-            aria-label={title}
-            aria-valuemax={100}
-            aria-valuemin={0}
-            aria-valuenow={downloadPercent}
-            className="h-1.5 w-full overflow-hidden rounded-full bg-[color-mix(in_srgb,var(--color-accent)_18%,transparent)]"
-            role="progressbar"
-          >
+    <>
+      <SettingsRow
+        control={
+          <SwitchControl
+            ariaLabel={title}
+            checked={state.enabled}
+            disabled={!isAvailable || !isBridgeAvailable || busy}
+            onCheckedChange={handleToggle}
+          />
+        }
+        notice={
+          !isAvailable
+            ? getUnavailableText(state.availability.reason)
+            : state.enabled && state.download.phase === "ready" && state.model === "failed"
+              ? getModelStatusText(state.model)
+              : undefined
+        }
+        noticeTone={isAvailable ? "danger" : "muted"}
+        title={title}
+      />
+      <div className="px-3 empty:hidden" data-tool-filter-progress="">
+        {isAvailable && state.download.phase === "downloading" ? (
+          <div className="flex flex-col gap-2 pb-2.5">
             <div
-              className="h-full rounded-full bg-[var(--color-accent)] transition-all duration-(--motion-duration-base)"
-              style={{ width: `${downloadPercent}%` }}
-            />
+              aria-label={title}
+              aria-valuemax={100}
+              aria-valuemin={0}
+              aria-valuenow={downloadPercent}
+              className="h-1.5 w-full overflow-hidden rounded-full bg-[color-mix(in_srgb,var(--color-accent)_18%,transparent)]"
+              role="progressbar"
+            >
+              <div
+                className="h-full rounded-full bg-[var(--color-accent)] transition-all duration-(--motion-duration-base)"
+                style={{ width: `${downloadPercent}%` }}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-3 text-xs">
+              <span className="text-fg-muted">
+                {t("settings.toolFilter.downloadProgress", {
+                  received: receivedFormatted,
+                  total: totalFormatted,
+                  percent: downloadPercent,
+                })}
+              </span>
+              <button
+                className="text-xs text-fg-muted outline-none transition-colors hover:text-fg"
+                onClick={() => void handleCancelDownload()}
+                type="button"
+              >
+                {t("settings.toolFilter.cancelDownloadButton")}
+              </button>
+            </div>
           </div>
-          <div className="flex items-center justify-between gap-3 text-xs">
-            <span className="text-fg-muted">
-              {t("settings.toolFilter.downloadProgress", {
-                received: receivedFormatted,
-                total: totalFormatted,
-                percent: downloadPercent,
-              })}
+        ) : null}
+
+        {isAvailable && state.download.phase === "verifying" ? (
+          <div className="flex flex-col gap-2 pb-2.5">
+            <div
+              aria-label={t("settings.toolFilter.verifying")}
+              aria-valuemax={100}
+              aria-valuemin={0}
+              aria-valuenow={100}
+              className="h-1.5 w-full overflow-hidden rounded-full bg-[color-mix(in_srgb,var(--color-accent)_18%,transparent)]"
+              role="progressbar"
+            >
+              <div className="h-full w-full rounded-full bg-[var(--color-accent)] animate-pulse" />
+            </div>
+            <span className="text-xs text-fg-muted">{t("settings.toolFilter.verifying")}</span>
+          </div>
+        ) : null}
+
+        {isAvailable && state.download.phase === "failed" ? (
+          <div className="flex items-center justify-between gap-3 pb-2.5 text-xs">
+            <span className="text-xs text-danger">
+              {state.download.error === "hash-mismatch"
+                ? t("settings.toolFilter.failedHashMismatch")
+                : t("settings.toolFilter.failedDownloadFailed")}
             </span>
-            <button
-              className="text-xs text-fg-muted outline-none transition-colors hover:text-fg"
-              onClick={() => void handleCancelDownload()}
-              type="button"
-            >
-              {t("settings.toolFilter.cancelDownloadButton")}
-            </button>
+            {state.download.error === "download-failed" ? (
+              <button
+                className="shrink-0 text-xs text-[var(--accent-text)] outline-none transition-colors hover:underline"
+                onClick={() => void handleEnable()}
+                type="button"
+              >
+                {t("settings.toolFilter.retryButton")}
+              </button>
+            ) : null}
           </div>
-        </div>
-      ) : null}
-
-      {isAvailable && state.download.phase === "verifying" ? (
-        <div className="mt-3 flex flex-col gap-2">
-          <div
-            aria-label={t("settings.toolFilter.verifying")}
-            aria-valuemax={100}
-            aria-valuemin={0}
-            aria-valuenow={100}
-            className="h-1.5 w-full overflow-hidden rounded-full bg-[color-mix(in_srgb,var(--color-accent)_18%,transparent)]"
-            role="progressbar"
-          >
-            <div className="h-full w-full rounded-full bg-[var(--color-accent)] animate-pulse" />
-          </div>
-          <span className="text-xs text-fg-muted">{t("settings.toolFilter.verifying")}</span>
-        </div>
-      ) : null}
-
-      {isAvailable && state.download.phase === "failed" ? (
-        <div className="mt-2 flex items-center justify-between gap-3 text-xs">
-          <span className="text-xs text-danger">
-            {state.download.error === "hash-mismatch"
-              ? t("settings.toolFilter.failedHashMismatch")
-              : t("settings.toolFilter.failedDownloadFailed")}
-          </span>
-          {state.download.error === "download-failed" ? (
-            <button
-              className="shrink-0 text-xs text-[var(--accent-text)] outline-none transition-colors hover:underline"
-              onClick={() => void handleEnable()}
-              type="button"
-            >
-              {t("settings.toolFilter.retryButton")}
-            </button>
-          ) : null}
-        </div>
-      ) : null}
-    </section>
+        ) : null}
+      </div>
+    </>
   );
 }

@@ -48,25 +48,24 @@ export function LanguageSetting() {
   }
 
   return (
-    <div className="mb-6">
-      <SettingsList>
-        <SettingsRow
-          control={
-            <div className="w-56">
-              <SelectField
-                disabled={!state}
-                label={title}
-                labelHidden
-                onChange={(next) => void choose(next)}
-                options={options}
-                value={state?.preference ?? "system"}
-              />
-            </div>
-          }
-          description={error ?? t("settings.general.languageDesc")}
-          title={title}
-        />
-      </SettingsList>
-    </div>
+    <SettingsList>
+      <SettingsRow
+        control={
+          <div className="w-56">
+            <SelectField
+              disabled={!state}
+              label={title}
+              labelHidden
+              onChange={(next) => void choose(next)}
+              options={options}
+              value={state?.preference ?? "system"}
+            />
+          </div>
+        }
+        notice={error}
+        noticeTone="danger"
+        title={title}
+      />
+    </SettingsList>
   );
 }

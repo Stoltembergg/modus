@@ -406,7 +406,7 @@ export function McpSettingsPanel({
         actions={
           <>
             <button
-              className="flex h-8 items-center gap-1.5 rounded-md border border-hairline bg-surface px-2.5 text-xs text-fg transition-colors hover:bg-hover disabled:opacity-40"
+              className="flex h-8 items-center gap-1.5 rounded-md bg-chip px-2.5 text-xs text-fg transition-colors hover:bg-chip-strong disabled:opacity-40"
               disabled={!effectiveProjectCwd || syncing}
               onClick={() => void refresh(effectiveProjectCwd)}
               type="button"
@@ -419,7 +419,7 @@ export function McpSettingsPanel({
               )}
             </button>
             <button
-              className="flex h-8 items-center gap-1.5 rounded-md bg-fg px-2.5 text-canvas text-xs transition-colors hover:bg-fg-muted disabled:opacity-40"
+              className="flex h-8 items-center gap-1.5 rounded-md bg-accent px-2.5 text-on-accent text-xs transition-colors hover:bg-accent/90 disabled:opacity-40"
               disabled={!effectiveProjectCwd}
               onClick={() => {
                 setForm((current) =>
@@ -433,7 +433,6 @@ export function McpSettingsPanel({
             </button>
           </>
         }
-        description={t("settings.mcp.pageDescription")}
         title={t("settings.mcp.pageTitle")}
       />
 
@@ -517,10 +516,7 @@ export function McpSettingsPanel({
               const status = MCP_STATUS_STYLE[server.status];
               const deleting = confirmingDelete === server.name;
               return (
-                <div
-                  className="group/mcp flex items-center gap-3 border-hairline-soft border-b px-4 py-3 last:border-b-0"
-                  key={server.name}
-                >
+                <div className="group/mcp flex items-center gap-3 px-4 py-3" key={server.name}>
                   <span className="relative flex size-10 shrink-0 items-center justify-center rounded-lg bg-chip-strong font-mono text-fg-muted text-xs">
                     {mcpInitial(server.name)}
                     <span
@@ -598,10 +594,10 @@ export function McpSettingsPanel({
                         </Tooltip>
                         <Switch.Root
                           checked={server.status !== "disabled"}
-                          className="ml-1 flex h-5 w-9 shrink-0 cursor-pointer rounded-full bg-chip-strong p-0.5 transition-colors data-checked:bg-success/70"
+                          className="ml-1 flex h-5 w-9 shrink-0 cursor-pointer rounded-full bg-chip-strong p-0.5 transition-colors data-checked:bg-accent"
                           onCheckedChange={(checked) => void toggleServer(server, checked)}
                         >
-                          <Switch.Thumb className="size-4 rounded-full bg-fg transition-transform data-checked:translate-x-4" />
+                          <Switch.Thumb className="size-4 rounded-full bg-fg-muted transition-[translate,background-color] duration-(--motion-duration-base) ease-standard data-checked:bg-on-accent data-checked:translate-x-4" />
                         </Switch.Root>
                       </>
                     )}
@@ -640,9 +636,6 @@ export function McpSettingsPanel({
           </button>
         </SettingsList>
         <div className="flex items-center justify-between">
-          <p className="text-fg-muted text-xs leading-relaxed">
-            {t("settings.mcp.serversFooterHint")}
-          </p>
           {activeScope === "project" ? (
             <button
               className="flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-fg-faint text-xs transition-colors hover:bg-hover hover:text-fg-subtle disabled:opacity-40"
@@ -695,7 +688,7 @@ export function ReaIntegrationRow({
   const detailsId = "rea-status-details";
 
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-hairline-soft bg-surface p-4 sm:flex-row sm:items-start sm:justify-between">
+    <div className="flex flex-col gap-3 settings-group p-4 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className="font-medium text-fg text-sm">{REA_LABEL}</span>
@@ -704,9 +697,6 @@ export function ReaIntegrationRow({
             {status.status === "starting" ? <WorkingText>{statusLabel}</WorkingText> : statusLabel}
           </span>
         </div>
-        <p className="mt-1 text-xs leading-relaxed text-fg-muted">
-          {t("settings.mcp.reaDescription")}
-        </p>
         <p className="mt-2 text-xs leading-relaxed text-fg-muted" id={noteId}>
           {t("settings.mcp.reaNote")}
         </p>
@@ -729,11 +719,6 @@ export function ReaIntegrationRow({
             ))}
           </ul>
         ) : null}
-        {retryable ? (
-          <p className="mt-2 text-xs leading-relaxed text-fg-muted">
-            {t("settings.mcp.reaRetryHint")}
-          </p>
-        ) : null}
         {status.settingsError ? (
           <p className="mt-2 text-xs text-danger" role="alert">
             {t("settings.mcp.reaReadSettingError")}
@@ -749,7 +734,7 @@ export function ReaIntegrationRow({
         {retryable ? (
           <button
             aria-describedby={status.note ? detailsId : undefined}
-            className="flex h-8 items-center gap-1.5 rounded-md border border-hairline bg-panel px-2.5 text-xs text-fg transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex h-8 items-center gap-1.5 rounded-md bg-chip px-2.5 text-xs text-fg transition-colors hover:bg-chip-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
             disabled={busy}
             onClick={onRetry}
             type="button"
@@ -766,11 +751,11 @@ export function ReaIntegrationRow({
           aria-describedby={`${noteId}${status.note ? ` ${detailsId}` : ""}`}
           aria-label={t("settings.mcp.reaEnableAriaLabel")}
           checked={status.enabled}
-          className="flex h-5 w-9 shrink-0 cursor-pointer rounded-full bg-chip-strong p-0.5 transition-colors data-checked:bg-success/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex h-5 w-9 shrink-0 cursor-pointer rounded-full bg-chip-strong p-0.5 transition-colors data-checked:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-50"
           disabled={busy || status.settingsError}
           onCheckedChange={(checked) => onToggle(checked === true)}
         >
-          <Switch.Thumb className="size-4 rounded-full bg-fg transition-transform data-checked:translate-x-4" />
+          <Switch.Thumb className="size-4 rounded-full bg-fg-muted transition-[translate,background-color] duration-(--motion-duration-base) ease-standard data-checked:bg-on-accent data-checked:translate-x-4" />
         </Switch.Root>
       </div>
     </div>
@@ -815,7 +800,7 @@ export function McpServerForm({
 
   return (
     <form
-      className="flex flex-col gap-4 rounded-lg border border-hairline bg-panel p-5"
+      className="flex flex-col gap-4 settings-group p-5"
       onSubmit={(event: FormEvent<HTMLFormElement>) => {
         event.preventDefault();
         if (canSave && allowlistConfirmed && !busy) {
@@ -884,7 +869,7 @@ export function McpServerForm({
           ) : null}
         </div>
       ) : (
-        <div className="rounded-md border border-hairline-soft bg-surface px-3 py-2 text-fg-muted text-xs">
+        <div className="rounded-md bg-surface px-3 py-2 text-fg-muted text-xs">
           {t("settings.mcp.locationLabel", {
             location:
               form.scope === "project"
@@ -913,7 +898,7 @@ export function McpServerForm({
 
       <McpField hint={t("settings.mcp.fieldNameHint")} label={t("settings.mcp.fieldName")}>
         <input
-          className="h-9 w-full rounded-md border border-hairline-soft bg-surface px-3 font-mono text-sm text-fg outline-none placeholder:text-fg-faint focus:border-focus-ring"
+          className="h-9 w-full rounded-md bg-surface px-3 font-mono text-sm text-fg outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
           onChange={(event) => set({ name: event.target.value })}
           placeholder={t("settings.mcp.namePlaceholder")}
           value={form.name}
@@ -927,7 +912,7 @@ export function McpServerForm({
             label={t("settings.mcp.fieldCommand")}
           >
             <input
-              className="h-9 w-full rounded-md border border-hairline-soft bg-surface px-3 font-mono text-sm text-fg outline-none placeholder:text-fg-faint focus:border-focus-ring"
+              className="h-9 w-full rounded-md bg-surface px-3 font-mono text-sm text-fg outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
               onChange={(event) => set({ commandLine: event.target.value })}
               placeholder={DEFAULT_COMMAND_PLACEHOLDER}
               value={form.commandLine}
@@ -947,7 +932,7 @@ export function McpServerForm({
         <>
           <McpField hint={t("settings.mcp.fieldUrlHint")} label={t("settings.mcp.fieldUrl")}>
             <input
-              className="h-9 w-full rounded-md border border-hairline-soft bg-surface px-3 font-mono text-sm text-fg outline-none placeholder:text-fg-faint focus:border-focus-ring"
+              className="h-9 w-full rounded-md bg-surface px-3 font-mono text-sm text-fg outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
               onChange={(event) => set({ url: event.target.value })}
               placeholder={DEFAULT_URL_PLACEHOLDER}
               value={form.url}
@@ -965,7 +950,7 @@ export function McpServerForm({
         </>
       )}
 
-      <fieldset className="min-w-0 rounded-lg border border-hairline-soft p-3">
+      <fieldset className="min-w-0 settings-group p-3">
         <legend className="px-1 font-medium text-fg text-sm">
           {t("settings.mcp.readOnlyToolsLegend")}
         </legend>
@@ -1005,7 +990,7 @@ export function McpServerForm({
           </p>
         )}
         {form.readOnlyToolAllowlist.length > 0 ? (
-          <label className="mt-3 flex cursor-pointer items-start gap-2 border-hairline-soft border-t pt-3 text-xs text-warning">
+          <label className="mt-3 flex cursor-pointer items-start gap-2 pt-3 text-xs text-warning">
             <input
               aria-label={t("settings.mcp.confirmReadOnlyAriaLabel")}
               checked={form.confirmReadOnlyToolAllowlist}
@@ -1018,15 +1003,15 @@ export function McpServerForm({
         ) : null}
       </fieldset>
 
-      <div className="flex items-center justify-between border-hairline-soft border-t pt-4">
+      <div className="flex items-center justify-between pt-4">
         <div className="flex items-center gap-2 text-fg-muted text-xs">
           <Switch.Root
             aria-label={t("settings.mcp.connectAutomatically")}
             checked={form.enabled}
-            className="flex h-4.5 w-8 shrink-0 cursor-pointer rounded-full bg-chip-strong p-0.5 transition-colors data-checked:bg-success/70"
+            className="flex h-4.5 w-8 shrink-0 cursor-pointer rounded-full bg-chip-strong p-0.5 transition-colors data-checked:bg-accent"
             onCheckedChange={(enabled) => set({ enabled })}
           >
-            <Switch.Thumb className="size-3.5 rounded-full bg-fg transition-transform data-checked:translate-x-3.5" />
+            <Switch.Thumb className="size-3.5 rounded-full bg-fg-muted transition-[translate,background-color] duration-(--motion-duration-base) ease-standard data-checked:bg-on-accent data-checked:translate-x-3.5" />
           </Switch.Root>
           {t("settings.mcp.connectAutomatically")}
         </div>
@@ -1039,12 +1024,12 @@ export function McpServerForm({
             {t("settings.mcp.cancel")}
           </button>
           <button
-            className="flex h-8 items-center gap-1.5 rounded-md bg-fg px-3 text-canvas text-xs transition-colors hover:bg-fg-muted disabled:opacity-40"
+            className="flex h-8 items-center gap-1.5 rounded-md bg-accent px-3 text-on-accent text-xs transition-colors hover:bg-accent/90 disabled:opacity-40"
             disabled={!canSave || !allowlistConfirmed || busy}
             type="submit"
           >
             {busy ? (
-              <WorkingText className="text-canvas">
+              <WorkingText className="text-on-accent">
                 {t("settings.mcp.connectingWorking")}
               </WorkingText>
             ) : isNew ? (
@@ -1101,7 +1086,7 @@ function McpKeyValueRows({
       {pairs.map((item) => (
         <div className="flex items-center gap-1.5" key={item.id}>
           <input
-            className="h-8 w-2/5 rounded-md border border-hairline-soft bg-surface px-2.5 font-mono text-fg text-xs outline-none placeholder:text-fg-faint focus:border-focus-ring"
+            className="h-8 w-2/5 rounded-md bg-surface px-2.5 font-mono text-fg text-xs outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
             onChange={(event) =>
               onChange(
                 pairs.map((existing) =>
@@ -1113,7 +1098,7 @@ function McpKeyValueRows({
             value={item.key}
           />
           <input
-            className="h-8 min-w-0 flex-1 rounded-md border border-hairline-soft bg-surface px-2.5 font-mono text-fg text-xs outline-none placeholder:text-fg-faint focus:border-focus-ring"
+            className="h-8 min-w-0 flex-1 rounded-md bg-surface px-2.5 font-mono text-fg text-xs outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
             onChange={(event) =>
               onChange(
                 pairs.map((existing) =>

@@ -101,7 +101,6 @@ export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
 
   const autoApplied = rules.filter((rule) => rule.mode === "always");
   const dirty = agents ? draft !== (agents.exists ? agents.content : agents.example) : false;
-  const exampleLoaded = Boolean(agents && !agents.exists && draft === agents.example);
 
   return (
     <>
@@ -109,7 +108,7 @@ export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
         actions={
           <>
             <button
-              className="flex h-8 items-center gap-1.5 rounded-md border border-hairline bg-surface px-2.5 text-xs text-fg transition-colors hover:bg-hover disabled:opacity-40"
+              className="flex h-8 items-center gap-1.5 rounded-md bg-chip px-2.5 text-xs text-fg transition-colors hover:bg-chip-strong disabled:opacity-40"
               disabled={!cwd || loading}
               onClick={() => void refresh()}
               type="button"
@@ -122,14 +121,14 @@ export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
               )}
             </button>
             <button
-              className="flex h-8 items-center gap-1.5 rounded-md bg-fg px-2.5 text-canvas text-xs transition-colors hover:bg-fg-muted disabled:opacity-40"
+              className="flex h-8 items-center gap-1.5 rounded-md bg-accent px-2.5 text-on-accent text-xs transition-colors hover:bg-accent/90 disabled:opacity-40"
               disabled={!cwd || loading || saving || (!dirty && Boolean(agents?.exists))}
               onClick={() => void saveAgents()}
               type="button"
             >
               <IconCheck size={13} stroke={2} />
               {saving ? (
-                <WorkingText className="text-canvas">
+                <WorkingText className="text-on-accent">
                   {t("settings.skillsRules.saving")}
                 </WorkingText>
               ) : agents?.exists ? (
@@ -146,16 +145,9 @@ export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
       {rulesError ? <p className="-mt-4 text-danger text-xs">{rulesError}</p> : null}
       {message ? <p className="-mt-4 text-success text-xs">{message}</p> : null}
 
-      <SettingsSection
-        title={t("settings.skillsRules.agentsSectionTitle")}
-        description={
-          exampleLoaded
-            ? t("settings.skillsRules.editExampleDescription")
-            : t("settings.skillsRules.appliedAutomaticallyDescription")
-        }
-      >
+      <SettingsSection title={t("settings.skillsRules.agentsSectionTitle")}>
         {!cwd ? (
-          <div className="rounded-lg border border-hairline-soft bg-panel px-5 py-6">
+          <div className="settings-group px-5 py-6">
             <p className="text-sm text-fg-muted">
               {t("settings.skillsRules.noWorkspaceEditRules")}
             </p>
@@ -169,7 +161,7 @@ export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
                   : t("settings.skillsRules.exampleNotSaved")}
               </ReadOnlyPill>
               <button
-                className="flex h-8 items-center gap-1.5 rounded-md border border-hairline bg-surface px-2.5 text-xs text-fg transition-colors hover:bg-hover disabled:opacity-40"
+                className="flex h-8 items-center gap-1.5 rounded-md bg-chip px-2.5 text-xs text-fg transition-colors hover:bg-chip-strong disabled:opacity-40"
                 disabled={!agents || loading || saving}
                 onClick={useExample}
                 type="button"
@@ -178,7 +170,7 @@ export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
               </button>
               {agents?.exists ? (
                 <button
-                  className="flex h-8 items-center gap-1.5 rounded-md border border-hairline bg-surface px-2.5 text-xs text-fg transition-colors hover:bg-hover disabled:opacity-40"
+                  className="flex h-8 items-center gap-1.5 rounded-md bg-chip px-2.5 text-xs text-fg transition-colors hover:bg-chip-strong disabled:opacity-40"
                   disabled={loading || saving}
                   onClick={() =>
                     void openRule({
@@ -197,7 +189,7 @@ export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
               ) : null}
             </div>
             <textarea
-              className="scroll-thin min-h-[280px] w-full resize-y rounded-lg border border-hairline-soft bg-panel px-4 py-3 font-mono text-sm text-fg leading-6 outline-none placeholder:text-fg-faint focus:border-focus-ring disabled:opacity-60"
+              className="scroll-thin min-h-[280px] w-full resize-y settings-group px-4 py-3 font-mono text-sm text-fg leading-6 outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35 disabled:opacity-60"
               disabled={loading || saving}
               onChange={(event) => {
                 setDraft(event.target.value);
@@ -213,17 +205,17 @@ export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
 
       <SettingsSection title={t("settings.skillsRules.detectedRuleFiles")}>
         {!cwd ? (
-          <div className="rounded-lg border border-hairline-soft bg-panel px-5 py-6">
+          <div className="settings-group px-5 py-6">
             <p className="text-sm text-fg-muted">
               {t("settings.skillsRules.noWorkspaceDiscoverRules")}
             </p>
           </div>
         ) : loading && rules.length === 0 && !agents ? (
-          <div className="rounded-lg border border-hairline-soft bg-panel px-5 py-6 text-sm text-fg-muted">
+          <div className="settings-group px-5 py-6 text-sm text-fg-muted">
             <WorkingText>{t("settings.skillsRules.scanningWorkspace")}</WorkingText>
           </div>
         ) : rules.length === 0 ? (
-          <div className="flex flex-col items-start gap-2 rounded-lg border border-hairline-soft bg-panel px-5 py-6">
+          <div className="flex flex-col items-start gap-2 settings-group px-5 py-6">
             <p className="text-sm text-fg-muted">
               {textWithNodes(t("settings.skillsRules.noRuleFiles"), {
                 agents: <span className="font-mono text-xs">AGENTS.md</span>,
@@ -236,7 +228,7 @@ export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
           <SettingsList>
             {rules.map((rule) => (
               <button
-                className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-hairline-soft border-b px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-hover"
+                className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-hover"
                 key={rule.path}
                 onClick={() => void openRule(rule)}
                 type="button"
@@ -271,7 +263,7 @@ export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
 
       {cwd && autoApplied.length > 0 ? (
         <SettingsSection title={t("settings.skillsRules.autoAppliedTitle")}>
-          <div className="rounded-lg border border-hairline-soft bg-panel px-5 py-4">
+          <div className="settings-group px-5 py-4">
             <p className="text-sm text-fg-muted">
               {t.plural("settings.skillsRules.autoAppliedDescription", autoApplied.length)}
             </p>

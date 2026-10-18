@@ -73,7 +73,7 @@ export function UnofficialProviderRiskInterstitial({
         <p className="text-xs text-fg-muted">{t("settings.providers.antigravityRiskReview")}</p>
       </header>
 
-      <section className="grid gap-3 rounded-lg border border-hairline bg-surface/45 p-3">
+      <section className="grid gap-3 settings-group p-3">
         <p className="text-sm text-fg">
           {t("settings.providers.antigravityEndpointsReverseEngineer")}
         </p>
@@ -115,7 +115,7 @@ export function UnofficialProviderRiskInterstitial({
         </button>
         <button
           aria-label={t("settings.providers.startAntigravityOAuthAria")}
-          className="flex h-9 items-center justify-center rounded-md bg-fg px-3 text-sm text-canvas transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex h-9 items-center justify-center rounded-md bg-accent px-3 text-sm text-on-accent transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
           disabled={busy || !value}
           onClick={onConfirm}
           type="button"

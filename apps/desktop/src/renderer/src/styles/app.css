@@ -3191,6 +3191,34 @@ body
 :root[data-native-glass="true"][data-transparency="full"] {
   --surface-chat: color-mix(in srgb, var(--color-elevated) var(--glass-alpha-chat), transparent);
 }
+/* Settings glass group (Gabriel 2026-10: minimal, no dividers). One borderless
+   surface per group of rows, a touch more transparent than the solid panel it
+   replaces, with the window blur behind it. Rows inside are separated by spacing.
+   Contrast: the group tints var(--color-surface) at --settings-group-alpha over the
+   settings content, which is opaque (canvas) unless native glass is on; there the
+   rule below swaps in --surface-chat, the tier whose text floor glassTokens and
+   tokensNew already pin; the solid fallback (--glass-filter: none) drops the blur.
+   settingsGlass.test.ts checks fg / fg-muted >= 4.5:1. */
+:root {
+  --settings-group-alpha: 72%;
+}
+.settings-group {
+  border-radius: var(--radius-lg);
+  background-color: color-mix(
+    in srgb,
+    var(--color-surface) var(--settings-group-alpha),
+    transparent
+  );
+  -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
+  transition: background-color var(--motion-duration-base) var(--motion-ease-standard);
+}
+.settings-row {
+  transition: background-color var(--motion-duration-fast) var(--motion-ease-standard);
+}
+:root[data-native-glass="true"][data-transparency="full"] .settings-content .settings-group {
+  background-color: var(--surface-chat);
+}
 /* Settings use the same light tint for lists and fields. Keep selected states,
    warnings and primary actions distinct; the token retains solid OS fallbacks. */
 :root[data-native-glass="true"][data-transparency="full"]

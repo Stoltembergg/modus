@@ -9,8 +9,7 @@ import { describe, expect, it } from "vitest";
  * fg-subtle stay for auxiliary or disabled text.
  */
 const SITES: Record<string, { anchors: string[]; count?: [string, number] }> = {
-  "../features/settings/settings-layout.tsx": { anchors: [], count: [">{description}</", 2] },
-  "../features/settings/form-controls.tsx": { anchors: [], count: [">{description}</", 3] },
+  "../features/settings/form-controls.tsx": { anchors: [], count: [">{description}</", 1] },
   "../features/settings/CustomProviderForm.tsx": {
     anchors: [
       't("settings.customProvider.description")',
@@ -68,7 +67,18 @@ describe("readable helper text (#254)", () => {
         checked += 1;
       }
     }
-    // 14 call sites plus the second SettingsRow description, which already used muted.
-    expect(checked).toBe(15);
+    // Settings rows no longer carry descriptions (minimal layout); only Field keeps
+    // its helper line. Row/section notices are checked below.
+    expect(checked).toBe(11);
+  });
+
+  it("Settings notices (the only extra line a row may carry) default to fg-muted", () => {
+    const layout = readFileSync(
+      new URL("../features/settings/settings-layout.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(layout).toContain('muted: "text-fg-muted"');
+    expect(layout).toMatch(/tone = "muted"/);
+    expect(layout).not.toMatch(/text-fg-(faint|subtle)/);
   });
 });
