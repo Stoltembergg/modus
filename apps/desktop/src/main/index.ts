@@ -47,6 +47,7 @@ import {
 import { disposeGroupRuntime } from "./groups/group-runtime-service";
 import { IPC_CHANNELS } from "./ipc/channels";
 import { registerAppIpc } from "./ipc/register-app-ipc";
+import { installLocalModelsLogFile } from "./local-models/local-models-log-file";
 import { getToolFilterController, startLocalModels, stopLocalModels } from "./local-models/startup";
 import {
   createUiLanguageController,
@@ -254,6 +255,8 @@ if (!app.requestSingleInstanceLock()) {
       startRemoteModelCatalog(notifyModelCatalogChanged);
       // B4b: the Modus provider follows the account session (registered only when signed in).
       startModusProvider(notifyModelCatalogChanged);
+      // Tool filter log lines also go to <userData>/logs/local-models.log (created on first line).
+      installLocalModelsLogFile(join(app.getPath("userData"), "logs"));
       openMainWindow();
       // RERANK-03 tool filter: no-op unless tool_filter.enabled is on (the model runs in a utilityProcess).
       startLocalModels(app.getPath("userData"));
