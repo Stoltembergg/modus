@@ -149,12 +149,13 @@ describe("NavRail", () => {
   it("swaps slides for a short fade when the system asks for reduced motion", () => {
     const full = navRailMotion(false);
     const reduced = navRailMotion(true);
-    expect(full.width).toMatchObject({ duration: 0.18 });
+    expect(full.width).toMatchObject({ duration: 0.2 });
     expect(full.offsetX).toBeLessThan(0);
     // Reduced: the width snaps, nothing slides, but content still fades briefly.
     expect(reduced.width).toMatchObject({ duration: 0 });
     expect(reduced.offsetX).toBe(0);
     expect(reduced.content).toMatchObject({ duration: 0.12 });
+    expect(reduced.sheetOffsetX).toBe(0);
 
     motionPrefs.reduced = true;
     const { nav } = renderRail();

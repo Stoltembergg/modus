@@ -174,7 +174,7 @@ export function ToolFilterSetting() {
             role="progressbar"
           >
             <div
-              className="h-full rounded-full bg-[var(--color-accent)] transition-all duration-150"
+              className="h-full rounded-full bg-[var(--color-accent)] transition-all duration-(--motion-duration-base)"
               style={{ width: `${downloadPercent}%` }}
             />
           </div>

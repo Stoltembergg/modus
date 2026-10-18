@@ -2,6 +2,7 @@ import { IconCube, IconSparkles } from "@tabler/icons-react";
 import { AnimatePresence, m } from "motion/react";
 import { useEffect, useMemo, useState } from "react";
 import { cn } from "../../lib/cn";
+import { tween } from "../../lib/motion";
 import {
   createProviderLogoResolver,
   providerLogoColor,
@@ -119,7 +120,7 @@ export function ProviderLogo({ provider, name, size = "md", framed = true }: Pro
               maskRepeat: "no-repeat",
               maskSize: "contain",
             }}
-            transition={{ duration: 0.14, ease: "easeOut" }}
+            transition={tween("base")}
           />
         ) : state === "loading" ? (
           <m.span
@@ -128,7 +129,7 @@ export function ProviderLogo({ provider, name, size = "md", framed = true }: Pro
             exit={{ opacity: 0 }}
             initial={{ opacity: 0 }}
             key="loading"
-            transition={{ duration: 0.14, ease: "easeOut" }}
+            transition={tween("base")}
           />
         ) : (
           <m.span
@@ -140,7 +141,7 @@ export function ProviderLogo({ provider, name, size = "md", framed = true }: Pro
             exit={{ opacity: 0, scale: 0.94 }}
             initial={{ opacity: 0, scale: 0.94 }}
             key="fallback"
-            transition={{ duration: 0.14, ease: "easeOut" }}
+            transition={tween("base")}
           >
             {provider === "synthetic" || provider === "custom" ? (
               <IconSparkles size={fallbackIconSize} stroke={1.7} />

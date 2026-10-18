@@ -1,5 +1,5 @@
 import { IconMenu2 } from "@tabler/icons-react";
-import { AnimatePresence, m, type Transition, useReducedMotion } from "motion/react";
+import { AnimatePresence, m, useReducedMotion } from "motion/react";
 import {
   createContext,
   type ReactNode,
@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import { cn } from "../../lib/cn";
+import { type NavRailMotion, navRailMotion } from "../../lib/motion";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 
 /** Width of the icon-only rail. */
@@ -20,30 +21,8 @@ export const NAV_RAIL_EXPANDED_WIDTH = 300;
 /** Below this viewport width the rail turns into a menu button + overlay sheet. */
 export const NAV_RAIL_COMPACT_QUERY = "(max-width: 640px)";
 
-/* Motion values mirror the CSS tokens in styles/app.css (--motion-ui 160ms,
-   --motion-overlay 180ms, --motion-fast 120ms, --ease-ui). */
-const EASE_UI = [0.22, 1, 0.36, 1] as const;
-const WIDTH_MOTION: Transition = { duration: 0.18, ease: EASE_UI };
-const CONTENT_MOTION: Transition = { duration: 0.16, ease: EASE_UI };
-/** Reduced motion keeps feedback as a short fade: nothing slides or resizes. */
-const REDUCED_FADE: Transition = { duration: 0.12, ease: "linear" };
-
-export type NavRailMotion = {
-  /** Transition for the rail width (instant when motion is reduced). */
-  width: Transition;
-  /** Transition for content that appears with the expanded rail. */
-  content: Transition;
-  /** Horizontal offset content enters from (0 when motion is reduced). */
-  offsetX: number;
-  reduced: boolean;
-};
-
-/** Motion recipe for the rail; reduced motion swaps every slide for a short fade. */
-export function navRailMotion(reduced: boolean): NavRailMotion {
-  return reduced
-    ? { width: { duration: 0 }, content: REDUCED_FADE, offsetX: 0, reduced: true }
-    : { width: WIDTH_MOTION, content: CONTENT_MOTION, offsetX: -4, reduced: false };
-}
+/* Rail motion lives in lib/motion.ts (navRailMotion); re-exported for callers. */
+export { type NavRailMotion, navRailMotion };
 
 type NavRailState = {
   /** True while the rail shows labels and the contextual list. */
@@ -350,8 +329,8 @@ export function NavRail({ label, pinned, compactMenuLabel, className, children }
             <m.div
               animate={{ x: 0 }}
               className="relative h-full max-w-[85vw]"
-              exit={{ x: motion.reduced ? 0 : -24 }}
-              initial={{ x: motion.reduced ? 0 : -24 }}
+              exit={{ x: motion.sheetOffsetX }}
+              initial={{ x: motion.sheetOffsetX }}
               transition={motion.content}
             >
               {nav}

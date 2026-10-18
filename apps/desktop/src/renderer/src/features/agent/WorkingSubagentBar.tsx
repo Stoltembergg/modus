@@ -2,6 +2,7 @@ import { IconLayoutBoard } from "@tabler/icons-react";
 import { AnimatePresence, m } from "motion/react";
 import { useState } from "react";
 import { cn } from "../../lib/cn";
+import { tween } from "../../lib/motion";
 import { ComposerRail } from "../composer/ComposerRail";
 
 export type WorkingSubagentItem = {
@@ -40,7 +41,7 @@ export function WorkingSubagentBar({
               initial={{ opacity: 0, y: 4 }}
               key={item.id}
               layout
-              transition={{ duration: 0.14, ease: "easeOut" }}
+              transition={tween("base")}
             >
               <button
                 className={cn(

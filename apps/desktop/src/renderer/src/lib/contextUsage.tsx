@@ -71,7 +71,7 @@ export function ContextUsageRing({ percent }: { percent: number | undefined }) {
         strokeDashoffset={offset}
         strokeWidth={strokeWidth}
         className={cn(
-          "transition-[stroke-dashoffset] duration-300 ease-out",
+          "transition-[stroke-dashoffset] duration-(--motion-duration-emphasized) ease-standard",
           !known && "opacity-0",
         )}
       />

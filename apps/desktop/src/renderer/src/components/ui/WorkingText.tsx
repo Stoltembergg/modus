@@ -14,15 +14,16 @@ type WorkingTextProps = {
  * sweeping left → right, then a short pause. The band is a gradient over `currentColor`
  * clipped to the glyphs, so it follows light/dark and any caller colour; the dimmest
  * point keeps ~55% of the colour so the text stays readable mid-sweep.
- * Paused or reduced motion: plain text, no gradient, no transparent fill.
+ * Reduced motion: no moving gradient; the text breathes in opacity instead
+ * (`working-text--pulse`). Paused: plain text, no gradient, no transparent fill.
  */
 export function WorkingText({ children, className, paused = false }: WorkingTextProps) {
   const reduceMotion = useReducedMotion() ?? false;
-  const sweeping = !paused && !reduceMotion;
+  const mode = paused ? "static" : reduceMotion ? "pulse" : "sweep";
   return (
     <span
-      className={cn("working-text", sweeping && "working-text--sweep", className)}
-      data-working-text={sweeping ? "sweep" : "static"}
+      className={cn("working-text", mode !== "static" && `working-text--${mode}`, className)}
+      data-working-text={mode}
     >
       {children}
     </span>

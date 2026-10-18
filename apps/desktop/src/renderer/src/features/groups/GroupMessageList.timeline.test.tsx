@@ -225,7 +225,7 @@ describe("Groups canonical timeline", () => {
     expect(entryMessageIds()).toEqual(["threshold-new"]);
   });
 
-  it("defines a brief upward fade and disables it for reduced motion", () => {
+  it("defines a brief upward fade and keeps only the fade for reduced motion", () => {
     expect(timelineStyles.includes("@keyframes group-message-card-enter")).toBe(true);
     expect(
       /@keyframes group-message-card-enter\s*\{\s*from\s*\{[^}]*opacity:\s*0[^}]*transform:\s*translateY\(\s*8px\s*\)/s.test(
@@ -233,7 +233,7 @@ describe("Groups canonical timeline", () => {
       ),
     ).toBe(true);
     expect(
-      /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*\.group-message-card-enter\s*\{[^}]*animation:\s*none;/s.test(
+      /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*\.group-message-card-enter\s*\{[^}]*animation:\s*motion-reduced-fade-in\s+var\(--motion-duration-reduced\)/s.test(
         timelineStyles,
       ),
     ).toBe(true);

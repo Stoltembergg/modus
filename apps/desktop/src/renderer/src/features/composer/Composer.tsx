@@ -34,6 +34,7 @@ import { MenuRow } from "../../components/ui/MenuRow";
 import { SendStopIcon } from "../../components/ui/SendStopIcon";
 import { cn } from "../../lib/cn";
 import { ContextUsageRing, contextUsagePercent, formatUsagePercent } from "../../lib/contextUsage";
+import { tween } from "../../lib/motion";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { formatUiNumber, useUiIntlLocale } from "../../lib/uiIntl";
 import { useWidthTier } from "../../lib/useWidthTier";
@@ -553,7 +554,7 @@ export function Composer({
       {/* biome-ignore lint/a11y/noStaticElementInteractions: drag-drop is a pointer-only enhancement; keyboard users attach images via paste in the editor. */}
       <div
         className={cn(
-          "composer-prompt-shell relative transition-[border-color] duration-150",
+          "composer-prompt-shell relative transition-[border-color] duration-(--motion-duration-base)",
           integrated ? "border-0 bg-transparent shadow-none" : "composer-glass",
           !integrated && COMPOSER_RADIUS_CLASS,
           !integrated && Boolean(footer) && "z-10",
@@ -620,7 +621,7 @@ export function Composer({
                   initial={{ opacity: 0, scale: 0.92 }}
                   key={image.id}
                   layout
-                  transition={{ duration: 0.14, ease: "easeOut" }}
+                  transition={tween("base")}
                 >
                   <ImageThumb
                     alt={image.name}
@@ -748,7 +749,7 @@ export function Composer({
             {/* One control: arrow → square morph while the agent is running. */}
             <button
               aria-label={isRunning ? "Stop" : "Send"}
-              className="flex size-7 shrink-0 items-center justify-center rounded-[10px] bg-accent text-white shadow-[0_4px_14px_-4px_var(--color-accent)] transition-[background-color,box-shadow,transform] duration-150 hover:brightness-110 active:scale-[0.96] disabled:bg-chip-strong disabled:text-fg-faint disabled:shadow-none motion-reduce:transition-none"
+              className="flex size-7 shrink-0 items-center justify-center rounded-[10px] bg-accent text-white shadow-[0_4px_14px_-4px_var(--color-accent)] transition-[background-color,box-shadow,transform] duration-(--motion-duration-base) hover:brightness-110 active:scale-[0.96] disabled:bg-chip-strong disabled:text-fg-faint disabled:shadow-none motion-reduce:transition-reduced-fade"
               disabled={isRunning ? !onAbort : !hasContent || !canSubmit || submitting || !model}
               onClick={() => {
                 if (isRunning) onAbort?.();
@@ -758,7 +759,7 @@ export function Composer({
             >
               {submitting && !isRunning ? (
                 <IconLoader2
-                  className="animate-spin motion-reduce:animate-none"
+                  className="animate-spin motion-reduce:animate-pulse"
                   size={ICON.sm}
                   stroke={ICON_STROKE.sm}
                 />
@@ -850,7 +851,7 @@ function ContextUsageIndicator({
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Positioner align="end" side="top" sideOffset={8}>
-          <Popover.Popup className="origin-(--transform-origin) popup-chrome p-2 transition-[transform,opacity] duration-100 data-ending-style:opacity-0 data-starting-style:opacity-0">
+          <Popover.Popup className="origin-(--transform-origin) popup-chrome p-2 transition-[transform,opacity] duration-(--motion-duration-fast) data-ending-style:opacity-0 data-starting-style:opacity-0">
             <ContextUsageTooltip
               {...(contextWindow ? { contextWindow } : {})}
               {...(usage ? { usage } : {})}

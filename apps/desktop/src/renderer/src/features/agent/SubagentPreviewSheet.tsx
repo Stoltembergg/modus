@@ -3,8 +3,9 @@ import { m } from "motion/react";
 import { type ReactNode, useEffect, useState } from "react";
 import { TOOLBAR_ICON, ToolbarButton } from "../../components/ui/ToolbarButton";
 import { cn } from "../../lib/cn";
+import { MOTION_DURATION, MOTION_EASE } from "../../lib/motion";
 
-const PANEL_TRANSITION = { duration: 0.19, ease: [0.22, 1, 0.36, 1] } as const;
+const PANEL_TRANSITION = { duration: MOTION_DURATION.slow, ease: MOTION_EASE.standard };
 
 /**
  * Subagent preview sheet, scoped to the timeline area of its host pane so the

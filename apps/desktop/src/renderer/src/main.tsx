@@ -2,6 +2,7 @@
  * Noto Sans SC Variable: owned CJK face — same optical contract on every machine, not YaHei lottery. */
 import "@fontsource-variable/inter/opsz.css";
 import "@fontsource-variable/noto-sans-sc";
+import { MotionConfig } from "motion/react";
 import { StrictMode, useLayoutEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./app/App";
@@ -63,6 +64,10 @@ if (import.meta.env.DEV) {
 createRoot(rootElement).render(
   <StrictMode>
     <StartupCommitReporter />
-    <App />
+    {/* One reduced-motion policy for every m.* element, portals included (they
+        stay in this React tree). Sites still pick their fade via lib/motion.ts. */}
+    <MotionConfig reducedMotion="user">
+      <App />
+    </MotionConfig>
   </StrictMode>,
 );

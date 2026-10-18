@@ -11,10 +11,10 @@ export type UpdateApi = ModusApi["update"];
 
 /**
  * A new offer's primary button breathes: a soft ring (::after, opacity only, so nothing
- * moves) that stops on hover and focus and never runs with reduced motion.
+ * moves) that stops on hover and focus; opacity only, so it also runs with reduced motion.
  */
 export const BREATHE_CLASSES =
-  "update-breathe-ring after:animate-update-breathe hover:after:animate-none focus:after:animate-none focus-visible:after:animate-none motion-reduce:after:animate-none";
+  "update-breathe-ring after:animate-update-breathe hover:after:animate-none focus:after:animate-none focus-visible:after:animate-none";
 export const UPDATE_TOAST_DURATION_MS = 45_000;
 
 const IDLE: UpdateState = { status: "idle" };
@@ -88,7 +88,7 @@ export function UpdateToastView({
           role="progressbar"
         >
           <div
-            className="update-toast-progress__value motion-reduce:transition-none"
+            className="update-toast-progress__value motion-reduce:transition-reduced-fade"
             style={{ width: `${content.progress}%` }}
           />
         </div>
@@ -127,7 +127,7 @@ export function UpdateToastView({
           fuse="none"
           icon={
             content.busy ? (
-              <IconLoader2 className="animate-spin motion-reduce:animate-none" size={13} />
+              <IconLoader2 className="animate-spin motion-reduce:animate-pulse" size={13} />
             ) : content.tone === "danger" ? (
               <IconAlertTriangle className="text-danger" size={13} stroke={1.7} />
             ) : (

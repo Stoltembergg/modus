@@ -11,6 +11,7 @@ import { AnimatePresence, m } from "motion/react";
 import { type ReactNode, useState } from "react";
 import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
 import { cn } from "../../lib/cn";
+import { tween } from "../../lib/motion";
 import { useSettingsText } from "../../lib/settingsText";
 import type { KeyValueRow } from "./provider-form-mapping";
 
@@ -123,7 +124,7 @@ export function SelectField<T extends string>({
             side="bottom"
             sideOffset={5}
           >
-            <Select.Popup className="scroll-thin origin-(--transform-origin) min-w-[var(--anchor-width)] overflow-y-auto popup-chrome p-1 transition-[transform,opacity] duration-100 data-[side=bottom]:data-ending-style:translate-y-[-4px] data-[side=bottom]:data-starting-style:translate-y-[-4px] data-[side=top]:data-ending-style:translate-y-[4px] data-[side=top]:data-starting-style:translate-y-[4px] data-ending-style:opacity-0 data-starting-style:opacity-0">
+            <Select.Popup className="scroll-thin origin-(--transform-origin) min-w-[var(--anchor-width)] overflow-y-auto popup-chrome p-1 transition-[transform,opacity] duration-(--motion-duration-fast) data-[side=bottom]:data-ending-style:translate-y-[-4px] data-[side=bottom]:data-starting-style:translate-y-[-4px] data-[side=top]:data-ending-style:translate-y-[4px] data-[side=top]:data-starting-style:translate-y-[4px] data-ending-style:opacity-0 data-starting-style:opacity-0">
               {options.map((option) => (
                 <Select.Item
                   className="grid h-8 cursor-default grid-cols-[minmax(0,1fr)_16px] items-center gap-2 rounded-md px-2 text-sm text-fg-muted outline-none select-none data-highlighted:bg-hover data-highlighted:text-fg"
@@ -175,7 +176,7 @@ export function SwitchControl({
     >
       <Switch.Thumb
         className={cn(
-          "block size-4 rounded-full bg-fg-muted transition-transform duration-150 ease-out",
+          "block size-4 rounded-full bg-fg-muted transition-transform duration-(--motion-duration-base) ease-standard",
           "data-[checked]:translate-x-4 data-[checked]:bg-canvas",
           "data-[unchecked]:translate-x-0",
         )}
@@ -226,7 +227,10 @@ export function Disclosure({
         type="button"
       >
         <IconChevronRight
-          className={cn("transition-transform duration-150", open && "rotate-90")}
+          className={cn(
+            "transition-transform duration-(--motion-duration-base)",
+            open && "rotate-90",
+          )}
           size={13}
           stroke={1.8}
         />
@@ -290,7 +294,7 @@ export function KeyValueEditor({
               initial={{ opacity: 0, y: 4 }}
               key={row.rowId}
               layout
-              transition={{ duration: 0.14, ease: "easeOut" }}
+              transition={tween("base")}
             >
               <input
                 aria-label={t("settings.window.keyValueKeyAriaLabel", { title })}

@@ -47,7 +47,7 @@ export function UnsavedChangesDialog({
       <AlertDialog.Portal>
         <AlertDialog.Backdrop
           className={cn(
-            "fixed inset-0 z-50 bg-black/50 transition-opacity duration-150 ease-out-quint motion-reduce:transition-none",
+            "fixed inset-0 z-50 bg-black/50 transition-opacity duration-(--motion-duration-base) ease-standard motion-reduce:transition-reduced-fade",
             "data-ending-style:opacity-0 data-starting-style:opacity-0",
           )}
         />
@@ -55,7 +55,7 @@ export function UnsavedChangesDialog({
           className={cn(
             "-translate-x-1/2 -translate-y-1/2 fixed top-1/2 left-1/2 z-50 w-[min(400px,calc(100vw-2rem))]",
             "origin-center overflow-hidden popup-chrome px-4 pt-3.5 pb-3 outline-none",
-            "transition-[transform,opacity,scale] duration-150 ease-out-quint motion-reduce:transition-none",
+            "transition-[transform,opacity,scale] duration-(--motion-duration-base) ease-standard motion-reduce:transition-reduced-fade",
             "data-ending-style:scale-[0.96] data-ending-style:opacity-0",
             "data-starting-style:scale-[0.96] data-starting-style:opacity-0",
           )}

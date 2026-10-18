@@ -601,7 +601,7 @@ export function GroupComposer({
             {modelChip ? <GroupModelChip chip={modelChip} locale={locale} /> : null}
             <button
               aria-label={t("composer.send")}
-              className="flex size-7 shrink-0 items-center justify-center rounded-full bg-focus-ring text-white transition-[background-color,transform,opacity] duration-150 hover:bg-focus-ring-soft active:scale-95 disabled:opacity-40 motion-reduce:transition-none"
+              className="flex size-7 shrink-0 items-center justify-center rounded-full bg-focus-ring text-white transition-[background-color,transform,opacity] duration-(--motion-duration-base) hover:bg-focus-ring-soft active:scale-95 disabled:opacity-40 motion-reduce:transition-reduced-fade"
               disabled={!canSend}
               onClick={() => void send()}
               type="button"

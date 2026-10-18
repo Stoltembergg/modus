@@ -118,7 +118,7 @@ export function FailureBlacklistView({
                   aria-hidden
                   className={
                     state.status === "loading" || clearing
-                      ? "animate-spin motion-reduce:animate-none"
+                      ? "animate-spin motion-reduce:animate-pulse"
                       : ""
                   }
                   size={14}
@@ -149,7 +149,7 @@ export function FailureBlacklistView({
           className="flex min-h-28 items-center justify-center gap-2 rounded-xl border border-hairline-soft bg-panel text-sm text-fg-muted"
           role="status"
         >
-          <IconRefresh aria-hidden className="animate-spin motion-reduce:animate-none" size={16} />
+          <IconRefresh aria-hidden className="animate-spin motion-reduce:animate-pulse" size={16} />
           Loading failure blacklist…
         </div>
       ) : state.status === "error" ? (

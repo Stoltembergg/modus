@@ -13,6 +13,7 @@ import type { CustomProviderConfig, TestCustomProviderResult } from "../../../..
 import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
 import { WorkingText } from "../../components/ui/WorkingText";
 import { cn } from "../../lib/cn";
+import { tween } from "../../lib/motion";
 import { type SettingsTextFn, settingsTextFor, useSettingsText } from "../../lib/settingsText";
 import { formatUiNumber, uiIntlLocale } from "../../lib/uiIntl";
 import {
@@ -584,7 +585,7 @@ function ModelRowEditor({
       exit={{ opacity: 0, y: -6 }}
       initial={{ opacity: 0, y: 6 }}
       layout
-      transition={{ duration: 0.16, ease: "easeOut" }}
+      transition={tween("base")}
     >
       <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] items-center gap-2 px-3 py-2.5">
         <input
@@ -629,7 +630,10 @@ function ModelRowEditor({
         type="button"
       >
         <IconChevronRight
-          className={cn("shrink-0 transition-transform duration-150", open && "rotate-90")}
+          className={cn(
+            "shrink-0 transition-transform duration-(--motion-duration-base)",
+            open && "rotate-90",
+          )}
           size={12}
           stroke={1.8}
         />

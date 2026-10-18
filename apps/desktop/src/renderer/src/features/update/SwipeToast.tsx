@@ -9,13 +9,13 @@ import {
   useState,
 } from "react";
 
+import { MOTION_DURATION, reducedFade, tween } from "../../lib/motion";
 import "./SwipeToast.css";
 
-const EASE_OUT = [0.23, 1, 0.32, 1] as const;
 const FLICK = 0.11;
 const DEAD_ZONE = 3;
 const RESIST_PX = 24;
-const COLLAPSE_MS = 200;
+const COLLAPSE_MS = Math.round(MOTION_DURATION.slow * 1000);
 const EXIT = 0.7;
 const BURN = [{ transform: "scaleX(1)" }, { transform: "scaleX(0)" }];
 const HAS_STARTING_STYLE = typeof window !== "undefined" && "CSSStartingStyleRule" in window;
@@ -246,7 +246,7 @@ export function SwipeToast({
         velocity,
       });
     }
-    void animate(fade, 0, { duration: 0.2, ease: EASE_OUT }).then(() => finish("swipe"));
+    void animate(fade, 0, reduceMotion ? reducedFade : tween("slow")).then(() => finish("swipe"));
   };
 
   return (
@@ -348,7 +348,7 @@ export function SwipeToast({
                   y,
                   0,
                   reduceMotion
-                    ? { duration: 0.2, ease: EASE_OUT }
+                    ? tween("slow")
                     : { type: "spring", duration: 0.5, bounce: settleBounce, velocity },
                 );
               }

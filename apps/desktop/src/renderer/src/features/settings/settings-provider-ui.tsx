@@ -28,6 +28,7 @@ import {
   selectedThinkingLabel,
   selectedThinkingOption,
 } from "../../lib/modelThinking";
+import { tween } from "../../lib/motion";
 import { type SettingsTextFn, settingsTextFor, useSettingsText } from "../../lib/settingsText";
 import { formatUiNumber, uiIntlLocale } from "../../lib/uiIntl";
 import { Field, parsePositiveInteger, SelectField, SwitchControl } from "./form-controls";
@@ -179,7 +180,7 @@ export function ProviderDetail({
       className="flex min-w-0 flex-col"
       exit={{ opacity: 0, y: 8 }}
       initial={{ opacity: 0, y: 8 }}
-      transition={{ duration: 0.24, ease: "easeOut" }}
+      transition={tween("slow")}
     >
       <div className="pb-4">
         <div className="flex items-start justify-between gap-4">
@@ -391,7 +392,7 @@ export function ProviderCredentials({
           </button>
           {canDisconnect ? (
             <button
-              className="h-8 rounded-full bg-danger/10 px-3 text-xs text-danger transition-[background-color,transform] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] hover:bg-danger/15 active:scale-[0.97]"
+              className="h-8 rounded-full bg-danger/10 px-3 text-xs text-danger transition-[background-color,transform] duration-(--motion-duration-slow) ease-standard hover:bg-danger/15 active:scale-[0.97]"
               onClick={onDisconnectProvider}
               type="button"
             >
@@ -432,7 +433,7 @@ export function ProviderCredentials({
           </button>
           {canDisconnect ? (
             <button
-              className="h-7 rounded-full bg-danger/10 px-3 text-xs text-danger transition-[background-color,transform] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] hover:bg-danger/15 active:scale-[0.97]"
+              className="h-7 rounded-full bg-danger/10 px-3 text-xs text-danger transition-[background-color,transform] duration-(--motion-duration-slow) ease-standard hover:bg-danger/15 active:scale-[0.97]"
               onClick={onDisconnectProvider}
               type="button"
             >
@@ -664,7 +665,7 @@ export function ModelRow({
       exit={{ opacity: 0, y: -4 }}
       initial={{ opacity: 0, y: 4 }}
       layout
-      transition={{ duration: 0.14, ease: "easeOut" }}
+      transition={tween("base")}
     >
       <div className="grid min-h-[44px] grid-cols-[minmax(0,1fr)_auto] items-center gap-4">
         <div className="min-w-0">
@@ -837,7 +838,7 @@ export function ProviderDetailLoading() {
       className="flex min-h-[320px] min-w-0 items-center justify-center px-5 py-10"
       exit={{ opacity: 0, y: 8 }}
       initial={{ opacity: 0, y: 8 }}
-      transition={{ duration: 0.16, ease: "easeOut" }}
+      transition={tween("base")}
     >
       <WorkingText className="text-sm">{t("settings.providerUi.loadingProvider")}</WorkingText>
     </m.section>

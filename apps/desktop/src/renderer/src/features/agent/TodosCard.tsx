@@ -10,7 +10,7 @@
  * in-flight hints, and change detection keyed by todo id (upstream keys by
  * index). When a list update arrives while the card is mounted, rows whose
  * status changed (or that are new) get a short highlight + glyph pop — the
- * upstream "pending update" diff; skipped under reduced motion.
+ * upstream "pending update" diff; under reduced motion the glyph only fades.
  */
 import {
   IconAlertCircle,
@@ -27,6 +27,7 @@ import type { TodoItem, TodoStatus } from "../../../../shared/contracts";
 import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
 import { WorkingText } from "../../components/ui/WorkingText";
 import { cn } from "../../lib/cn";
+import { motionOffset, motionTransition, tween } from "../../lib/motion";
 
 /** How long a changed row stays highlighted after an update arrives. */
 export const TODO_CHANGE_HIGHLIGHT_MS = 1400;
@@ -132,7 +133,7 @@ export function TodosCard({
         <span className="min-w-0 flex-1" />
         <IconChevronRight
           className={cn(
-            "shrink-0 text-fg-faint transition-transform duration-150",
+            "shrink-0 text-fg-faint transition-transform duration-(--motion-duration-base)",
             open && "rotate-90",
           )}
           size={14}
@@ -148,7 +149,7 @@ export function TodosCard({
           ) : (
             todos.map((todo) => (
               <TodoRow
-                animate={!reduceMotion}
+                reduced={reduceMotion ?? false}
                 changed={changed.has(todo.id)}
                 key={todo.id}
                 todo={todo}
@@ -207,11 +208,12 @@ const TODO_ROW_STYLES: Record<
 function TodoRow({
   todo,
   changed = false,
-  animate = true,
+  reduced = false,
 }: {
   todo: TodoItem;
   changed?: boolean;
-  animate?: boolean;
+  /** Reduced motion: the glyph fades back in without the scale pop. */
+  reduced?: boolean;
 }) {
   const { Glyph, iconClass, iconStroke, textClass } = TODO_ROW_STYLES[todo.status];
   const blocked = todo.status === "blocked";
@@ -227,9 +229,9 @@ function TodoRow({
       <m.span
         animate={{ scale: 1, opacity: 1 }}
         className="mt-0.5 flex shrink-0"
-        initial={changed && animate ? { scale: 0.6, opacity: 0.4 } : false}
+        initial={changed ? { scale: motionOffset(0.6, reduced, 1), opacity: 0.4 } : false}
         key={`${todo.status}-${changed ? "changed" : "steady"}`}
-        transition={{ duration: 0.22, ease: "easeOut" }}
+        transition={motionTransition(tween("slow"), reduced)}
       >
         <Glyph className={cn("shrink-0", iconClass)} size={14} stroke={iconStroke} />
       </m.span>

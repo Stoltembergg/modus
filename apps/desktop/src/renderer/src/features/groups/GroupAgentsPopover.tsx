@@ -168,7 +168,7 @@ export function GroupAgentsPopover({
                 state={agentAvatarState(state, avatar.archived)}
               />
               <AgentPresenceDot
-                className="absolute right-0 bottom-0 transition-colors duration-[var(--motion-ui)]"
+                className="absolute right-0 bottom-0 transition-colors duration-(--motion-duration-base)"
                 state={presence}
               />
             </span>

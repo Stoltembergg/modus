@@ -33,6 +33,7 @@ import { type CodeSelectionRange, CodeViewer } from "../../components/code/CodeV
 import { EmptyState } from "../../components/ui/Panel";
 import { Tooltip } from "../../components/ui/Tooltip";
 import { cn } from "../../lib/cn";
+import { MOTION_DURATION, MOTION_EASE } from "../../lib/motion";
 import { beginResizeGesture, endResizeGesture } from "../../lib/resizeGesture";
 import { MarkdownExcerptPreview } from "../preview/MarkdownExcerptPreview";
 import { PreviewHost } from "../preview/PreviewHost";
@@ -82,7 +83,7 @@ function fileNameOf(file: FileReadResult | undefined): string {
 const DEFAULT_TREE_WIDTH = 240;
 const MIN_TREE_WIDTH = 180;
 const MAX_TREE_WIDTH = 480;
-const TREE_TRANSITION = { duration: 0.32, ease: [0.25, 0.1, 0.25, 1] } as const;
+const TREE_TRANSITION = { duration: MOTION_DURATION.emphasized, ease: MOTION_EASE.gentle };
 
 function isMarkdown(path: string): boolean {
   return /\.(md|markdown|mdx)$/i.test(path);
@@ -957,14 +958,14 @@ function FileRow({
       {isDir ? (
         loading ? (
           <IconLoader2
-            className="shrink-0 animate-spin text-fg-faint motion-reduce:animate-none"
+            className="shrink-0 animate-spin text-fg-faint motion-reduce:animate-pulse"
             size={12}
             stroke={1.5}
           />
         ) : (
           <IconChevronRight
             className={cn(
-              "shrink-0 text-fg-faint transition-transform duration-150",
+              "shrink-0 text-fg-faint transition-transform duration-(--motion-duration-base)",
               expanded && "rotate-90",
             )}
             size={12}
