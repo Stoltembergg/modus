@@ -255,10 +255,8 @@ function LiveToolCard({
           {status}
         </span>
         <IconChevronRight
-          className={cn(
-            "shrink-0 text-fg-faint transition-transform duration-(--motion-duration-base)",
-            bodyOpen && "rotate-90",
-          )}
+          className="disclosure-chevron shrink-0 text-fg-faint duration-(--motion-duration-base)"
+          data-open={bodyOpen ? "" : undefined}
           size={14}
           stroke={1.7}
         />
@@ -318,10 +316,8 @@ function FlatToolRow({
       )}
       {expandable ? (
         <IconChevronRight
-          className={cn(
-            "shrink-0 text-fg-faint transition-transform duration-(--motion-duration-base)",
-            open && "rotate-90",
-          )}
+          className="disclosure-chevron shrink-0 text-fg-faint duration-(--motion-duration-base)"
+          data-open={open ? "" : undefined}
           size={14}
           stroke={1.7}
         />
