@@ -241,7 +241,7 @@ export function MorphingDialogClose({
     <button
       aria-label="Close"
       className={cn(
-        "absolute top-3 right-3 flex size-7 items-center justify-center rounded-md text-fg-muted hover:bg-hover hover:text-fg",
+        "absolute top-3 right-3 flex size-7 items-center justify-center rounded-md text-fg-muted outline-none hover:bg-hover hover:text-fg focus-visible:ring-2 focus-visible:ring-focus-ring/35",
         className,
       )}
       onClick={() => setIsOpen(false)}
