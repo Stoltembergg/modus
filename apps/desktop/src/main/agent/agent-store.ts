@@ -128,6 +128,7 @@ export function createAgentSessionRecord(input: {
   cwd: string;
   runtime?: "pi-sdk" | "pi-rpc";
   model?: string;
+  agentId?: string;
   piSessionId?: string;
   piSessionFile?: string;
   parentSessionId?: string;
@@ -151,6 +152,9 @@ export function createAgentSessionRecord(input: {
 
   if (input.model !== undefined) {
     session.model = input.model;
+  }
+  if (input.agentId !== undefined) {
+    session.agentId = input.agentId;
   }
   if (input.piSessionId !== undefined) {
     session.piSessionId = input.piSessionId;
@@ -180,9 +184,9 @@ export function createAgentSessionRecord(input: {
         parent_session_id, subagent_task, subagent_type, subagent_readonly,
         subagent_worktree_path, subagent_worktree_branch, subagent_worktree_base_sha,
         subagent_integration_status, subagent_changed_files_json, subagent_conflict_files_json,
-        created_at, updated_at
+        agent_id, created_at, updated_at
        )
-       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       session.id,
@@ -208,6 +212,7 @@ export function createAgentSessionRecord(input: {
       session.subagentWorktree?.conflictFiles
         ? JSON.stringify(session.subagentWorktree.conflictFiles)
         : null,
+      session.agentId ?? null,
       session.createdAt,
       session.updatedAt,
     );

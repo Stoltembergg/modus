@@ -2,6 +2,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  AGENT_AVATAR_COLORS,
+  AGENT_AVATAR_FACES,
+  AGENT_AVATAR_SHAPES,
+} from "../../shared/contracts";
 
 let userData: string;
 
@@ -14,6 +19,7 @@ vi.mock("electron", () => ({
 const { getDatabase } = await import("../db/database");
 const {
   getAgentSession,
+  createAgentSessionRecord,
   listAgentSessions,
   listArchivedAgentSessions,
   setAgentSessionArchived,
@@ -57,6 +63,35 @@ afterAll(async () => {
 });
 
 describe("agent-store", () => {
+  it("persists an optional Agent identity on a newly created session", () => {
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    const agentId = `agent-${crypto.randomUUID()}`;
+    insertWorkspace(workspaceId);
+    getDatabase()
+      .prepare(
+        `insert into agents (id, name, avatar_face, avatar_color, avatar_shape, created_at, updated_at)
+         values (?, 'Automation Agent', ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        agentId,
+        AGENT_AVATAR_FACES[0],
+        AGENT_AVATAR_COLORS[0],
+        AGENT_AVATAR_SHAPES[0],
+        new Date().toISOString(),
+        new Date().toISOString(),
+      );
+
+    const session = createAgentSessionRecord({
+      workspaceId,
+      cwd: `root-${workspaceId}`,
+      title: "Scheduled conversation",
+      agentId,
+    });
+
+    expect(session.agentId).toBe(agentId);
+    expect(getAgentSession(session.id)?.agentId).toBe(agentId);
+  });
+
   it("hides archived sessions from the default list", () => {
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     const visibleId = `session-${crypto.randomUUID()}`;

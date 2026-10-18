@@ -48,13 +48,13 @@
 - `createAutomationStore(db)` provides validated create/update, list/get, pause/resume, soft-delete, history, unresolved-run reconciliation and transactional `claimOccurrence` operations.
 - `nextAutomationOccurrence(schedule, timeZone, after)` returns the next calendar instant or `null`; missed-interval calculation advances without claiming an execution.
 
-- [ ] Add failing tests for one-time/daily/weekly recurrence, timezone changes, DST skip/first-repeat behavior, and missed intervals using fixed dates.
-- [ ] Run `npx vitest run --root ../.. apps/desktop/src/main/automations/automation-schedule.test.ts`; confirm the new schedule cases fail before implementation.
-- [ ] Implement the schedule calculation and strict input validation without adding a recurrence dependency.
-- [ ] Add failing store tests for persisted snapshots, soft deletion/history retention, unique occurrence claims under competing callers, and restart reconciliation.
-- [ ] Run `npx vitest run --root ../.. apps/desktop/src/main/automations/automation-store.test.ts`; confirm failures are limited to the missing store behavior.
-- [ ] Add the minimal tables and indexes in `migrateDatabase`, then implement the store operations with transactions for occurrence claims.
-- [ ] Run both automation test files and the focused database migration tests; confirm all pass and old database migration remains idempotent.
+- [x] Add failing tests for one-time/daily/weekly recurrence, timezone changes, DST skip/first-repeat behavior, and missed intervals using fixed dates.
+- [x] Run `npx vitest run --root ../.. apps/desktop/src/main/automations/automation-schedule.test.ts`; confirm the new schedule cases fail before implementation.
+- [x] Implement the schedule calculation and strict input validation without adding a recurrence dependency.
+- [x] Add failing store tests for persisted snapshots, soft deletion/history retention, unique occurrence claims under competing callers, and restart reconciliation.
+- [x] Run `npx vitest run --root ../.. apps/desktop/src/main/automations/automation-store.test.ts`; confirm failures are limited to the missing store behavior.
+- [x] Add the minimal tables and indexes in `migrateDatabase`, then implement the store operations with transactions for occurrence claims.
+- [x] Run both automation test files and the focused database migration tests; confirm all pass and old database migration remains idempotent.
 
 ### Task 2: Own scheduling and execution in the main process
 
@@ -69,12 +69,12 @@
 - The service uses `AgentRuntime.create`, `prompt`, `abort`, `onTurnSettled` and `onQuestionPending`; it maps only automation-owned sessions to execution records.
 - Window closure pauses new admission and aborts owned sessions. Minimized windows remain valid. Shutdown stops claims and drains owned sessions before `shutdownAgentRuntime()`.
 
-- [ ] Add synthetic-runtime tests for service reuse, one global automation slot, Run now busy behavior, due occurrence skipped while occupied (no backlog), question-waiting state, timeout, cancellation and settlement cleanup.
-- [ ] Add lifecycle tests proving minimized-window execution, closed-window pause/cancel, reopening resume, app shutdown and unresolved-run reconciliation.
-- [ ] Run `npx vitest run --root ../.. apps/desktop/src/main/automations/automation-service.test.ts`; confirm failures expose missing lifecycle behavior.
-- [ ] Implement the service with injected clock/runtime, transactional admission and a single scheduler timer; retain the slot until runtime settlement is confirmed.
-- [ ] Wire service creation after database/runtime availability, start it for the live main window, pause it from the window `closed` callback, resume on window recreation, and stop it in the existing bounded shutdown drain.
-- [ ] Run service, runtime-registry and focused main lifecycle tests; confirm scheduled prompts use saved project/cwd/Agent/model settings without changing foreground chat concurrency.
+- [x] Add synthetic-runtime tests for service reuse, one global automation slot, Run now busy behavior, due occurrence skipped while occupied (no backlog), question-waiting state, timeout, cancellation and settlement cleanup.
+- [x] Add lifecycle tests proving minimized-window execution, closed-window pause/cancel, reopening resume, app shutdown and unresolved-run reconciliation.
+- [x] Run `npx vitest run --root ../.. apps/desktop/src/main/automations/automation-service.test.ts`; confirm failures expose missing lifecycle behavior.
+- [x] Implement the service with injected clock/runtime, transactional admission and a single scheduler timer; retain the slot until runtime settlement is confirmed.
+- [x] Wire service creation after database/runtime availability, start it for the live main window, pause it from the window `closed` callback, resume on window recreation, and stop it in the existing bounded shutdown drain.
+- [x] Run service, runtime-registry and focused main lifecycle tests; confirm scheduled prompts use saved project/cwd/Agent/model settings without changing foreground chat concurrency.
 
 ### Task 3: Expose validated host operations and confirmed chat proposals
 

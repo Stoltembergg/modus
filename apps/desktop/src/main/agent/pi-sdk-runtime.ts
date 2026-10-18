@@ -3802,6 +3802,7 @@ export class PiSdkRuntime implements AgentRuntime {
       title: input.title,
       runtime: "pi-sdk",
       ...(input.id !== undefined ? { id: input.id } : {}),
+      ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),
       ...(input.parentSessionId !== undefined ? { parentSessionId: input.parentSessionId } : {}),
       ...(input.subagentTask !== undefined ? { subagentTask: input.subagentTask } : {}),
       ...(input.subagentType !== undefined ? { subagentType: input.subagentType } : {}),

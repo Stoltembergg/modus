@@ -5,6 +5,7 @@ import {
   type BrowserWindow as BrowserWindowType,
   dialog,
   nativeTheme,
+  powerMonitor,
   shell,
 } from "electron";
 import { resolveWindowAppearance } from "../shared/window-appearance";
@@ -26,6 +27,12 @@ import {
   initializeAuthService,
   shutdownAuthService,
 } from "./auth/auth-service-instance";
+import {
+  closeAutomationServiceWindow,
+  startAutomationService,
+  stopAutomationService,
+  wakeAutomationService,
+} from "./automations/automation-service-instance";
 import { getBillingService, shutdownBillingService } from "./billing/billing-service-instance";
 import { resolveBrowserLocale } from "./browser/browser-locale";
 import {
@@ -151,7 +158,9 @@ function openMainWindow(): void {
 
   mainWindow.on("closed", () => {
     mainWindow = null;
+    closeAutomationServiceWindow();
   });
+  startAutomationService(mainWindow);
 }
 
 function focusMainWindow(): void {
@@ -253,6 +262,7 @@ if (!app.requestSingleInstanceLock()) {
         }
       };
       startRemoteModelCatalog(notifyModelCatalogChanged);
+      powerMonitor.on("resume", wakeAutomationService);
       // B4b: the Modus provider follows the account session (registered only when signed in).
       startModusProvider(notifyModelCatalogChanged);
       // Tool filter log lines also go to <userData>/logs/local-models.log (created on first line).
@@ -318,7 +328,10 @@ if (!app.requestSingleInstanceLock()) {
     disposeGroupRuntime();
     shutdownBillingService();
     void drainShutdown([
-      shutdownAgentRuntime(),
+      (async () => {
+        await stopAutomationService();
+        await shutdownAgentRuntime();
+      })(),
       disposeAllReaSessions(),
       shutdownProviderAuthOperations(),
       shutdownAuthService(),
