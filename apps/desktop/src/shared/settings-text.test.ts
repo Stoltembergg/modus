@@ -125,7 +125,7 @@ describe("#258 polish", () => {
     }
   });
 
-  it("names the instruction-file pill like the general.ts \"modo próprio\" wording", () => {
+  it('names the instruction-file pill like the general.ts "modo próprio" wording', () => {
     expect(SETTINGS_TEXT_PT["settings.appearance.fileOverride"]).toBe("Arquivo próprio");
     expect(SETTINGS_TEXT_PT["settings.appearance.fileBase"]).toBe("Arquivo base");
   });
