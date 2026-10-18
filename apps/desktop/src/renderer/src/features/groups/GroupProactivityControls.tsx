@@ -76,7 +76,7 @@ export function GroupProactivityControls({
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
           <h3 className="text-xs font-medium text-fg">{t("proactivity.title")}</h3>
-          <p className="mt-0.5 text-2xs text-fg-faint">{t("proactivity.defaultDescription")}</p>
+          <p className="mt-0.5 text-2xs text-fg-muted">{t("proactivity.defaultDescription")}</p>
         </div>
         <label className="flex shrink-0 items-center gap-1.5 text-2xs text-fg-muted">
           <input
@@ -102,10 +102,10 @@ export function GroupProactivityControls({
           <span data-testid="group-suggestion-count">{suggestions.length}</span>
         </h4>
         {loading ? (
-          <p className="px-1 py-2 text-xs text-fg-faint">{t("proactivity.loading")}</p>
+          <p className="px-1 py-2 text-xs text-fg-muted">{t("proactivity.loading")}</p>
         ) : null}
         {!loading && suggestions.length === 0 ? (
-          <p className="px-1 py-2 text-xs text-fg-faint">{t("proactivity.noPending")}</p>
+          <p className="px-1 py-2 text-xs text-fg-muted">{t("proactivity.noPending")}</p>
         ) : null}
         <ul className="flex flex-col gap-2">
           {suggestions.map((suggestion) => (
@@ -180,7 +180,7 @@ function SuggestionCard({
       <p className="mt-1 text-fg-muted" data-testid="group-suggestion-reason">
         {suggestion.reason}
       </p>
-      <p className="mt-1 text-2xs text-fg-faint" data-testid="group-suggestion-origin">
+      <p className="mt-1 text-2xs text-fg-muted" data-testid="group-suggestion-origin">
         {t("proactivity.source")} {sourceLabel}
       </p>
       <label className="mt-2 flex items-center gap-2 text-2xs text-fg-muted">
@@ -199,7 +199,7 @@ function SuggestionCard({
           ))}
         </select>
       </label>
-      <p className="mt-1 text-2xs text-fg-faint" data-testid="group-suggestion-destination">
+      <p className="mt-1 text-2xs text-fg-muted" data-testid="group-suggestion-destination">
         {t("proactivity.destination")} {targetLabel ?? t("proactivity.chooseActiveMember")}
       </p>
       {error ? (

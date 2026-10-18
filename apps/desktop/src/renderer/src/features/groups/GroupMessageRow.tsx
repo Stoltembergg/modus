@@ -578,7 +578,7 @@ export function GroupMessageRow({
     }
     return (
       <div
-        className="text-center text-2xs text-fg-faint"
+        className="text-center text-2xs text-fg-muted"
         data-collab={collab?.kind}
         data-kind="status"
         data-testid="group-message"

@@ -640,7 +640,7 @@ export function McpSettingsPanel({
           </button>
         </SettingsList>
         <div className="flex items-center justify-between">
-          <p className="text-fg-faint text-xs leading-relaxed">
+          <p className="text-fg-muted text-xs leading-relaxed">
             {t("settings.mcp.serversFooterHint")}
           </p>
           {activeScope === "project" ? (
@@ -707,7 +707,7 @@ export function ReaIntegrationRow({
         <p className="mt-1 text-xs leading-relaxed text-fg-muted">
           {t("settings.mcp.reaDescription")}
         </p>
-        <p className="mt-2 text-xs leading-relaxed text-fg-faint" id={noteId}>
+        <p className="mt-2 text-xs leading-relaxed text-fg-muted" id={noteId}>
           {t("settings.mcp.reaNote")}
         </p>
         {status.note ? (
@@ -730,7 +730,7 @@ export function ReaIntegrationRow({
           </ul>
         ) : null}
         {retryable ? (
-          <p className="mt-2 text-xs leading-relaxed text-fg-faint">
+          <p className="mt-2 text-xs leading-relaxed text-fg-muted">
             {t("settings.mcp.reaRetryHint")}
           </p>
         ) : null}
@@ -1000,7 +1000,7 @@ export function McpServerForm({
             ))}
           </ul>
         ) : (
-          <p className="rounded-md bg-surface px-2.5 py-2 text-xs text-fg-faint" role="status">
+          <p className="rounded-md bg-surface px-2.5 py-2 text-xs text-fg-muted" role="status">
             {t("settings.mcp.toolListUnavailable")}
           </p>
         )}
@@ -1072,7 +1072,7 @@ function McpField({
     <div className="flex flex-col gap-1.5">
       <span className="text-fg-muted text-xs">{label}</span>
       {children}
-      {hint ? <span className="text-2xs text-fg-faint">{hint}</span> : null}
+      {hint ? <span className="text-2xs text-fg-muted">{hint}</span> : null}
     </div>
   );
 }
@@ -1143,7 +1143,7 @@ function McpKeyValueRows({
           <IconPlus size={12} stroke={2} />
           {addLabel}
         </button>
-        <span className="text-2xs text-fg-faint">{hint}</span>
+        <span className="text-2xs text-fg-muted">{hint}</span>
       </div>
     </div>
   );

@@ -1160,7 +1160,7 @@ export function McpTypeCard({
         {icon}
         {label}
       </span>
-      <span className="text-2xs text-fg-faint leading-relaxed">{description}</span>
+      <span className="text-2xs text-fg-muted leading-relaxed">{description}</span>
     </button>
   );
 }

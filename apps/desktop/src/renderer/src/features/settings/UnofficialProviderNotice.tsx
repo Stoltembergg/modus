@@ -70,7 +70,7 @@ export function UnofficialProviderRiskInterstitial({
         <h3 className="text-md font-normal text-fg">
           {t("settings.providers.antigravityRiskAcknowledgement")}
         </h3>
-        <p className="text-xs text-fg-faint">{t("settings.providers.antigravityRiskReview")}</p>
+        <p className="text-xs text-fg-muted">{t("settings.providers.antigravityRiskReview")}</p>
       </header>
 
       <section className="grid gap-3 rounded-lg border border-hairline bg-surface/45 p-3">

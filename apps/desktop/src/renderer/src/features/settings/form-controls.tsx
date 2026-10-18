@@ -317,7 +317,7 @@ export function KeyValueEditor({
             </m.div>
           ))}
         </AnimatePresence>
-        {rows.length === 0 ? <p className="text-xs text-fg-faint">{emptyLabel}</p> : null}
+        {rows.length === 0 ? <p className="text-xs text-fg-muted">{emptyLabel}</p> : null}
       </div>
     </section>
   );

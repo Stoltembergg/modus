@@ -53,7 +53,7 @@ export function SubagentRow({
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex min-w-0 items-center gap-2 overflow-hidden">
-          <span className="min-w-0 truncate text-sm text-fg-subtle leading-snug">{task}</span>
+          <span className="min-w-0 truncate text-sm text-fg-muted leading-snug">{task}</span>
           {model ? (
             <span className="inline-flex min-w-0 shrink-0 items-center gap-1 text-xs text-fg-muted">
               <ProviderLogo

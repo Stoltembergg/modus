@@ -199,7 +199,7 @@ export function LimitsSettingsPanel({ models }: { models: ModelInfo[] }) {
       ) : null}
 
       <SettingsSection title="Model limits">
-        <p className="-mt-2 mb-3 text-xs text-fg-faint">
+        <p className="-mt-2 mb-3 text-xs text-fg-muted">
           Configured metadata for enabled models; these are not live account quotas.
         </p>
         {modelGroups.length ? (
@@ -238,7 +238,7 @@ export function LimitsSettingsPanel({ models }: { models: ModelInfo[] }) {
       </SettingsSection>
 
       <SettingsSection title="Account usage">
-        <p className="-mt-2 mb-3 text-xs text-fg-faint">
+        <p className="-mt-2 mb-3 text-xs text-fg-muted">
           Provider-reported values only. Budgets and balances are not rate limits.
         </p>
         <div className="mb-3 rounded-lg border border-hairline-soft bg-panel px-3 py-3">

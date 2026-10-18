@@ -202,7 +202,7 @@ export function ModelPicker({
               />
             </div>
             <Combobox.Empty>
-              <p className="px-3 py-6 text-center text-xs text-fg-faint">No models match</p>
+              <p className="px-3 py-6 text-center text-xs text-fg-muted">No models match</p>
             </Combobox.Empty>
             <Combobox.List className="scroll-thin max-h-[min(22rem,calc(var(--available-height)-3rem))] min-h-0 scroll-pt-8 overflow-y-auto overscroll-contain p-1 outline-none empty:p-0">
               {(group: PickerGroup) => (

@@ -260,7 +260,7 @@ export function ActivityTimeline({
             {...(onOpenSubagent ? { onOpenSubagent } : {})}
           />
         ) : (
-          <p className="px-4 py-8 text-center text-xs text-fg-faint">
+          <p className="px-4 py-8 text-center text-xs text-fg-muted">
             {!sessionId ? t("shell.selectChatForActivity") : "No execution activity recorded yet."}
           </p>
         )}

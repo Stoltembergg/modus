@@ -688,11 +688,11 @@ export function FilesPanel({
             </div>
             <div className="scroll-thin min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1.5 py-1">
               {rows.length === 0 ? (
-                <div className="px-3 py-2 text-fg-faint text-xs">
+                <div className="px-3 py-2 text-fg-muted text-xs">
                   {cwd ? t("files.empty") : t("files.noWorkspace")}
                 </div>
               ) : visibleRows.length === 0 ? (
-                <div className="px-3 py-2 text-fg-faint text-xs">{t("files.noMatches")}</div>
+                <div className="px-3 py-2 text-fg-muted text-xs">{t("files.noMatches")}</div>
               ) : (
                 visibleRows.map(({ entry, depth }) => (
                   <FileRow
@@ -1059,7 +1059,7 @@ function FileViewer({
 
 function Centered({ children }: { children: ReactNode }) {
   return (
-    <div className="flex h-full items-center justify-center px-4 text-center text-fg-faint text-xs">
+    <div className="flex h-full items-center justify-center px-4 text-center text-fg-muted text-xs">
       {children}
     </div>
   );

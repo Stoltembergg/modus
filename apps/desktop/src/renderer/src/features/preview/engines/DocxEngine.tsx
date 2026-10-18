@@ -58,7 +58,7 @@ export default function DocxEngine({ bytes, path, onAddToChat }: PreviewEnginePr
 
   if (error) {
     return (
-      <div className="flex h-full items-center justify-center px-4 text-center text-fg-faint text-xs">
+      <div className="flex h-full items-center justify-center px-4 text-center text-fg-muted text-xs">
         {error}
       </div>
     );

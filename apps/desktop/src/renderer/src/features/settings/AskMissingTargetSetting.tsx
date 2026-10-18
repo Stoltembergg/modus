@@ -46,7 +46,7 @@ export function AskMissingTargetSetting() {
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0">
           <h3 className="text-md font-normal text-fg">{title}</h3>
-          <p className="mt-1 text-xs text-fg-faint">{t("settings.general.askMissingTargetDesc")}</p>
+          <p className="mt-1 text-xs text-fg-muted">{t("settings.general.askMissingTargetDesc")}</p>
           {error ? <p className="mt-1 text-xs text-danger">{error}</p> : null}
         </div>
         <SwitchControl

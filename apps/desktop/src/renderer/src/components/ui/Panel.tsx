@@ -63,7 +63,7 @@ export function EmptyState({
       ) : null}
       <span className={cn("text-fg-subtle", compact ? "text-sm" : "text-xs")}>{hint}</span>
       {description ? (
-        <span className={cn("text-fg-faint text-xs", compact && "mx-auto mt-1 max-w-[300px]")}>
+        <span className={cn("text-fg-muted text-xs", compact && "mx-auto mt-1 max-w-[300px]")}>
           {description}
         </span>
       ) : null}

@@ -136,7 +136,7 @@ function Centered({
   return (
     <div
       className={cn(
-        "flex h-full items-center justify-center px-4 text-center text-fg-faint text-xs",
+        "flex h-full items-center justify-center px-4 text-center text-fg-muted text-xs",
         className,
       )}
     >

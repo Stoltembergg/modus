@@ -154,7 +154,7 @@ export function SessionBranchPicker({
         <Menu.Positioner align="start" side="top" sideOffset={6}>
           <Menu.Popup className={BRANCH_MENU_POPUP_CLASS}>
             {!summary ? (
-              <div className="px-2.5 py-3 text-center text-2xs text-fg-faint">
+              <div className="px-2.5 py-3 text-center text-2xs text-fg-muted">
                 <WorkingText>Loading…</WorkingText>
               </div>
             ) : (

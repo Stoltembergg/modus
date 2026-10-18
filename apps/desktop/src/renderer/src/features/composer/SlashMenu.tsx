@@ -22,7 +22,7 @@ export function SlashMenu({ items, activeIndex, onSelect }: SlashMenuProps) {
         return (
           <div key={item.key}>
             {showSectionHeader ? (
-              <p className="px-2 pt-2 pb-1 text-xs text-fg-faint">
+              <p className="px-2 pt-2 pb-1 text-xs text-fg-muted">
                 {item.kind === "skill" ? "Skills" : "Commands"}
               </p>
             ) : null}
@@ -48,7 +48,7 @@ export function SlashMenu({ items, activeIndex, onSelect }: SlashMenuProps) {
                 )}
               </span>
               <span className="truncate text-sm text-fg">{item.name}</span>
-              <span className="min-w-0 truncate text-xs text-fg-faint">{item.description}</span>
+              <span className="min-w-0 truncate text-xs text-fg-muted">{item.description}</span>
               {scopeLabel ? (
                 <span className="shrink-0 text-xs text-fg-muted">{scopeLabel}</span>
               ) : null}

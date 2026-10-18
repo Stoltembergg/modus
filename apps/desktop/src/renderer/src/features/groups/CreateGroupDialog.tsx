@@ -200,7 +200,7 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
               <Dialog.Title className="font-medium text-fg text-sm">
                 {t("manage.title")}
               </Dialog.Title>
-              <Dialog.Description className="mt-0.5 truncate text-2xs text-fg-faint">
+              <Dialog.Description className="mt-0.5 truncate text-2xs text-fg-muted">
                 {`${editGroup.name} · ${projectName}`}
               </Dialog.Description>
             </div>
@@ -313,7 +313,7 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
                   ))}
                 </select>
               </label>
-              {hint ? <p className="text-2xs text-fg-faint">{hint}</p> : null}
+              {hint ? <p className="text-2xs text-fg-muted">{hint}</p> : null}
             </div>
 
             {error ? (

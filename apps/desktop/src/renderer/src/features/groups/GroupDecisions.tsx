@@ -77,7 +77,7 @@ export function GroupDecisionsSection({
         </span>
       </button>
       {open && decisions.length === 0 ? (
-        <div className="px-1 py-2 text-fg-faint text-xs">{t("decisions.empty")}</div>
+        <div className="px-1 py-2 text-fg-muted text-xs">{t("decisions.empty")}</div>
       ) : null}
       {open
         ? decisions.map((decision) => (
