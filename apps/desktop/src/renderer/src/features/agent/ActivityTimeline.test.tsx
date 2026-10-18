@@ -203,6 +203,45 @@ describe("ActivityTimeline", () => {
     expect(olderAttempts).toBe(2);
   });
 
+  it.each([
+    "first page",
+    "older page",
+  ])("does not offer older activity when the %s says hasMore without a nextCursor", async (where) => {
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(300);
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(0);
+    const event = (id: string, eventCursor: number): AgentEventItem & { createdAt: string } => ({
+      id,
+      createdAt: "2026-10-01T12:00:00.000Z",
+      event: { type: "run.started", sessionId: "s", runId: id, delivery: "normal", eventCursor },
+    });
+    const listEventPage = vi.fn(
+      async (_sessionId: string, options: AgentEventPageOptions): Promise<AgentEventPage> => {
+        const older = options.direction === "backward" && options.beforeCursor !== undefined;
+        const cursorless = where === "first page" || older;
+        return {
+          events: [older ? event("older", 10) : event("latest", 20)],
+          summaryEvents: [],
+          activityEvents: [],
+          snapshotCursor: 20,
+          ...(cursorless ? {} : { nextCursor: 20 }),
+          hasMore: true,
+        };
+      },
+    );
+    Object.assign(window, { modus: { agent: { listEventPage } } });
+    render(<ActivityTimeline cwd="/repo" hub={new AgentEventHub()} sessionId="s" />);
+    const expectedCalls = where === "first page" ? 1 : 2;
+    await waitFor(() => expect(listEventPage).toHaveBeenCalledTimes(expectedCalls));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    });
+    expect(listEventPage).toHaveBeenCalledTimes(expectedCalls);
+    expect(screen.queryByRole("button", { name: "Load earlier activity" })).toBeNull();
+    expect(screen.getByTestId("activity-event-count").textContent).toBe(
+      where === "first page" ? "1 event" : "2 events",
+    );
+  });
+
   it("ignores an older-page response arriving after switching sessions", async () => {
     vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(300);
     let finishOlder!: (page: AgentEventPage) => void;
