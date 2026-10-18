@@ -188,6 +188,9 @@ const { setTurnToolFilter, setTurnToolFilterClock, CORE_TOOL_NAMES } = await imp
   "../local-models/turn-tool-filter"
 );
 const { TOOLS_EXPAND_TOOL_NAME } = await import("../../shared/tools");
+const { createLocalModelsLogFile, setLocalModelsLogFile } = await import(
+  "../local-models/local-models-log-file"
+);
 const { registerSpillTools, RETRIEVE_SPILL_TOOL_NAME } = await import("./tools/spill-tools");
 const { deleteAgentSessionTree, setAgentSessionArchivedTree } = await import("./session-lifecycle");
 const contextPlanner = await import("../context/context-planner");
@@ -13430,9 +13433,29 @@ describe("PiSdkRuntime per-request token stability", () => {
       const message = (turn: number) => `Turn ${turn}: ${SENTINEL} explain src/app.ts.`;
       let output: string[] = [];
       const spies: Array<{ mockRestore(): void }> = [];
+      /** The <userData>/logs/local-models.log copy, in a temp dir per test. */
+      let logDir = "";
+      let logFile: ReturnType<typeof createLocalModelsLogFile> | null = null;
+      /** The file's lines without their ISO timestamp (checked to be present). */
+      async function fileLines(): Promise<string[]> {
+        await logFile?.flush();
+        if (!logFile || !existsSync(logFile.path)) return [];
+        const { readFile } = await import("node:fs/promises");
+        const text = await readFile(logFile.path, "utf8");
+        return text
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => {
+            expect(line).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z \[local-models\] /);
+            return line.slice(25);
+          });
+      }
 
       /** Every console call during the test, as text (all levels). */
-      beforeEach(() => {
+      beforeEach(async () => {
+        logDir = await mkdtemp(join(tmpdir(), "modus-lm-log-"));
+        logFile = createLocalModelsLogFile(join(logDir, "logs"));
+        setLocalModelsLogFile(logFile);
         output = [];
         for (const level of ["log", "info", "warn", "error", "debug"] as const) {
           spies.push(
@@ -13444,9 +13467,13 @@ describe("PiSdkRuntime per-request token stability", () => {
           );
         }
       });
-      afterEach(() => {
+      afterEach(async () => {
         for (const spy of spies.splice(0)) spy.mockRestore();
         setTurnToolFilterClock(null);
+        await logFile?.flush();
+        setLocalModelsLogFile(null);
+        logFile = null;
+        await rm(logDir, { recursive: true, force: true });
       });
 
       /** Main-side clock: `ms` ticks between the decision's start and its line. */
@@ -13465,10 +13492,15 @@ describe("PiSdkRuntime per-request token stability", () => {
         ).length;
         return { of: pools[0]?.length ?? -1, core };
       }
-      function expectNoSentinel() {
+      /** stdout (every console level) and the log file: no sentinel, no text, ids or paths. */
+      async function expectNoSentinel() {
         expect(output.length).toBeGreaterThan(0);
         for (const line of output) expect(line).not.toContain(SENTINEL);
-        for (const line of filterLines()) {
+        const file = await fileLines();
+        // The file holds exactly the tool filter lines stdout got, nothing else.
+        expect(file).toEqual(filterLines());
+        for (const line of [...filterLines(), ...file]) {
+          expect(line).not.toContain(SENTINEL);
           expect(line).not.toContain("src/app.ts");
           expect(line).not.toMatch(/token-stability|workspace-|\/|\\/);
         }
@@ -13486,7 +13518,7 @@ describe("PiSdkRuntime per-request token stability", () => {
         expect(filterLines()).toEqual([
           `[local-models] tool filter: filtered sent=8 of=${of} core=${core} ms=41`,
         ]);
-        expectNoSentinel();
+        await expectNoSentinel();
         await run.runtime.releaseRuntime(run.sessionId);
       }, 30_000);
 
@@ -13506,7 +13538,7 @@ describe("PiSdkRuntime per-request token stability", () => {
         expect(filterLines()).toEqual([
           `[local-models] tool filter: fallback reason=off sent=${of} of=${of} core=${core} ms=1 cause=disabled`,
         ]);
-        expectNoSentinel();
+        await expectNoSentinel();
         await raced.runtime.releaseRuntime(raced.sessionId);
       }, 30_000);
 
@@ -13518,7 +13550,7 @@ describe("PiSdkRuntime per-request token stability", () => {
         expect(filterLines()).toEqual([
           `[local-models] tool filter: fallback reason=loading sent=${of} of=${of} core=${core} ms=2 cause=not-ready`,
         ]);
-        expectNoSentinel();
+        await expectNoSentinel();
         await run.runtime.releaseRuntime(run.sessionId);
       }, 30_000);
 
@@ -13530,7 +13562,7 @@ describe("PiSdkRuntime per-request token stability", () => {
         expect(filterLines()).toEqual([
           `[local-models] tool filter: fallback reason=busy sent=${of} of=${of} core=${core} ms=0`,
         ]);
-        expectNoSentinel();
+        await expectNoSentinel();
         await run.runtime.releaseRuntime(run.sessionId);
       }, 30_000);
 
@@ -13542,7 +13574,7 @@ describe("PiSdkRuntime per-request token stability", () => {
         expect(filterLines()).toEqual([
           `[local-models] tool filter: fallback reason=timeout sent=${of} of=${of} core=${core} ms=77`,
         ]);
-        expectNoSentinel();
+        await expectNoSentinel();
         await run.runtime.releaseRuntime(run.sessionId);
       }, 30_000);
 
@@ -13562,7 +13594,7 @@ describe("PiSdkRuntime per-request token stability", () => {
           `[local-models] tool filter: fallback reason=error sent=${of} of=${of} core=${core} ms=5 cause=crashed`,
           `[local-models] tool filter: fallback reason=error sent=${of} of=${of} core=${core} ms=3 cause=exception`,
         ]);
-        expectNoSentinel();
+        await expectNoSentinel();
         await thrown.runtime.releaseRuntime(thrown.sessionId);
       }, 30_000);
 
@@ -13574,7 +13606,7 @@ describe("PiSdkRuntime per-request token stability", () => {
         expect(filterLines()[0]).toMatch(
           /^\[local-models\] tool filter: filtered sent=8 of=\d+ core=\d+ ms=9$/,
         );
-        expectNoSentinel();
+        await expectNoSentinel();
         await run.runtime.releaseRuntime(run.sessionId);
       }, 30_000);
 
@@ -13596,7 +13628,68 @@ describe("PiSdkRuntime per-request token stability", () => {
         expect(pools).toHaveLength(0);
         expect(filterLines()).toEqual([]);
         for (const line of output) expect(line).not.toContain(SENTINEL);
+        expect(await fileLines()).toEqual([]);
       });
+
+      it("tools_expand after filtered: one expand line per call (added=0 too), tool-call args never logged", async () => {
+        pinClock(41);
+        installFilter(lastEight);
+        const run = await runTurns(
+          ["build", "build", "build"],
+          (turn, offline) => {
+            offline.requestToolSequence(
+              turn === 1
+                ? []
+                : [{ name: TOOLS_EXPAND_TOOL_NAME, input: { reason: `need git ${SENTINEL}` } }],
+            );
+          },
+          message,
+        );
+        const { of, core } = counts(run.lastRequestOfTurn[0]);
+        const before = names(run.lastRequestOfTurn[0]).length;
+        const after = names(run.lastRequestOfTurn[1]).length;
+        expect(after).toBeGreaterThan(before);
+        expect(filterLines()).toEqual([
+          `[local-models] tool filter: filtered sent=8 of=${of} core=${core} ms=41`,
+          `[local-models] tool filter: expand turn=2 added=${after - before} after=filtered`,
+          "[local-models] tool filter: expand turn=3 added=0 after=filtered",
+        ]);
+        await expectNoSentinel();
+        await run.runtime.releaseRuntime(run.sessionId);
+      }, 30_000);
+
+      it("tools_expand after fallback: logs after=fallback (nothing to add, so added=0)", async () => {
+        pinClock(2);
+        installFilter(fallbackWith("not-ready"));
+        const run = await runTurns(
+          ["build"],
+          (_turn, offline) => {
+            offline.requestToolSequence([
+              { name: TOOLS_EXPAND_TOOL_NAME, input: { reason: `missing ${SENTINEL}` } },
+            ]);
+          },
+          message,
+        );
+        const { of, core } = counts(run.lastRequestOfTurn[0]);
+        expect(filterLines()).toEqual([
+          `[local-models] tool filter: fallback reason=loading sent=${of} of=${of} core=${core} ms=2 cause=not-ready`,
+          "[local-models] tool filter: expand turn=1 added=0 after=fallback",
+        ]);
+        await expectNoSentinel();
+        await run.runtime.releaseRuntime(run.sessionId);
+      }, 30_000);
+
+      it("tools_expand on a session the filter never decided (subagent, or filter off) logs nothing", async () => {
+        installFilter(lastEight);
+        const runtime = new PiSdkRuntime();
+        expect(runtime.expandSessionTools(`child-${crypto.randomUUID()}`)).toEqual([]);
+        installFilter(lastEight, false);
+        const off = await runTurns(["build"], undefined, message);
+        expect(off.runtime.expandSessionTools(off.sessionId)).toEqual([]);
+        expect(filterLines()).toEqual([]);
+        expect(await fileLines()).toEqual([]);
+        await off.runtime.releaseRuntime(off.sessionId);
+      }, 30_000);
     });
 
     it("subagents are never filtered and never get tools_expand", () => {
