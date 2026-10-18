@@ -588,7 +588,7 @@ export function TerminalPanel({
                 />
               ))}
               {visibleTabs.length === 0 ? (
-                <div className="flex h-full items-center justify-center px-6 text-center text-sm text-fg-faint">
+                <div className="flex h-full items-center justify-center px-6 text-center text-sm text-fg-muted">
                   No active terminals. Press + to start one.
                 </div>
               ) : null}

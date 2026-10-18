@@ -601,7 +601,7 @@ function WorktreeActionButton({
       </span>
       <span className="min-w-0">
         <span className="block truncate font-medium text-sm text-fg">{label}</span>
-        <span className="block truncate text-fg-faint text-xs">{description}</span>
+        <span className="block truncate text-fg-muted text-xs">{description}</span>
       </span>
     </button>
   );

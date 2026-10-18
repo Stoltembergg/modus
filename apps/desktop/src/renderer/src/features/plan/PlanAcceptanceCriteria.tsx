@@ -229,13 +229,13 @@ export function PlanAcceptanceCriteria({
                   <div className="mt-2 space-y-2">
                     {earlierRuns.map((group) => (
                       <div className="space-y-1" key={group.runId}>
-                        <p className="text-2xs font-medium text-fg-faint">Run {group.runId}</p>
+                        <p className="text-2xs font-medium text-fg-muted">Run {group.runId}</p>
                         <EvidenceList evidence={group.evidence} />
                       </div>
                     ))}
                     {unscoped.length ? (
                       <div className="space-y-1">
-                        <p className="text-2xs font-medium text-fg-faint">No run linked</p>
+                        <p className="text-2xs font-medium text-fg-muted">No run linked</p>
                         <EvidenceList evidence={unscoped} />
                       </div>
                     ) : null}
@@ -243,7 +243,7 @@ export function PlanAcceptanceCriteria({
                 </details>
               ) : null}
               {!currentRun.length && status === "unverified" ? (
-                <p className="mt-2 text-xs text-fg-faint">No linked evidence for the latest run.</p>
+                <p className="mt-2 text-xs text-fg-muted">No linked evidence for the latest run.</p>
               ) : null}
             </li>
           );

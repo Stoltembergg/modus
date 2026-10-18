@@ -366,13 +366,13 @@ function QuestionMode({
                       {display.optionLabel(option.label)}
                     </span>
                     {option.recommended ? (
-                      <span className="shrink-0 text-fg-faint text-xs">
+                      <span className="shrink-0 text-fg-muted text-xs">
                         {t("settings.question.recommended")}
                       </span>
                     ) : null}
                     {option.description ? (
                       <IconInfoCircle
-                        className="shrink-0 text-fg-faint"
+                        className="shrink-0 text-fg-muted"
                         size={ICON.sm}
                         stroke={ICON_STROKE.sm}
                         title={option.description}
@@ -652,7 +652,7 @@ function ApprovalMode({
                     {choice.title}
                   </span>
                   {choice.description ? (
-                    <span className="mt-0.5 block text-xs leading-snug text-fg-faint">
+                    <span className="mt-0.5 block text-xs leading-snug text-fg-muted">
                       {choice.description}
                     </span>
                   ) : null}

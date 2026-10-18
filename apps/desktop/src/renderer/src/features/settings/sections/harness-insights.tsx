@@ -198,7 +198,7 @@ function HarnessInsightsResults({
         </div>
       </section>
 
-      <p className="text-xs leading-relaxed text-fg-faint">
+      <p className="text-xs leading-relaxed text-fg-muted">
         Patterns are suggestions from structured local activity. Promotion requires your explicit
         confirmation and never rewrites skills or prompts silently.
       </p>
@@ -293,7 +293,7 @@ function HarnessInsightsResults({
 
 function HarnessInsightLimitations({ limitations }: { limitations: string[] }) {
   return limitations.length ? (
-    <ul className="mt-3 space-y-1 text-2xs leading-relaxed text-fg-faint">
+    <ul className="mt-3 space-y-1 text-2xs leading-relaxed text-fg-muted">
       {limitations.slice(0, 4).map((limitation) => (
         <li className="break-words" key={limitation}>
           {limitation}

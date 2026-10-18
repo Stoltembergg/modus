@@ -268,7 +268,7 @@ function LiveToolCard({
         <pre
           className={cn(
             "scroll-thin max-h-80 overflow-auto border-hairline border-t px-3 py-2",
-            "whitespace-pre-wrap wrap-break-word text-xs text-fg-faint leading-relaxed",
+            "whitespace-pre-wrap wrap-break-word text-xs text-fg-muted leading-relaxed",
             isError && "text-danger/90",
           )}
           ref={scrollRef}
@@ -348,7 +348,7 @@ function FlatToolRow({
         <pre
           className={cn(
             "scroll-thin mt-1 max-h-72 overflow-auto rounded-md border border-hairline bg-card px-3 py-2",
-            "whitespace-pre-wrap wrap-break-word text-xs text-fg-faint leading-relaxed",
+            "whitespace-pre-wrap wrap-break-word text-xs text-fg-muted leading-relaxed",
             isError && "border-danger/25 text-danger/90",
           )}
         >

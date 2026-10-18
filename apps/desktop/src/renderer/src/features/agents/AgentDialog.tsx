@@ -493,14 +493,14 @@ export function AgentDialog(props: AgentDialogProps) {
               <Dialog.Title className="font-semibold text-[15px] text-fg tracking-tight">
                 {title}
               </Dialog.Title>
-              <Dialog.Description className="mt-0.5 truncate text-xs text-fg-faint">
+              <Dialog.Description className="mt-0.5 truncate text-xs text-fg-muted">
                 {subtitle}
               </Dialog.Description>
             </>
           ) : (
             <>
               <h2 className="font-semibold text-[15px] text-fg tracking-tight">{title}</h2>
-              <p className="mt-0.5 truncate text-xs text-fg-faint">{subtitle}</p>
+              <p className="mt-0.5 truncate text-xs text-fg-muted">{subtitle}</p>
             </>
           )}
         </div>

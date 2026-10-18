@@ -196,7 +196,7 @@ function FailureBlacklistResults({
           are not a hard permanent block — TTL expiry, clear, or a changed project revision allows
           reevaluation.
         </p>
-        <p className="mt-2 text-xs text-fg-faint">
+        <p className="mt-2 text-xs text-fg-muted">
           {entries.length} active {entries.length === 1 ? "entry" : "entries"}
         </p>
       </section>

@@ -118,7 +118,7 @@ function ActivityTokenSection({
       <h3 className="mb-1.5 text-2xs text-fg-faint uppercase tracking-wide">
         {t("activity.tokens")}
       </h3>
-      <p className="mb-1.5 text-2xs text-fg-faint">
+      <p className="mb-1.5 text-2xs text-fg-muted">
         {t.plural("activity.tokensSummary", executionCount, { total: formatTokenCount(grand) })}
       </p>
       <ul className="space-y-1">
@@ -197,7 +197,7 @@ function ActivityLiveSection({
                 </ul>
               ) : null}
               {row.live.thoughtPreview ? (
-                <p className="mt-1 line-clamp-3 text-2xs text-fg-faint">
+                <p className="mt-1 line-clamp-3 text-2xs text-fg-muted">
                   {row.live.thoughtPreview}
                 </p>
               ) : null}
@@ -277,7 +277,7 @@ function ActivityCoordinationSection({
         {stage ? (
           <GroupStageChip labels={labels} stage={stage} />
         ) : (
-          <span className="text-2xs text-fg-faint">{t("activity.noHandoff")}</span>
+          <span className="text-2xs text-fg-muted">{t("activity.noHandoff")}</span>
         )}
         <div className="flex items-center justify-between gap-2 text-2xs text-fg-muted">
           <span data-testid="group-activity-coordinator-status">

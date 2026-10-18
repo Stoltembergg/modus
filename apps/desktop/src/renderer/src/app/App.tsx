@@ -1679,7 +1679,7 @@ function WorkspaceMenu({
               <span className="min-w-0 flex-1 truncate">{t("shell.noProject")}</span>
             </Menu.Item>
             {workspaces.length === 0 ? (
-              <div className="px-2.5 py-3 text-center text-2xs text-fg-faint">
+              <div className="px-2.5 py-3 text-center text-2xs text-fg-muted">
                 No recent workspaces
               </div>
             ) : (

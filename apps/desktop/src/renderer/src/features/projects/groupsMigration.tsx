@@ -77,7 +77,7 @@ export function GroupsMovedNotice({
         ))}
       </div>
       {notice.backup ? (
-        <p className="mt-2 break-all text-2xs text-fg-faint">
+        <p className="mt-2 break-all text-2xs text-fg-muted">
           {t("shell.groupsMoved.backup", { path: notice.backup })}
         </p>
       ) : null}

@@ -233,7 +233,7 @@ export function ApprovalModeSettings({ cwd, workspaces = [] }: ApprovalModeSetti
         />
       </section>
 
-      <p className="text-xs text-fg-faint">{t("settings.general.scopeHint")}</p>
+      <p className="text-xs text-fg-muted">{t("settings.general.scopeHint")}</p>
     </div>
   );
 }
@@ -275,7 +275,7 @@ function ModeOptionList({
               <span className={cn("block text-sm", danger ? "text-accent" : "text-fg")}>
                 {modeLabel(item.id, t)}
               </span>
-              <span className="mt-0.5 block text-xs leading-snug text-fg-faint">
+              <span className="mt-0.5 block text-xs leading-snug text-fg-muted">
                 {modeDescription(item.id, t)}
               </span>
             </span>

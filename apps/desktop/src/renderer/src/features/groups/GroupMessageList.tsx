@@ -505,7 +505,7 @@ export function GroupMessageList({
             </div>
           ) : null}
           {loadingOlder ? (
-            <div className="text-center text-2xs text-fg-faint">{t("list.loadingOlder")}</div>
+            <div className="text-center text-2xs text-fg-muted">{t("list.loadingOlder")}</div>
           ) : null}
           {error ? <div className="text-center text-danger text-xs">{error}</div> : null}
           {loaded && roomMessages.length === 0 && !error && visibleWorkingRows.length === 0 ? (

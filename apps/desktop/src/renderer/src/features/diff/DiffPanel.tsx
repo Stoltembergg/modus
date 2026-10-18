@@ -1625,7 +1625,7 @@ function CommitRow({
       </button>
       <CollapsibleMotion open={expanded} preset="default">
         {files === undefined ? (
-          <div className="py-2 pr-3 pl-9 text-fg-faint text-xs">Loading files…</div>
+          <div className="py-2 pr-3 pl-9 text-fg-muted text-xs">Loading files…</div>
         ) : files.length === 0 ? (
           <div className="py-2 pr-3 pl-9 text-fg-muted text-xs">No files changed.</div>
         ) : (

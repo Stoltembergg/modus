@@ -821,7 +821,7 @@ function InboxChatsSection({
           <div className={cn("mt-1 space-y-0.5", SB_NEST)}>
             {archivedSessions === undefined ? (
               archivedOpen ? (
-                <div className="px-2 py-1 text-2xs text-fg-faint">Loading archived chats…</div>
+                <div className="px-2 py-1 text-2xs text-fg-muted">Loading archived chats…</div>
               ) : null
             ) : archivedSessions.length === 0 ? (
               <div className="px-2 py-1 text-2xs text-fg-muted">No archived chats</div>
@@ -1010,7 +1010,7 @@ function WorkspaceItem({
         <CollapsibleMotion open={archivedOpen} preset="default">
           <div className={cn("mt-1 space-y-0.5", SB_NEST)}>
             {archivedSessions === undefined ? (
-              <div className="px-2 py-1 text-2xs text-fg-faint">Loading archived chats…</div>
+              <div className="px-2 py-1 text-2xs text-fg-muted">Loading archived chats…</div>
             ) : archivedSessions.length === 0 ? (
               <div className="px-2 py-1 text-2xs text-fg-muted">No archived chats</div>
             ) : (

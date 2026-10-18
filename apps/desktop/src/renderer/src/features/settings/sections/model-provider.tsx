@@ -272,7 +272,7 @@ function ProviderCatalog({
       <div className="mb-3 flex items-end justify-between gap-4">
         <div className="min-w-0">
           <h3 className="text-md font-normal text-fg">{t("settings.providers.catalogTitle")}</h3>
-          <p className="mt-1 text-xs text-fg-faint">{t("settings.providers.catalogDescription")}</p>
+          <p className="mt-1 text-xs text-fg-muted">{t("settings.providers.catalogDescription")}</p>
         </div>
         <ReadOnlyPill>{t.plural("settings.providers.countShown", visibleCount)}</ReadOnlyPill>
       </div>
@@ -492,7 +492,7 @@ function ProviderConnectionDialog({
             <h3 className="text-md font-normal text-fg">
               {t("settings.providers.connectProviderNamed", { name: provider.name })}
             </h3>
-            <p className="mt-1 text-xs text-fg-faint">
+            <p className="mt-1 text-xs text-fg-muted">
               {t("settings.providers.chooseSignInMethod")}
             </p>
           </div>
@@ -602,7 +602,7 @@ function ProviderAuthDialog({
               </div>
             ) : null}
             {operation.instructions ? (
-              <p className="text-xs text-fg-faint">{operation.instructions}</p>
+              <p className="text-xs text-fg-muted">{operation.instructions}</p>
             ) : null}
           </div>
         ) : null}
@@ -731,7 +731,7 @@ export function UnofficialProviderInterstitialDialog({
           <ProviderLogo framed={false} name={provider.name} provider={provider.id} size="lg" />
           <div>
             <h3 className="text-md font-normal text-fg">{provider.name}</h3>
-            <p className="mt-1 text-xs text-fg-faint">
+            <p className="mt-1 text-xs text-fg-muted">
               {t("settings.providers.unofficialProviderRequiredBeforeOAuth")}
             </p>
           </div>

@@ -80,7 +80,7 @@ export function PlanStepList({
                 {step.content}
               </p>
               {step.detail ? (
-                <p className="mt-1 break-words text-xs text-fg-faint">{step.detail}</p>
+                <p className="mt-1 break-words text-xs text-fg-muted">{step.detail}</p>
               ) : null}
             </div>
           </li>
@@ -222,7 +222,7 @@ export function PlanToolCard({
               writing ? (
                 <div className="h-20" />
               ) : (
-                <p className="text-fg-faint text-xs">No plan content provided.</p>
+                <p className="text-fg-muted text-xs">No plan content provided.</p>
               )
             ) : null}
           </div>

@@ -152,9 +152,9 @@ function ExternalMemoryReference({ reference }: { reference: ProjectMemoryExtern
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className="font-medium text-2xs text-warning">Untrusted external reference</span>
-          <span className="max-w-full truncate text-2xs text-fg-faint">{attribution}</span>
+          <span className="max-w-full truncate text-2xs text-fg-muted">{attribution}</span>
         </div>
-        <p className="mt-0.5 text-2xs text-fg-faint">External page content is not verified.</p>
+        <p className="mt-0.5 text-2xs text-fg-muted">External page content is not verified.</p>
         {href ? (
           <a
             aria-label={`Open external reference: ${label}`}
@@ -303,7 +303,7 @@ export function ProjectMemorySettingsPanel({ workspaceId }: { workspaceId?: stri
       ) : null}
 
       {loading ? (
-        <div className="rounded-lg border border-hairline-soft bg-panel px-4 py-5 text-sm text-fg-faint">
+        <div className="rounded-lg border border-hairline-soft bg-panel px-4 py-5 text-sm text-fg-muted">
           Loading project memory…
         </div>
       ) : snapshot ? (
@@ -379,7 +379,7 @@ function ProjectMemoryScopeSection({
       <div className="flex items-center justify-between gap-4 border-hairline-soft border-b px-4 py-3">
         <div className="min-w-0">
           <h3 className="text-md font-normal text-fg">{title}</h3>
-          <p className="mt-1 text-xs text-fg-faint">{description}</p>
+          <p className="mt-1 text-xs text-fg-muted">{description}</p>
         </div>
         <SwitchControl
           ariaLabel={`Enable ${title.toLowerCase()} memory`}
@@ -389,7 +389,7 @@ function ProjectMemoryScopeSection({
         />
       </div>
       {records.length === 0 ? (
-        <p className="px-4 py-4 text-xs text-fg-faint">No memories in this scope yet.</p>
+        <p className="px-4 py-4 text-xs text-fg-muted">No memories in this scope yet.</p>
       ) : (
         <div className="divide-y divide-hairline-soft">
           {records.map((memory) => (

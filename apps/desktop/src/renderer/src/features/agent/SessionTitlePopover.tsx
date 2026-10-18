@@ -82,7 +82,7 @@ export function SessionTitlePopover({
                 icon={<IconGitBranch size={TOOLBAR_ICON.size} stroke={TOOLBAR_ICON.stroke} />}
               >
                 <span className="truncate text-sm text-fg">{project}</span>
-                <span className="truncate text-2xs text-fg-faint">{branch ?? "No branch"}</span>
+                <span className="truncate text-2xs text-fg-muted">{branch ?? "No branch"}</span>
               </SessionMetaRow>
               <SessionMetaRow
                 icon={<IconFolder size={TOOLBAR_ICON.size} stroke={TOOLBAR_ICON.stroke} />}

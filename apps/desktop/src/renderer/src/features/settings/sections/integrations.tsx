@@ -707,7 +707,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
                 <p className="text-xs text-fg">
                   {t("settings.integrations.allowConsumerForAgents")}
                 </p>
-                <p className="mt-1 text-[11px] text-fg-faint">
+                <p className="mt-1 text-[11px] text-fg-muted">
                   {t("settings.integrations.allowConsumerRequirements")}
                 </p>
               </div>
@@ -794,7 +794,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
                             <h5 className="text-xs font-medium text-fg">
                               {t("settings.integrations.accountsHeading")}
                             </h5>
-                            <p className="mt-1 text-xs text-fg-faint">
+                            <p className="mt-1 text-xs text-fg-muted">
                               {t("settings.integrations.accountsSubheading")}
                             </p>
                           </div>
@@ -986,7 +986,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
                             <h5 className="text-xs font-medium text-fg">
                               {t("settings.integrations.allowedOperationsHeading")}
                             </h5>
-                            <p className="mt-1 text-xs text-fg-faint">
+                            <p className="mt-1 text-xs text-fg-muted">
                               {t("settings.integrations.allowedOperationsHint", {
                                 count: selectedCount,
                               })}
@@ -1098,7 +1098,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
                             <p className="text-xs text-fg">
                               {t("settings.integrations.allowPlatformForAgents")}
                             </p>
-                            <p className="mt-1 text-[11px] text-fg-faint">
+                            <p className="mt-1 text-[11px] text-fg-muted">
                               {t("settings.integrations.allowPlatformRequirements")}
                             </p>
                           </div>

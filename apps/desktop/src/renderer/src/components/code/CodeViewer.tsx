@@ -323,7 +323,7 @@ export function CodeViewer({
     <div className={cn("relative min-h-0", className)}>
       <div className="absolute inset-0" ref={hostRef} />
       {!ready ? (
-        <div className="absolute inset-0 flex items-center justify-center text-fg-faint text-xs">
+        <div className="absolute inset-0 flex items-center justify-center text-fg-muted text-xs">
           Loading…
         </div>
       ) : null}

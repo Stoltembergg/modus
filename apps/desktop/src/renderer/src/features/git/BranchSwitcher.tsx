@@ -112,11 +112,11 @@ export function BranchSwitcher({
         <Menu.Positioner align={align} side="bottom" sideOffset={6}>
           <Menu.Popup className={BRANCH_MENU_POPUP_CLASS}>
             {!branches ? (
-              <div className="px-2.5 py-3 text-center text-2xs text-fg-faint">
+              <div className="px-2.5 py-3 text-center text-2xs text-fg-muted">
                 <WorkingText>Loading…</WorkingText>
               </div>
             ) : locals.length === 0 && remotes.length === 0 ? (
-              <div className="px-2.5 py-3 text-center text-2xs text-fg-faint">No branches</div>
+              <div className="px-2.5 py-3 text-center text-2xs text-fg-muted">No branches</div>
             ) : (
               <BranchMenuGroups
                 groups={groups}

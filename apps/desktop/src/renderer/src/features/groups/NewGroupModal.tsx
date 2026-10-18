@@ -516,7 +516,7 @@ export function NewGroupModal({
                   <Dialog.Title className="font-medium text-fg text-sm">
                     {t("newGroup.title")}
                   </Dialog.Title>
-                  <Dialog.Description className="mt-0.5 text-2xs text-fg-faint">
+                  <Dialog.Description className="mt-0.5 text-2xs text-fg-muted">
                     {t("newGroup.description")}
                   </Dialog.Description>
                 </div>
@@ -670,7 +670,7 @@ export function NewGroupModal({
                                   {member.role && member.role !== member.name ? (
                                     <div className="text-2xs text-fg-subtle">{member.role}</div>
                                   ) : null}
-                                  <p className="mt-0.5 text-2xs text-fg-faint">{desc}</p>
+                                  <p className="mt-0.5 text-2xs text-fg-muted">{desc}</p>
                                 </div>
                                 <div className="flex shrink-0 items-center gap-1">
                                   <button
@@ -733,7 +733,7 @@ export function NewGroupModal({
                                     {template.role !== template.name ? (
                                       <div className="text-2xs text-fg-subtle">{template.role}</div>
                                     ) : null}
-                                    <p className="mt-0.5 text-2xs text-fg-faint">
+                                    <p className="mt-0.5 text-2xs text-fg-muted">
                                       {template.description}
                                     </p>
                                   </div>
@@ -802,7 +802,7 @@ export function NewGroupModal({
                                     {member.role && member.role !== member.name ? (
                                       <div className="text-2xs text-fg-subtle">{member.role}</div>
                                     ) : null}
-                                    <p className="mt-0.5 text-2xs text-fg-faint">
+                                    <p className="mt-0.5 text-2xs text-fg-muted">
                                       {template.description}
                                     </p>
                                   </div>
@@ -866,7 +866,7 @@ export function NewGroupModal({
                                   {template.role !== template.name ? (
                                     <div className="text-2xs text-fg-subtle">{template.role}</div>
                                   ) : null}
-                                  <p className="mt-0.5 text-2xs text-fg-faint">
+                                  <p className="mt-0.5 text-2xs text-fg-muted">
                                     {template.description}
                                   </p>
                                 </div>
@@ -940,15 +940,15 @@ export function NewGroupModal({
                     </div>
                   ) : tab === "copy" ? (
                     <div className="flex flex-col gap-2">
-                      <p className="mb-1 text-2xs text-fg-faint">{t("newGroup.copyHint")}</p>
+                      <p className="mb-1 text-2xs text-fg-muted">{t("newGroup.copyHint")}</p>
                       {agents === null ? (
-                        <p className="text-fg-faint text-xs">{t("newGroup.loadingAgents")}</p>
+                        <p className="text-fg-muted text-xs">{t("newGroup.loadingAgents")}</p>
                       ) : agentsError ? (
                         <p className="text-danger text-xs" role="alert">
                           {agentsError}
                         </p>
                       ) : copyable.length === 0 ? (
-                        <p className="text-fg-faint text-xs">{t("newGroup.noCopyable")}</p>
+                        <p className="text-fg-muted text-xs">{t("newGroup.noCopyable")}</p>
                       ) : (
                         <ul className="flex flex-col gap-2">
                           {copyable.map((agent) => {
@@ -1178,7 +1178,7 @@ export function NewGroupModal({
                                     {member.role && member.role !== member.name ? (
                                       <div className="text-2xs text-fg-subtle">{member.role}</div>
                                     ) : null}
-                                    <p className="mt-0.5 text-2xs text-fg-faint">
+                                    <p className="mt-0.5 text-2xs text-fg-muted">
                                       {t("newGroup.customSource")}
                                     </p>
                                   </div>
@@ -1223,7 +1223,7 @@ export function NewGroupModal({
 
                 <div className="flex items-center gap-2 border-hairline-soft border-t px-4 py-2.5">
                   <span
-                    className="min-w-0 flex-1 truncate text-2xs text-fg-faint"
+                    className="min-w-0 flex-1 truncate text-2xs text-fg-muted"
                     data-testid="new-group-hint"
                   >
                     {blocker ?? ""}
