@@ -33,6 +33,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { agentAvatarSeed } from "../../../shared/agent-avatar-seeds";
 import { agentAvatarForId } from "../../../shared/agent-templates";
 import type {
   AgentInfo,
@@ -1103,7 +1104,7 @@ function SessionRow({
               face={avatar.avatarFace}
               color={avatar.avatarColor}
               shape={avatar.avatarShape}
-              seed={agentId}
+              seed={agentAvatarSeed({ id: agentId, avatarSeed: agent?.avatarSeed })}
               size={20}
               state={
                 agent?.archivedAt

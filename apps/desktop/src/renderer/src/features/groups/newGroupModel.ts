@@ -1,4 +1,9 @@
 import {
+  agentAvatarSeed,
+  copyAvatarSeed,
+  faceForAvatarSeed,
+} from "../../../../shared/agent-avatar-seeds";
+import {
   AGENT_TEMPLATES,
   type AgentTemplate,
   agentAvatarForId,
@@ -43,7 +48,18 @@ export type NewGroupMember = {
   avatarFace: AgentAvatarFace;
   avatarColor: AgentAvatarColor;
   avatarShape?: AgentAvatarShape;
+  /**
+   * The face seed (shared/agent-avatar-seeds.ts) saved as the agent's
+   * avatar_seed: picked in the agent dialog, or for a copy a random one of
+   * the eight other than its source's (copyAvatarSeed). Absent: drawn with its id.
+   */
+  avatarSeed?: string;
 };
+
+/** The seed a draft member is drawn with in the modal: its picked seed, else its key. */
+export function newGroupMemberSeed(member: Pick<NewGroupMember, "key" | "avatarSeed">): string {
+  return agentAvatarSeed({ id: member.key, avatarSeed: member.avatarSeed ?? null });
+}
 
 /** Group name used when the name field is left empty, in the room locale. */
 export function newGroupDefaultName(locale?: string | null): string {
@@ -153,11 +169,14 @@ export function copyMember(
     | "avatarFace"
     | "avatarColor"
     | "avatarShape"
-  >,
+  > & { avatarSeed?: string | null | undefined },
   members: readonly NewGroupMember[],
   key: string,
   fallbackModelId = "",
+  random: () => number = Math.random,
 ): NewGroupMember {
+  // Picked once, when the copy is added (stable across renders); the dialog can change it.
+  const avatarSeed = copyAvatarSeed(agent, random);
   return {
     key,
     source: "copy",
@@ -169,9 +188,10 @@ export function copyMember(
     role: agent.role,
     instructions: agent.instructions,
     modelId: agent.modelId ?? fallbackModelId,
-    avatarFace: agent.avatarFace,
+    avatarFace: faceForAvatarSeed(avatarSeed) ?? agent.avatarFace,
     avatarColor: agent.avatarColor,
     avatarShape: agent.avatarShape,
+    avatarSeed,
   };
 }
 
@@ -221,6 +241,7 @@ export function dialogMember(
     ...(input.avatarShape || fallback.avatarShape
       ? { avatarShape: input.avatarShape ?? fallback.avatarShape }
       : {}),
+    ...(input.avatarSeed ? { avatarSeed: input.avatarSeed } : {}),
   };
 }
 
@@ -259,6 +280,9 @@ export function leadAfterRemoval(
  * copiedFromAgentId) and taking editable fields from the agent input.
  */
 export function editedMember(member: NewGroupMember, input: NewGroupAgentInput): NewGroupMember {
+  // A new face seed replaces the old one, null / "" clears it, absent keeps it.
+  const avatarSeed =
+    input.avatarSeed === undefined ? member.avatarSeed : input.avatarSeed || undefined;
   return {
     key: member.key,
     source: member.source,
@@ -273,6 +297,7 @@ export function editedMember(member: NewGroupMember, input: NewGroupAgentInput):
     ...(input.avatarShape || member.avatarShape
       ? { avatarShape: input.avatarShape ?? member.avatarShape }
       : {}),
+    ...(avatarSeed ? { avatarSeed } : {}),
   };
 }
 
@@ -339,6 +364,7 @@ export function newGroupMemberInput(member: NewGroupMember): NewGroupAgentInput 
     avatarFace: member.avatarFace,
     avatarColor: member.avatarColor,
     ...(member.avatarShape ? { avatarShape: member.avatarShape } : {}),
+    ...(member.avatarSeed ? { avatarSeed: member.avatarSeed } : {}),
   };
 }
 

@@ -43,7 +43,7 @@ export function MemberRow({
           color={row.color}
           face={row.face}
           shape={row.shape}
-          seed={row.agentId}
+          seed={row.seed}
           size={16}
           state={row.state}
         />

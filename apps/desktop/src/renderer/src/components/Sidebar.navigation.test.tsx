@@ -61,6 +61,7 @@ const AGENT: AgentInfo = {
   avatarColor: "orange",
   avatarFace: "happy",
   avatarShape: "roundedSquare",
+  avatarSeed: null,
   createdAt: "2026-10-14T00:00:00Z",
   updatedAt: "2026-10-14T00:00:00Z",
 };
@@ -89,8 +90,10 @@ function Navigation({
   onRestore = () => {},
   onListArchived = async () => [],
   workspaces = [WORKSPACE, SECOND_WORKSPACE],
+  agents = [AGENT],
 }: {
   initialSessions: AgentSessionInfo[];
+  agents?: AgentInfo[];
   activeSessionId?: string;
   activityBySession?: Record<string, SessionActivity>;
   pinned?: boolean;
@@ -123,7 +126,7 @@ function Navigation({
         <Sidebar
           activeSessionId={activeSessionId}
           activityBySession={activityBySession}
-          agents={[AGENT]}
+          agents={agents}
           agentSessions={sessions}
           canCreateSession
           embedded
@@ -423,6 +426,16 @@ describe("sidebar project and Agent navigation", () => {
     expect(screen.getAllByText("Atlas")).toHaveLength(1);
   });
 
+  it("draws the sidebar Agent avatar with its stored avatarSeed", () => {
+    render(
+      <Navigation
+        agents={[{ ...AGENT, avatarSeed: "face-wink-29" }]}
+        initialSessions={[session("Atlas", { agentId: AGENT.id })]}
+      />,
+    );
+    expect(screen.getByTestId("agent-avatar").getAttribute("data-seed")).toBe("face-wink-29");
+  });
+
   it("shows the stored animated Agent avatar beside its session and keeps ordinary session status", () => {
     render(
       <Navigation
@@ -436,6 +449,8 @@ describe("sidebar project and Agent navigation", () => {
     expect(avatar.getAttribute("data-color")).toBe("orange");
     expect(avatar.getAttribute("data-face")).toBe("happy");
     expect(avatar.getAttribute("data-shape")).toBe("roundedSquare");
+    // No stored seed: drawn with the agent id (avatarSeed ?? id).
+    expect(avatar.getAttribute("data-seed")).toBe(AGENT.id);
     expect(avatar.getAttribute("data-state")).toBe("working");
     expect(avatar.getAttribute("data-animated")).not.toBe("false");
     expect(screen.getByRole("button", { name: "New Agent" })).toBeTruthy();

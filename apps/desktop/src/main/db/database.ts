@@ -617,6 +617,13 @@ export function migrateDatabase(db: DatabaseSync): void {
     migrateAgentAvatarsN5(db);
     migrateAgentAvatarShapesN6(db);
   }
+  // Avatar seed (PR #278): the avatar package seed the agent is drawn with
+  // (eyes, tone, ribbons). Nullable and never backfilled: NULL means "draw
+  // with the id", so agents saved before this column keep their exact look.
+  // Added after the legacy rebuilds above (they copy an explicit column list
+  // into AGENTS_TABLE_BODY), and additive, so user_version stays put and an
+  // older build (explicit column lists) still opens the database.
+  addColumn(db, "agents", "avatar_seed", "text");
   // A3: an agent's 1:1 chat is a normal 'chat' session in its group's Project,
   // linked by agent_id (at most one per agent, made on first open). Deleting
   // the agent (with its group) only unlinks the row: the caller then runs the

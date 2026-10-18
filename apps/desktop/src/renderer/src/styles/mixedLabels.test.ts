@@ -100,7 +100,8 @@ const HELP_EMPTY_ANCHORS: Record<string, string[]> = {
   "../features/agent/SessionTitlePopover.tsx": ['>{branch ?? "No branch"}</span>'],
   "../features/agent/SubagentRow.tsx": [">{task}</span>"],
   "../features/agent/TodosCard.tsx": ["data-todos-empty>"],
-  "../features/agents/AgentDialog.tsx": [">{subtitle}</p>"],
+  // The New Agent dialog has no visible subtitle any more; its picker labels are readable.
+  "../features/agents/AvatarOptionGroup.tsx": ["id={labelId}>"],
   "../features/agents/ModelPicker.tsx": [">No models match</p>"],
   "../features/composer/SlashMenu.tsx": [
     '{item.kind === "skill" ? "Skills" : "Commands"}',
@@ -229,6 +230,7 @@ const FAINT_BUDGET: Record<string, number> = {
   "../features/agent/changes/ChangeStats.tsx": 2,
   "../features/agent/diff/InlineDiff.tsx": 2,
   "../features/agents/AgentDialog.tsx": 3,
+  "../features/agents/AvatarOptionGroup.tsx": 0,
   "../features/agents/ModelPicker.tsx": 5,
   "../features/composer/ContextMentionMenu.tsx": 1,
   "../features/composer/SlashMenu.tsx": 1,

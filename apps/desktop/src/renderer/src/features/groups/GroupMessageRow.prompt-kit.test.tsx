@@ -44,7 +44,14 @@ describe("GroupMessageRow Prompt Kit", () => {
   ])("keeps member avatar animation unless archived (archived=%s)", (archived) => {
     render(
       <GroupMessageRow
-        avatar={{ agentId: "planner", color: "violet", face: "happy", shape: "circle", archived }}
+        avatar={{
+          agentId: "planner",
+          seed: "face-calm-40",
+          color: "violet",
+          face: "happy",
+          shape: "circle",
+          archived,
+        }}
         labels={labels}
         members={members}
         message={agentMessage("Agent response")}
@@ -52,6 +59,8 @@ describe("GroupMessageRow Prompt Kit", () => {
     );
     const avatar = screen.getByTestId("agent-avatar");
     expect(avatar.getAttribute("data-paused") === "true").toBe(archived);
+    // Drawn with the member's seed (avatarSeed ?? agentId, from memberAvatar).
+    expect(avatar.getAttribute("data-seed")).toBe("face-calm-40");
     expect(avatar.getAttribute("data-animated")).not.toBe("false");
   });
 

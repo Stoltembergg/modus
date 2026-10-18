@@ -162,7 +162,7 @@ export function GroupAgentsPopover({
               <AgentAvatar
                 color={avatar.color}
                 face={avatar.face}
-                seed={avatar.agentId}
+                seed={avatar.seed}
                 shape={avatar.shape}
                 size={24}
                 state={agentAvatarState(state, avatar.archived)}
@@ -246,7 +246,7 @@ export function GroupAgentsPopover({
                         <AgentAvatar
                           color={avatar.color}
                           face={avatar.face}
-                          seed={avatar.agentId}
+                          seed={avatar.seed}
                           shape={avatar.shape}
                           size={16}
                           state={agentAvatarState(state, avatar.archived)}

@@ -2,6 +2,7 @@ import { Dialog } from "@base-ui/react/dialog";
 import { IconCrown, IconPlus, IconX } from "@tabler/icons-react";
 import { AnimatePresence, m, useReducedMotion } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { agentAvatarSeed } from "../../../../shared/agent-avatar-seeds";
 import {
   AGENT_TEMPLATES,
   type AgentTemplate,
@@ -39,6 +40,7 @@ import {
   newGroupCreateInput,
   newGroupDefaultName,
   newGroupMemberInput,
+  newGroupMemberSeed,
   nextFreeName,
   templateMember,
 } from "./newGroupModel";
@@ -642,7 +644,7 @@ export function NewGroupModal({
                                 <AgentAvatar
                                   color={member.avatarColor}
                                   face={member.avatarFace}
-                                  seed={member.key}
+                                  seed={newGroupMemberSeed(member)}
                                   shape={
                                     member.avatarShape ?? agentAvatarForId(member.key).avatarShape
                                   }
@@ -778,7 +780,7 @@ export function NewGroupModal({
                                   <AgentAvatar
                                     color={member.avatarColor}
                                     face={member.avatarFace}
-                                    seed={member.key}
+                                    seed={newGroupMemberSeed(member)}
                                     shape={
                                       member.avatarShape ??
                                       agentAvatarForId(template.id).avatarShape
@@ -893,7 +895,7 @@ export function NewGroupModal({
                                       <AgentAvatar
                                         color={member.avatarColor}
                                         face={member.avatarFace}
-                                        seed={member.key}
+                                        seed={newGroupMemberSeed(member)}
                                         shape={
                                           member.avatarShape ??
                                           agentAvatarForId(template.id).avatarShape
@@ -974,7 +976,7 @@ export function NewGroupModal({
                                   <AgentAvatar
                                     color={agent.avatarColor}
                                     face={agent.avatarFace}
-                                    seed={agent.id}
+                                    seed={agentAvatarSeed(agent)}
                                     shape={agent.avatarShape}
                                     size={48}
                                   />
@@ -1068,7 +1070,7 @@ export function NewGroupModal({
                                           <AgentAvatar
                                             color={member.avatarColor}
                                             face={member.avatarFace}
-                                            seed={member.key}
+                                            seed={newGroupMemberSeed(member)}
                                             {...(member.avatarShape
                                               ? { shape: member.avatarShape }
                                               : {})}
@@ -1150,7 +1152,7 @@ export function NewGroupModal({
                                   <AgentAvatar
                                     color={member.avatarColor}
                                     face={member.avatarFace}
-                                    seed={member.key}
+                                    seed={newGroupMemberSeed(member)}
                                     shape={
                                       member.avatarShape ?? agentAvatarForId(member.key).avatarShape
                                     }

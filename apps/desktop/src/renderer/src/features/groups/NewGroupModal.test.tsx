@@ -59,6 +59,7 @@ const agent = (id: string, name: string, extra: Partial<AgentInfo> = {}): AgentI
   avatarFace: "cheeky",
   avatarColor: "red",
   avatarShape: "circle",
+  avatarSeed: null,
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
   ...extra,
@@ -319,11 +320,8 @@ describe("NewGroupModal (A4 redesigned)", () => {
 
     const name = within(dialog).getByRole("textbox", { name: "Name" }) as HTMLInputElement;
     expect(name.value).toBe("Explorer");
-    const role = within(dialog).getByRole("combobox", { name: "Role" }) as HTMLSelectElement;
-    expect(role.value).toBe("explorer");
-
-    await user.selectOptions(role, "custom");
-    await user.type(within(dialog).getByRole("textbox", { name: "Custom role" }), "Deep searcher");
+    // No Role field: a template member keeps its template's role.
+    expect(within(dialog).queryByRole("combobox", { name: "Role" })).toBeNull();
 
     // Submit button in add mode is "Add to group"
     await user.click(within(dialog).getByRole("button", { name: "Add to group" }));
@@ -334,7 +332,7 @@ describe("NewGroupModal (A4 redesigned)", () => {
     expect(create.mock.calls[0]?.[0].members[1]).toMatchObject({
       templateId: "explorer",
       name: "Explorer",
-      role: "Deep searcher",
+      role: "Explorer",
     });
   });
 
@@ -413,7 +411,7 @@ describe("NewGroupModal (A4 redesigned)", () => {
     await user.click(within(modal).getByRole("button", { name: "New agent…" }));
     const dialog = screen.getByTestId("agent-dialog");
     await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Cy");
-    await user.type(within(dialog).getByRole("textbox", { name: "Custom role" }), "Scribe");
+    await user.type(within(dialog).getByRole("textbox", { name: "Instructions" }), "Take notes.");
     await user.click(within(dialog).getByRole("button", { name: "Add to group" }));
     await waitFor(() => expect(screen.queryByTestId("agent-dialog")).toBeNull());
 
@@ -441,6 +439,55 @@ describe("NewGroupModal (A4 redesigned)", () => {
     expect(members?.[1]).toMatchObject({ name: "Cy" });
   });
 
+  it("a copy starts on a random face seed (not its source's), stable, and Create saves the previewed one", async () => {
+    const user = userEvent.setup();
+    // 3/8 would pick the source's own seed (wink) among all 8: it is excluded.
+    const random = vi.spyOn(Math, "random").mockReturnValue(3 / 8);
+    const { modal, create } = renderModal({
+      defaultWorkspaceId: "ws-1",
+      agents: [
+        agent("a-1", "Builder", { avatarSeed: "face-wink-29", avatarFace: "wink" }),
+        agent("a-2", "Zed"),
+      ],
+    });
+    await user.click(within(modal).getByRole("tab", { name: "From another group" }));
+    await user.click(await within(modal).findByRole("button", { name: "Copy Builder from Alpha" }));
+    random.mockReturnValue(0); // picked once, on Copy: later renders don't re-roll
+    const previewSeed = async () => {
+      await user.click(within(modal).getByRole("button", { name: "Edit Builder" }));
+      const dialog = screen.getByTestId("agent-dialog");
+      const seed = within(within(dialog).getByTestId("agent-dialog-preview"))
+        .getByTestId("agent-avatar")
+        .getAttribute("data-seed");
+      return { dialog, seed };
+    };
+    let { dialog, seed } = await previewSeed();
+    expect(seed).toBe("face-sleepy-2");
+    expect(seed).not.toBe("face-wink-29");
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(screen.queryByTestId("agent-dialog")).toBeNull());
+    ({ dialog, seed } = await previewSeed());
+    expect(seed).toBe("face-sleepy-2");
+    // The user may change it: the picked face is what gets saved.
+    await user.click(
+      within(within(dialog).getByRole("radiogroup", { name: "Face" })).getByRole("radio", {
+        name: "Calm",
+      }),
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(screen.queryByTestId("agent-dialog")).toBeNull());
+    await user.click(within(modal).getByRole("tab", { name: "Templates" }));
+    await user.click(within(modal).getByRole("button", { name: "Add Planner" }));
+    await user.click(createButton(modal));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create.mock.calls[0]?.[0].members[0]).toMatchObject({
+      copiedFromAgentId: "a-1",
+      avatarSeed: "face-calm-40",
+      avatarFace: "calm",
+    });
+    random.mockRestore();
+  });
+
   it("New agent: Generate sends the roles chosen in the modal (no group yet), then Add to group", async () => {
     const user = userEvent.setup();
     const { modal, generate, create } = renderModal({ defaultWorkspaceId: "ws-1" });
@@ -458,8 +505,9 @@ describe("NewGroupModal (A4 redesigned)", () => {
     });
     await waitFor(() =>
       expect(
-        (within(dialog).getByRole("textbox", { name: "Custom role" }) as HTMLInputElement).value,
-      ).toBe("Release writer"),
+        (within(dialog).getByRole("textbox", { name: "Instructions" }) as HTMLTextAreaElement)
+          .value,
+      ).toBe("Write the notes."),
     );
     await user.click(within(dialog).getByRole("button", { name: "Add to group" }));
     await waitFor(() => expect(screen.queryByTestId("agent-dialog")).toBeNull());
@@ -469,7 +517,8 @@ describe("NewGroupModal (A4 redesigned)", () => {
     const custom = create.mock.calls[0]?.[0].members[2];
     expect(custom).toMatchObject({
       name: "Cy",
-      role: "Release writer",
+      // Only the generated instructions are kept; the generated role is discarded (Custom).
+      role: "",
       instructions: "Write the notes.",
       modelId: "m-2",
     });

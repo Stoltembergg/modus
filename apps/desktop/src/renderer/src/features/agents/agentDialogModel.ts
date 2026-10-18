@@ -43,10 +43,14 @@ export function agentDialogError(
   return null;
 }
 
-/** Create of a custom agent with no role and no instructions: generate them first. */
+/**
+ * Create of a custom agent with no instructions: generate them first. The
+ * dialog has no Role field, so only the instructions decide; the generated
+ * role is discarded (the agent is saved with its role as it was, "" for Custom).
+ */
 export function needsProfileGeneration(
-  draft: Pick<AgentDialogDraft, "role" | "instructions">,
+  draft: Pick<AgentDialogDraft, "instructions">,
   custom: boolean,
 ): boolean {
-  return custom && !draft.role.trim() && !draft.instructions.trim();
+  return custom && !draft.instructions.trim();
 }

@@ -31,6 +31,8 @@ export type GroupAgentRow = {
   face: AgentAvatarFace;
   color: AgentAvatarColor;
   shape: AgentAvatarShape;
+  /** Package seed the avatar is drawn with (`avatarSeed ?? agentId`). */
+  seed: string;
   state: AgentAvatarState;
   isLead: boolean;
   /** The agent's 1:1 chat when it exists (created on first open). */
@@ -103,6 +105,7 @@ export function groupAgentRows(
       face: avatar.face,
       color: avatar.color,
       shape: avatar.shape,
+      seed: avatar.seed,
       state: agentAvatarState(activity, member.archived === true),
       isLead: group.leadSessionId === member.sessionId,
       chatSessionId: chat?.id,
