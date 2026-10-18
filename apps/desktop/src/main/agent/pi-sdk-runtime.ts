@@ -293,6 +293,7 @@ import { deriveSessionTitle, shouldReplaceSessionTitle } from "./session-title";
 import { describeAgentShellForPrompt, resolveAgentShell } from "./shell-resolver";
 import { resolveAvailableSubagent, resolveSubagentsPrompt } from "./subagents-config";
 import { registerAppTools } from "./tools/app-tools";
+import { registerAutomationProposalTool } from "./tools/automation-proposal-tool";
 import { registerBrowserTools } from "./tools/browser-tools";
 import {
   EXTERNAL_PLUGIN_INVOKE_TOOL,
@@ -1154,6 +1155,7 @@ export class PiSdkRuntime implements AgentRuntime {
     registerProjectMemoryTools();
     registerPlanTools();
     registerQuestionTools();
+    registerAutomationProposalTool();
     registerReaTools();
     registerSpillTools();
     registerSubagentTools(this);
@@ -4374,6 +4376,9 @@ export class PiSdkRuntime implements AgentRuntime {
           input.thinkingVariant ?? input.thinkingLevel,
         );
       }
+      toolContext.modelId = turnModelId;
+      toolContext.thinkingLevel = runtimeSession.session.thinkingLevel;
+      if (input.thinkingVariant) toolContext.thinkingVariant = input.thinkingVariant;
     } catch (error) {
       throw failEarlyPrompt(error);
     }

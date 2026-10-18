@@ -59,6 +59,16 @@ describe("automation schedule", () => {
     ).toBe("2026-11-02T06:30:00.000Z");
   });
 
+  it("resolves one-time local inputs in the selected timezone without inventing gap times", () => {
+    expect(scheduleModule).not.toBeNull();
+    if (!scheduleModule) return;
+    const { localDateTimeToInstant } = scheduleModule;
+    expect(localDateTimeToInstant("2026-11-01T01:30", "America/New_York")).toBe(
+      "2026-11-01T05:30:00.000Z",
+    );
+    expect(localDateTimeToInstant("2026-03-08T02:30", "America/New_York")).toBeNull();
+  });
+
   it("rejects an invalid IANA timezone", () => {
     expect(scheduleModule).not.toBeNull();
     if (!scheduleModule) return;

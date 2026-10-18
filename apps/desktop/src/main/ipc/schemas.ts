@@ -97,6 +97,80 @@ const skillSelectionSchema = z.object({
   path: nonEmptyString,
 });
 
+const automationScheduleSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("once"),
+      at: z
+        .string()
+        .min(1)
+        .max(64)
+        .refine((value) => Number.isFinite(Date.parse(value))),
+    })
+    .strict(),
+  z
+    .object({ kind: z.literal("daily"), localTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/) })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("weekly"),
+      daysOfWeek: z
+        .array(z.number().int().min(0).max(6))
+        .min(1)
+        .max(7)
+        .refine((days) => new Set(days).size === days.length),
+      localTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+    })
+    .strict(),
+]);
+
+export const automationGetSchema = z.object({ id: nonEmptyString.max(128) }).strict();
+export const automationHistorySchema = z
+  .object({ id: nonEmptyString.max(128), limit: z.number().int().min(1).max(500).optional() })
+  .strict();
+export const automationCreateSchema = z
+  .object({
+    name: z.string().trim().min(1).max(120),
+    instruction: z.string().trim().min(1).max(65_536),
+    schedule: automationScheduleSchema,
+    timeZone: nonEmptyString.max(128),
+    workspaceId: nonEmptyString.max(128),
+    agentId: nonEmptyString.max(128).nullable(),
+    providerId: nonEmptyString.max(128),
+    modelId: nonEmptyString.max(256),
+    thinkingLevel: thinkingLevelSchema,
+    thinkingVariant: z.string().trim().min(1).max(128).optional(),
+  })
+  .strict();
+const automationUpdatePatchSchema = z
+  .object({
+    name: z.string().trim().min(1).max(120).optional(),
+    instruction: z.string().trim().min(1).max(65_536).optional(),
+    schedule: automationScheduleSchema.optional(),
+    timeZone: nonEmptyString.max(128).optional(),
+    workspaceId: nonEmptyString.max(128).optional(),
+    agentId: nonEmptyString.max(128).nullable().optional(),
+    providerId: nonEmptyString.max(128).optional(),
+    modelId: nonEmptyString.max(256).optional(),
+    thinkingLevel: thinkingLevelSchema.optional(),
+    thinkingVariant: z.string().trim().min(1).max(128).nullable().optional(),
+  })
+  .strict()
+  .refine((patch) => Object.keys(patch).length > 0, "At least one field must be updated.");
+export const automationUpdateSchema = z
+  .object({
+    id: nonEmptyString.max(128),
+    revision: z.number().int().min(1),
+    patch: automationUpdatePatchSchema,
+  })
+  .strict();
+export const automationSetEnabledSchema = workspaceIdSchema
+  .extend({ enabled: z.boolean() })
+  .strict();
+export const automationRunNowSchema = automationGetSchema;
+export const automationDeleteSchema = automationGetSchema;
+export const automationStopSchema = z.object({ executionId: nonEmptyString.max(128) }).strict();
+
 export const agentPromptSchema = z.object({
   sessionId: nonEmptyString,
   message: nonEmptyString,

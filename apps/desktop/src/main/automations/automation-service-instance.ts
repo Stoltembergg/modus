@@ -5,6 +5,7 @@ import { isUsableModelId } from "../agent/model-service";
 import { getAgentRuntime } from "../agent/runtime-registry";
 import { getAgent } from "../agents/agents-store";
 import { getDatabase } from "../db/database";
+import { IPC_CHANNELS } from "../ipc/channels";
 import { getWorkspace } from "../workspace/workspace-store";
 import { createAutomationService } from "./automation-service";
 import { createAutomationStore } from "./automation-store";
@@ -51,6 +52,7 @@ export function getAutomationService(): ReturnType<typeof createAutomationServic
         throw new Error(`The selected model is unavailable: ${definition.modelId}`);
       }
     },
+    notify: (window, event) => window.webContents.send(IPC_CHANNELS.automationEvent, event),
   });
   return service;
 }

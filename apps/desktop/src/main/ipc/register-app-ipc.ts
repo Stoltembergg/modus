@@ -115,6 +115,8 @@ import {
 } from "../agents/agents-store";
 import type { AppearanceController } from "../appearance/appearance-controller";
 import { authIpcService } from "../auth/auth-service-instance";
+import { registerAutomationIpcHandlers } from "../automations/automation-ipc";
+import { getAutomationService } from "../automations/automation-service-instance";
 import { billingIpcService } from "../billing/billing-service-instance";
 import { deleteBrowserRecent, listBrowserRecents } from "../browser/browser-recents-store";
 import {
@@ -262,7 +264,7 @@ import {
   revealProject,
   setProjectPinned,
 } from "../workspace/workspace-service";
-import { upsertWorkspace } from "../workspace/workspace-store";
+import { getWorkspace, upsertWorkspace } from "../workspace/workspace-store";
 import { registerAdaptiveHarnessIpcHandlers } from "./adaptive-harness-ipc";
 import { registerAgentsIpcHandlers } from "./agents-ipc";
 import { registerAppearanceIpcHandlers } from "./appearance-ipc";
@@ -436,6 +438,12 @@ export function registerAppIpc({
   if (appearance) registerAppearanceIpcHandlers(ipcMain, assertTrustedSender, appearance);
   if (uiLanguage) registerUiLanguageIpcHandlers(ipcMain, assertTrustedSender, uiLanguage);
   if (toolFilter) registerToolFilterIpcHandlers(ipcMain, assertTrustedSender, toolFilter);
+  registerAutomationIpcHandlers({
+    ipcMain,
+    assertTrustedSender,
+    resolveWorkspace: getWorkspace,
+    service: getAutomationService,
+  });
 
   // Validate explicit 1:1/group choices here. Agent App-default selection is sent as `null` so
   // the runtime can bypass stale hot/PI branch models; unlinked legacy rows stay unset to restore.

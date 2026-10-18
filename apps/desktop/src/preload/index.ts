@@ -2,6 +2,7 @@ import type { IpcRendererEvent } from "electron";
 import { contextBridge, ipcRenderer } from "electron";
 import type { AppearanceState } from "../shared/appearance";
 import type { AuthState } from "../shared/auth";
+import type { AutomationServiceEvent } from "../shared/automations";
 import type { BillingState } from "../shared/billing";
 import type {
   AgentEvent,
@@ -132,6 +133,22 @@ const api: ModusApi = {
     deleteChats: (id) => ipcRenderer.invoke("workspace:delete-chats", { id }),
     remove: (id) => ipcRenderer.invoke("workspace:remove", { id }),
     reveal: (id) => ipcRenderer.invoke("workspace:reveal", { id }),
+  },
+  automations: {
+    list: () => ipcRenderer.invoke("automation:list"),
+    get: (id) => ipcRenderer.invoke("automation:get", { id }),
+    history: (id, limit) => ipcRenderer.invoke("automation:history", { id, limit }),
+    create: (input) => ipcRenderer.invoke("automation:create", input),
+    update: (input) => ipcRenderer.invoke("automation:update", input),
+    setEnabled: (id, enabled) => ipcRenderer.invoke("automation:set-enabled", { id, enabled }),
+    delete: (id) => ipcRenderer.invoke("automation:delete", { id }),
+    runNow: (id) => ipcRenderer.invoke("automation:run-now", { id }),
+    stop: (executionId) => ipcRenderer.invoke("automation:stop", { executionId }),
+    onEvent(handler) {
+      const listener = (_event: IpcRendererEvent, event: AutomationServiceEvent) => handler(event);
+      ipcRenderer.on("automation:event", listener);
+      return () => ipcRenderer.removeListener("automation:event", listener);
+    },
   },
   group: {
     list: () => ipcRenderer.invoke("group:list"),

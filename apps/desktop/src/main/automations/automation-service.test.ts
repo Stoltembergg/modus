@@ -156,12 +156,15 @@ describe("automation service", () => {
 
   it("reuses one scheduler for a live minimized window and admits one run with the saved model", async () => {
     const { db, store, clock, runtime, service, definition } = createFixture();
+    const configured = store.updateDefinition(definition.id, definition.revision, {
+      agentId: "agent-1",
+    });
     const window = makeWindow(true);
     service.start(window);
     service.start(window);
 
     expect(clock.pending()).toBe(1);
-    const accepted = await service.runNow(definition.id);
+    const accepted = await service.runNow(configured.id);
     await Promise.resolve();
 
     expect(accepted.status).toBe("running");
@@ -172,6 +175,7 @@ describe("automation service", () => {
         cwd: definition.cwd,
         model: definition.modelId,
         title: definition.name,
+        agentId: "agent-1",
       }),
     );
     expect(runtime.prompt).toHaveBeenCalledWith(
@@ -186,6 +190,17 @@ describe("automation service", () => {
     );
     runtime.promptGate.resolve({ outcome: "ok", finalText: "Done" });
     await vi.waitFor(() => expect(store.listHistory(definition.id)[0]?.status).toBe("completed"));
+    expect(store.listHistory(definition.id)[0]).toMatchObject({
+      sessionId: accepted.sessionId,
+      config: {
+        workspaceId: configured.workspaceId,
+        cwd: configured.cwd,
+        agentId: "agent-1",
+        providerId: configured.providerId,
+        modelId: configured.modelId,
+        instruction: configured.instruction,
+      },
+    });
     await service.stop();
     db.close();
   });

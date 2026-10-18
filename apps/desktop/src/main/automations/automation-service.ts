@@ -1,13 +1,15 @@
 import type { BrowserWindow as BrowserWindowType } from "electron";
+import type {
+  AutomationDefinition,
+  AutomationExecution,
+  AutomationServiceEvent,
+  CreateAutomationInput,
+  UpdateAutomationInput,
+} from "../../shared/automations";
 import type { AgentRuntime, PromptTurnResult } from "../agent/runtime";
 import { findMissedAutomationOccurrences, nextAutomationOccurrence } from "./automation-schedule";
 import type { createAutomationStore } from "./automation-store";
 import { AutomationStoreError } from "./automation-store";
-import type {
-  AutomationDefinition,
-  AutomationExecution,
-  UpdateAutomationInput,
-} from "./automation-types";
 
 const AUTOMATION_DEADLINE_MS = 10 * 60 * 1000;
 const MAX_TIMEOUT_MS = 2_147_483_647;
@@ -24,10 +26,6 @@ export type AutomationClock = {
   setTimeout(callback: () => void, delayMs: number): AutomationTimer;
   clearTimeout(timer: AutomationTimer): void;
 };
-
-export type AutomationServiceEvent =
-  | { type: "definitions-changed" }
-  | { type: "execution-changed"; execution: AutomationExecution };
 
 export class AutomationServiceError extends Error {
   constructor(
@@ -60,7 +58,12 @@ export function createAutomationService(input: {
   runtime: AutomationRuntime;
   clock?: AutomationClock;
   notify?: (window: BrowserWindowType, event: AutomationServiceEvent) => void;
-  validateResources?: (definition: AutomationDefinition) => void | Promise<void>;
+  validateResources?: (
+    selection: Pick<
+      AutomationDefinition,
+      "workspaceId" | "cwd" | "agentId" | "providerId" | "modelId"
+    >,
+  ) => void | Promise<void>;
 }) {
   const clock = input.clock ?? {
     now: () => new Date().toISOString(),
@@ -598,13 +601,18 @@ export function createAutomationService(input: {
     listDefinitions: () => input.store.listDefinitions(),
     getDefinition: (id: string) => input.store.getDefinition(id),
     listHistory: (id: string, limit?: number) => input.store.listHistory(id, limit),
-    createDefinition(inputDefinition: Parameters<AutomationStore["createDefinition"]>[0]) {
+    async createDefinition(inputDefinition: CreateAutomationInput) {
+      await input.validateResources?.(inputDefinition);
       const definition = input.store.createDefinition(inputDefinition);
       publish({ type: "definitions-changed" });
       scheduleNext();
       return definition;
     },
-    updateDefinition(id: string, revision: number, patch: UpdateAutomationInput) {
+    async updateDefinition(id: string, revision: number, patch: UpdateAutomationInput) {
+      const current = input.store.getDefinition(id);
+      if (!current) throw new AutomationServiceError("not-found", "Automation not found.");
+      const selection = { ...current, ...patch };
+      await input.validateResources?.(selection);
       const definition = input.store.updateDefinition(id, revision, patch);
       publish({ type: "definitions-changed" });
       scheduleNext();

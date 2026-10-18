@@ -305,6 +305,15 @@ export const ASK_USER_TOOL_UI: ToolUiMeta = {
   groupInTimeline: false,
 };
 
+/** Proposal-only entry point; persistence requires a separate user confirmation. */
+export const AUTOMATION_PROPOSAL_TOOL_NAME = "propose_automation";
+export const AUTOMATION_PROPOSAL_TOOL_UI: ToolUiMeta = {
+  verb: "Proposed automation",
+  activeVerb: "Preparing automation",
+  primaryArgKey: "name",
+  groupInTimeline: false,
+};
+
 /** Agent-facing subagent delegation tool (custom tool registered at runtime). */
 export const SUBAGENT_TOOL_NAMES = ["task"] as const;
 
@@ -450,6 +459,9 @@ export function getToolUiMeta(name: string): ToolUiMeta | undefined {
   }
   if (name === ASK_USER_TOOL_NAME) {
     return ASK_USER_TOOL_UI;
+  }
+  if (name === AUTOMATION_PROPOSAL_TOOL_NAME) {
+    return AUTOMATION_PROPOSAL_TOOL_UI;
   }
   if (name === WAIT_TOOL_NAME) {
     return WAIT_TOOL_UI;
