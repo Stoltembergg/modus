@@ -147,7 +147,7 @@ npm --workspace @modus/desktop run package:linux -- --publish never
 | `apps/site/` | 网站与支付页面 |
 | `crates/` | Rust PTY host、REA supervisor 和插件隔离组件 |
 | `catalog/` | 生成的模型与服务商目录 |
-| `supabase/` | 账户与计费后端、迁移、函数和测试 |
+| [`docs/db/`](./docs/db/README.md) | 账户与计费后端、迁移、函数和测试 |
 | `scripts/` | 目录生成与开发工具 |
 | `docs/` | 架构、安全、发行说明和媒体资源 |
 

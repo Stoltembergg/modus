@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # B1 SQL tests: start a throwaway local Postgres, load the Supabase shim
-# (shim/supabase_shim.sql), apply supabase/migrations/*.sql in order, run the
+# (shim/supabase_shim.sql), apply docs/db/migrations/*.sql in order, run the
 # pgTAP files in database/ with pg_prove, then the concurrency check.
 # Exits non-zero on any failure. Never touches a remote database.
 #
@@ -16,7 +16,7 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-root="$(cd "$here/../.." && pwd)"
+db_root="$(cd "$here/.." && pwd)"
 
 if [[ -z "${PG_BIN:-}" ]]; then
   for candidate in /usr/lib/postgresql/*/bin; do
@@ -62,7 +62,7 @@ psql_run() { "$PG_BIN/psql" -X -q -v ON_ERROR_STOP=1 "$@"; }
 echo "== shim"
 psql_run -f "$here/shim/supabase_shim.sql"
 echo "== migrations"
-for migration in "$root"/supabase/migrations/*.sql; do
+for migration in "$db_root"/migrations/*.sql; do
   echo "   $(basename "$migration")"
   psql_run -f "$migration"
 done
@@ -76,7 +76,7 @@ echo "== concurrency"
 PSQL="$PG_BIN/psql" bash "$here/concurrency.sh"
 
 echo "== functions db.ts + model-router + mp-webhook + mp-cancel (npm:postgres, real cluster, fake upstream / fake MP API)"
-(cd "$root/supabase/functions" &&
+(cd "$db_root/functions" &&
   MODUS_TEST_DB_URL="postgres://postgres:$db_password@127.0.0.1:$PGPORT/postgres" \
     deno test --allow-env --allow-net=127.0.0.1 --allow-read --allow-import \
       _shared/db.integration.ts model-router/router.integration.ts mp-webhook/mp.integration.ts \

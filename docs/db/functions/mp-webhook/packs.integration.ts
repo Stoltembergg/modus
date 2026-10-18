@@ -1,5 +1,5 @@
 /**
- * L5a credit packs against the REAL migrated Postgres (supabase/tests/run.sh): the real
+ * L5a credit packs against the REAL migrated Postgres (docs/db/tests/run.sh): the real
  * mp-webhook handler + createPostgresBillingDb with a fake Mercado Pago API (never the real
  * one), then the real model-router handler + createPostgresRouterDb. A purchase payment is
  * credited once into a lot, unlocks the pack's access plan, and router usage consumes the

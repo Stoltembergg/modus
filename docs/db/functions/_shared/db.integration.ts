@@ -1,6 +1,6 @@
 /**
  * Integration test for the REAL db.ts (npm:postgres) against a migrated Postgres.
- * Not picked up by `deno test` (name is not *.test.ts): supabase/tests/run.sh runs it
+ * Not picked up by `deno test` (name is not *.test.ts): docs/db/tests/run.sh runs it
  * with MODUS_TEST_DB_URL pointing at its throwaway cluster, after the migrations.
  * Guards the B3 smoke bug: `${JSON.stringify(payload)}::jsonb` reached
  * process_stripe_event as a JSON *string* and failed with 22023.
