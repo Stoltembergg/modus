@@ -635,9 +635,9 @@ describe("ReaSessionManager", () => {
         note: REA_NPM_NOT_FOUND_NOTE,
       }),
     });
-    await expect(manager.listTools(owner("no-npm-probe"), { offset: 0, limit: 10 })).rejects.toThrow(
-      REA_NPM_NOT_FOUND_NOTE,
-    );
+    await expect(
+      manager.listTools(owner("no-npm-probe"), { offset: 0, limit: 10 }),
+    ).rejects.toThrow(REA_NPM_NOT_FOUND_NOTE);
     expect(clients).toHaveLength(0);
     expect(manager.getIntegrationStatus()).toMatchObject({
       status: "needs_node",
