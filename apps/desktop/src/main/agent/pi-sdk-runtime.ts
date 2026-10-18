@@ -78,9 +78,12 @@ import type { ToolSelection } from "../local-models/tool-ranker";
 import {
   CORE_TOOL_NAMES,
   getTurnToolFilter,
+  logTurnToolFilter,
   TOOL_FILTER_TOP_K,
+  type TurnToolFilterFallbackCause,
   toolDocShort,
   turnToolFilterEnabled,
+  turnToolFilterNow,
 } from "../local-models/turn-tool-filter";
 import { listAllowlistedMcpToolNames } from "../mcp/mcp-service";
 import {
@@ -5415,21 +5418,47 @@ export class PiSdkRuntime implements AgentRuntime {
     if (!filter?.enabled() || runtimeSession.info.parentSessionId) return { mode: "off" };
     const sessionId = runtimeSession.info.id;
     if (this.exposedToolNames.has(sessionId)) return { mode: "on", selected: [] };
+    // One log line for this decision: counts, ms and a reason word only (no text, names or ids).
+    let of = 0;
+    let coreSent = 0;
+    const started = turnToolFilterNow();
+    const fallback = (cause: TurnToolFilterFallbackCause): void =>
+      logTurnToolFilter({
+        mode: "fallback",
+        cause,
+        sent: of,
+        of,
+        core: coreSent,
+        ms: turnToolFilterNow() - started,
+      });
     try {
       const allowed = activeToolNamesForSession(runtimeSession.info, profile);
       const core = new Set<string>([...CORE_TOOL_NAMES, TOOLS_EXPAND_TOOL_NAME]);
+      coreSent = allowed.filter((name) => core.has(name)).length;
       const described = new Map(
         runtimeSession.session.getAllTools().map((tool) => [tool.name, tool.description]),
       );
       const pool = allowed
         .filter((name) => !core.has(name))
         .map((name) => ({ name, doc: toolDocShort(name, described.get(name)) }));
+      of = pool.length;
       const selection = await filter.select({ query: message, tools: pool, k: TOOL_FILTER_TOP_K });
       this.toolFilterSelections.set(sessionId, selection);
-      return selection.filtered
-        ? { mode: "on", selected: selection.tools, selection }
-        : { mode: "fallback", selection };
+      if (selection.filtered) {
+        const inPool = new Set(pool.map((tool) => tool.name));
+        logTurnToolFilter({
+          mode: "filtered",
+          sent: selection.tools.filter((name) => inPool.has(name)).length,
+          of,
+          core: coreSent,
+          ms: turnToolFilterNow() - started,
+        });
+        return { mode: "on", selected: selection.tools, selection };
+      }
+      fallback(selection.fallback ?? "unknown");
+      return { mode: "fallback", selection };
     } catch {
+      fallback("exception");
       return { mode: "fallback" };
     }
   }

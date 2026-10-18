@@ -23,6 +23,7 @@ import type {
   PlanRef,
   SubagentWorktreeInfo,
 } from "../../shared/contracts";
+import type { LocalModelFailure } from "../local-models/errors";
 import type {
   HarnessContext,
   HarnessHook,
@@ -183,7 +184,9 @@ const {
 const agentEventStore = await import("./agent-event-store");
 const modelService = await import("./model-service");
 const { toolRegistry } = await import("./tools/registry");
-const { setTurnToolFilter, CORE_TOOL_NAMES } = await import("../local-models/turn-tool-filter");
+const { setTurnToolFilter, setTurnToolFilterClock, CORE_TOOL_NAMES } = await import(
+  "../local-models/turn-tool-filter"
+);
 const { TOOLS_EXPAND_TOOL_NAME } = await import("../../shared/tools");
 const { registerSpillTools, RETRIEVE_SPILL_TOOL_NAME } = await import("./tools/spill-tools");
 const { deleteAgentSessionTree, setAgentSessionArchivedTree } = await import("./session-lifecycle");
@@ -13077,6 +13080,7 @@ describe("PiSdkRuntime per-request token stability", () => {
       turn: number,
       harness: Awaited<ReturnType<typeof createOfflinePiToolSessions>>,
     ) => void,
+    messageOfTurn: (turn: number) => string = (turn) => `Turn ${turn}: explain src/app.ts.`,
   ) {
     const requests: Request[] = [];
     const harness = await createOfflinePiToolSessions({
@@ -13111,7 +13115,7 @@ describe("PiSdkRuntime per-request token stability", () => {
       await runtime.prompt(createWindowStub(), {
         context: [],
         delivery: "normal",
-        message: `Turn ${index + 1}: explain src/app.ts.`,
+        message: messageOfTurn(index + 1),
         sessionId,
         ...(mode === "plan" ? { mode: "plan" as const } : {}),
       });
@@ -13289,7 +13293,7 @@ describe("PiSdkRuntime per-request token stability", () => {
       query: string;
       tools: readonly { name: string; doc: string }[];
       k: number;
-    }) => Promise<{ tools: string[]; filtered: boolean; fallback?: "timeout" }>;
+    }) => Promise<{ tools: string[]; filtered: boolean; fallback?: LocalModelFailure }>;
     const pools: Array<readonly { name: string; doc: string }[]> = [];
     const warmed: Array<readonly { name: string; doc: string }[]> = [];
     function installFilter(select: FakeSelect, enabled = true) {
@@ -13420,6 +13424,180 @@ describe("PiSdkRuntime per-request token stability", () => {
       }
       await baseline.runtime.releaseRuntime(baseline.sessionId);
     }, 30_000);
+
+    describe("per-turn log line (Debbie: counts, ms and a reason word only)", () => {
+      const SENTINEL = "SENTINEL-7f3a-user-secret";
+      const message = (turn: number) => `Turn ${turn}: ${SENTINEL} explain src/app.ts.`;
+      let output: string[] = [];
+      const spies: Array<{ mockRestore(): void }> = [];
+
+      /** Every console call during the test, as text (all levels). */
+      beforeEach(() => {
+        output = [];
+        for (const level of ["log", "info", "warn", "error", "debug"] as const) {
+          spies.push(
+            vi.spyOn(console, level).mockImplementation((...args: unknown[]) => {
+              output.push(
+                args.map((arg) => (typeof arg === "string" ? arg : String(arg))).join(" "),
+              );
+            }),
+          );
+        }
+      });
+      afterEach(() => {
+        for (const spy of spies.splice(0)) spy.mockRestore();
+        setTurnToolFilterClock(null);
+      });
+
+      /** Main-side clock: `ms` ticks between the decision's start and its line. */
+      function pinClock(ms: number) {
+        let calls = 0;
+        setTurnToolFilterClock(() => (calls++ % 2 === 0 ? 1000 : 1000 + ms));
+      }
+      const filterLines = () => output.filter((line) => line.includes("tool filter"));
+      /** of = the non-core pool ranked; core = core tools + tools_expand in the request. */
+      function counts(request?: Request) {
+        const sent = names(request);
+        const core = sent.filter(
+          (name) =>
+            (CORE_TOOL_NAMES as readonly string[]).includes(name) ||
+            name === TOOLS_EXPAND_TOOL_NAME,
+        ).length;
+        return { of: pools[0]?.length ?? -1, core };
+      }
+      function expectNoSentinel() {
+        expect(output.length).toBeGreaterThan(0);
+        for (const line of output) expect(line).not.toContain(SENTINEL);
+        for (const line of filterLines()) {
+          expect(line).not.toContain("src/app.ts");
+          expect(line).not.toMatch(/token-stability|workspace-|\/|\\/);
+        }
+      }
+      const fallbackWith =
+        (fallback: LocalModelFailure): FakeSelect =>
+        async ({ tools }) => ({ tools: tools.map((tool) => tool.name), filtered: false, fallback });
+
+      it("filtered: one line with sent/of/core/ms", async () => {
+        pinClock(41);
+        installFilter(lastEight);
+        const run = await runTurns(["build"], undefined, message);
+        const { of, core } = counts(run.lastRequestOfTurn[0]);
+        expect(of).toBeGreaterThan(8);
+        expect(filterLines()).toEqual([
+          `[local-models] tool filter: filtered sent=8 of=${of} core=${core} ms=41`,
+        ]);
+        expectNoSentinel();
+        await run.runtime.releaseRuntime(run.sessionId);
+      }, 30_000);
+
+      it("off (desligado): the filter switched off logs nothing, and a selection that races a switch-off logs reason=off", async () => {
+        // Off is the default for every user: no decision is made, so no line (the
+        // absence of lines is the signal). Only a decision that ran logs.
+        installFilter(lastEight, false);
+        const off = await runTurns(["build", "build"], undefined, message);
+        expect(pools).toHaveLength(0);
+        expect(filterLines()).toEqual([]);
+        await off.runtime.releaseRuntime(off.sessionId);
+
+        pinClock(1);
+        installFilter(fallbackWith("disabled"));
+        const raced = await runTurns(["build"], undefined, message);
+        const { of, core } = counts(raced.lastRequestOfTurn[0]);
+        expect(filterLines()).toEqual([
+          `[local-models] tool filter: fallback reason=off sent=${of} of=${of} core=${core} ms=1 cause=disabled`,
+        ]);
+        expectNoSentinel();
+        await raced.runtime.releaseRuntime(raced.sessionId);
+      }, 30_000);
+
+      it("loading: the model is not ready yet", async () => {
+        pinClock(2);
+        installFilter(fallbackWith("not-ready"));
+        const run = await runTurns(["build"], undefined, message);
+        const { of, core } = counts(run.lastRequestOfTurn[0]);
+        expect(filterLines()).toEqual([
+          `[local-models] tool filter: fallback reason=loading sent=${of} of=${of} core=${core} ms=2 cause=not-ready`,
+        ]);
+        expectNoSentinel();
+        await run.runtime.releaseRuntime(run.sessionId);
+      }, 30_000);
+
+      it("busy: a selection is still running in the model process", async () => {
+        pinClock(0);
+        installFilter(fallbackWith("busy"));
+        const run = await runTurns(["build"], undefined, message);
+        const { of, core } = counts(run.lastRequestOfTurn[0]);
+        expect(filterLines()).toEqual([
+          `[local-models] tool filter: fallback reason=busy sent=${of} of=${of} core=${core} ms=0`,
+        ]);
+        expectNoSentinel();
+        await run.runtime.releaseRuntime(run.sessionId);
+      }, 30_000);
+
+      it("timeout: past the 75 ms main-side deadline", async () => {
+        pinClock(77);
+        installFilter(fallbackWith("timeout"));
+        const run = await runTurns(["build"], undefined, message);
+        const { of, core } = counts(run.lastRequestOfTurn[0]);
+        expect(filterLines()).toEqual([
+          `[local-models] tool filter: fallback reason=timeout sent=${of} of=${of} core=${core} ms=77`,
+        ]);
+        expectNoSentinel();
+        await run.runtime.releaseRuntime(run.sessionId);
+      }, 30_000);
+
+      it("error: a worker failure and an exception (whose message carries the sentinel) both log reason=error", async () => {
+        pinClock(5);
+        installFilter(fallbackWith("crashed"));
+        const crashed = await runTurns(["build"], undefined, message);
+        const { of, core } = counts(crashed.lastRequestOfTurn[0]);
+        await crashed.runtime.releaseRuntime(crashed.sessionId);
+
+        pinClock(3);
+        installFilter(async () => {
+          throw new Error(`model process gone while ranking "${SENTINEL}"`);
+        });
+        const thrown = await runTurns(["build"], undefined, message);
+        expect(filterLines()).toEqual([
+          `[local-models] tool filter: fallback reason=error sent=${of} of=${of} core=${core} ms=5 cause=crashed`,
+          `[local-models] tool filter: fallback reason=error sent=${of} of=${of} core=${core} ms=3 cause=exception`,
+        ]);
+        expectNoSentinel();
+        await thrown.runtime.releaseRuntime(thrown.sessionId);
+      }, 30_000);
+
+      it("later turns (grow-only) do not log: one line for three turns", async () => {
+        pinClock(9);
+        installFilter(lastEight);
+        const run = await runTurns(["build", "build", "build"], undefined, message);
+        expect(filterLines()).toHaveLength(1);
+        expect(filterLines()[0]).toMatch(
+          /^\[local-models\] tool filter: filtered sent=8 of=\d+ core=\d+ ms=9$/,
+        );
+        expectNoSentinel();
+        await run.runtime.releaseRuntime(run.sessionId);
+      }, 30_000);
+
+      it("subagent sessions do not log and are never ranked", async () => {
+        installFilter(lastEight);
+        const runtime = new PiSdkRuntime() as unknown as {
+          decideTurnToolFilter(
+            session: { info: { id: string; parentSessionId?: string } },
+            profile: string,
+            message: string,
+          ): Promise<{ mode: string }>;
+        };
+        const decision = await runtime.decideTurnToolFilter(
+          { info: { id: `child-${crypto.randomUUID()}`, parentSessionId: "parent" } },
+          "chat",
+          message(1),
+        );
+        expect(decision).toEqual({ mode: "off" });
+        expect(pools).toHaveLength(0);
+        expect(filterLines()).toEqual([]);
+        for (const line of output) expect(line).not.toContain(SENTINEL);
+      });
+    });
 
     it("subagents are never filtered and never get tools_expand", () => {
       installFilter(lastEight);
