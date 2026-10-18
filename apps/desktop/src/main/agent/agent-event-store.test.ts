@@ -31,6 +31,7 @@ const {
   listAgentEventRawPage,
   listAgentRunMessagePage,
   listAgentEvents,
+  listUnterminatedAgentRunIds,
   MAX_AGENT_EVENT_PAGE_SIZE,
   recordAgentEvent,
 } = await import("./agent-event-store");
@@ -3007,6 +3008,42 @@ fs.renameSync("original-manifest-link", "package.json");
     expect(() => listAgentEventPage(sessionId, { runId: "target-run", limit: 20 })).toThrow(
       /overlap/i,
     );
+  });
+
+  it("lists only runs without a terminal event, and a closed orphan stops blocking later reads", () => {
+    const sessionId = `unterminated-runs-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    recordAgentEvent({ type: "run.started", sessionId, runId: "done-run", delivery: "normal" });
+    recordAgentEvent({ type: "run.completed", sessionId, runId: "done-run" });
+    recordAgentEvent({ type: "run.started", sessionId, runId: "orphan-run", delivery: "normal" });
+    recordAgentEvent({ type: "run.started", sessionId, runId: "blocked-run", delivery: "normal" });
+    recordAgentEvent({
+      type: "run.blocked",
+      sessionId,
+      runId: "blocked-run",
+      requestId: "request",
+      reason: "waiting",
+    });
+    expect(listUnterminatedAgentRunIds(sessionId)).toEqual(["orphan-run"]);
+
+    recordAgentEvent({ type: "run.cancelled", sessionId, runId: "orphan-run" });
+    expect(listUnterminatedAgentRunIds(sessionId)).toEqual([]);
+    recordAgentEvent({ type: "run.started", sessionId, runId: "next-run", delivery: "normal" });
+    recordAgentEvent({
+      type: "message.started",
+      sessionId,
+      messageId: "next-message",
+      role: "assistant",
+    });
+    recordAgentEvent({
+      type: "message.delta",
+      sessionId,
+      messageId: "next-message",
+      delta: "oi",
+    });
+    recordAgentEvent({ type: "run.completed", sessionId, runId: "next-run" });
+    expect(runAssistantOutput(sessionId, "next-run")).toBe("oi");
+    expect(listUnterminatedAgentRunIds(sessionId)).toEqual([]);
   });
 
   it("loads the newest page first and walks older pages with one fixed snapshot", () => {
