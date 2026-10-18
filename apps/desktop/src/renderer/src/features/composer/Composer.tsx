@@ -9,7 +9,7 @@ import {
   IconPlus,
   IconX,
 } from "@tabler/icons-react";
-import { AnimatePresence, m } from "motion/react";
+import { AnimatePresence, m, useReducedMotion } from "motion/react";
 import {
   type ClipboardEvent,
   type DragEvent,
@@ -34,7 +34,7 @@ import { MenuRow } from "../../components/ui/MenuRow";
 import { SendStopIcon } from "../../components/ui/SendStopIcon";
 import { cn } from "../../lib/cn";
 import { ContextUsageRing, contextUsagePercent, formatUsagePercent } from "../../lib/contextUsage";
-import { tween } from "../../lib/motion";
+import { composerImageChipMotion } from "../../lib/motion";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { formatUiNumber, useUiIntlLocale } from "../../lib/uiIntl";
 import { useWidthTier } from "../../lib/useWidthTier";
@@ -248,6 +248,8 @@ export function Composer({
   const [textBeforeCaret, setTextBeforeCaret] = useState(value);
   const hasText = value.trim().length > 0;
   const hasImages = images.length > 0;
+  const reducedMotion = useReducedMotion() ?? false;
+  const imageChipMotion = composerImageChipMotion(reducedMotion);
   const hasSelectedSkills = selectedSkills.length > 0;
   const hasInlineTokens = contextItems.length > 0 || hasSelectedSkills;
   const hasContent = hasText || hasImages || contextItems.length > 0 || hasSelectedSkills;
@@ -615,24 +617,25 @@ export function Composer({
             <AnimatePresence initial={false}>
               {images.map((image) => (
                 <m.div
-                  animate={{ opacity: 1, scale: 1 }}
-                  className="group/image relative"
-                  exit={{ opacity: 0, scale: 0.92 }}
-                  initial={{ opacity: 0, scale: 0.92 }}
+                  animate={imageChipMotion.animate}
+                  className="composer-image-chip group/image relative rounded-xl has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-focus-ring/60"
+                  data-composer-image=""
+                  exit={imageChipMotion.exit}
+                  initial={imageChipMotion.initial}
                   key={image.id}
                   layout
-                  transition={tween("base")}
+                  transition={imageChipMotion.transition}
                 >
                   <ImageThumb
                     alt={image.name}
-                    className="size-14 rounded-lg border border-hairline bg-canvas object-contain"
+                    className="composer-image-thumb size-14 rounded-xl object-contain outline-none"
                     onSaveEdited={(dataUrl) => updateImage(image.id, dataUrl)}
                     src={image.dataUrl}
                     title={image.name}
                   />
                   <button
                     aria-label={`Remove ${image.name}`}
-                    className="absolute -top-1.5 -right-1.5 flex size-4.5 items-center justify-center rounded-full border border-hairline bg-elevated text-fg-faint opacity-0 transition-opacity hover:text-fg group-hover/image:opacity-100"
+                    className="composer-image-remove absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full text-fg-muted opacity-0 outline-none transition-[opacity,color,background-color] duration-(--motion-duration-fast) hover:text-fg focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-focus-ring/60 group-focus-within/image:opacity-100 group-hover/image:opacity-100"
                     onClick={() => removeImage(image.id)}
                     type="button"
                   >
@@ -695,8 +698,11 @@ export function Composer({
               className="hidden"
               multiple
               onChange={(event) => {
-                if (event.target.files?.length) {
-                  void addFiles(event.target.files);
+                // Copy first: clearing `value` below empties the live FileList
+                // before the async reader gets past the first file.
+                const files = Array.from(event.target.files ?? []);
+                if (files.length > 0) {
+                  void addFiles(files);
                 }
                 event.target.value = "";
               }}

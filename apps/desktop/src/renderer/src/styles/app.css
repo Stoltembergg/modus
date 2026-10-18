@@ -3298,6 +3298,25 @@ body
 }
 /* No reduced-motion override: the focus ring and fill change colour, nothing moves. */
 
+/* Composer image chips: borderless glass thumbnails, a glass remove button
+   revealed on hover / keyboard focus. Radius from the shared scale. */
+.composer-image-thumb {
+  background-color: var(--color-chip);
+  box-shadow: var(--shadow-1);
+  transition: box-shadow var(--motion-duration-fast) var(--motion-ease-standard);
+}
+.composer-image-chip:hover .composer-image-thumb {
+  box-shadow:
+    var(--shadow-1),
+    0 0 0 1px color-mix(in srgb, var(--color-accent) 35%, transparent);
+}
+.composer-image-remove {
+  background-color: color-mix(in srgb, var(--color-elevated) 88%, transparent);
+  -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
+  box-shadow: var(--shadow-1);
+}
+
 /*
  * Glass fallback (D1). Reduced transparency, increased contrast, forced colors
  * and hosts without backdrop-filter get solid surfaces: every glass tier goes to
