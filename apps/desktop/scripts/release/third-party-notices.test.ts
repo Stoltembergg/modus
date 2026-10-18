@@ -79,9 +79,12 @@ describe("license files after L0", () => {
     expect(license).not.toContain("Commons Clause");
   });
 
-  it.each(["README.md", "README.zh-CN.md"])("%s License section is plain Apache-2.0", (readme) => {
+  it.each([
+    ["README.md", "## License"],
+    ["README.zh-CN.md", "## 许可证"],
+  ])("%s License section is plain Apache-2.0", (readme, heading) => {
     const text = read(join(repoRoot, readme));
-    const start = text.indexOf("## License");
+    const start = text.indexOf(heading);
     expect(start).toBeGreaterThanOrEqual(0);
     const end = text.indexOf("\n## ", start + 1);
     const section = text.slice(start, end === -1 ? undefined : end);
