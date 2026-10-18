@@ -34,7 +34,7 @@ export function CopyButton({ text, label = "Copy", className }: CopyButtonProps)
     <button
       aria-label={label}
       className={cn(
-        "flex size-6 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg-muted",
+        "flex size-6 items-center justify-center rounded-md text-fg-faint outline-none transition-colors hover:bg-hover hover:text-fg-muted focus-visible:ring-2 focus-visible:ring-focus-ring/35",
         className,
       )}
       onClick={handleCopy}
