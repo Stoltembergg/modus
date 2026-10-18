@@ -35,6 +35,7 @@ const AGENT: AgentInfo = {
   avatarColor: "green",
   avatarFace: "happy",
   avatarShape: "blob",
+  avatarSeed: null,
   createdAt: "now",
   updatedAt: "now",
 };
@@ -57,6 +58,8 @@ describe("message cards", () => {
     expect(avatar.getAttribute("data-size")).toBe("24");
     expect(avatar.getAttribute("data-color")).toBe("green");
     expect(avatar.getAttribute("data-shape")).toBe("blob");
+    // No stored seed: drawn with the agent id.
+    expect(avatar.getAttribute("data-seed")).toBe(AGENT.id);
     expect(avatar.getAttribute("data-state")).toBe("working");
     expect(avatar.getAttribute("data-paused")).not.toBe("true");
     view.rerender(<MessageBlock {...props} streaming={false} content="Reply complete" />);
@@ -64,6 +67,21 @@ describe("message cards", () => {
     expect(avatar.getAttribute("data-state")).toBe("idle");
     expect(avatar.getAttribute("data-paused")).not.toBe("true");
     expect(await screen.findByText("Reply complete")).toBeTruthy();
+  });
+
+  it("draws the timeline avatar with the stored avatarSeed (avatarSeed ?? id)", () => {
+    render(
+      <MessageBlock
+        assistantAgent={{ ...AGENT, avatarSeed: "face-calm-40" }}
+        assistantAgentId={AGENT.id}
+        content="Reply"
+        messageId="a"
+        messageRole="assistant"
+      />,
+    );
+    expect(screen.getByRole("img", { name: "Judas" }).getAttribute("data-seed")).toBe(
+      "face-calm-40",
+    );
   });
 
   it("places the user's badge after the bubble, outside its edit control", () => {
@@ -109,6 +127,7 @@ describe("message cards", () => {
     view.rerender(<MessageBlock {...props} assistantAgentId="missing-profile" />);
     expect(screen.queryByRole("img", { name: "Modus" })).toBeNull();
     expect(screen.getByTestId("agent-avatar").getAttribute("data-paused")).not.toBe("true");
+    expect(screen.getByTestId("agent-avatar").getAttribute("data-seed")).toBe("missing-profile");
   });
 
   it("never labels a different session with stale profile data", () => {

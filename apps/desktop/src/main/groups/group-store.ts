@@ -108,6 +108,7 @@ type MemberRow = {
   agent_avatar_face: AgentAvatarFace;
   agent_avatar_color: AgentAvatarColor;
   agent_avatar_shape: AgentAvatarShape;
+  agent_avatar_seed: string | null;
   agent_template_id: string | null;
   capability_ids_json: string;
   supported_task_kinds_json: string;
@@ -152,7 +153,7 @@ const MEMBER_SELECT = `select m.group_id, m.session_id, m.role, m.agent_id, m.jo
     a.name as agent_name, a.role as agent_role, a.archived_at as agent_archived_at,
     a.avatar_face as agent_avatar_face, a.avatar_color as agent_avatar_color,
     a.avatar_shape as agent_avatar_shape, a.template_id as agent_template_id,
-    a.capability_ids_json, a.supported_task_kinds_json
+    a.capability_ids_json, a.supported_task_kinds_json, a.avatar_seed as agent_avatar_seed
   from agent_group_members m join agents a on a.id = m.agent_id`;
 const MESSAGE_COLUMNS = `id, group_id, author_kind, author_session_id, reply_to_message_id,
   to_session_id, chain_id, kind, body, mentions_json, attachments_json, context_items_json, created_at,
@@ -193,6 +194,7 @@ function toMember(row: MemberRow): AgentGroupMember {
     avatarFace: row.agent_avatar_face,
     avatarColor: row.agent_avatar_color,
     avatarShape: row.agent_avatar_shape,
+    avatarSeed: row.agent_avatar_seed || null,
     joinedAt: row.joined_at,
   };
 }

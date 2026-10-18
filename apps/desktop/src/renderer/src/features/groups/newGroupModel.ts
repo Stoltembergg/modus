@@ -1,3 +1,4 @@
+import { agentAvatarSeed } from "../../../../shared/agent-avatar-seeds";
 import {
   AGENT_TEMPLATES,
   type AgentTemplate,
@@ -43,7 +44,18 @@ export type NewGroupMember = {
   avatarFace: AgentAvatarFace;
   avatarColor: AgentAvatarColor;
   avatarShape?: AgentAvatarShape;
+  /**
+   * The face seed picked in the agent dialog (shared/agent-avatar-seeds.ts),
+   * saved as the agent's avatar_seed. Absent: the agent is drawn with its id.
+   * Copies never carry one.
+   */
+  avatarSeed?: string;
 };
+
+/** The seed a draft member is drawn with in the modal: its picked seed, else its key. */
+export function newGroupMemberSeed(member: Pick<NewGroupMember, "key" | "avatarSeed">): string {
+  return agentAvatarSeed({ id: member.key, avatarSeed: member.avatarSeed ?? null });
+}
 
 /** Group name used when the name field is left empty, in the room locale. */
 export function newGroupDefaultName(locale?: string | null): string {
@@ -221,6 +233,7 @@ export function dialogMember(
     ...(input.avatarShape || fallback.avatarShape
       ? { avatarShape: input.avatarShape ?? fallback.avatarShape }
       : {}),
+    ...(input.avatarSeed ? { avatarSeed: input.avatarSeed } : {}),
   };
 }
 
@@ -259,6 +272,13 @@ export function leadAfterRemoval(
  * copiedFromAgentId) and taking editable fields from the agent input.
  */
 export function editedMember(member: NewGroupMember, input: NewGroupAgentInput): NewGroupMember {
+  // A new face seed replaces the old one, null / "" clears it, absent keeps it.
+  // A copy never carries a seed (it is drawn with its new id).
+  const avatarSeed = member.copiedFromAgentId
+    ? undefined
+    : input.avatarSeed === undefined
+      ? member.avatarSeed
+      : input.avatarSeed || undefined;
   return {
     key: member.key,
     source: member.source,
@@ -273,6 +293,7 @@ export function editedMember(member: NewGroupMember, input: NewGroupAgentInput):
     ...(input.avatarShape || member.avatarShape
       ? { avatarShape: input.avatarShape ?? member.avatarShape }
       : {}),
+    ...(avatarSeed ? { avatarSeed } : {}),
   };
 }
 
@@ -339,6 +360,7 @@ export function newGroupMemberInput(member: NewGroupMember): NewGroupAgentInput 
     avatarFace: member.avatarFace,
     avatarColor: member.avatarColor,
     ...(member.avatarShape ? { avatarShape: member.avatarShape } : {}),
+    ...(member.avatarSeed && !member.copiedFromAgentId ? { avatarSeed: member.avatarSeed } : {}),
   };
 }
 

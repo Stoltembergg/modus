@@ -59,6 +59,7 @@ const agent = (id: string, name: string, extra: Partial<AgentInfo> = {}): AgentI
   avatarFace: "cheeky",
   avatarColor: "red",
   avatarShape: "circle",
+  avatarSeed: null,
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
   ...extra,

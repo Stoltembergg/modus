@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { faceForAvatarSeed, normalizeAvatarSeed } from "../../shared/agent-avatar-seeds";
 import {
   capabilitiesForRole,
   effectiveCapabilities,
@@ -78,10 +79,11 @@ type AgentRow = {
   archived_at: string | null;
   capability_ids_json: string;
   supported_task_kinds_json: string;
+  avatar_seed: string | null;
 };
 
 const AGENT_COLUMNS = `id, group_id, name, role, instructions, model_id, default_workspace_id,
-  avatar_face, avatar_color, avatar_shape, template_id, created_at, updated_at, archived_at, capability_ids_json, supported_task_kinds_json`;
+  avatar_face, avatar_color, avatar_shape, template_id, created_at, updated_at, archived_at, capability_ids_json, supported_task_kinds_json, avatar_seed`;
 
 /** The lists exactly as saved (empty for agents saved before they existed). */
 function savedCapabilities(
@@ -116,11 +118,21 @@ function toAgent(row: AgentRow): AgentInfo {
     avatarFace: row.avatar_face,
     avatarColor: row.avatar_color,
     avatarShape: row.avatar_shape,
+    avatarSeed: row.avatar_seed || null,
     ...(row.template_id !== null ? { templateId: row.template_id } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     ...(row.archived_at !== null ? { archivedAt: row.archived_at } : {}),
   };
+}
+
+/** The stored avatar seed: trimmed, null when absent or blank (never ""), else a bad value. */
+export function requireAvatarSeed(value: string | null | undefined): string | null {
+  try {
+    return normalizeAvatarSeed(value);
+  } catch {
+    throw new GroupStoreError("invalid-value", "Invalid avatar seed.");
+  }
 }
 
 function requireAgentRow(agentId: string): AgentRow {
@@ -276,9 +288,12 @@ export function createAgent(input: AgentCreateFields): AgentInfo {
     groupId === null
       ? preferredShape
       : allocateNewGroupShape(groupId, id, preferredShape, input.avatarShape !== undefined);
+  // A picker seed sets the face it stands for, so avatar_face matches the drawn eyes.
+  const avatarSeed = requireAvatarSeed(input.avatarSeed);
+  const avatarFace = faceForAvatarSeed(avatarSeed) ?? input.avatarFace ?? avatar.avatarFace;
   getDatabase()
     .prepare(
-      `insert into agents (${AGENT_COLUMNS}) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, ?, ?)`,
+      `insert into agents (${AGENT_COLUMNS}) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, ?, ?, ?)`,
     )
     .run(
       id,
@@ -288,7 +303,7 @@ export function createAgent(input: AgentCreateFields): AgentInfo {
       input.instructions ?? "",
       input.modelId || null,
       requireWorkspace(input.defaultWorkspaceId ?? null),
-      requireAvatar(input.avatarFace ?? avatar.avatarFace, AGENT_AVATAR_FACES, "avatar face"),
+      requireAvatar(avatarFace, AGENT_AVATAR_FACES, "avatar face"),
       requireAvatar(input.avatarColor ?? avatar.avatarColor, AGENT_AVATAR_COLORS, "avatar color"),
       avatarShape,
       input.templateId ?? null,
@@ -296,6 +311,7 @@ export function createAgent(input: AgentCreateFields): AgentInfo {
       now,
       JSON.stringify(capabilities.capabilityIds),
       JSON.stringify(capabilities.supportedTaskKinds),
+      avatarSeed,
     );
   return toAgent(requireAgentRow(id));
 }
@@ -305,7 +321,11 @@ export function createAgent(input: AgentCreateFields): AgentInfo {
  * role, instructions and avatar; explicit fields win.
  */
 function newAgentFields(input: NewGroupAgentInput, groupId: string | undefined): AgentCreateFields {
-  const { templateId, copiedFromAgentId, ...fields } = input;
+  const { templateId, copiedFromAgentId, ...rest } = input;
+  // A copy of an existing agent never carries an avatar seed: it is drawn with
+  // its own new id (color and shape may still be copied).
+  const { avatarSeed: _copySeed, ...copyFields } = rest;
+  const fields = copiedFromAgentId !== undefined ? copyFields : rest;
   const base = { ...fields, ...(groupId !== undefined ? { groupId } : {}) };
   if (templateId === undefined) {
     // A copy handles what its source handles (empty lists derived, as shown) unless its
@@ -505,11 +525,22 @@ export function updateAgent(agentId: string, input: UpdateAgentInput): AgentInfo
   if (input.avatarShape !== undefined && row.group_id !== null) {
     requireFreeGroupShape(row.group_id, agentId, avatarShape);
   }
+  // avatarSeed absent: seed and face stay as stored. A seed: stored, and a
+  // picker seed sets its face. null / blank: cleared, so the avatar is drawn
+  // with the id again and the face falls back to the id-derived one.
+  const avatarSeed =
+    input.avatarSeed !== undefined ? requireAvatarSeed(input.avatarSeed) : row.avatar_seed;
+  const avatarFace =
+    input.avatarSeed === undefined
+      ? (input.avatarFace ?? row.avatar_face)
+      : (faceForAvatarSeed(avatarSeed) ??
+        input.avatarFace ??
+        (avatarSeed === null ? agentAvatarForId(agentId).avatarFace : row.avatar_face));
   getDatabase()
     .prepare(
       `update agents
        set name = ?, role = ?, instructions = ?, model_id = ?, default_workspace_id = ?,
-           avatar_face = ?, avatar_color = ?, avatar_shape = ?, updated_at = ?, capability_ids_json = ?, supported_task_kinds_json = ?
+           avatar_face = ?, avatar_color = ?, avatar_shape = ?, avatar_seed = ?, updated_at = ?, capability_ids_json = ?, supported_task_kinds_json = ?
        where id = ?`,
     )
     .run(
@@ -520,9 +551,10 @@ export function updateAgent(agentId: string, input: UpdateAgentInput): AgentInfo
       input.defaultWorkspaceId !== undefined
         ? requireWorkspace(input.defaultWorkspaceId)
         : row.default_workspace_id,
-      requireAvatar(input.avatarFace ?? row.avatar_face, AGENT_AVATAR_FACES, "avatar face"),
+      requireAvatar(avatarFace, AGENT_AVATAR_FACES, "avatar face"),
       requireAvatar(input.avatarColor ?? row.avatar_color, AGENT_AVATAR_COLORS, "avatar color"),
       avatarShape,
+      avatarSeed,
       new Date().toISOString(),
       JSON.stringify(capabilities.capabilityIds),
       JSON.stringify(capabilities.supportedTaskKinds),

@@ -2,6 +2,7 @@ import { Dialog } from "@base-ui/react/dialog";
 import { IconChevronLeft } from "@tabler/icons-react";
 import { m, type Transition, useIsPresent, useReducedMotion } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { AGENT_FACE_SEEDS, agentAvatarSeed } from "../../../../shared/agent-avatar-seeds";
 import { agentAvatarForId, getAgentTemplate } from "../../../../shared/agent-templates";
 import {
   AGENT_AVATAR_COLORS,
@@ -65,7 +66,10 @@ export type AgentDialogDraftTarget = {
   roles: readonly string[];
   /** Shapes already assigned to draft members. */
   takenAvatarShapes?: readonly AgentAvatarShape[];
-  /** Avatar seed for a fresh custom agent. */
+  /**
+   * Seed for the draft's default look (agentAvatarForId) and, while it has no
+   * picked face seed, its preview (the modal draws the member with its key).
+   */
   seed: string;
   /** Prefill ("Customize" on a template card carries its `templateId`). */
   initial?: NewGroupAgentInput | undefined;
@@ -215,6 +219,31 @@ export function AgentDialog(props: AgentDialogProps) {
   const [face, setFace] = useState<AgentAvatarFace>(initialAvatar.avatarFace);
   const [color, setColor] = useState<AgentAvatarColor>(initialAvatar.avatarColor);
   const [shape, setShape] = useState<AgentAvatarShape>(initialAvatar.avatarShape);
+  // The avatar package seed (eyes, tone, ribbons): what the preview draws and
+  // what is saved as avatar_seed. Editing starts from the stored seed (null:
+  // drawn with the id). Creating starts on the default face's seed, so the
+  // preview is exactly the saved avatar. Picking a face sets its seed.
+  const editing = agent !== undefined || target?.mode === "edit";
+  // A copy of an existing agent never gets a seed: it is drawn with its new id,
+  // so its face can't be picked here (the preview would not be what is saved).
+  const isCopy = target?.sourceAgent !== undefined;
+  const [avatarSeed, setAvatarSeed] = useState<string | null>(() => {
+    if (agent) return agent.avatarSeed;
+    if (editing || isCopy) return (!isCopy && initial?.avatarSeed) || null;
+    return initial?.avatarSeed || AGENT_FACE_SEEDS[initialAvatar.avatarFace];
+  });
+  // Edit: the seed (and face) are only sent once the face was changed.
+  const [faceTouched, setFaceTouched] = useState(false);
+  const previewSeed = agentAvatarSeed({
+    id: agent?.id ?? target?.seed ?? "profile",
+    avatarSeed,
+  });
+  function pickFace(next: AgentAvatarFace): void {
+    if (isCopy) return;
+    setFace(next);
+    setAvatarSeed(AGENT_FACE_SEEDS[next]);
+    setFaceTouched(true);
+  }
   const [busy, setBusy] = useState<"save" | "generate" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ text: string; warning: boolean } | null>(null);
@@ -250,7 +279,7 @@ export function AgentDialog(props: AgentDialogProps) {
     setName(target?.defaultName ?? template.name);
     setRole(template.role);
     setInstructions(template.instructions);
-    setFace(template.avatarFace);
+    pickFace(template.avatarFace);
     setColor(template.avatarColor);
     setShape(availableShape(agentAvatarForId(template.id).avatarShape));
   }
@@ -318,6 +347,14 @@ export function AgentDialog(props: AgentDialogProps) {
       return;
     }
     const selectedModel = modelId;
+    // Create: always the previewed seed. Edit: only a changed face sends its seed,
+    // so an untouched edit keeps the stored seed and face exactly.
+    const seedField =
+      !editing || faceTouched
+        ? { avatarFace: face, avatarSeed: previewSeed }
+        : agent
+          ? {}
+          : { avatarFace: face };
     if (target) {
       // A4: added to the modal's member list; the group:create call creates it.
       closingRef.current = true; // before onAdd: a re-entrant submit must not add it twice
@@ -327,7 +364,7 @@ export function AgentDialog(props: AgentDialogProps) {
         role: role.trim(),
         instructions,
         ...(selectedModel ? { modelId: selectedModel } : {}),
-        avatarFace: face,
+        ...seedField,
         avatarColor: color,
         avatarShape: shape,
       });
@@ -344,7 +381,7 @@ export function AgentDialog(props: AgentDialogProps) {
           role: role.trim(),
           instructions,
           ...(selectedModel !== (agent.modelId ?? "") ? { modelId: selectedModel || null } : {}),
-          avatarFace: face,
+          ...seedField,
           avatarColor: color,
           avatarShape: shape,
         });
@@ -354,7 +391,7 @@ export function AgentDialog(props: AgentDialogProps) {
           role: role.trim(),
           instructions,
           modelId: selectedModel,
-          avatarFace: face,
+          ...seedField,
           avatarColor: color,
           avatarShape: shape,
         });
@@ -365,7 +402,7 @@ export function AgentDialog(props: AgentDialogProps) {
           role: role.trim(),
           instructions,
           modelId: selectedModel,
-          avatarFace: face,
+          ...seedField,
           avatarColor: color,
           avatarShape: shape,
         });
@@ -409,7 +446,7 @@ export function AgentDialog(props: AgentDialogProps) {
         : "New agent";
   const subtitle = group?.name ?? target?.title;
   // The preview pops on each face / shape / color change (not on open).
-  const look = `${face}:${shape}:${color}`;
+  const look = `${previewSeed}:${shape}:${color}`;
   const [openedLook] = useState(look);
   const changed = look !== openedLook;
   const form = (
@@ -462,8 +499,8 @@ export function AgentDialog(props: AgentDialogProps) {
           <AgentAvatar
             color={color}
             face={face}
-            // The face picks the avatar's eyes (the picker tiles use the same seed).
-            seed={face}
+            // Exactly the saved avatar: its seed (a picked face's, else the stored one / the id).
+            seed={previewSeed}
             shape={shape}
             size={PREVIEW_SIZE}
             state={busy === "generate" ? "working" : "idle"}
@@ -541,12 +578,21 @@ export function AgentDialog(props: AgentDialogProps) {
         </label>
 
         <AvatarOptionGroup
+          disabledTitle="A copy gets its own face from its new id"
+          isDisabled={() => isCopy}
           label="Face"
-          onChange={setFace}
+          onChange={pickFace}
           optionLabel={humanizeOption}
           options={AGENT_AVATAR_FACES}
           renderOption={(option) => (
-            <AgentAvatar color={color} face={option} seed={option} shape={shape} size={20} />
+            // The full avatar this face saves (its seed), in the current color and shape.
+            <AgentAvatar
+              color={color}
+              face={option}
+              seed={AGENT_FACE_SEEDS[option]}
+              shape={shape}
+              size={20}
+            />
           )}
           value={face}
         />
@@ -558,7 +604,7 @@ export function AgentDialog(props: AgentDialogProps) {
           optionLabel={humanizeOption}
           options={AGENT_AVATAR_SHAPES}
           renderOption={(option) => (
-            <AgentAvatar color={color} face={face} seed={face} shape={option} size={20} />
+            <AgentAvatar color={color} face={face} seed={previewSeed} shape={option} size={20} />
           )}
           value={shape}
         />

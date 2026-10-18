@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import userEvent from "@testing-library/user-event";
 import { cloneElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AGENT_FACE_SEEDS, faceForAvatarSeed } from "../../../../shared/agent-avatar-seeds";
 import { CUSTOM_ROLE_CAPABILITIES, effectiveCapabilities } from "../../../../shared/agent-roles";
 import {
   AGENT_FALLBACK_INSTRUCTIONS,
@@ -17,10 +18,12 @@ import type {
   GeneratedAgentProfile,
   NewGroupAgentInput,
 } from "../../../../shared/contracts";
+import { AGENT_AVATAR_FACES } from "../../../../shared/contracts";
 import { encodeGroupErrorMessage } from "../../../../shared/group-errors";
 import type { PickableModel } from "../../lib/modusModels";
 import { GROUP_ERROR_MESSAGES } from "../groups/groupErrors";
 import { AGENT_GENERATED_HINT, AgentDialog } from "./AgentDialog";
+import { humanizeOption } from "./AvatarOptionGroup";
 import { AGENT_NAME_REQUIRED, agentDialogError, needsProfileGeneration } from "./agentDialogModel";
 import { normalizeSearch } from "./ModelPicker";
 
@@ -68,6 +71,7 @@ const ANA: AgentInfo = {
   avatarFace: "wink",
   avatarColor: "teal",
   avatarShape: "squircle",
+  avatarSeed: null,
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
 };
@@ -498,12 +502,12 @@ describe("AgentDialog", () => {
     await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
     expect(generate).not.toHaveBeenCalled();
     // The model did not change: it is not sent (the IPC revalidates only a changed model).
+    // The face was not touched: neither the face nor the seed is sent (stored ones stay).
     expect(onUpdate).toHaveBeenCalledWith({
       id: "a-1",
       name: "Ana",
       role: "Reviewer",
       instructions: "Review twice.",
-      avatarFace: "wink",
       avatarColor: "pink",
       avatarShape: "squircle",
     });
@@ -1089,5 +1093,152 @@ describe("AgentDialog profile mode", () => {
     await user.click(within(dialog).getByRole("button", { name: "Create" }));
     expect(create).not.toHaveBeenCalled();
     expect(within(dialog).getByText(GROUP_ERROR_MESSAGES["agent-name-taken"])).toBeTruthy();
+  });
+});
+
+describe("AgentDialog avatar seed (avatar_seed)", () => {
+  const seedOf = (element: HTMLElement) => element.dataset.seed;
+  const faceTile = (dialog: HTMLElement, name: string) =>
+    within(option(dialog, "Face", name)).getByTestId("agent-avatar");
+
+  it("the Face picker shows the 8 full avatars (one seed each) in the current color and shape", async () => {
+    const user = userEvent.setup();
+    const { dialog } = renderDialog();
+    await user.click(option(dialog, "Shape", "Hexagon"));
+    await user.click(option(dialog, "Color", "Violet"));
+    const tiles = AGENT_AVATAR_FACES.map((face) => faceTile(dialog, humanizeOption(face)));
+    expect(tiles.map(seedOf)).toEqual(AGENT_AVATAR_FACES.map((face) => AGENT_FACE_SEEDS[face]));
+    expect(new Set(tiles.map(seedOf)).size).toBe(8);
+    for (const tile of tiles) {
+      expect(tile.dataset.shape).toBe("hexagon");
+      expect(tile.dataset.color).toBe("violet");
+    }
+  });
+
+  it("create: the preview seed is the saved avatarSeed, also after changing face before Create", async () => {
+    const user = userEvent.setup();
+    const { dialog, create } = renderDialog();
+    // No choice yet: a default face seed, so the preview is what gets saved.
+    const initial = seedOf(preview(dialog));
+    expect(Object.values(AGENT_FACE_SEEDS)).toContain(initial);
+    await user.click(option(dialog, "Face", "Sleepy"));
+    expect(seedOf(preview(dialog))).toBe(AGENT_FACE_SEEDS.sleepy);
+    await user.click(option(dialog, "Face", "Calm"));
+    const shown = seedOf(preview(dialog));
+    expect(shown).toBe(AGENT_FACE_SEEDS.calm);
+    // The shape tiles draw the same face.
+    expect(seedOf(within(option(dialog, "Shape", "Hexagon")).getByTestId("agent-avatar"))).toBe(
+      shown,
+    );
+    await user.type(field(dialog, "Name"), "Cy");
+    await user.type(field(dialog, "Instructions"), "Keep notes.");
+    await user.click(within(dialog).getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create.mock.calls[0]?.[0]).toMatchObject({ avatarSeed: shown, avatarFace: "calm" });
+  });
+
+  it("create without touching the face saves the default seed shown", async () => {
+    const user = userEvent.setup();
+    const { dialog, create } = renderDialog();
+    const shown = seedOf(preview(dialog));
+    await user.type(field(dialog, "Name"), "Dee");
+    await user.type(field(dialog, "Instructions"), "Write.");
+    await user.click(within(dialog).getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    const payload = create.mock.calls[0]?.[0] as { avatarSeed?: string; avatarFace?: string };
+    expect(payload.avatarSeed).toBe(shown);
+    expect(faceForAvatarSeed(payload.avatarSeed)).toBe(payload.avatarFace);
+  });
+
+  it("edit: the preview is avatarSeed ?? id; untouched face sends no seed or face", async () => {
+    const user = userEvent.setup();
+    const legacy = renderDialog({ agent: ANA });
+    expect(seedOf(preview(legacy.dialog))).toBe("a-1");
+    cleanup();
+    const seeded: AgentInfo = { ...ANA, avatarSeed: AGENT_FACE_SEEDS.cheeky, avatarFace: "cheeky" };
+    const { dialog, onUpdate } = renderDialog({ agent: seeded });
+    expect(seedOf(preview(dialog))).toBe(AGENT_FACE_SEEDS.cheeky);
+    await user.click(option(dialog, "Color", "Pink"));
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    const payload = onUpdate.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect("avatarSeed" in payload).toBe(false);
+    expect("avatarFace" in payload).toBe(false);
+    expect(payload.avatarColor).toBe("pink");
+  });
+
+  it("edit: changing the face sends its seed (what the preview shows)", async () => {
+    const user = userEvent.setup();
+    const { dialog, onUpdate } = renderDialog({ agent: ANA });
+    await user.click(option(dialog, "Face", "Focused"));
+    expect(seedOf(preview(dialog))).toBe(AGENT_FACE_SEEDS.focused);
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0]?.[0]).toMatchObject({
+      avatarSeed: AGENT_FACE_SEEDS.focused,
+      avatarFace: "focused",
+    });
+  });
+
+  it("a copy of an existing agent gets no seed (its face can't be picked)", async () => {
+    const user = userEvent.setup();
+    const onAdd = vi.fn();
+    const source: AgentInfo = { ...ANA, avatarSeed: AGENT_FACE_SEEDS.bright, avatarFace: "bright" };
+    render(
+      <AgentDialog
+        draft={{
+          title: "Draft",
+          seed: "copy-key",
+          takenNames: [],
+          roles: [],
+          onAdd,
+          mode: "edit",
+          sourceAgent: source,
+          initial: {
+            name: "Ana 2",
+            instructions: "Review.",
+            copiedFromAgentId: "a-1",
+            avatarFace: "bright",
+            modelId: "m-1",
+          },
+        }}
+        models={MODELS}
+        onGenerate={async () => GENERATED}
+        onOpenChange={vi.fn()}
+        open
+        surface="plain"
+      />,
+    );
+    const dialog = screen.getByTestId("agent-dialog");
+    // Drawn like its modal card (the draft key), never with the source's seed.
+    expect(seedOf(preview(dialog))).toBe("copy-key");
+    expect(option(dialog, "Face", "Calm").disabled).toBe(true);
+    await user.click(option(dialog, "Face", "Bright"));
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    expect(onAdd).toHaveBeenCalledTimes(1);
+    expect("avatarSeed" in (onAdd.mock.calls[0]?.[0] as object)).toBe(false);
+  });
+
+  it("group draft: Add sends the previewed seed", async () => {
+    const user = userEvent.setup();
+    const onAdd = vi.fn();
+    render(
+      <AgentDialog
+        defaultModelId="m-1"
+        draft={{ title: "Draft", seed: "new-group:1", takenNames: [], roles: [], onAdd }}
+        models={MODELS}
+        onGenerate={async () => GENERATED}
+        onOpenChange={vi.fn()}
+        open
+        surface="plain"
+      />,
+    );
+    const dialog = screen.getByTestId("agent-dialog");
+    await user.click(option(dialog, "Face", "Wink"));
+    const shown = seedOf(preview(dialog));
+    await user.type(field(dialog, "Name"), "Eve");
+    await user.type(field(dialog, "Instructions"), "Do.");
+    await user.click(within(dialog).getByRole("button", { name: /Add to group/ }));
+    expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({ avatarSeed: shown }));
   });
 });

@@ -329,3 +329,64 @@ describe("newGroupCreateInput blank-name default follows the room locale (C6)", 
     expect(newGroupCreateInput({ ...blank, name: " Crew " }, "pt").name).toBe("Crew");
   });
 });
+
+describe("avatar seed in the New group modal (avatar_seed)", () => {
+  const SEED = "face-wink-29";
+  const custom: NewGroupMember = {
+    key: "k-1",
+    source: "custom",
+    name: "Ana",
+    role: "",
+    instructions: "Do.",
+    modelId: "m-1",
+    avatarFace: "wink",
+    avatarColor: "teal",
+    avatarSeed: SEED,
+  };
+
+  it("a dialog member keeps the picked seed and sends it with group:create", () => {
+    const member = dialogMember(
+      { name: "Ana", avatarFace: "wink", avatarSeed: SEED, modelId: "m-1" },
+      [],
+      "k-1",
+      { avatarFace: "happy", avatarColor: "teal" },
+    );
+    expect(member.avatarSeed).toBe(SEED);
+    expect(newGroupMemberInput(member).avatarSeed).toBe(SEED);
+    // A template card added without the dialog gets no seed (drawn with its new id).
+    const card = templateMember(template("planner"), [], "k-2");
+    expect(card.avatarSeed).toBeUndefined();
+    expect("avatarSeed" in newGroupMemberInput(card)).toBe(false);
+  });
+
+  it("an edit without touching the face keeps the seed; a new face seed replaces it; blank clears", () => {
+    expect(editedMember(custom, { name: "Ana B", avatarColor: "pink" }).avatarSeed).toBe(SEED);
+    expect(editedMember(custom, { name: "Ana", avatarSeed: "face-calm-40" }).avatarSeed).toBe(
+      "face-calm-40",
+    );
+    expect(editedMember(custom, { name: "Ana", avatarSeed: null }).avatarSeed).toBeUndefined();
+    expect(editedMember(custom, { name: "Ana", avatarSeed: "" }).avatarSeed).toBeUndefined();
+  });
+
+  it("a copy of an existing agent never carries a seed (color and shape may)", () => {
+    const copy = copyMember(
+      {
+        id: "a-src",
+        name: "Src",
+        role: "Fixer",
+        instructions: "Fix.",
+        modelId: "m-1",
+        avatarFace: "bright",
+        avatarColor: "pink",
+        avatarShape: "hexagon",
+      },
+      [],
+      "k-3",
+    );
+    expect(copy.avatarSeed).toBeUndefined();
+    expect(copy.avatarColor).toBe("pink");
+    const edited = editedMember(copy, { name: "Src 2", avatarSeed: SEED });
+    expect(edited.avatarSeed).toBeUndefined();
+    expect("avatarSeed" in newGroupMemberInput({ ...copy, avatarSeed: SEED })).toBe(false);
+  });
+});

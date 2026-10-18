@@ -79,6 +79,7 @@ export const agentsCreateSchema = z
     avatarFace: agentFields.avatarFace.optional(),
     avatarColor: agentFields.avatarColor.optional(),
     avatarShape: agentFields.avatarShape.optional(),
+    avatarSeed: agentFields.avatarSeed.optional(),
   })
   .strict();
 
@@ -93,6 +94,7 @@ export const agentsUpdateSchema = z
     avatarFace: agentFields.avatarFace.optional(),
     avatarColor: agentFields.avatarColor.optional(),
     avatarShape: agentFields.avatarShape.optional(),
+    avatarSeed: agentFields.avatarSeed.optional(),
   })
   .strict();
 

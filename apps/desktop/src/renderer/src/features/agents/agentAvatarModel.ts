@@ -1,4 +1,5 @@
 import type { AgentAvatarShapeName } from "@tryopenbot/agent-avatar";
+import { agentAvatarSeed } from "../../../../shared/agent-avatar-seeds";
 import { agentAvatarForId } from "../../../../shared/agent-templates";
 import type {
   AgentAvatarColor,
@@ -79,16 +80,24 @@ export const AGENT_AVATAR_FILL: Record<AgentAvatarColor, string> = {
 /** Archived agents are drawn in this grey (and never animate). */
 export const AGENT_AVATAR_ARCHIVED_FILL = "#71717a";
 
-/** A member's avatar: stored face / color / shape, or the id-derived default. */
+/**
+ * A member's avatar: stored face / color / shape, or the id-derived default,
+ * and the package seed it is drawn with (`avatarSeed ?? agentId`).
+ */
 export function memberAvatar(
-  member: Pick<AgentGroupMember, "agentId" | "avatarFace" | "avatarColor" | "avatarShape">,
+  member: Pick<
+    AgentGroupMember,
+    "agentId" | "avatarFace" | "avatarColor" | "avatarShape" | "avatarSeed"
+  >,
 ): {
   face: AgentAvatarFace;
   color: AgentAvatarColor;
   shape: AgentAvatarShape;
+  seed: string;
 } {
   const fallback = agentAvatarForId(member.agentId);
   return {
+    seed: agentAvatarSeed({ id: member.agentId, avatarSeed: member.avatarSeed }),
     face: member.avatarFace ?? fallback.avatarFace,
     color: member.avatarColor ?? fallback.avatarColor,
     shape: member.avatarShape ?? fallback.avatarShape,

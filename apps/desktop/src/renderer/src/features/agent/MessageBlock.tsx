@@ -12,6 +12,7 @@ import {
   IconWorld,
 } from "@tabler/icons-react";
 import { memo, useState } from "react";
+import { agentAvatarSeed } from "../../../../shared/agent-avatar-seeds";
 import { agentAvatarForId } from "../../../../shared/agent-templates";
 import type {
   AgentInfo,
@@ -287,7 +288,7 @@ function AssistantAvatar({
       color={avatar.avatarColor}
       face={avatar.avatarFace}
       label={profile?.name || "Agent"}
-      seed={id}
+      seed={agentAvatarSeed({ id, avatarSeed: profile?.avatarSeed })}
       shape={avatar.avatarShape}
       size={24}
       state={profile?.archivedAt ? "archived" : streaming ? "working" : "idle"}
