@@ -833,6 +833,14 @@ describe("PiSdkRuntime", () => {
     ).not.toContain(EXTERNAL_PLUGIN_INVOKE_TOOL);
   });
 
+  it("registers automation proposals only for ordinary chat sessions", async () => {
+    const { AUTOMATION_PROPOSAL_TOOL_NAME } = await import("../../shared/tools");
+    new PiSdkRuntime();
+
+    expect(toolRegistry.resolveActiveTools("chat")).toContain(AUTOMATION_PROPOSAL_TOOL_NAME);
+    expect(toolRegistry.resolveActiveTools("plan")).not.toContain(AUTOMATION_PROPOSAL_TOOL_NAME);
+  });
+
   it("connects plugin tracing to the private capability registry only when enabled", async () => {
     const capabilityModule = await import("./harness/capability/capability-registry");
     const setInstrumentation = vi.spyOn(

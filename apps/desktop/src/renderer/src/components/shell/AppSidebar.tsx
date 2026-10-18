@@ -1,4 +1,11 @@
-import { IconEdit, IconPin, IconPinnedOff, IconSettings, IconUserPlus } from "@tabler/icons-react";
+import {
+  IconClock,
+  IconEdit,
+  IconPin,
+  IconPinnedOff,
+  IconSettings,
+  IconUserPlus,
+} from "@tabler/icons-react";
 import { m } from "motion/react";
 import type { ReactNode } from "react";
 import { cn } from "../../lib/cn";
@@ -116,7 +123,13 @@ export function AppSidebar({
           <ExpandedOnly>{beforeProjects}</ExpandedOnly>
           <ContextList>{children}</ContextList>
         </div>
-        <div className="pt-2">
+        <div className="flex flex-col gap-0.5 pt-2">
+          <NavRailItem
+            current={active === "automations"}
+            icon={<IconClock size={ICON.rail} stroke={ICON_STROKE.rail} />}
+            label={t("shell.automations")}
+            onSelect={() => onNavigate("automations")}
+          />
           <NavRailItem
             current={active === "settings"}
             icon={<IconSettings size={ICON.rail} stroke={ICON_STROKE.rail} />}

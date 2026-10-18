@@ -1,8 +1,9 @@
-export type PrimaryDestination = "direct-messages" | "settings";
+export type PrimaryDestination = "direct-messages" | "automations" | "settings";
 
 /** Persisted/restored destinations: the retired "groups" (and anything unknown) → Projects. */
 export function normalizePrimaryDestination(value: unknown): PrimaryDestination {
-  return value === "settings" ? "settings" : "direct-messages";
+  if (value === "settings" || value === "automations") return value;
+  return "direct-messages";
 }
 export type WorkDestination = Exclude<PrimaryDestination, "settings">;
 

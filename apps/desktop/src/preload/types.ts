@@ -1,6 +1,13 @@
 import type { AgentEventPage, AgentEventPageOptions } from "../shared/agent-events";
 import type { AppearanceSetInput, AppearanceState } from "../shared/appearance";
 import type { AuthCredentialsInput, AuthOAuthInput, AuthState } from "../shared/auth";
+import type {
+  AutomationDefinition,
+  AutomationExecution,
+  AutomationServiceEvent,
+  CreateAutomationRequest,
+  UpdateAutomationRequest,
+} from "../shared/automations";
 import type { BillingBuyCreditsInput, BillingCheckoutInput, BillingState } from "../shared/billing";
 import type {
   AddDocInput,
@@ -212,6 +219,22 @@ export type ModusApi = {
     remove(id: string): Promise<WorkspaceInfo[]>;
     /** Reveal a project's root folder in the OS file manager. */
     reveal(id: string): Promise<void>;
+  };
+  automations: {
+    list(): Promise<AutomationDefinition[]>;
+    get(id: string): Promise<AutomationDefinition | undefined>;
+    history(id: string, limit?: number): Promise<AutomationExecution[]>;
+    create(input: CreateAutomationRequest): Promise<AutomationDefinition>;
+    update(input: {
+      id: string;
+      revision: number;
+      patch: UpdateAutomationRequest;
+    }): Promise<AutomationDefinition>;
+    setEnabled(id: string, enabled: boolean): Promise<AutomationDefinition>;
+    delete(id: string): Promise<void>;
+    runNow(id: string): Promise<AutomationExecution>;
+    stop(executionId: string): Promise<void>;
+    onEvent(handler: (event: AutomationServiceEvent) => void): () => void;
   };
   group: {
     /** Every Agent Group with its members (sidebar Groups section). */

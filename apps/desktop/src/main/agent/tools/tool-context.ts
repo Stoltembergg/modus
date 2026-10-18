@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { BrowserWindow as BrowserWindowType } from "electron";
-import type { AgentMode } from "../../../shared/contracts";
+import type { AgentMode, ThinkingLevel } from "../../../shared/contracts";
 import type { ToolProfileName } from "../../../shared/tools";
 import type { EmitAgentEvent } from "../runtime";
 
@@ -22,6 +22,10 @@ export type AgentToolContext = {
   runId?: string;
   profile?: ToolProfileName;
   mode?: AgentMode;
+  /** Host-selected model and reasoning settings for this exact turn. */
+  modelId?: string;
+  thinkingLevel?: ThinkingLevel;
+  thinkingVariant?: string;
   parentSessionId?: string;
   /** The agent group this session is a member of (member tools need it). */
   groupId?: string;

@@ -63,6 +63,7 @@ import { addContextItemToDraft } from "../features/agent/ChatPane";
 import { HeaderActions } from "../features/agent/SessionHeaderActions";
 import { SessionTitlePopover } from "../features/agent/SessionTitlePopover";
 import { AgentDialog } from "../features/agents/AgentDialog";
+import { AutomationsPage } from "../features/automations/AutomationsPage";
 import { type ComposerDraft, createEmptyComposerDraft } from "../features/composer/Composer";
 import { contextItemKey } from "../features/composer/composerTokens";
 import { HomeComposer } from "../features/composer/HomeComposer";
@@ -185,6 +186,7 @@ export function App() {
   const [primaryNavigation, setPrimaryNavigation] = useState(INITIAL_PRIMARY_NAVIGATION);
   const primaryNavigationTouchedRef = useRef(false);
   const settingsOpen = primaryNavigation.active === "settings";
+  const automationsOpen = primaryNavigation.active === "automations";
   const [settingsNavSlot, setSettingsNavSlot] = useState<HTMLDivElement | null>(null);
   const [settingsInitialSection, setSettingsInitialSection] =
     useState<SettingsSectionId>("model-provider");
@@ -1294,6 +1296,31 @@ export function App() {
                         />
                       </Suspense>
                     </div>
+                  ) : automationsOpen ? (
+                    <MainSurface
+                      className="surface-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-b-lg border border-hairline-strong border-t-0"
+                      data-shell-layer="main-surface"
+                    >
+                      <TopBar
+                        data-width-tier={topBarTier}
+                        ref={topBarRef}
+                        className={cn(
+                          "toolbar-row relative z-10 flex shrink-0 items-center pr-3 pl-1",
+                          (isMac || windowChrome === "windows-overlay") && "app-drag",
+                          windowChrome === "windows-overlay" && "pr-[138px]",
+                        )}
+                      />
+                      <AutomationsPage
+                        activeAgentId={activeSession?.agentId}
+                        activeWorkspaceId={activeWorkspace?.id}
+                        agents={sidebarAgents}
+                        api={window.modus.automations}
+                        defaultModelId={model}
+                        models={models}
+                        onOpenConversation={(sessionId) => void openSessionById(sessionId)}
+                        workspaces={workspaces}
+                      />
+                    </MainSurface>
                   ) : (
                     <>
                       {/* Keeps the dialog mounted for its exit spring after onOpenChange(false). */}

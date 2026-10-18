@@ -23,6 +23,8 @@ export type CreateAgentRuntimeInput = {
   cwd: string;
   title: string;
   model?: string;
+  /** Optional Agent persona attached to the new conversation. */
+  agentId?: string;
   parentSessionId?: string;
   subagentTask?: string;
   subagentType?: string;
