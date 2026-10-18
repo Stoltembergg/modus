@@ -981,7 +981,7 @@ export function disallowedToolReason(toolName: string, limits: TurnToolLimits): 
   if (limits.profile === "plan" && limits.allowedOutsidePlan.has(toolName)) {
     return `Blocked ${toolName}: Plan Mode is read-only. Use ${[...limits.allowed].join(", ")} to research and write the plan, or ask the user to switch to Build mode.`;
   }
-  return `${toolName} is not available in this turn (for example in Plan Mode). Use the tools this turn allows.`;
+  return `${toolName} is not available in this turn. Use the tools this turn allows.`;
 }
 
 function isGroupMailboxToolName(name: string): boolean {
