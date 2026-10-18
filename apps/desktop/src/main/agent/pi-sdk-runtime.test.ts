@@ -13060,6 +13060,211 @@ describe("workspace move", () => {
   });
 });
 
+describe("PiSdkRuntime define-goal skill activation", () => {
+  const GOAL_TOOLS = ["get_goal", "create_goal", "complete_goal"];
+  type GoalRequest = { names: string[] };
+  type Offline = Awaited<ReturnType<typeof createOfflinePiToolSessions>>;
+
+  afterEach(() => setTurnToolFilter(null));
+
+  async function goalTurns(
+    turns: number,
+    options: {
+      sessionId?: string;
+      beforeTurn?: (turn: number, harness: Offline) => void;
+      skillsOfTurn?: (turn: number) => Array<{ name: string; path: string }>;
+    } = {},
+  ) {
+    const requests: GoalRequest[] = [];
+    const harness = await createOfflinePiToolSessions({
+      onStream: (_session, context) => {
+        requests.push({ names: (context.tools ?? []).map((tool) => tool.name) });
+      },
+    });
+    const runtime = new PiSdkRuntime();
+    const sessionId = options.sessionId ?? `define-goal-${crypto.randomUUID()}`;
+    if (!options.sessionId) {
+      const existing = getDatabase()
+        .prepare("select id from workspaces where root_path = ?")
+        .get(cwd) as { id: string } | undefined;
+      insertSession(
+        sessionId,
+        existing?.id ?? `workspace-${crypto.randomUUID()}`,
+        join(userData, "missing.jsonl"),
+      );
+    }
+    const lastRequestOfTurn: GoalRequest[] = [];
+    for (let turn = 1; turn <= turns; turn += 1) {
+      harness.requestToolSequence([]);
+      options.beforeTurn?.(turn, harness);
+      const skills = options.skillsOfTurn?.(turn) ?? [];
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        delivery: "normal",
+        message: `Turn ${turn}: help me with this.`,
+        sessionId,
+        ...(skills.length > 0 ? { skills } : {}),
+      });
+      const last = requests.at(-1);
+      if (!last) throw new Error("Expected a provider request.");
+      lastRequestOfTurn.push(last);
+    }
+    return { requests, lastRequestOfTurn, runtime, sessionId };
+  }
+
+  const hasGoalTools = (request?: GoalRequest) =>
+    GOAL_TOOLS.every((name) => request?.names.includes(name));
+  const hasAnyGoalTool = (request?: GoalRequest) =>
+    GOAL_TOOLS.some((name) => request?.names.includes(name));
+
+  it("never exposes the goal tools to a session that never used the skill", async () => {
+    const { lastRequestOfTurn, runtime, sessionId } = await goalTurns(3);
+    for (const request of lastRequestOfTurn) expect(hasAnyGoalTool(request)).toBe(false);
+    const { goalToolsActive } = await import("./goal-state");
+    expect(goalToolsActive(sessionId)).toBe(false);
+    await runtime.releaseRuntime(sessionId);
+  }, 30_000);
+
+  it("activation (1): an <invoked_skills> define-goal adds the tools from the next turn", async () => {
+    const { builtinDefineGoalSkillPath } = await import("./goal-state");
+    const { lastRequestOfTurn, runtime, sessionId } = await goalTurns(3, {
+      skillsOfTurn: (turn) =>
+        turn === 1 ? [{ name: "define-goal", path: builtinDefineGoalSkillPath() }] : [],
+    });
+    expect(hasAnyGoalTool(lastRequestOfTurn[0])).toBe(false);
+    expect(hasGoalTools(lastRequestOfTurn[1])).toBe(true);
+    // Stays active on a turn that does not invoke the skill again.
+    expect(hasGoalTools(lastRequestOfTurn[2])).toBe(true);
+    await runtime.releaseRuntime(sessionId);
+  }, 30_000);
+
+  it("activation (2): reading the built-in define-goal SKILL.md adds the tools from the next turn", async () => {
+    const { builtinDefineGoalSkillPath } = await import("./goal-state");
+    const { requests, lastRequestOfTurn, runtime, sessionId } = await goalTurns(2, {
+      beforeTurn: (turn, offline) => {
+        if (turn === 1)
+          offline.requestToolSequence([
+            { name: "read", input: { path: builtinDefineGoalSkillPath() } },
+          ]);
+      },
+    });
+    // Turn 1 made two requests (read, then the answer); neither had the goal tools.
+    expect(requests.length).toBeGreaterThanOrEqual(3);
+    expect(hasAnyGoalTool(requests[0])).toBe(false);
+    expect(hasAnyGoalTool(lastRequestOfTurn[0])).toBe(false);
+    expect(hasGoalTools(lastRequestOfTurn[1])).toBe(true);
+    await runtime.releaseRuntime(sessionId);
+  }, 30_000);
+
+  it("reading some other SKILL.md does not activate the goal tools", async () => {
+    const { builtinDefineGoalSkillPath } = await import("./goal-state");
+    const other = builtinDefineGoalSkillPath().replace("define-goal", "brainstorming");
+    const { lastRequestOfTurn, runtime, sessionId } = await goalTurns(2, {
+      beforeTurn: (turn, offline) => {
+        if (turn === 1) offline.requestToolSequence([{ name: "read", input: { path: other } }]);
+      },
+    });
+    expect(hasAnyGoalTool(lastRequestOfTurn[1])).toBe(false);
+    await runtime.releaseRuntime(sessionId);
+  }, 30_000);
+
+  it("activation (3) and reload: a saved goal exposes the tools from the first turn of a new runtime", async () => {
+    const first = await goalTurns(1);
+    expect(hasAnyGoalTool(first.lastRequestOfTurn[0])).toBe(false);
+    await first.runtime.releaseRuntime(first.sessionId);
+    const { createSessionGoal } = await import("./goal-state");
+    createSessionGoal(first.sessionId, { objective: "Ship it", doneWhen: ["CI green"] });
+    const reloaded = await goalTurns(2, { sessionId: first.sessionId });
+    expect(hasGoalTools(reloaded.lastRequestOfTurn[0])).toBe(true);
+    expect(hasGoalTools(reloaded.lastRequestOfTurn[1])).toBe(true);
+    await reloaded.runtime.releaseRuntime(reloaded.sessionId);
+  }, 30_000);
+
+  it("the active flag alone (skill used, no goal yet) survives a runtime reload", async () => {
+    const { builtinDefineGoalSkillPath } = await import("./goal-state");
+    const first = await goalTurns(1, {
+      skillsOfTurn: () => [{ name: "define-goal", path: builtinDefineGoalSkillPath() }],
+    });
+    await first.runtime.releaseRuntime(first.sessionId);
+    const reloaded = await goalTurns(1, { sessionId: first.sessionId });
+    expect(hasGoalTools(reloaded.lastRequestOfTurn[0])).toBe(true);
+    await reloaded.runtime.releaseRuntime(reloaded.sessionId);
+  }, 30_000);
+
+  it("grow-only: activation appends the goal tools after the earlier array and never drops them", async () => {
+    const { builtinDefineGoalSkillPath } = await import("./goal-state");
+    const { lastRequestOfTurn, runtime, sessionId } = await goalTurns(4, {
+      skillsOfTurn: (turn) =>
+        turn === 1 ? [{ name: "define-goal", path: builtinDefineGoalSkillPath() }] : [],
+    });
+    const [one, two, three, four] = lastRequestOfTurn;
+    expect(two?.names.slice(0, one?.names.length)).toEqual(one?.names);
+    expect(two?.names.slice(one?.names.length).sort()).toEqual([...GOAL_TOOLS].sort());
+    expect(three?.names).toEqual(two?.names);
+    expect(four?.names).toEqual(two?.names);
+    await runtime.releaseRuntime(sessionId);
+  }, 30_000);
+
+  it("tool filter on: active goal tools are always sent and never ranked", async () => {
+    const pools: string[][] = [];
+    setTurnToolFilter({
+      enabled: () => true,
+      select: vi.fn(async ({ tools, k }: { tools: readonly { name: string }[]; k: number }) => {
+        pools.push(tools.map((tool) => tool.name));
+        return { tools: tools.slice(-k).map((tool) => tool.name), filtered: true };
+      }),
+      warm: () => undefined,
+    } as never);
+    const { builtinDefineGoalSkillPath, createSessionGoal } = await import("./goal-state");
+    // Activated mid-session: the later-turn "core only" decision still adds them.
+    const invoked = await goalTurns(2, {
+      skillsOfTurn: (turn) =>
+        turn === 1 ? [{ name: "define-goal", path: builtinDefineGoalSkillPath() }] : [],
+    });
+    expect(hasAnyGoalTool(invoked.lastRequestOfTurn[0])).toBe(false);
+    expect(hasGoalTools(invoked.lastRequestOfTurn[1])).toBe(true);
+    await invoked.runtime.releaseRuntime(invoked.sessionId);
+    // Active from the first (ranked) turn: sent, and kept out of the ranked pool.
+    const saved = await goalTurns(1);
+    await saved.runtime.releaseRuntime(saved.sessionId);
+    createSessionGoal(saved.sessionId, { objective: "Ship it", doneWhen: ["CI green"] });
+    pools.length = 0;
+    const reloaded = await goalTurns(1, { sessionId: saved.sessionId });
+    expect(hasGoalTools(reloaded.lastRequestOfTurn[0])).toBe(true);
+    expect(pools).toHaveLength(1);
+    for (const name of GOAL_TOOLS) expect(pools[0]).not.toContain(name);
+    await reloaded.runtime.releaseRuntime(reloaded.sessionId);
+  }, 30_000);
+
+  it("subagents never get the goal tools, even when their id is active", async () => {
+    new PiSdkRuntime();
+    const { activateGoalTools } = await import("./goal-state");
+    const base = {
+      id: `goal-child-${crypto.randomUUID()}`,
+      workspaceId: "w",
+      title: "child",
+      cwd,
+      status: "idle" as const,
+      createdAt: "",
+      updatedAt: "",
+    };
+    const existing = getDatabase()
+      .prepare("select id from workspaces where root_path = ?")
+      .get(cwd) as { id: string } | undefined;
+    insertSession(
+      base.id,
+      existing?.id ?? `workspace-${crypto.randomUUID()}`,
+      join(userData, "missing.jsonl"),
+    );
+    expect(activeToolNamesForSession(base, "chat")).not.toContain("get_goal");
+    activateGoalTools(base.id);
+    expect(activeToolNamesForSession(base, "chat")).toEqual(expect.arrayContaining(GOAL_TOOLS));
+    expect(activeToolNamesForSession(base, "plan")).toEqual(expect.arrayContaining(GOAL_TOOLS));
+    const child = activeToolNamesForSession({ ...base, parentSessionId: "parent" }, "chat");
+    for (const name of GOAL_TOOLS) expect(child).not.toContain(name);
+  });
+});
+
 describe("PiSdkRuntime per-request token stability", () => {
   beforeEach(() => resetFeatureFlagOverrides());
   afterEach(() => resetFeatureFlagOverrides());

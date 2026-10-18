@@ -38,6 +38,8 @@ import type {
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
 import { buildPlanMessage } from "../../shared/plan-message";
 import {
+  GOAL_TOOL_NAMES,
+  isGoalToolName,
   SUBAGENT_TOOL_NAMES,
   TOOLS_EXPAND_TOOL_NAME,
   type ToolProfileName,
@@ -140,6 +142,12 @@ import {
   updateAgentSessionWorktree,
 } from "./agent-store";
 import { createCheckpoint } from "./checkpoint-service";
+import {
+  activateGoalTools,
+  goalToolsActive,
+  invokedDefineGoalSkill,
+  isBuiltinDefineGoalSkillRead,
+} from "./goal-state";
 import { CapabilityRegistry } from "./harness/capability/capability-registry";
 import { registerCoreCapabilities } from "./harness/capability/core-capabilities";
 import { SAFE_DUPLICATE_PRUNE_TOOL_NAMES } from "./harness/compaction/compaction-pruner";
@@ -286,6 +294,7 @@ import {
   unregisterExternalPluginTool,
 } from "./tools/external-plugin-tools";
 import { registerFastCodebaseTools } from "./tools/fast-codebase-tools";
+import { registerGoalTools } from "./tools/goal-tools";
 import {
   GROUP_MAILBOX_ACK_TOOL,
   GROUP_MAILBOX_RECEIVE_TOOL,
@@ -905,6 +914,11 @@ export function activeToolNamesForSession(
   // RERANK-03: the meta-tool exists only while the local tool filter is on, and
   // only for top-level sessions (subagents are not filtered).
   if (info.parentSessionId || !turnToolFilterEnabled()) disabled.add(TOOLS_EXPAND_TOOL_NAME);
+  // define-goal: goal tools only once the skill is active in a top-level session
+  // (invoked, its built-in SKILL.md read, or a saved goal). See goal-state.ts.
+  if (info.parentSessionId || !goalToolsActive(info.id)) {
+    for (const name of GOAL_TOOL_NAMES) disabled.add(name);
+  }
   if (info.parentSessionId) {
     // Parent-only orchestration: children neither spawn peers nor wait on them.
     for (const name of SUBAGENT_TOOL_NAMES) disabled.add(name);
@@ -960,7 +974,13 @@ export function filteredTurnToolNames(
   decision: TurnToolDecision,
 ): string[] {
   if (decision.mode !== "on") return [...allowed];
-  const keep = new Set<string>([...CORE_TOOL_NAMES, TOOLS_EXPAND_TOOL_NAME, ...decision.selected]);
+  // Active goal tools are always sent (never ranked), like core tools.
+  const keep = new Set<string>([
+    ...CORE_TOOL_NAMES,
+    TOOLS_EXPAND_TOOL_NAME,
+    ...GOAL_TOOL_NAMES,
+    ...decision.selected,
+  ]);
   return allowed.filter((name) => keep.has(name));
 }
 
@@ -1118,6 +1138,7 @@ export class PiSdkRuntime implements AgentRuntime {
     registerToolsExpandTool({
       expandSessionTools: (sessionId) => this.expandSessionTools(sessionId),
     });
+    registerGoalTools();
     registerGroupTools();
     registerGroupMailboxTools();
 
@@ -3568,6 +3589,19 @@ export class PiSdkRuntime implements AgentRuntime {
       if (event.type === "message_end")
         noteAssistantMessageToolCalls(params.info.id, event.message);
       for (const normalized of normalizePiEvent(event)) {
+        if (
+          normalized.type === "tool.started" &&
+          normalized.toolName === "read" &&
+          !params.info.parentSessionId &&
+          isBuiltinDefineGoalSkillRead(
+            (normalized.args as { path?: unknown } | undefined)?.path,
+            params.info.cwd,
+          )
+        ) {
+          // define-goal activation (2): the agent read the built-in SKILL.md from the
+          // manifest; the goal tools join from the next turn.
+          activateGoalTools(params.info.id);
+        }
         if (normalized.type === "tool.delta" || normalized.type === "tool.started") {
           const mcp = toolRegistry.getEntry(normalized.toolName)?.ui.mcp;
           if (mcp) normalized.mcp = { ...mcp };
@@ -5385,7 +5419,9 @@ export class PiSdkRuntime implements AgentRuntime {
       filter.warm(
         runtimeSession.session
           .getAllTools()
-          .filter((tool) => allowed.has(tool.name) && !core.has(tool.name))
+          .filter(
+            (tool) => allowed.has(tool.name) && !core.has(tool.name) && !isGoalToolName(tool.name),
+          )
           .map((tool) => ({ name: tool.name, doc: toolDocShort(tool.name, tool.description) })),
       );
     } catch {
@@ -5422,7 +5458,7 @@ export class PiSdkRuntime implements AgentRuntime {
         runtimeSession.session.getAllTools().map((tool) => [tool.name, tool.description]),
       );
       const pool = allowed
-        .filter((name) => !core.has(name))
+        .filter((name) => !core.has(name) && !isGoalToolName(name))
         .map((name) => ({ name, doc: toolDocShort(name, described.get(name)) }));
       const selection = await filter.select({ query: message, tools: pool, k: TOOL_FILTER_TOP_K });
       this.toolFilterSelections.set(sessionId, selection);
@@ -5480,6 +5516,10 @@ export class PiSdkRuntime implements AgentRuntime {
     const skillsText = resolveSkillsPrompt(runtimeSession.info.cwd, input.skills ?? [], undefined, {
       includeManifest: false,
     });
+    // define-goal activation (1): invoked this turn; the goal tools join from the next turn.
+    if (!runtimeSession.info.parentSessionId && invokedDefineGoalSkill(skillsText)) {
+      activateGoalTools(runtimeSession.info.id);
+    }
     let projectMemoryText = "";
     if (options.includeProjectMemory !== false) {
       const { paths, symbols } = projectMemoryHints(input.context, runtimeSession.info.cwd);
