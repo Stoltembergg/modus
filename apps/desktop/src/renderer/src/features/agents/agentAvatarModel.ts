@@ -11,8 +11,8 @@ import type { GroupActivityState } from "../groups/useWorkingGroups";
 /** What the avatar shows: idle (blink + float), working, waiting for you, archived (grey). */
 export type AgentAvatarState = "idle" | "working" | "waiting" | "archived";
 
-/** The app sizes: small metadata, message / chip, compact header and dialog preview. */
-export type AgentAvatarSize = 16 | 20 | 24 | 48;
+/** The app sizes: small metadata, message / chip, compact header, preview tiles and the dialog preview. */
+export type AgentAvatarSize = 16 | 20 | 24 | 48 | 64;
 
 /** Every persisted silhouette is translated to an explicit package shape. */
 export const AGENT_AVATAR_SHAPE_MAP: Record<AgentAvatarShape, AgentAvatarShapeName> = {

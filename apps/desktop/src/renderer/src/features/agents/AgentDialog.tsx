@@ -1,17 +1,7 @@
 import { Dialog } from "@base-ui/react/dialog";
-import { IconChevronLeft, IconRefresh } from "@tabler/icons-react";
+import { IconChevronLeft } from "@tabler/icons-react";
 import { m, type Transition, useIsPresent, useReducedMotion } from "motion/react";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
-import {
-  AGENT_ROLES,
-  type AgentRoleId,
-  capabilitiesForRole,
-  describeCapabilities,
-  effectiveCapabilities,
-  getAgentRole,
-  hasCustomWorkTypes,
-  roleIdForLabel,
-} from "../../../../shared/agent-roles";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { agentAvatarForId, getAgentTemplate } from "../../../../shared/agent-templates";
 import {
   AGENT_AVATAR_COLORS,
@@ -34,26 +24,31 @@ import { selectableModels } from "../../lib/modusModels";
 import type { GroupDialogModel } from "../groups/CreateGroupDialog";
 import { describeGroupError } from "../groups/groupErrors";
 import { AgentAvatar } from "./AgentAvatar";
+import { AvatarOptionGroup, humanizeOption } from "./AvatarOptionGroup";
 import { AGENT_AVATAR_FILL } from "./agentAvatarModel";
 import { agentDialogError, needsProfileGeneration } from "./agentDialogModel";
 import { ModelPicker } from "./ModelPicker";
 
-export const AGENT_GENERATED_HINT = "Generated. Review the role and instructions, then save.";
-export const CUSTOM_WORK_TYPES_WARNING = "This agent has custom work types that will be replaced.";
+export const AGENT_GENERATED_HINT = "Generated. Review the instructions, then save.";
 
 const FIELD = cn(
   "h-9 w-full rounded-lg border border-hairline bg-canvas/70 px-3 text-sm text-fg outline-none",
   "transition-colors duration-150 placeholder:text-fg-faint hover:border-hairline-strong",
   "focus:border-hairline-strong focus-visible:ring-2 focus-visible:ring-focus-ring/40",
 );
-/** Field and section labels: small, quiet, a little air below. */
-const LABEL = "font-medium text-2xs text-fg-subtle";
+/** Field labels: small and quiet, but readable over glass. */
+const LABEL = "font-medium text-2xs text-fg-muted";
 /** Subtle press feedback (transform only; none with reduced motion). */
 const PRESS =
   "transition-[background-color,color,opacity,transform] duration-150 ease-out-quint active:scale-[0.97] motion-reduce:transition-none motion-reduce:active:scale-100";
 /** Open/close spring of the dialog (transform + opacity only). */
 const DIALOG_SPRING: Transition = { type: "spring", stiffness: 420, damping: 34, mass: 0.8 };
 const DIALOG_EXIT: Transition = { duration: 0.14, ease: [0.4, 0, 1, 1] };
+/** Reduced motion: a short fade instead of the spring, never no animation at all. */
+const DIALOG_FADE: Transition = { duration: 0.12, ease: "easeOut" };
+/** The preview's pop when face, shape or color changes. */
+const PREVIEW_SPRING: Transition = { type: "spring", stiffness: 480, damping: 26, mass: 0.7 };
+const PREVIEW_SIZE = 64;
 
 /**
  * The create-group modal (A4): the agent is not created here but added to the
@@ -79,10 +74,7 @@ export type AgentDialogDraftTarget = {
   mode?: "add" | "edit";
   /** Edit mode: "Remove from group" in the footer. */
   onRemove?(): void;
-  /**
-   * A copy's source agent: until the role changes the copy handles what the
-   * source handles; a new role recalculates (and warns over hand-picked lists).
-   */
+  /** A copy's source agent (the copy keeps its role, so it handles what the source handles). */
   sourceAgent?: AgentInfo | undefined;
   /** Name restored by "Use {template}'s defaults" (the next free one in the modal). */
   defaultName?: string | undefined;
@@ -138,12 +130,15 @@ export type AgentDialogProps = AgentDialogCommonProps &
   (AgentDialogGroupProps | AgentDialogDraftProps | AgentDialogProfileProps);
 
 /**
- * Create / edit an agent (A3): name, role, instructions, model, face and color
- * with an animated 48 px preview. A custom agent (no template) needs a name and
- * a model. Creating one with an empty role AND empty instructions first asks
- * the model for them (shown here, editable; the button reads "Generate", then "Create" saves); "Regenerate"
- * asks again. The profile is saved once, never regenerated per wake. Render
- * it only while open: each open starts from a fresh draft.
+ * Create / edit an agent: a live, animated avatar preview centered on top
+ * (it follows the face, shape and color pickers), then name, model,
+ * instructions and the three pickers. There is no Role field: the role is
+ * kept as stored (an edit), as the template's (a template agent), or empty
+ * for a new custom agent, which therefore handles Custom's work. A custom
+ * agent needs a name and a model. Creating one with empty instructions first
+ * asks the model for them (shown here, editable; the button reads "Generate",
+ * then "Create" saves); only the generated instructions are kept, never the
+ * generated role. Render it only while open: each open starts from a fresh draft.
  */
 export function AgentDialog(props: AgentDialogProps) {
   const {
@@ -199,40 +194,9 @@ export function AgentDialog(props: AgentDialogProps) {
     return { ...seededAvatar, avatarShape: availableShape(seededAvatar.avatarShape) };
   });
   const [name, setName] = useState(agent?.name ?? initial?.name ?? "");
-  // Role: one of the known roles, or Custom with its own label (the only part stored).
-  const initialRole = agent?.role ?? initial?.role ?? "";
-  const initialRoleId = roleIdForLabel(initialRole);
-  const [roleChoice, setRoleChoice] = useState<AgentRoleId>(initialRoleId);
-  const [customLabel, setCustomLabel] = useState(initialRoleId === "custom" ? initialRole : "");
-  const role = roleChoice === "custom" ? customLabel : getAgentRole(roleChoice).label;
-  // A Custom label that names a known role is that role (same rule as main).
-  const effectiveRoleId = roleIdForLabel(role);
-  const roleChanged = effectiveRoleId !== initialRoleId;
-  // Untouched selection: send the stored text back as it was (Planner stays Planner).
-  const savedRole = roleChoice === initialRoleId && roleChoice !== "custom" ? initialRole : role;
-  // An existing agent, or the source of a copy: what it handles until the role changes.
-  const saved = agent ?? target?.sourceAgent;
-  // A copy compares against its source's role (main does the same on create).
-  const savedRoleChanged = saved
-    ? effectiveRoleId !== roleIdForLabel(agent ? initialRole : saved.role)
-    : roleChanged;
-  // What the agent will handle, computed exactly like main does on save.
-  const workTypes = saved
-    ? savedRoleChanged
-      ? capabilitiesForRole(effectiveRoleId)
-      : effectiveCapabilities(saved)
-    : template && effectiveRoleId === roleIdForLabel(template.role)
-      ? effectiveCapabilities(template)
-      : capabilitiesForRole(effectiveRoleId);
-  const replacesCustomWorkTypes =
-    !!saved &&
-    savedRoleChanged &&
-    hasCustomWorkTypes({
-      role: saved.role,
-      ...(saved.templateId ? { templateId: saved.templateId } : {}),
-      capabilityIds: saved.capabilityIds ?? [],
-      supportedTaskKinds: saved.supportedTaskKinds ?? [],
-    });
+  // No Role field: the stored role (edit), the template's (template / copy), else "" (Custom).
+  // A generated role is never taken, so "Generalist" is never saved from here.
+  const [role, setRole] = useState(agent?.role ?? initial?.role ?? "");
   const [instructions, setInstructions] = useState(
     agent?.instructions ?? initial?.instructions ?? "",
   );
@@ -274,8 +238,6 @@ export function AgentDialog(props: AgentDialogProps) {
     closingRef.current = true;
     onOpenChange(false);
   }
-  const roleId = useId();
-
   // The plain panel has no Base UI popup to apply initialFocus: focus Name on open.
   // biome-ignore lint/correctness/useExhaustiveDependencies: on mount only.
   useEffect(() => {
@@ -286,9 +248,7 @@ export function AgentDialog(props: AgentDialogProps) {
   function applyTemplateDefaults(): void {
     if (!template) return;
     setName(target?.defaultName ?? template.name);
-    const templateRole = roleIdForLabel(template.role);
-    setRoleChoice(templateRole);
-    setCustomLabel(templateRole === "custom" ? template.role : "");
+    setRole(template.role);
     setInstructions(template.instructions);
     setFace(template.avatarFace);
     setColor(template.avatarColor);
@@ -315,7 +275,6 @@ export function AgentDialog(props: AgentDialogProps) {
     availableModelIds: models.map((model) => model.id),
     savedModelId: agent?.modelId,
   });
-  const canGenerate = custom && !!name.trim() && !!modelId.trim() && busy === null;
 
   async function generate(): Promise<boolean> {
     if (inactive()) return false;
@@ -331,11 +290,8 @@ export function AgentDialog(props: AgentDialogProps) {
         ...(description.trim() ? { description: description.trim() } : {}),
         ...(agent ? { agentId: agent.id } : {}),
       });
-      // The role is the user's choice: Regenerate only rewrites the instructions. A new
-      // agent with no role yet takes the generated label (Custom, or the role it names).
-      if (!agent && roleChoice === "custom" && !customLabel.trim()) {
-        setCustomLabel(generated.role);
-      }
+      // Only the instructions are kept: the generated role (or the "Generalist"
+      // fallback) is discarded, so a new custom agent is saved with role "" (Custom).
       setInstructions(generated.instructions);
       setNotice(
         generated.generated
@@ -357,7 +313,7 @@ export function AgentDialog(props: AgentDialogProps) {
     setTouched(true);
     if (problem || busy) return;
     if (!agent && needsProfileGeneration(draft, custom)) {
-      // "Generate": fill role + instructions, let the user review; the button then reads "Create".
+      // "Generate": fill the instructions, let the user review; the button then reads "Create".
       await generate();
       return;
     }
@@ -368,7 +324,7 @@ export function AgentDialog(props: AgentDialogProps) {
       target.onAdd({
         ...(initial?.templateId ? { templateId: initial.templateId } : {}),
         name: name.trim(),
-        role: savedRole.trim(),
+        role: role.trim(),
         instructions,
         ...(selectedModel ? { modelId: selectedModel } : {}),
         avatarFace: face,
@@ -385,7 +341,7 @@ export function AgentDialog(props: AgentDialogProps) {
         await props.onUpdate({
           id: agent.id,
           name: name.trim(),
-          role: savedRole.trim(),
+          role: role.trim(),
           instructions,
           ...(selectedModel !== (agent.modelId ?? "") ? { modelId: selectedModel || null } : {}),
           avatarFace: face,
@@ -395,7 +351,7 @@ export function AgentDialog(props: AgentDialogProps) {
       } else if (profile && props.onCreate) {
         await props.onCreate({
           name: name.trim(),
-          role: savedRole.trim(),
+          role: role.trim(),
           instructions,
           modelId: selectedModel,
           avatarFace: face,
@@ -406,7 +362,7 @@ export function AgentDialog(props: AgentDialogProps) {
         await props.onCreate({
           groupId: group.id,
           name: name.trim(),
-          role: savedRole.trim(),
+          role: role.trim(),
           instructions,
           modelId: selectedModel,
           avatarFace: face,
@@ -452,6 +408,10 @@ export function AgentDialog(props: AgentDialogProps) {
         ? "Customize agent"
         : "New agent";
   const subtitle = group?.name ?? target?.title;
+  // The preview pops on each face / shape / color change (not on open).
+  const look = `${face}:${shape}:${color}`;
+  const [openedLook] = useState(look);
+  const changed = look !== openedLook;
   const form = (
     <form
       aria-hidden={isPresent ? undefined : true}
@@ -463,12 +423,23 @@ export function AgentDialog(props: AgentDialogProps) {
         void submit();
       }}
     >
-      <div className="flex items-center gap-3.5 px-5 pt-5 pb-2">
+      {/* No visible title: the live avatar leads; the title stays for assistive tech. */}
+      {surface === "dialog" ? (
+        <>
+          <Dialog.Title className="sr-only">{title}</Dialog.Title>
+          {subtitle ? (
+            <Dialog.Description className="sr-only">{subtitle}</Dialog.Description>
+          ) : null}
+        </>
+      ) : (
+        <h2 className="sr-only">{title}</h2>
+      )}
+      <div className="relative flex items-center justify-center px-5 pt-6 pb-2">
         {surface === "plain" ? (
           <button
             aria-label="Back"
             className={cn(
-              "-ml-1.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-chip-faint text-fg-muted hover:bg-hover hover:text-fg",
+              "absolute top-4 left-4 flex size-8 items-center justify-center rounded-lg text-fg-muted hover:bg-hover hover:text-fg",
               PRESS,
             )}
             onClick={() => {
@@ -479,40 +450,34 @@ export function AgentDialog(props: AgentDialogProps) {
             <IconChevronLeft size={16} />
           </button>
         ) : null}
-        <AgentAvatar
-          color={color}
-          face={face}
-          seed={agent?.id ?? group?.id ?? target?.seed ?? "agent"}
-          shape={shape}
-          size={48}
-          state={busy === "generate" ? "working" : "idle"}
-        />
-        <div className="min-w-0">
-          {surface === "dialog" ? (
-            <>
-              <Dialog.Title className="font-semibold text-[15px] text-fg tracking-tight">
-                {title}
-              </Dialog.Title>
-              <Dialog.Description className="mt-0.5 truncate text-xs text-fg-muted">
-                {subtitle}
-              </Dialog.Description>
-            </>
-          ) : (
-            <>
-              <h2 className="font-semibold text-[15px] text-fg tracking-tight">{title}</h2>
-              <p className="mt-0.5 truncate text-xs text-fg-muted">{subtitle}</p>
-            </>
-          )}
-        </div>
+        <m.div
+          animate={{ opacity: 1, scale: 1 }}
+          data-testid="agent-dialog-preview"
+          initial={
+            changed ? (reduceMotion ? { opacity: 0.4 } : { opacity: 0.6, scale: 0.86 }) : false
+          }
+          key={look}
+          transition={reduceMotion ? DIALOG_FADE : PREVIEW_SPRING}
+        >
+          <AgentAvatar
+            color={color}
+            face={face}
+            // The face picks the avatar's eyes (the picker tiles use the same seed).
+            seed={face}
+            shape={shape}
+            size={PREVIEW_SIZE}
+            state={busy === "generate" ? "working" : "idle"}
+          />
+        </m.div>
         {/* New group panel only: the standalone Edit agent dialog has no "defaults" to go back to. */}
         {template && target ? (
           <button
             className={cn(
-              "ml-auto shrink-0 rounded-md px-1.5 py-1 font-medium text-accent text-xs hover:bg-hover",
+              "absolute top-4 right-4 rounded-md px-1.5 py-1 font-medium text-accent text-xs hover:bg-hover",
               PRESS,
             )}
             onClick={applyTemplateDefaults}
-            title="Resets the name, role, instructions and look"
+            title="Resets the name, instructions and look"
             type="button"
           >
             Use {template.name}'s defaults
@@ -559,62 +524,6 @@ export function AgentDialog(props: AgentDialogProps) {
           </label>
         ) : null}
 
-        <div className="flex flex-col gap-1.5">
-          <div className="flex items-center justify-between">
-            <label className={LABEL} htmlFor={roleId}>
-              Role
-            </label>
-            {custom ? (
-              <button
-                className={cn(
-                  "-my-0.5 flex h-6 items-center gap-1 rounded-md px-1.5 text-2xs text-fg-subtle hover:bg-hover hover:text-fg disabled:opacity-40",
-                  PRESS,
-                )}
-                disabled={!canGenerate}
-                onClick={() => void generate()}
-                title="Ask the model for a role and instructions"
-                type="button"
-              >
-                <IconRefresh size={12} />
-                {busy === "generate" ? "Generating…" : "Regenerate"}
-              </button>
-            ) : null}
-          </div>
-          <select
-            className={cn(FIELD, "px-2")}
-            id={roleId}
-            onChange={(event) => setRoleChoice(event.target.value as AgentRoleId)}
-            value={roleChoice}
-          >
-            {AGENT_ROLES.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          {roleChoice === "custom" ? (
-            <input
-              aria-label="Custom role"
-              className={FIELD}
-              maxLength={80}
-              onChange={(event) => setCustomLabel(event.target.value)}
-              placeholder={custom && !agent ? "Leave empty to generate" : "e.g. Release notes"}
-              value={customLabel}
-            />
-          ) : null}
-          <p className="text-2xs text-fg-subtle" data-testid="agent-work-types">
-            {describeCapabilities(workTypes)}
-          </p>
-          {replacesCustomWorkTypes ? (
-            <p
-              className="rounded-md border border-dialog-warning/30 bg-dialog-warning/10 px-2 py-1 text-2xs text-dialog-warning"
-              role="status"
-            >
-              {CUSTOM_WORK_TYPES_WARNING}
-            </p>
-          ) : null}
-        </div>
-
         <label className="flex flex-col gap-1.5">
           <span className={LABEL}>Instructions</span>
           <textarea
@@ -631,79 +540,42 @@ export function AgentDialog(props: AgentDialogProps) {
           />
         </label>
 
-        <fieldset className="flex flex-col gap-1">
-          <legend className={cn(LABEL, "mb-1.5")}>Face</legend>
-          <div className="flex flex-wrap gap-1">
-            {AGENT_AVATAR_FACES.map((option) => (
-              <button
-                aria-label={`Face ${option}`}
-                aria-pressed={face === option}
-                className={cn(
-                  "flex size-8 items-center justify-center rounded-lg border",
-                  PRESS,
-                  face === option
-                    ? "border-accent bg-accent/10"
-                    : "border-transparent hover:bg-hover",
-                )}
-                key={option}
-                onClick={() => setFace(option)}
-                type="button"
-              >
-                <AgentAvatar color={color} face={option} seed={option} shape={shape} size={20} />
-              </button>
-            ))}
-          </div>
-        </fieldset>
-
-        <fieldset className="flex flex-col gap-1">
-          <legend className={cn(LABEL, "mb-1.5")}>Shape</legend>
-          <div className="flex flex-wrap gap-1">
-            {AGENT_AVATAR_SHAPES.map((option) => (
-              <button
-                aria-label={`Shape ${option}`}
-                aria-pressed={shape === option}
-                className={cn(
-                  "flex size-8 items-center justify-center rounded-lg border",
-                  PRESS,
-                  occupiedShapes.has(option) && shape !== option
-                    ? "cursor-not-allowed border-transparent opacity-35"
-                    : shape === option
-                      ? "border-accent bg-accent/10"
-                      : "border-transparent hover:bg-hover",
-                )}
-                disabled={occupiedShapes.has(option) && shape !== option}
-                key={option}
-                onClick={() => setShape(option)}
-                title={occupiedShapes.has(option) ? "Used by another agent in this group" : option}
-                type="button"
-              >
-                <AgentAvatar color={color} face={face} seed={option} shape={option} size={20} />
-              </button>
-            ))}
-          </div>
-        </fieldset>
-
-        <fieldset className="flex flex-col gap-1">
-          <legend className={cn(LABEL, "mb-1.5")}>Color</legend>
-          <div className="flex flex-wrap gap-1.5">
-            {AGENT_AVATAR_COLORS.map((option) => (
-              <button
-                aria-label={`Color ${option}`}
-                aria-pressed={color === option}
-                className={cn(
-                  "size-5 rounded-md ring-offset-2 ring-offset-elevated transition-[box-shadow,transform] duration-150 ease-out-quint active:scale-90 motion-reduce:transition-none motion-reduce:active:scale-100",
-                  color === option
-                    ? "ring-2 ring-accent"
-                    : "hover:ring-1 hover:ring-hairline-strong",
-                )}
-                key={option}
-                onClick={() => setColor(option)}
-                style={{ backgroundColor: AGENT_AVATAR_FILL[option] }}
-                type="button"
-              />
-            ))}
-          </div>
-        </fieldset>
+        <AvatarOptionGroup
+          label="Face"
+          onChange={setFace}
+          optionLabel={humanizeOption}
+          options={AGENT_AVATAR_FACES}
+          renderOption={(option) => (
+            <AgentAvatar color={color} face={option} seed={option} shape={shape} size={20} />
+          )}
+          value={face}
+        />
+        <AvatarOptionGroup
+          disabledTitle="Used by another agent in this group"
+          isDisabled={(option) => occupiedShapes.has(option)}
+          label="Shape"
+          onChange={setShape}
+          optionLabel={humanizeOption}
+          options={AGENT_AVATAR_SHAPES}
+          renderOption={(option) => (
+            <AgentAvatar color={color} face={face} seed={face} shape={option} size={20} />
+          )}
+          value={shape}
+        />
+        <AvatarOptionGroup
+          label="Color"
+          onChange={setColor}
+          optionLabel={humanizeOption}
+          options={AGENT_AVATAR_COLORS}
+          renderOption={(option) => (
+            <span
+              className="block size-full rounded-full"
+              style={{ backgroundColor: AGENT_AVATAR_FILL[option] }}
+            />
+          )}
+          value={color}
+          variant="swatch"
+        />
       </div>
 
       {notice ? (
@@ -731,7 +603,7 @@ export function AgentDialog(props: AgentDialogProps) {
         </div>
       ) : null}
 
-      <div className="mt-4 flex items-center justify-end gap-2 border-hairline-soft border-t px-5 py-3">
+      <div className="mt-2 flex items-center justify-end gap-2 px-5 pt-3 pb-5">
         {target?.onRemove ? (
           <button
             className={cn(
@@ -773,7 +645,7 @@ export function AgentDialog(props: AgentDialogProps) {
             "h-8 rounded-lg px-3.5 font-medium text-xs",
             PRESS,
             busy === null
-              ? "bg-accent text-white hover:opacity-90"
+              ? "bg-accent text-on-accent hover:opacity-90"
               : "cursor-not-allowed bg-chip-strong text-fg-faint",
           )}
           disabled={busy !== null}
@@ -796,9 +668,9 @@ export function AgentDialog(props: AgentDialogProps) {
           render={
             <m.div
               animate={{ opacity: 1 }}
-              exit={reduceMotion ? { opacity: 1 } : { opacity: 0, transition: DIALOG_EXIT }}
-              initial={reduceMotion ? false : { opacity: 0 }}
-              transition={{ duration: 0.18, ease: "easeOut" }}
+              exit={{ opacity: 0, transition: reduceMotion ? DIALOG_FADE : DIALOG_EXIT }}
+              initial={{ opacity: 0 }}
+              transition={reduceMotion ? DIALOG_FADE : { duration: 0.18, ease: "easeOut" }}
             />
           }
         />
@@ -813,11 +685,11 @@ export function AgentDialog(props: AgentDialogProps) {
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={
                 reduceMotion
-                  ? { opacity: 1 }
+                  ? { opacity: 0, transition: DIALOG_FADE }
                   : { opacity: 0, scale: 0.97, y: 4, transition: DIALOG_EXIT }
               }
-              initial={reduceMotion ? false : { opacity: 0, scale: 0.96, y: 8 }}
-              transition={DIALOG_SPRING}
+              initial={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.96, y: 8 }}
+              transition={reduceMotion ? DIALOG_FADE : DIALOG_SPRING}
             />
           }
         >

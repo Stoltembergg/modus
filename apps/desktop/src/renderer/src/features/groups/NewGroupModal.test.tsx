@@ -319,11 +319,8 @@ describe("NewGroupModal (A4 redesigned)", () => {
 
     const name = within(dialog).getByRole("textbox", { name: "Name" }) as HTMLInputElement;
     expect(name.value).toBe("Explorer");
-    const role = within(dialog).getByRole("combobox", { name: "Role" }) as HTMLSelectElement;
-    expect(role.value).toBe("explorer");
-
-    await user.selectOptions(role, "custom");
-    await user.type(within(dialog).getByRole("textbox", { name: "Custom role" }), "Deep searcher");
+    // No Role field: a template member keeps its template's role.
+    expect(within(dialog).queryByRole("combobox", { name: "Role" })).toBeNull();
 
     // Submit button in add mode is "Add to group"
     await user.click(within(dialog).getByRole("button", { name: "Add to group" }));
@@ -334,7 +331,7 @@ describe("NewGroupModal (A4 redesigned)", () => {
     expect(create.mock.calls[0]?.[0].members[1]).toMatchObject({
       templateId: "explorer",
       name: "Explorer",
-      role: "Deep searcher",
+      role: "Explorer",
     });
   });
 
@@ -413,7 +410,7 @@ describe("NewGroupModal (A4 redesigned)", () => {
     await user.click(within(modal).getByRole("button", { name: "New agent…" }));
     const dialog = screen.getByTestId("agent-dialog");
     await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Cy");
-    await user.type(within(dialog).getByRole("textbox", { name: "Custom role" }), "Scribe");
+    await user.type(within(dialog).getByRole("textbox", { name: "Instructions" }), "Take notes.");
     await user.click(within(dialog).getByRole("button", { name: "Add to group" }));
     await waitFor(() => expect(screen.queryByTestId("agent-dialog")).toBeNull());
 
@@ -458,8 +455,9 @@ describe("NewGroupModal (A4 redesigned)", () => {
     });
     await waitFor(() =>
       expect(
-        (within(dialog).getByRole("textbox", { name: "Custom role" }) as HTMLInputElement).value,
-      ).toBe("Release writer"),
+        (within(dialog).getByRole("textbox", { name: "Instructions" }) as HTMLTextAreaElement)
+          .value,
+      ).toBe("Write the notes."),
     );
     await user.click(within(dialog).getByRole("button", { name: "Add to group" }));
     await waitFor(() => expect(screen.queryByTestId("agent-dialog")).toBeNull());
@@ -469,7 +467,8 @@ describe("NewGroupModal (A4 redesigned)", () => {
     const custom = create.mock.calls[0]?.[0].members[2];
     expect(custom).toMatchObject({
       name: "Cy",
-      role: "Release writer",
+      // Only the generated instructions are kept; the generated role is discarded (Custom).
+      role: "",
       instructions: "Write the notes.",
       modelId: "m-2",
     });
