@@ -3176,6 +3176,58 @@ body
 }
 
 /*
+ * Visible prompt queue above the composer: one borderless surface on the
+ * composer's own glass tier (--surface-chat, solid unless native glass +
+ * Transparency "full"), rows separated by spacing only, purple accent on hover
+ * and keyboard focus. Text contrast >= 4.5:1 pinned by queuedPromptStrip.test.ts.
+ */
+.queued-prompt-strip {
+  border: 0;
+  border-radius: var(--radius-xl);
+  background: var(--surface-chat);
+  box-shadow: var(--menu-shadow);
+  color: var(--color-fg);
+}
+:root[data-native-glass="true"][data-transparency="full"] .queued-prompt-strip {
+  -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
+}
+.queued-prompt-item {
+  border-radius: var(--radius-lg);
+  transition: background-color var(--motion-duration-fast) var(--motion-ease-standard);
+}
+.queued-prompt-item:hover,
+.queued-prompt-item:focus-within {
+  background-color: color-mix(in srgb, var(--color-accent) 8%, transparent);
+}
+.queued-prompt-text {
+  color: var(--color-fg);
+}
+.queued-prompt-glyph,
+.queued-prompt-meta {
+  color: var(--color-fg-muted);
+}
+.queued-prompt-remove {
+  border-radius: var(--radius-md);
+  color: var(--color-fg-muted);
+  outline: none;
+  transition:
+    opacity var(--motion-duration-fast) var(--motion-ease-standard),
+    color var(--motion-duration-fast) var(--motion-ease-standard),
+    background-color var(--motion-duration-fast) var(--motion-ease-standard);
+}
+.queued-prompt-remove:hover {
+  color: var(--color-fg);
+  background-color: color-mix(in srgb, var(--color-accent) 14%, transparent);
+}
+.queued-prompt-remove:focus-visible {
+  opacity: 1;
+  color: var(--color-fg);
+  box-shadow: 0 0 0 2px var(--color-accent);
+}
+/* No reduced-motion override: only opacity and colour change here. */
+
+/*
  * Composer surface: one continuous rounded field, no border or divider, theme glass fill.
  * Solid fill unless native glass + Transparency "full".
  */

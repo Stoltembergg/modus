@@ -887,8 +887,10 @@ export function buildBlocks(
       continue;
     }
 
-    if (event.type === "queue.updated") {
-      // Pi queue noise (steer/follow-up envelopes) — not a user-facing notice.
+    if (event.type === "queue.updated" || event.type === "queue.snapshot") {
+      // Queued prompts live in the strip above the composer (queue.snapshot);
+      // pi's own queue.updated carries composed envelopes. A queued prompt
+      // enters the chat only as the user message main emits once it is sent.
       continue;
     }
 

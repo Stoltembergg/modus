@@ -11,6 +11,7 @@ import type {
   ProjectMemoryCategory,
   PromptDelivery,
   PromptImageAttachment,
+  QueuedPromptItem,
   SkillSelection,
   ThinkingLevel,
 } from "../../shared/contracts";
@@ -153,6 +154,10 @@ export type AgentRuntime = {
     onProgress?: (text: string) => void;
   }): Promise<BackgroundWaitResult>;
   abort(sessionId: string): Promise<void>;
+  /** The chat's visible prompt queue (prompts waiting for the running turn). */
+  listQueuedPrompts(sessionId: string): QueuedPromptItem[];
+  /** Remove one queued prompt by id; `removed: false` when pi already took it to send. */
+  removeQueuedPrompt(sessionId: string, id: string): { removed: boolean };
   listRuns(sessionId: string): Promise<AgentRunInfo[]>;
   dispose(sessionId: string): Promise<void>;
   /**

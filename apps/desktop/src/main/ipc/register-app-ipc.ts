@@ -281,6 +281,7 @@ import {
   agentEventPageRequestSchema,
   agentListSchema,
   agentPromptSchema,
+  agentQueueRemoveSchema,
   agentRollbackSchema,
   agentRunWorkspaceRevisionSchema,
   agentSetBranchSchema,
@@ -701,6 +702,20 @@ export function registerAppIpc({
     await getAgentRuntime().abort(
       parseIpcInput(sessionIdSchema, sessionId, IPC_CHANNELS.agentAbort),
     );
+  });
+
+  ipcMain.handle(IPC_CHANNELS.agentQueueList, async (event, sessionId: string) => {
+    assertTrustedSender(event);
+    return getAgentRuntime().listQueuedPrompts(
+      parseIpcInput(sessionIdSchema, sessionId, IPC_CHANNELS.agentQueueList),
+    );
+  });
+
+  ipcMain.handle(IPC_CHANNELS.agentQueueRemove, async (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(agentQueueRemoveSchema, input, IPC_CHANNELS.agentQueueRemove);
+    requireSessionWritable(parsed.sessionId);
+    return getAgentRuntime().removeQueuedPrompt(parsed.sessionId, parsed.id);
   });
 
   // Cursor-style "edit & resend": rewind conversation + workspace files to

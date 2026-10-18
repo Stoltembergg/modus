@@ -34,6 +34,7 @@ import type {
   PlanEvidenceRef,
   PlanRef,
   QuestionResponse,
+  QueuedPromptItem,
 } from "../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
 import { buildPlanMessage } from "../../shared/plan-message";
@@ -266,6 +267,7 @@ import { createPiEventNormalizer } from "./pi-event-normalizer";
 import { createModusPermissionExtension } from "./pi-permission-extension";
 import { createModusToolSpillHandler } from "./pi-tool-spill-extension";
 import { planModePreamble, profileForMode } from "./plan-prompt";
+import { PromptQueue } from "./prompt-queue";
 import { PI_ROOT_LEAF } from "./rollback-service";
 import type {
   AgentRuntime,
@@ -406,7 +408,12 @@ type SdkRuntimeSession = {
     | undefined;
   /** True only while the runtime is awaiting an explicitly requested native compaction. */
   manualCompactionInProgress?: boolean | undefined;
+  /** Visible prompt queue; undefined when pi's queue shape is not the one we know. */
+  promptQueue?: PromptQueue<QueuedPromptPayload> | undefined;
 };
+
+/** What a queued prompt needs to appear in chat once pi actually sends it. */
+type QueuedPromptPayload = { input: PromptAgentInput; userMessageId: string };
 
 type PreviousSessionSelection = {
   modelId?: string;
@@ -3600,6 +3607,13 @@ export class PiSdkRuntime implements AgentRuntime {
       params.emitVolatile(event);
     };
     const sessionUnsubscribe = session.subscribe((event) => {
+      if (event.type === "message_start") {
+        // A queued prompt is shown in chat only when pi actually sends it.
+        const queued = runtimeSession?.promptQueue?.consume(event.message);
+        if (queued) this.emitUserMessage(params.emit, queued.input, queued.userMessageId);
+      } else if (event.type === "agent_end") {
+        runtimeSession?.promptQueue?.reconcile();
+      }
       this.noteAssistantResponseUsage(params.info.id, event);
       // Before PI runs this message's tool calls: group_start_worktree must be alone.
       if (event.type === "message_end")
@@ -3758,6 +3772,9 @@ export class PiSdkRuntime implements AgentRuntime {
       resourceLoader: params.loader,
       lastCompactionEnd: undefined,
       manualCompactionInProgress: false,
+      promptQueue: PromptQueue.attach<QueuedPromptPayload>(session, (items) =>
+        params.emitVolatile({ type: "queue.snapshot", sessionId: params.info.id, items }),
+      ),
     };
     this.sessions.set(params.info.id, runtimeSession);
     this.warmToolFilter(runtimeSession);
@@ -5730,8 +5747,8 @@ export class PiSdkRuntime implements AgentRuntime {
     const tracker = this.runOutputTrackers.get(runtimeSession.info.id);
     if (tracker) tracker.hasQueuedInput = true;
     const userMessageId = input.userMessageId ?? `local-user:${randomUUID()}`;
-    if (emitUserMessage) this.emitUserMessage(runtimeSession.emit, input, userMessageId);
-    try {
+    const streamingBehavior = delivery === "follow-up" ? "followUp" : "steer";
+    const prepare = async (): Promise<() => Promise<void>> => {
       await this.refreshPromptResources(runtimeSession);
       if (isFeatureFlagEnabled("MODUS_PROMPT_REGISTRY")) {
         this.applyTurnToolSet(runtimeSession, runtimeSession.profile);
@@ -5740,21 +5757,71 @@ export class PiSdkRuntime implements AgentRuntime {
         includeProjectMemory: false,
       });
       const images = buildTurnImages(input);
-      await runWithAgentToolContext(toolContext, () =>
-        runtimeSession.session.prompt(message, {
-          source: "rpc",
-          ...(images.length > 0 ? { images } : {}),
-          streamingBehavior: delivery === "follow-up" ? "followUp" : "steer",
-        }),
-      );
+      return () =>
+        runWithAgentToolContext(toolContext, () =>
+          runtimeSession.session.prompt(message, {
+            source: "rpc",
+            ...(images.length > 0 ? { images } : {}),
+            streamingBehavior,
+          }),
+        );
+    };
+    const queue = runtimeSession.promptQueue;
+    // A normal prompt that joins the turn already published its message, so it
+    // keeps the old path; so does a pi whose queue we cannot address.
+    if (!queue || !emitUserMessage || delivery === "normal") {
+      if (emitUserMessage) this.emitUserMessage(runtimeSession.emit, input, userMessageId);
+      try {
+        const enqueue = await prepare();
+        await enqueue();
+        this.emitContextUsage(runtimeSession);
+      } catch (error) {
+        runtimeSession.emit({
+          type: "runtime.error",
+          sessionId: input.sessionId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+    const queueId = randomUUID();
+    queue.add(
+      {
+        id: queueId,
+        delivery,
+        text: input.message,
+        imageCount: input.attachments?.length ?? 0,
+      },
+      { input, userMessageId },
+    );
+    try {
+      const unqueued = await queue.deliver(queueId, prepare);
+      // pi took it without queueing (no message_start seen): show it now.
+      if (unqueued)
+        this.emitUserMessage(runtimeSession.emit, unqueued.input, unqueued.userMessageId);
       this.emitContextUsage(runtimeSession);
     } catch (error) {
+      // Keep what the user typed visible next to the error.
+      this.emitUserMessage(runtimeSession.emit, input, userMessageId);
       runtimeSession.emit({
         type: "runtime.error",
         sessionId: input.sessionId,
         message: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  /** The chat's visible prompt queue, in arrival order (empty when none). */
+  listQueuedPrompts(sessionId: string): QueuedPromptItem[] {
+    return this.sessions.get(sessionId)?.promptQueue?.items() ?? [];
+  }
+
+  /**
+   * Remove one queued prompt by its id. Refused when pi already took it off
+   * the queue to send it; that prompt is then delivered as usual.
+   */
+  removeQueuedPrompt(sessionId: string, id: string): { removed: boolean } {
+    return this.sessions.get(sessionId)?.promptQueue?.remove(id) ?? { removed: false };
   }
 
   /**
@@ -6269,6 +6336,8 @@ export class PiSdkRuntime implements AgentRuntime {
       runtimeSession.promptRegistry?.unregisterSection(section.id);
     }
     runtimeSession.promptRegistry = undefined;
+    // pi's queue goes with the pi session; the strip must not keep ghosts.
+    runtimeSession.promptQueue?.clear();
     runtimeSession.unsubscribe();
     runtimeSession.session.dispose();
     this.clearRepeatGuardSession(sessionId);

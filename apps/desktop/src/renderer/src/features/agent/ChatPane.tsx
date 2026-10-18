@@ -25,6 +25,7 @@ import type {
   PromptDelivery,
   PromptImageAttachment,
   QuestionAnswer,
+  QueuedPromptItem,
   SkillSelection,
   SubagentActivity,
   SubagentStatus,
@@ -44,6 +45,7 @@ import {
 import { ComposerDock } from "../composer/ComposerDock";
 import { contextItemKey } from "../composer/composerTokens";
 import type { MentionEditorPart } from "../composer/MentionEditor";
+import { QueuedPromptStrip } from "../composer/QueuedPromptStrip";
 import { SessionModelPicker } from "../composer/SessionModelPicker";
 import { SessionBranchPicker } from "../git/SessionBranchPicker";
 import { effectiveBuildStatus, normalizePlan } from "../plan/planState";
@@ -704,6 +706,8 @@ export function ChatPane({
   );
 
   const queuedRef = useRef<AgentEventItem[]>([]);
+  /** Prompts waiting for the running turn (main's queue.snapshot), in arrival order. */
+  const [queuedPrompts, setQueuedPrompts] = useState<QueuedPromptItem[]>([]);
   /** Pending frame-clock flush handle (requestAnimationFrame id). */
   const flushFrameRef = useRef<number | undefined>(undefined);
   const statsTimerRef = useRef<number | undefined>(undefined);
@@ -983,6 +987,8 @@ export function ChatPane({
     setPendingPrompt(false);
     setAborting(false);
     setWorkingStats(undefined);
+    setQueuedPrompts([]);
+    let queueSnapshotSeen = false;
     planBuildGeneration.current += 1;
     planBuildOperations.current.reset();
     setStartingPlan(false);
@@ -991,6 +997,11 @@ export function ChatPane({
     const unsubscribe = hub.subscribe(sessionId, (item) => {
       const event = item.event;
       if (event.type === "context.updated") {
+        return;
+      }
+      if (event.type === "queue.snapshot") {
+        queueSnapshotSeen = true;
+        setQueuedPrompts(event.items);
         return;
       }
       queuedRef.current.push(item);
@@ -1012,6 +1023,14 @@ export function ChatPane({
         }
       }
     });
+
+    // The live queue lives in main; a snapshot that arrives first is newer.
+    void Promise.resolve()
+      .then(() => window.modus.agent.listQueue(sessionId))
+      .then((items: QueuedPromptItem[]) => {
+        if (!cancelled && !queueSnapshotSeen) setQueuedPrompts(items);
+      })
+      .catch(() => {});
 
     // Seed the newest bounded page. A second snapshot covers events queued
     // before the first read; later live echoes are de-duplicated by event ID.
@@ -1144,19 +1163,23 @@ export function ChatPane({
     // Main ignores the renderer's model as authority and resolves the stored session or agent
     // selection; the payload remains advisory UI state only.
     const userMessageId = `local-user:${crypto.randomUUID()}`;
-    setAgentEvents((events) =>
-      appendAgentEvents(
-        events,
-        optimisticUserPromptEvents({
-          sessionId,
-          userMessageId,
-          message,
-          ...(mergedAttachments.length > 0 ? { attachments: mergedAttachments } : {}),
-          ...(skills && skills.length > 0 ? { skills } : {}),
-          ...(leanContext.length > 0 ? { contextItems: leanContext } : {}),
-        }),
-      ),
-    );
+    // A steer/follow-up waits in the queue strip; main shows it in chat only
+    // when the agent actually sends it, so no optimistic bubble here.
+    if (delivery === "normal") {
+      setAgentEvents((events) =>
+        appendAgentEvents(
+          events,
+          optimisticUserPromptEvents({
+            sessionId,
+            userMessageId,
+            message,
+            ...(mergedAttachments.length > 0 ? { attachments: mergedAttachments } : {}),
+            ...(skills && skills.length > 0 ? { skills } : {}),
+            ...(leanContext.length > 0 ? { contextItems: leanContext } : {}),
+          }),
+        ),
+      );
+    }
     void window.modus.agent
       .prompt({
         context: leanContext,
@@ -1226,6 +1249,12 @@ export function ChatPane({
       }
     });
   });
+
+  function removeQueuedPrompt(id: string): void {
+    void window.modus.agent.removeQueued({ sessionId, id }).catch((error: unknown) => {
+      setPromptError(error instanceof Error ? error.message : String(error));
+    });
+  }
 
   async function abortPrompt(): Promise<void> {
     if (aborting) {
@@ -1490,6 +1519,7 @@ export function ChatPane({
                       status={modusStatus}
                     />
                     {retryStatus ? <RetryStatusBar status={retryStatus} /> : null}
+                    <QueuedPromptStrip items={queuedPrompts} onRemove={removeQueuedPrompt} />
                     <ComposerDock
                       rails={
                         hasComposerRails ? (
