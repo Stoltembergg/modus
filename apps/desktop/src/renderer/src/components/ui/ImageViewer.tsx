@@ -1,5 +1,5 @@
 import { IconCopy, IconDownload, IconPencil, IconRotate2, IconX } from "@tabler/icons-react";
-import { AnimatePresence, m } from "motion/react";
+import { AnimatePresence, m, useReducedMotion } from "motion/react";
 import {
   createContext,
   type ReactNode,
@@ -11,7 +11,7 @@ import {
   useState,
 } from "react";
 import { cn } from "../../lib/cn";
-import { tween } from "../../lib/motion";
+import { imageViewerMotion } from "../../lib/motion";
 import { useSuppressNativeSurface } from "./nativeSurface";
 
 type Size = { width: number; height: number };
@@ -162,6 +162,9 @@ function ImageViewerOverlay({ state, onClose }: { state: ViewerState; onClose():
   const [activeStroke, setActiveStroke] = useState<DrawStroke | null>(null);
   const activeStrokeRef = useRef<DrawStroke | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Zoom + drop-in under full motion; reduced motion fades each layer in place.
+  const reducedMotion = useReducedMotion();
+  const motion = useMemo(() => imageViewerMotion(reducedMotion), [reducedMotion]);
 
   // The lightbox lives in the renderer DOM, but Electron composites embedded
   // browser views above the DOM — so hide them while the viewer (and its exit
@@ -269,25 +272,26 @@ function ImageViewerOverlay({ state, onClose }: { state: ViewerState; onClose():
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center">
       <m.div
-        animate={{ opacity: 1 }}
+        animate={motion.backdrop.animate}
         aria-hidden="true"
         className="absolute inset-0 bg-black/70"
-        exit={{ opacity: 0 }}
-        initial={{ opacity: 0 }}
+        exit={motion.backdrop.exit}
+        initial={motion.backdrop.initial}
         onClick={drawing ? undefined : onClose}
-        transition={tween("slow")}
+        transition={motion.backdrop.transition}
       />
       <m.div
-        animate={{ opacity: 1, scale: 1 }}
+        animate={motion.stage.animate}
         className="relative z-10 flex items-center justify-center overflow-hidden popup-chrome"
-        exit={{ opacity: 0, scale: 0.98 }}
-        initial={{ opacity: 0, scale: 0.98 }}
+        data-image-viewer-stage=""
+        exit={motion.stage.exit}
+        initial={motion.stage.initial}
         style={{
           width: stage.width,
           height: stage.height,
           padding: stage.padding,
         }}
-        transition={tween("slow", "emphasized")}
+        transition={motion.stage.transition}
       >
         <div className="relative" style={{ width: stage.imageWidth, height: stage.imageHeight }}>
           <img
@@ -329,11 +333,11 @@ function ImageViewerOverlay({ state, onClose }: { state: ViewerState; onClose():
           ) : null}
         </div>
         <m.div
-          animate={{ opacity: 1, y: 0 }}
+          animate={motion.toolbar.animate}
           className="app-no-drag absolute top-3 right-3 flex items-center gap-1.5 popup-chrome p-1"
-          exit={{ opacity: 0 }}
-          initial={{ opacity: 0, y: -4 }}
-          transition={tween("base", "standard", { delay: 0.04 })}
+          exit={motion.toolbar.exit}
+          initial={motion.toolbar.initial}
+          transition={motion.toolbar.transition}
         >
           {drawing ? (
             <>

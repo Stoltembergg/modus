@@ -227,10 +227,8 @@ export function Disclosure({
         type="button"
       >
         <IconChevronRight
-          className={cn(
-            "transition-transform duration-(--motion-duration-base)",
-            open && "rotate-90",
-          )}
+          className="disclosure-chevron duration-(--motion-duration-base)"
+          data-open={open ? "" : undefined}
           size={13}
           stroke={1.8}
         />

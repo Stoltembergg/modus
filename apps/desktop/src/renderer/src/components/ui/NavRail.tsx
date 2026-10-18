@@ -11,7 +11,7 @@ import {
   useState,
 } from "react";
 import { cn } from "../../lib/cn";
-import { type NavRailMotion, navRailMotion } from "../../lib/motion";
+import { type NavRailMotion, navRailMotion, reducedTarget } from "../../lib/motion";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 
 /** Width of the icon-only rail. */
@@ -38,6 +38,14 @@ type NavRailState = {
 };
 
 const NavRailContext = createContext<NavRailState | null>(null);
+
+/**
+ * True once the rail's first render has committed. Content that mounts with the
+ * rail on that first render (a rail pinned open at app start) must not animate
+ * in; content that mounts on a later expansion may (`NavRailReveal appear`).
+ * `null` outside a rail: nothing there animates in.
+ */
+const NavRailRenderedContext = createContext<{ readonly current: boolean } | null>(null);
 
 /** Rail state for content rendered inside `<NavRail>`; a pinned, static rail elsewhere. */
 export function useNavRail(): NavRailState {
@@ -262,6 +270,11 @@ export function NavRail({ label, pinned, compactMenuLabel, className, children }
     [expanded, pinned, compact, motion, collapse, hold],
   );
 
+  const rendered = useRef(false);
+  useEffect(() => {
+    rendered.current = true;
+  }, []);
+
   const nav = (
     <m.nav
       animate={{
@@ -287,7 +300,7 @@ export function NavRail({ label, pinned, compactMenuLabel, className, children }
       ref={setNavElement}
       transition={motion.width}
     >
-      {children}
+      <NavRailRenderedContext.Provider value={rendered}>{children}</NavRailRenderedContext.Provider>
     </m.nav>
   );
 
@@ -384,24 +397,47 @@ export function NavRailItem({
   );
 }
 
+/**
+ * Entrance for a `NavRailReveal` that mounts already visible: none on the
+ * rail's first render, otherwise a fade (+ a few px slide with full motion;
+ * opacity only under reduced motion, with `motion.content` = `reducedFade`).
+ */
+export function navRailRevealInitial(
+  motion: NavRailMotion,
+  appear: boolean,
+): false | { opacity: number; x?: number } {
+  if (!appear) return false;
+  return reducedTarget({ opacity: 0, x: motion.offsetX }, motion.reduced);
+}
+
 /** Content that fades (and, with full motion, slides a few px) in with the expanded rail. */
 export function NavRailReveal({
   visible,
   motion,
+  appear = false,
   className,
   children,
 }: {
   visible: boolean;
   motion: NavRailMotion;
+  /**
+   * Animate in when mounted already visible (content rendered only while the
+   * rail is expanded, like the brand). Never on the rail's first render.
+   */
+  appear?: boolean;
   className?: string;
   children: ReactNode;
 }) {
+  const rendered = useContext(NavRailRenderedContext);
+  // Decided once at mount: later re-renders must not restart the entrance.
+  const [entrance] = useState(() => appear && rendered?.current === true);
   return (
     <m.span
       animate={visible ? { opacity: 1, x: 0 } : { opacity: 0, x: motion.offsetX }}
       aria-hidden
       className={className}
-      initial={false}
+      data-appear={entrance ? "" : undefined}
+      initial={navRailRevealInitial(motion, entrance)}
       transition={motion.content}
     >
       {children}
