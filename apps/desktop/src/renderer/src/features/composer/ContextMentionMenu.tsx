@@ -85,7 +85,7 @@ export function ContextMentionMenu({
       {rows.map((row, index) => {
         if (row.row === "header") {
           return (
-            <div className="px-2 pt-1.5 pb-1 text-2xs text-fg-faint" key={row.id}>
+            <div className="px-2 pt-1.5 pb-1 text-2xs text-fg-muted" key={row.id}>
               {row.label}
             </div>
           );
@@ -101,8 +101,8 @@ export function ContextMentionMenu({
           return (
             <button
               className={cn(
-                "flex h-8 w-full items-center rounded-md px-2.5 text-left text-xs text-fg-faint transition-colors",
-                active && "bg-hover text-fg-muted",
+                "flex h-8 w-full items-center rounded-md px-2.5 text-left text-xs text-fg-muted transition-colors",
+                active && "bg-hover text-fg",
               )}
               key={row.id}
               onMouseDown={(event) => {
@@ -140,7 +140,7 @@ export function ContextMentionMenu({
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-fg text-sm leading-tight">{row.label}</span>
                 {detail ? (
-                  <span className="mt-0.5 block truncate text-2xs text-fg-faint leading-tight">
+                  <span className="mt-0.5 block truncate text-2xs text-fg-muted leading-tight">
                     {detail}
                   </span>
                 ) : null}

@@ -870,7 +870,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
                                       <div className="truncate text-xs text-fg">
                                         {account.alias}
                                       </div>
-                                      <div className="mt-0.5 text-[11px] capitalize text-fg-faint">
+                                      <div className="mt-0.5 text-[11px] capitalize text-fg-muted">
                                         {account.status}
                                       </div>
                                     </>

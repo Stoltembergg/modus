@@ -55,7 +55,7 @@ export function SubagentRow({
         <span className="flex min-w-0 items-center gap-2 overflow-hidden">
           <span className="min-w-0 truncate text-sm text-fg-subtle leading-snug">{task}</span>
           {model ? (
-            <span className="inline-flex min-w-0 shrink-0 items-center gap-1 text-xs text-fg-faint">
+            <span className="inline-flex min-w-0 shrink-0 items-center gap-1 text-xs text-fg-muted">
               <ProviderLogo
                 framed={false}
                 name={model.providerName ?? model.provider}
@@ -67,7 +67,7 @@ export function SubagentRow({
             </span>
           ) : null}
         </span>
-        <span className="mt-1 block truncate text-sm text-fg-faint leading-snug">
+        <span className="mt-1 block truncate text-sm text-fg-muted leading-snug">
           {activityLabel}
         </span>
       </span>

@@ -253,9 +253,9 @@ export function WorkActivityRow({
     if (item.streaming) {
       return (
         <WorkStatusLine
-          className="text-fg-faint"
+          className="text-fg-muted"
           collapsible={false}
-          color="var(--color-fg-faint)"
+          color="var(--color-fg-muted)"
           fontSize={12}
           label={preview || "Thinking…"}
           showTimer={false}
@@ -265,8 +265,8 @@ export function WorkActivityRow({
     }
     return (
       <WorkStatusLine
-        className="text-fg-faint"
-        color="var(--color-fg-faint)"
+        className="text-fg-muted"
+        color="var(--color-fg-muted)"
         doneLabel="Thought"
         fontSize={12}
         showTimer={false}
@@ -416,7 +416,7 @@ export const WorkFold = memo(function WorkFold({
               }
               if (item.type === "notice") {
                 return (
-                  <div className="text-xs text-fg-faint" key={item.id}>
+                  <div className="text-xs text-fg-muted" key={item.id}>
                     {item.title}
                     {item.body ? ` — ${item.body}` : null}
                   </div>

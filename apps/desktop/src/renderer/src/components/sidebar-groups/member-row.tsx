@@ -58,13 +58,13 @@ export function MemberRow({
           <MemberName label={label} />
         </span>
         {isLead ? (
-          <span className="shrink-0 text-fg-faint" title="Lead">
+          <span className="shrink-0 text-fg-muted" title="Lead">
             <IconCrown aria-hidden size={ICON.xs} stroke={ICON_STROKE.xs} />
             <span className="sr-only">Lead</span>
           </span>
         ) : null}
         {role ? (
-          <span className="max-w-[45%] shrink-0 truncate text-2xs text-fg-faint">{role}</span>
+          <span className="max-w-[45%] shrink-0 truncate text-2xs text-fg-muted">{role}</span>
         ) : null}
       </button>
       <span className="ml-0.5 hidden shrink-0 items-center group-hover:flex group-focus-within:flex">

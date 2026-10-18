@@ -50,7 +50,7 @@ export function SlashMenu({ items, activeIndex, onSelect }: SlashMenuProps) {
               <span className="truncate text-sm text-fg">{item.name}</span>
               <span className="min-w-0 truncate text-xs text-fg-faint">{item.description}</span>
               {scopeLabel ? (
-                <span className="shrink-0 text-xs text-fg-faint">{scopeLabel}</span>
+                <span className="shrink-0 text-xs text-fg-muted">{scopeLabel}</span>
               ) : null}
             </button>
           </div>

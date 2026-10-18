@@ -252,7 +252,7 @@ export function GroupAgentsPopover({
                           state={agentAvatarState(state, avatar.archived)}
                         />
                         <span className="min-w-0 flex-1 truncate">{member.name}</span>
-                        <span className="text-2xs text-fg-faint">
+                        <span className="text-2xs text-fg-muted">
                           {AGENT_PRESENCE_LABEL[presence]}
                         </span>
                       </Menu.Item>

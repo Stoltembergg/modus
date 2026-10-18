@@ -866,7 +866,7 @@ describe("GroupRoom decisions", () => {
     ]);
     const authors = within(section).getAllByTestId("decision-author");
     // A repeated title keeps its short id suffix; no author (session deleted) or an
-    // author no longer in the group is a former member, faded, never "You".
+    // author no longer in the group is a former member, readable (fg-muted, #fg-faint-mixed-labels), never "You".
     expect(authors.map((author) => author.textContent)).toEqual([
       "Reviewer · srev1",
       "Planner",
@@ -874,7 +874,7 @@ describe("GroupRoom decisions", () => {
       FORMER_MEMBER_TEXT,
     ]);
     for (const author of authors.slice(2)) {
-      expect(author.querySelector(".text-fg-faint")?.textContent).toBe(FORMER_MEMBER_TEXT);
+      expect(author.querySelector(".text-fg-muted")?.textContent).toBe(FORMER_MEMBER_TEXT);
     }
     expect(within(authors[0] as HTMLElement).getByTestId("member-id-suffix")).toBeTruthy();
     const time = cards[1]?.querySelector("time");

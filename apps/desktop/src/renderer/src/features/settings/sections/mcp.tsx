@@ -538,7 +538,7 @@ export function McpSettingsPanel({
                   >
                     <div className="flex items-center gap-2">
                       <span className="truncate text-fg text-sm">{server.name}</span>
-                      <span className="shrink-0 text-2xs text-fg-faint">
+                      <span className="shrink-0 text-2xs text-fg-muted">
                         {sourceBadge(server.source)}
                       </span>
                     </div>

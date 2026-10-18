@@ -124,7 +124,7 @@ export function SettingsSidebar({
         )}
       </div>
 
-      <div className="px-2 pt-3 pb-1 text-xs text-fg-faint">
+      <div className="px-2 pt-3 pb-1 text-xs text-fg-muted">
         <div>{t("settings.window.appTitle")}</div>
         {version ? <div className="mt-1">v{version}</div> : null}
         <p className="mt-2 leading-snug" data-testid="model-attribution">
@@ -157,7 +157,7 @@ function useAppVersion(): string | undefined {
 function SettingsNavGroup({ children, title }: { children: ReactNode; title: string }) {
   return (
     <section className="mb-5">
-      <h3 className="mb-1.5 px-2 text-[11px] font-medium text-fg-faint">{title}</h3>
+      <h3 className="mb-1.5 px-2 text-[11px] font-medium text-fg-muted">{title}</h3>
       <div className="space-y-0.5">{children}</div>
     </section>
   );

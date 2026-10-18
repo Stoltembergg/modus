@@ -217,7 +217,7 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
                       <span className="min-w-0 flex-1 truncate">
                         {member.name}
                         {member.agentRole ? (
-                          <span className="text-fg-faint"> · {member.agentRole}</span>
+                          <span className="text-fg-muted"> · {member.agentRole}</span>
                         ) : null}
                       </span>
                       <button

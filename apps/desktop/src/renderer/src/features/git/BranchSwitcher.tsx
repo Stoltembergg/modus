@@ -220,7 +220,7 @@ export function BranchMenuGroups({
           className="flex flex-col border-hairline-soft border-t pt-1 first:border-t-0 first:pt-0"
           key={group.label}
         >
-          <Menu.GroupLabel className="px-2.5 py-1.5 text-2xs font-medium text-fg-faint">
+          <Menu.GroupLabel className="px-2.5 py-1.5 text-2xs font-medium text-fg-muted">
             {group.label}
           </Menu.GroupLabel>
           {group.items.map((item) => (
@@ -254,7 +254,7 @@ export function BranchMenuGroups({
               </span>
               <span className="min-w-0 flex-1 truncate">{item.label}</span>
               {item.meta ? (
-                <span className="shrink-0 text-2xs text-fg-faint">{item.meta}</span>
+                <span className="shrink-0 text-2xs text-fg-muted">{item.meta}</span>
               ) : null}
             </Menu.Item>
           ))}

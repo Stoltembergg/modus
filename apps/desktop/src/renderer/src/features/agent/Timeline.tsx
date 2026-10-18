@@ -1283,7 +1283,7 @@ function Notice({ body, isError = false, title }: NoticeBlockItem) {
       />
       <div className="min-w-0">
         <span className={isError ? "text-danger" : "text-fg-muted"}>{title}</span>
-        {body ? <span className="ml-2 text-fg-faint">{body}</span> : null}
+        {body ? <span className="ml-2 text-fg-muted">{body}</span> : null}
       </div>
     </div>
   );
@@ -1299,13 +1299,13 @@ function tokenUsageTooltip(usage: RunTokenUsage): ReactNode {
   );
   return (
     <span className="flex min-w-[11rem] flex-col gap-1">
-      <span className="text-fg-faint">Provider-reported · main run</span>
+      <span className="text-fg-muted">Provider-reported · main run</span>
       {row("Input", usage.input)}
       {row("Output", usage.output)}
       {row("Cache read", usage.cacheRead)}
       {row("Cache write", usage.cacheWrite)}
       {row("Total", tokenUsageTotal(usage))}
-      <span className="mt-0.5 max-w-[15rem] text-fg-faint">
+      <span className="mt-0.5 max-w-[15rem] text-fg-muted">
         Reasoning is counted inside Output. Excludes subagents and compaction.
       </span>
     </span>
@@ -1386,7 +1386,7 @@ function TurnFooter({ turn, models }: { turn: TimelineTurn; models?: ModelInfo[]
   }
 
   return (
-    <div className="pointer-events-none relative flex h-6 w-full min-w-0 items-center gap-1.5 px-8 text-2xs text-fg-faint">
+    <div className="pointer-events-none relative flex h-6 w-full min-w-0 items-center gap-1.5 px-8 text-2xs text-fg-muted">
       {/* Action stays quiet — revealed on hover/focus (and always reachable on
           coarse pointers). The metadata beside it is always visible. Copy is
           shown only when the turn actually produced answer text. */}

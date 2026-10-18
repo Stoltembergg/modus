@@ -136,12 +136,12 @@ function DecisionCard({
       data-testid="group-decision"
     >
       <div className="whitespace-pre-wrap break-words text-fg">{decision.text}</div>
-      <div className="mt-1 flex min-w-0 items-center gap-1 text-2xs text-fg-faint">
+      <div className="mt-1 flex min-w-0 items-center gap-1 text-2xs text-fg-muted">
         <span className="min-w-0 truncate text-fg-muted" data-testid="decision-author">
           {authorLabel ? (
             <MemberName label={authorLabel} />
           ) : (
-            <span className="text-fg-faint">{t("decisions.formerMember")}</span>
+            <span className="text-fg-muted">{t("decisions.formerMember")}</span>
           )}
         </span>
         <span aria-hidden>·</span>

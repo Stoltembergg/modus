@@ -712,7 +712,7 @@ export function AgentDialog(props: AgentDialogProps) {
             "mx-5 mt-3 rounded-lg px-2.5 py-1.5 text-xs",
             notice.warning
               ? "border border-dialog-warning/30 bg-dialog-warning/10 text-dialog-warning"
-              : "text-fg-faint",
+              : "text-fg-muted",
           )}
           data-testid="agent-dialog-notice"
           data-warning={notice.warning || undefined}

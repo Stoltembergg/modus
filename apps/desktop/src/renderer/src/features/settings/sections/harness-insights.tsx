@@ -182,7 +182,7 @@ function HarnessInsightsResults({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="max-w-full break-words rounded-full border border-hairline-soft px-2.5 py-1 text-2xs text-fg-faint">
+          <span className="max-w-full break-words rounded-full border border-hairline-soft px-2.5 py-1 text-2xs text-fg-muted">
             <span className="mr-1 font-medium">Period</span>
             {harnessInsightPeriod(result.period)}
           </span>
@@ -249,7 +249,7 @@ function HarnessInsightsResults({
                     {insight.recommendation}
                   </p>
                 </div>
-                <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-2xs text-fg-faint">
+                <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-2xs text-fg-muted">
                   <span>
                     {insight.sampleCount} {insight.sampleCount === 1 ? "sample" : "samples"}
                   </span>

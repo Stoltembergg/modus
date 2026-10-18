@@ -51,7 +51,7 @@ export function PromptMessageIdentity({
   return (
     <div className="flex flex-wrap items-baseline gap-x-1.5 font-medium text-fg-muted text-xs">
       <span className="text-fg">{name}</span>
-      {role?.trim() ? <span className="font-normal text-fg-faint">{role.trim()}</span> : null}
+      {role?.trim() ? <span className="font-normal text-fg-muted">{role.trim()}</span> : null}
       {trailing}
     </div>
   );
@@ -133,7 +133,7 @@ export function PromptTool({
         />
       ) : null}
       <span className="min-w-0 truncate font-medium text-fg-muted">{name}</span>
-      <span className="shrink-0 text-fg-faint">{badge}</span>
+      <span className="shrink-0 text-fg-muted">{badge}</span>
     </div>
   );
 }
@@ -257,7 +257,7 @@ export function AttachmentChip({
       )}
       <div className="min-w-0 flex-1">
         <div className="truncate text-2xs text-fg">{name}</div>
-        <div className="truncate text-[10px] text-fg-faint">
+        <div className="truncate text-[10px] text-fg-muted">
           {error ? error : [mimeTypeLabel(mimeType, t), sizeLabel].filter(Boolean).join(" · ")}
         </div>
       </div>

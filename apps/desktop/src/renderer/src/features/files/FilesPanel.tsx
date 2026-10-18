@@ -638,7 +638,7 @@ export function FilesPanel({
     <div className="flex h-full min-h-0 flex-col">
       <div className="toolbar-row flex shrink-0 items-center gap-2 border-hairline border-b pr-1.5 pl-3">
         <FileBreadcrumb cwd={cwd} dirty={dirty} file={selectedFile} t={t} />
-        {viewerNote ? <span className="shrink-0 text-2xs text-fg-faint">{viewerNote}</span> : null}
+        {viewerNote ? <span className="shrink-0 text-2xs text-fg-muted">{viewerNote}</span> : null}
         <FileActions
           cwd={cwd}
           file={selectedFile}

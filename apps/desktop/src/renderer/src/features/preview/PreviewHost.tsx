@@ -108,7 +108,7 @@ function Unsupported({
         className,
       )}
     >
-      <div className="text-fg-faint text-xs">
+      <div className="text-fg-muted text-xs">
         {message ??
           (kind && kind !== "unsupported"
             ? `No renderer for ${kind}`

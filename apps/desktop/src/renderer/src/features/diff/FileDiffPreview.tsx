@@ -229,7 +229,7 @@ function OpenFileButton({ cwd, path }: { cwd: string; path: string }) {
 
 function Notice({ children, actions }: { children: React.ReactNode; actions?: React.ReactNode }) {
   return (
-    <div className="mx-1 mb-1 flex items-center justify-between gap-3 rounded-lg bg-code-bg px-4 py-3 text-fg-faint text-xs">
+    <div className="mx-1 mb-1 flex items-center justify-between gap-3 rounded-lg bg-code-bg px-4 py-3 text-fg-muted text-xs">
       <span>{children}</span>
       {actions}
     </div>

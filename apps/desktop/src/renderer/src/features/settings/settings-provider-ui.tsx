@@ -103,7 +103,7 @@ export function ProviderRow({
             <UnofficialProviderMark>{t("settings.providerUi.unofficial")}</UnofficialProviderMark>
           ) : null}
         </span>
-        <span className="mt-0.5 block truncate text-xs text-fg-faint">
+        <span className="mt-0.5 block truncate text-xs text-fg-muted">
           {providerSummary(provider, t)}
         </span>
       </span>
@@ -240,7 +240,7 @@ export function ProviderDetail({
         >
           <span className="min-w-0">
             <span className="block text-sm text-fg">{t("settings.providerUi.modelsHeading")}</span>
-            <span className="mt-0.5 block text-xs text-fg-faint">
+            <span className="mt-0.5 block text-xs text-fg-muted">
               {t("settings.providerUi.modelsSummary", {
                 enabled: enabledCount,
                 total: detail.modelCount,
@@ -377,7 +377,7 @@ export function ProviderCredentials({
       <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-chip-faint px-3 py-3">
         <span className="min-w-0">
           <span className="block text-sm text-fg">{t("settings.providerUi.connection")}</span>
-          <span className="mt-0.5 block truncate text-xs text-fg-faint">{connectionLabel}</span>
+          <span className="mt-0.5 block truncate text-xs text-fg-muted">{connectionLabel}</span>
         </span>
         <span className="flex shrink-0 items-center gap-1.5">
           <button
@@ -418,7 +418,7 @@ export function ProviderCredentials({
       <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-chip-faint px-3 py-3">
         <span className="min-w-0">
           <span className="block text-sm text-fg">{t("settings.providerUi.connection")}</span>
-          <span className="mt-0.5 block truncate text-xs text-fg-faint">{connectionLabel}</span>
+          <span className="mt-0.5 block truncate text-xs text-fg-muted">{connectionLabel}</span>
         </span>
         <span className="flex shrink-0 items-center gap-1.5">
           <button
@@ -917,7 +917,7 @@ export function ModelKindBadge({ model }: { model: ProviderModelConfig }) {
     <span
       className={cn(
         "flex items-center gap-1 rounded-full px-1.5 py-0.5 text-2xs",
-        model.reasoning ? "bg-chip-strong text-fg-muted" : "bg-chip text-fg-faint",
+        model.reasoning ? "bg-chip-strong text-fg-muted" : "bg-chip text-fg-muted",
       )}
     >
       {model.reasoning ? <IconBrain size={11} stroke={1.8} /> : null}
@@ -930,7 +930,7 @@ export function ModelKindBadge({ model }: { model: ProviderModelConfig }) {
 
 export function TinyBadge({ children }: { children: string }) {
   return (
-    <span className="rounded-full bg-chip px-1.5 py-0.5 text-2xs text-fg-faint">{children}</span>
+    <span className="rounded-full bg-chip px-1.5 py-0.5 text-2xs text-fg-muted">{children}</span>
   );
 }
 

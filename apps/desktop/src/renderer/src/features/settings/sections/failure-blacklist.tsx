@@ -244,7 +244,7 @@ function FailureBlacklistRow({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="font-mono text-sm text-fg">{entry.strategyCode}</h3>
-            <span className="rounded-full border border-hairline-soft px-2 py-0.5 text-2xs text-fg-faint">
+            <span className="rounded-full border border-hairline-soft px-2 py-0.5 text-2xs text-fg-muted">
               Soft
             </span>
           </div>
@@ -266,7 +266,7 @@ function FailureBlacklistRow({
           </button>
         ) : null}
       </div>
-      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-2xs text-fg-faint">
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-2xs text-fg-muted">
         <span>
           {entry.hitCount} {entry.hitCount === 1 ? "hit" : "hits"}
         </span>

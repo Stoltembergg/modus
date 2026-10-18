@@ -415,7 +415,7 @@ export function Sidebar({
       )}
     >
       {draggedId && pinnedSessions.length === 0 ? (
-        <div className="px-2 py-2 text-fg-faint text-xs">Drop here to pin</div>
+        <div className="px-2 py-2 text-fg-muted text-xs">Drop here to pin</div>
       ) : null}
       {section === "direct-messages" && pinnedSessions.length > 0 && (
         <>
@@ -824,7 +824,7 @@ function InboxChatsSection({
                 <div className="px-2 py-1 text-2xs text-fg-faint">Loading archived chats…</div>
               ) : null
             ) : archivedSessions.length === 0 ? (
-              <div className="px-2 py-1 text-2xs text-fg-faint">No archived chats</div>
+              <div className="px-2 py-1 text-2xs text-fg-muted">No archived chats</div>
             ) : (
               <AnimatePresence initial={false}>
                 {archivedSessions.map((session) => (
@@ -1012,7 +1012,7 @@ function WorkspaceItem({
             {archivedSessions === undefined ? (
               <div className="px-2 py-1 text-2xs text-fg-faint">Loading archived chats…</div>
             ) : archivedSessions.length === 0 ? (
-              <div className="px-2 py-1 text-2xs text-fg-faint">No archived chats</div>
+              <div className="px-2 py-1 text-2xs text-fg-muted">No archived chats</div>
             ) : (
               <AnimatePresence initial={false}>
                 {archivedSessions.map((session) => (
@@ -1737,10 +1737,10 @@ function SectionHeader({
   action?: ReactNode;
 }) {
   return (
-    <div className="group mt-3 mb-0.5 flex h-6 items-center px-2 text-2xs font-normal text-fg-faint">
+    <div className="group mt-3 mb-0.5 flex h-6 items-center px-2 text-2xs font-normal text-fg-muted">
       <button
         aria-expanded={expanded}
-        className="flex items-center gap-1 transition-colors hover:text-fg-subtle"
+        className="flex items-center gap-1 transition-colors hover:text-fg"
         onClick={onToggle}
         type="button"
       >

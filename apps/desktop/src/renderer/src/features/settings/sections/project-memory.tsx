@@ -166,13 +166,13 @@ function ExternalMemoryReference({ reference }: { reference: ProjectMemoryExtern
             <span className="flex min-w-0 flex-col">
               <span className="block max-w-full truncate">{label}</span>
               {reference.title?.trim() ? (
-                <span className="block max-w-full truncate text-2xs text-fg-faint">{href}</span>
+                <span className="block max-w-full truncate text-2xs text-fg-muted">{href}</span>
               ) : null}
             </span>
             <IconExternalLink aria-hidden className="shrink-0" size={12} />
           </a>
         ) : (
-          <span className="mt-1 block max-w-full truncate text-xs text-fg-faint">
+          <span className="mt-1 block max-w-full truncate text-xs text-fg-muted">
             External URL unavailable
           </span>
         )}
@@ -445,7 +445,7 @@ export function ProjectMemoryRow({
           <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-fg-muted">
             {memory.claim}
           </p>
-          <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-2xs text-fg-faint">
+          <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-2xs text-fg-muted">
             <span>{projectMemoryCategoryLabel(memory.category)}</span>
             <span>Source: {projectMemorySourceLabel(memory)}</span>
             <span>Verification: {projectMemoryVerificationLabel(memory.verification)}</span>

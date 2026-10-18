@@ -429,7 +429,7 @@ function SubagentList({
                     <LineDelta added={stats.added} removed={stats.removed} />
                   ) : null}
                 </div>
-                <div className="truncate text-fg-faint text-xs">
+                <div className="truncate text-fg-muted text-xs">
                   {subagentMeta(session, models)}
                 </div>
               </div>
@@ -594,7 +594,7 @@ function WorktreeActionButton({
     >
       <span
         className={`flex size-[18px] shrink-0 items-center justify-center rounded-full font-semibold text-2xs ${
-          recommended ? "bg-build text-build-fg" : "border border-hairline text-fg-faint"
+          recommended ? "bg-build text-build-fg" : "border border-hairline text-fg-muted"
         }`}
       >
         {index}
@@ -651,7 +651,7 @@ function SubagentConflictChoiceCard({
           type="button"
         >
           {busy === "resolve" ? "Asking root..." : "Ask root to resolve"}
-          <span className="mt-0.5 block text-fg-faint text-xs">
+          <span className="mt-0.5 block text-fg-muted text-xs">
             Send the conflict context to the root agent.
           </span>
         </button>
@@ -662,7 +662,7 @@ function SubagentConflictChoiceCard({
           type="button"
         >
           {busy === "abort" ? "Aborting..." : "Abort apply"}
-          <span className="mt-0.5 block text-fg-faint text-xs">
+          <span className="mt-0.5 block text-fg-muted text-xs">
             Run git merge --abort and return this worktree to ready.
           </span>
         </button>
@@ -673,7 +673,7 @@ function SubagentConflictChoiceCard({
           type="button"
         >
           Resolve myself
-          <span className="mt-0.5 block text-fg-faint text-xs">
+          <span className="mt-0.5 block text-fg-muted text-xs">
             Close this panel without changing Git state.
           </span>
         </button>

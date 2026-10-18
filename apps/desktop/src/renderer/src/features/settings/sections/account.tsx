@@ -287,7 +287,7 @@ export function AccountSettingsPanel({
           <div className="space-y-4">
             <div className="flex items-center gap-3" aria-hidden="true">
               <span className="h-px flex-1 bg-hairline" />
-              <span className="text-xs text-fg-faint">{t("settings.account.orDivider")}</span>
+              <span className="text-xs text-fg-muted">{t("settings.account.orDivider")}</span>
               <span className="h-px flex-1 bg-hairline" />
             </div>
             <fieldset className="grid min-w-0 grid-cols-1 gap-2">

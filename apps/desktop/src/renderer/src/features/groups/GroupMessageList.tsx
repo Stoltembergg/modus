@@ -457,7 +457,7 @@ export function GroupMessageList({
     return (
       <div className="flex items-center gap-3 py-1" data-testid="group-day-separator" key={key}>
         <span className="h-px flex-1 bg-hairline" />
-        <span className="shrink-0 text-2xs text-fg-faint">{label}</span>
+        <span className="shrink-0 text-2xs text-fg-muted">{label}</span>
         <span className="h-px flex-1 bg-hairline" />
       </div>
     );

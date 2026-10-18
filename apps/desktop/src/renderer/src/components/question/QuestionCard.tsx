@@ -84,7 +84,7 @@ function StatusBadge({ status }: { status: QuestionCardStatus }) {
     <span
       className={cn(
         "rounded bg-chip px-1.5 py-0.5 text-2xs",
-        status === "expired" ? "text-fg-faint" : "text-success",
+        status === "expired" ? "text-fg-muted" : "text-success",
       )}
       data-status={status}
     >
@@ -103,7 +103,7 @@ function CardHeader({
   children?: ReactNode;
 }) {
   return (
-    <div className="flex h-7 items-center justify-between gap-2 border-hairline border-b px-3.5 text-fg-faint text-xs">
+    <div className="flex h-7 items-center justify-between gap-2 border-hairline border-b px-3.5 text-fg-muted text-xs">
       <div className="inline-flex items-center gap-1.5">
         {icon}
         {label}
@@ -356,7 +356,7 @@ function QuestionMode({
                     className={cn(
                       "flex size-[18px] shrink-0 items-center justify-center font-semibold text-2xs",
                       kind === "multi" ? "rounded" : "rounded-full",
-                      selected ? "bg-build text-build-fg" : "border border-hairline text-fg-faint",
+                      selected ? "bg-build text-build-fg" : "border border-hairline text-fg-muted",
                     )}
                   >
                     {optionIndex + 1}
@@ -637,7 +637,7 @@ function ApprovalMode({
                       ? deny
                         ? "bg-danger text-white"
                         : "bg-build text-build-fg"
-                      : "border border-hairline text-fg-faint",
+                      : "border border-hairline text-fg-muted",
                   )}
                 >
                   {choice.key}
@@ -773,12 +773,10 @@ function SummaryMode({ running = false, items, label, className }: QuestionCardS
           {items.map((item) => (
             <div className="min-w-0" key={item.id}>
               <div className="font-medium text-sm text-fg">{item.header}</div>
-              <div className="mt-0.5 text-fg-faint text-xs">
+              <div className="mt-0.5 text-fg-muted text-xs">
                 {item.answer || "—"}
                 {item.recommended ? (
-                  <span className="ml-1.5 text-fg-faint/70">
-                    {t("settings.question.recommended")}
-                  </span>
+                  <span className="ml-1.5 text-fg-muted">{t("settings.question.recommended")}</span>
                 ) : null}
               </div>
             </div>

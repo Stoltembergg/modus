@@ -234,7 +234,7 @@ function TaskCheckRow({
           >
             {task.title}
           </div>
-          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-2xs text-fg-faint">
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-2xs text-fg-muted">
             {badge ? (
               <span className="text-fg-muted" data-testid="task-status-badge">
                 {badge}

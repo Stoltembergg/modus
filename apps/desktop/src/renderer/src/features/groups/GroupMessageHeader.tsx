@@ -52,7 +52,7 @@ export function GroupMessageHeader({
     >
       {avatar}
       <span className="font-medium text-fg">{name}</span>
-      {memberRole?.trim() ? <span className="text-fg-faint">{memberRole.trim()}</span> : null}
+      {memberRole?.trim() ? <span className="text-fg-muted">{memberRole.trim()}</span> : null}
       <span aria-hidden className="text-fg-faint" data-testid="group-message-header-dot">
         ·
       </span>
@@ -88,7 +88,7 @@ function deliveryTone(state: GroupDeliveryState): string {
   if (state === "waiting") return "text-amber-400";
   if (state === "failed") return "text-danger";
   if (state === "working") return "text-fg-muted";
-  return "text-fg-faint";
+  return "text-fg-muted";
 }
 
 function memberTitle(sessionId: string, labels: ReadonlyMap<string, MemberLabel>): string {

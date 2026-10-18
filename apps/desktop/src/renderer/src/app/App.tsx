@@ -1701,7 +1701,7 @@ function WorkspaceMenu({
                     </span>
                     <span className="flex min-w-0 flex-1 flex-col">
                       <span className="truncate">{workspace.displayName}</span>
-                      <span className="truncate text-2xs text-fg-faint">{workspace.rootPath}</span>
+                      <span className="truncate text-2xs text-fg-muted">{workspace.rootPath}</span>
                     </span>
                   </Menu.Item>
                 );
