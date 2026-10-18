@@ -70,6 +70,28 @@ afterEach(() => {
 });
 
 describe("ToolFilterSetting", () => {
+  it("default state (no stored choice) renders on, with no prompt and no enable call", async () => {
+    const { api } = setupBridge();
+    render(<ToolFilterSetting />);
+
+    const toggle = await screen.findByRole("switch", { name: "Local tool filter" });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(screen.queryByRole("heading", { name: "Turn on local tool filter" })).toBeNull();
+    expect(api.enable).not.toHaveBeenCalled();
+  });
+
+  it("turning the default off calls disable directly", async () => {
+    const { api } = setupBridge();
+    const user = userEvent.setup();
+    render(<ToolFilterSetting />);
+
+    const toggle = await screen.findByRole("switch", { name: "Local tool filter" });
+    await user.click(toggle);
+
+    expect(api.disable).toHaveBeenCalledTimes(1);
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+  });
+
   it("renders off state correctly", async () => {
     setupBridge({ enabled: false });
     render(<ToolFilterSetting />);

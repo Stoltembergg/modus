@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -138,21 +138,184 @@ describe("staticToolFilterAvailability", () => {
 });
 
 describe("tool filter controller", () => {
-  it("OFF by default: nothing spawned, nothing downloaded, the turn filter is off", async () => {
-    const { c, spawn, ensureFiles } = controller();
+  it("ON by default: a fresh install (no preference file) probes, downloads and loads in the background at startup", async () => {
+    const { c, spawn, ensureFiles, worker, userDataDir } = controller();
+    expect(c.getState().enabled).toBe(true);
+    c.start();
+    await settle();
+    await settle();
+    expect(spawn).toHaveBeenCalled();
+    expect(worker.posted.slice(0, 2)).toEqual(["probe", "load"]);
+    expect(ensureFiles).toHaveBeenCalledTimes(1);
+    expect(c.getState()).toMatchObject({
+      enabled: true,
+      availability: { available: true },
+      download: { phase: "ready" },
+      model: "ready",
+      downloadBytes: manifestBytes(),
+    });
+    expect(c.turnFilter.enabled()).toBe(true);
+    // The default is not a stored choice: nothing is written until the user flips the switch.
+    expect(() => readFileSync(join(userDataDir, TOOL_FILTER_FILE_NAME))).toThrow();
+    c.dispose();
+  });
+
+  it("an unreadable preference file reads as the default (ON)", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "modus-tool-filter-"));
+    dirs.push(userDataDir);
+    writeFileSync(join(userDataDir, TOOL_FILTER_FILE_NAME), "{not json");
+    const { c, ensureFiles } = controller({ userDataDir });
+    c.start();
+    await settle();
+    await settle();
+    expect(c.getState().enabled).toBe(true);
+    expect(ensureFiles).toHaveBeenCalledTimes(1);
+    c.dispose();
+  });
+
+  it("a legacy `enabled: false` without `userSet` reads as the default (ON) and starts the download", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "modus-tool-filter-"));
+    dirs.push(userDataDir);
+    writeFileSync(
+      join(userDataDir, TOOL_FILTER_FILE_NAME),
+      `${JSON.stringify({ enabled: false })}\n`,
+    );
+    const { c, ensureFiles } = controller({ userDataDir });
+    c.start();
+    await settle();
+    await settle();
+    expect(c.getState()).toMatchObject({ enabled: true, model: "ready" });
+    expect(ensureFiles).toHaveBeenCalledTimes(1);
+    c.dispose();
+  });
+
+  it("a user-chosen `enabled: false` (`userSet: true`) stays off: nothing spawned, nothing downloaded", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "modus-tool-filter-"));
+    dirs.push(userDataDir);
+    writeFileSync(
+      join(userDataDir, TOOL_FILTER_FILE_NAME),
+      `${JSON.stringify({ enabled: false, userSet: true })}\n`,
+    );
+    const { c, spawn, ensureFiles } = controller({ userDataDir });
     c.start();
     await settle();
     expect(c.getState()).toMatchObject({
       enabled: false,
-      availability: { available: true },
       download: { phase: "idle" },
       model: "stopped",
-      downloadBytes: manifestBytes(),
-      partialBytes: 0,
     });
     expect(c.turnFilter.enabled()).toBe(false);
     expect(spawn).not.toHaveBeenCalled();
     expect(ensureFiles).not.toHaveBeenCalled();
+  });
+
+  it("a user-chosen `enabled: true` (`userSet: true`) is on", async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), "modus-tool-filter-"));
+    dirs.push(userDataDir);
+    writeFileSync(
+      join(userDataDir, TOOL_FILTER_FILE_NAME),
+      `${JSON.stringify({ enabled: true, userSet: true })}\n`,
+    );
+    const { c, ensureFiles } = controller({ userDataDir });
+    c.start();
+    await settle();
+    await settle();
+    expect(c.getState()).toMatchObject({ enabled: true, model: "ready" });
+    expect(ensureFiles).toHaveBeenCalledTimes(1);
+    c.dispose();
+  });
+
+  it.each([
+    ["Intel Mac", { available: false, reason: "intel-mac" }],
+    ["Windows without VC++", { available: false, reason: "vc-runtime-missing" }],
+    ["unsupported platform", { available: false, reason: "unsupported-platform" }],
+  ] as const)("%s: the default stays silently inactive at startup (no spawn, no download)", async (_name, availability) => {
+    const { c, spawn, ensureFiles, userDataDir } = controller({ availability: () => availability });
+    expect(() => c.start()).not.toThrow();
+    await settle();
+    expect(c.getState()).toMatchObject({ enabled: false, availability });
+    expect(c.turnFilter.enabled()).toBe(false);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(ensureFiles).not.toHaveBeenCalled();
+    expect(
+      await c.turnFilter.select({ query: "q", tools: [{ name: "a", doc: "a" }], k: 1 }),
+    ).toMatchObject({ tools: ["a"], filtered: false, fallback: "disabled" });
+    expect(() => readFileSync(join(userDataDir, TOOL_FILTER_FILE_NAME))).toThrow();
+  });
+
+  it("a failed load probe at startup is not persisted: nothing downloads and the next launch checks again", async () => {
+    const { c, ensureFiles, userDataDir } = controller({ probeFails: true });
+    c.start();
+    await settle();
+    await settle();
+    expect(c.getState()).toMatchObject({
+      enabled: false,
+      availability: { available: false, reason: "runtime-load-failed" },
+    });
+    expect(ensureFiles).not.toHaveBeenCalled();
+    expect(() => readFileSync(join(userDataDir, TOOL_FILTER_FILE_NAME))).toThrow();
+    const next = createToolFilterController({
+      userDataDir,
+      spawn: () => fakeWorker().proc,
+      availability: () => ({ available: true }),
+      forced: () => false,
+      ensureFiles: async () => undefined,
+      log: () => undefined,
+    });
+    expect(next.getState().enabled).toBe(true);
+    next.dispose();
+  });
+
+  it.each([
+    ["offline", new LocalModelError("download-failed", "getaddrinfo ENOTFOUND")],
+    [
+      "low disk space",
+      new LocalModelError(
+        "download-failed",
+        "Failed to download model.onnx: ENOSPC: no space left on device",
+      ),
+    ],
+    [
+      "raw ENOSPC creating the folder",
+      Object.assign(new Error("ENOSPC: no space left on device, mkdir"), { code: "ENOSPC" }),
+    ],
+  ])("background download failure (%s) is silent: all tools are sent and it retries later by itself", async (_name, error) => {
+    let calls = 0;
+    const ensureFiles = vi.fn<EnsureFiles>(async () => {
+      calls++;
+      if (calls === 1) throw error;
+    });
+    const { c } = controller({ ensureFiles, retryDelaysMs: [20] });
+    c.start();
+    await settle();
+    await settle();
+    // No error in the state the Settings row reads: nothing red, no retry button.
+    expect(c.getState()).toMatchObject({
+      enabled: true,
+      download: { phase: "idle" },
+      model: "stopped",
+    });
+    expect(c.ranker.status()).toMatchObject({ state: "failed", retryAt: expect.any(Number) });
+    expect(
+      await c.turnFilter.select({
+        query: "q",
+        tools: [
+          { name: "a", doc: "a" },
+          { name: "b", doc: "b" },
+        ],
+        k: 1,
+      }),
+    ).toMatchObject({ tools: ["a", "b"], filtered: false });
+    await vi.waitFor(() => expect(ensureFiles).toHaveBeenCalledTimes(2), { timeout: 2000 });
+    await settle();
+    await settle();
+    expect(ensureFiles).toHaveBeenCalledTimes(2);
+    expect(c.getState()).toMatchObject({
+      enabled: true,
+      download: { phase: "ready" },
+      model: "ready",
+    });
+    c.dispose();
   });
 
   it("enable: persists, probes in the model process, downloads, loads; disable stops the process", async () => {
@@ -164,6 +327,7 @@ describe("tool filter controller", () => {
     await settle();
     expect(JSON.parse(readFileSync(join(userDataDir, TOOL_FILTER_FILE_NAME), "utf8"))).toEqual({
       enabled: true,
+      userSet: true,
     });
     expect(worker.posted.slice(0, 2)).toEqual(["probe", "load"]);
     expect(ensureFiles).toHaveBeenCalledTimes(1);
@@ -184,6 +348,7 @@ describe("tool filter controller", () => {
     expect(c.host.running()).toBe(false);
     expect(JSON.parse(readFileSync(join(userDataDir, TOOL_FILTER_FILE_NAME), "utf8"))).toEqual({
       enabled: false,
+      userSet: true,
     });
   });
 
@@ -282,7 +447,7 @@ describe("tool filter controller", () => {
     release();
   });
 
-  it("download-failed shows as failed and retries by itself; hash-mismatch is failed and terminal", async () => {
+  it("download-failed stays silent while it retries by itself; hash-mismatch is failed and terminal", async () => {
     const offline = controller({
       ensureFiles: vi.fn<EnsureFiles>(async () => {
         throw new LocalModelError("download-failed", "getaddrinfo ENOTFOUND");
@@ -290,10 +455,7 @@ describe("tool filter controller", () => {
     });
     await offline.c.enable();
     await settle();
-    expect(offline.c.getState().download).toMatchObject({
-      phase: "failed",
-      error: "download-failed",
-    });
+    expect(offline.c.getState().download).toEqual({ phase: "idle" });
     expect(offline.c.ranker.status()).toMatchObject({
       state: "failed",
       retryAt: expect.any(Number),

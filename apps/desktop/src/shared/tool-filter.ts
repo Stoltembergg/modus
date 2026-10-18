@@ -1,7 +1,7 @@
 /**
  * Local tool filter (RERANK-03) state shared by main, preload and the Settings
- * UI. `enabled` is tool_filter.enabled, a persisted preference that is OFF by
- * default. While the filter is off, unavailable, downloading, or not ready, every
+ * UI. `enabled` is tool_filter.enabled, a persisted preference that is ON by
+ * default (only an explicit user "off" is stored as off). While the filter is off, unavailable, downloading, or not ready, every
  * request carries all tools (today's behaviour).
  */
 export type ToolFilterUnavailableReason =
@@ -40,7 +40,7 @@ export type ToolFilterState = {
 };
 
 export const DEFAULT_TOOL_FILTER_STATE: ToolFilterState = {
-  enabled: false,
+  enabled: true,
   availability: { available: true },
   download: { phase: "idle" },
   model: "stopped",
