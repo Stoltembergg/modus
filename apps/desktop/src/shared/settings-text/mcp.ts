@@ -15,9 +15,9 @@ export const MCP_TEXT_EN = {
   "settings.mcp.reaStatusFailed": "REA couldn’t start.",
   "settings.mcp.reaDescription": "Reverse-engineering tools for your Modus sessions.",
   "settings.mcp.reaNote":
-    "The first approved REA tool call may use Node.js and npm to download the pinned package. Enabling REA does not start it. REA uses your normal user access; it is not a sandbox.",
+    "The first REA tool call may use Node.js and npm to download the pinned package. Enabling REA does not start it. REA uses your normal user access; it is not a sandbox.",
   "settings.mcp.reaRetryHint":
-    "Retry clears this error. REA starts only after the next approved tool call.",
+    "Retry clears this error. REA starts only on the next REA tool call.",
   "settings.mcp.reaReadSettingError":
     "Could not read the saved REA setting. The integration stays off until the setting is available.",
   "settings.mcp.reaRetry": "Retry",
@@ -117,9 +117,9 @@ export const MCP_TEXT_PT: Record<keyof typeof MCP_TEXT_EN, string> = {
   "settings.mcp.reaStatusFailed": "Não foi possível iniciar o REA.",
   "settings.mcp.reaDescription": "Ferramentas de engenharia reversa para suas sessões do Modus.",
   "settings.mcp.reaNote":
-    "A primeira chamada de ferramenta aprovada do REA pode usar Node.js e npm para baixar o pacote fixado. Ativar o REA não o inicia. O REA usa seu acesso normal de usuário; não é uma sandbox.",
+    "A primeira chamada de ferramenta do REA pode usar Node.js e npm para baixar o pacote fixado. Ativar o REA não o inicia. O REA usa seu acesso normal de usuário; não é uma sandbox.",
   "settings.mcp.reaRetryHint":
-    "Tentar de novo limpa este erro. O REA só inicia após a próxima chamada de ferramenta aprovada.",
+    "Tentar de novo limpa este erro. O REA só inicia na próxima chamada de ferramenta do REA.",
   "settings.mcp.reaReadSettingError":
     "Não foi possível ler a configuração salva do REA. A integração continuará desativada até a configuração ficar disponível.",
   "settings.mcp.reaRetry": "Tentar de novo",

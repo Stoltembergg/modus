@@ -158,3 +158,56 @@ describe("browser_cdp approval payload", () => {
     expect(result).toMatchObject({ block: true });
   });
 });
+
+describe("REA on a fresh install", () => {
+  beforeAll(async () => {
+    const { registerReaTools } = await import("./tools/rea-tools");
+    registerReaTools();
+  });
+
+  it("is on by default and its calls run with no approval prompt in the default approval mode", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { ReaSettingsStore } = await import("../mcp/rea-settings");
+    const { DEFAULT_APPROVAL_MODE } = await import("../../shared/approval");
+    const home = mkdtempSync(join(tmpdir(), "modus-rea-fresh-"));
+    try {
+      expect(new ReaSettingsStore(home).get()).toEqual({ enabled: true, settingsError: false });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+
+    permissionMocks.getApprovalMode.mockReturnValue(DEFAULT_APPROVAL_MODE);
+    permissionMocks.findWorkspaceAllowDecision.mockReset().mockReturnValue(undefined);
+    permissionMocks.requestPermission.mockClear();
+    let toolCallHandler: ((event: ToolCallEvent) => Promise<unknown>) | undefined;
+    createModusPermissionExtension(
+      "rea-fresh-session",
+      () => {},
+      "/worktree/path",
+      undefined,
+      undefined,
+      undefined,
+      "workspace-a",
+    )({
+      on(event: string, handler: unknown) {
+        if (event === "tool_call") toolCallHandler = handler as typeof toolCallHandler;
+      },
+    } as never);
+
+    for (const [toolName, input] of [
+      ["rea_tools", { query: "pe" }],
+      ["rea_call", { operation: "inspect_native_load_image", arguments: { path: "a.bin" } }],
+    ] as const) {
+      const result = await toolCallHandler?.({
+        type: "tool_call",
+        toolCallId: `${toolName}-1`,
+        toolName,
+        input,
+      } as unknown as ToolCallEvent);
+      expect(result).toBeUndefined();
+    }
+    expect(permissionMocks.requestPermission).not.toHaveBeenCalled();
+  });
+});

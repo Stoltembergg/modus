@@ -1,7 +1,7 @@
 /**
  * Local tool filter (RERANK-03) state shared by main, preload and the Settings
- * UI. `enabled` is tool_filter.enabled, a persisted preference that is OFF by
- * default. While the filter is off, unavailable, downloading, or not ready, every
+ * UI. `enabled` is tool_filter.enabled, a persisted preference that is ON by
+ * default (only an explicit user "off" is stored as off). While the filter is off, unavailable, downloading, or not ready, every
  * request carries all tools (today's behaviour).
  */
 export type ToolFilterUnavailableReason =
@@ -33,14 +33,14 @@ export type ToolFilterState = {
   availability: ToolFilterAvailability;
   download: ToolFilterDownload;
   model: ToolFilterModel;
-  /** Total download size in bytes (shown in the confirmation prompt). */
+  /** Total download size in bytes. */
   downloadBytes: number;
   /** Bytes already on disk from an earlier, cancelled download (it resumes from here). */
   partialBytes: number;
 };
 
 export const DEFAULT_TOOL_FILTER_STATE: ToolFilterState = {
-  enabled: false,
+  enabled: true,
   availability: { available: true },
   download: { phase: "idle" },
   model: "stopped",
@@ -51,7 +51,7 @@ export const DEFAULT_TOOL_FILTER_STATE: ToolFilterState = {
 /** Preload bridge (`window.modus.toolFilter`). */
 export type ToolFilterApi = {
   get(): Promise<ToolFilterState>;
-  /** Turn the filter on (after the user confirmed the download) and start/resume the download. */
+  /** Turn the filter on and start/resume the background download (no confirmation). */
   enable(): Promise<ToolFilterState>;
   /** Turn the filter off. Stops the model process; downloaded files are kept. */
   disable(): Promise<ToolFilterState>;

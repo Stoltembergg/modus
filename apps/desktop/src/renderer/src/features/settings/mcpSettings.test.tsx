@@ -44,7 +44,7 @@ describe("built-in REA settings row", () => {
       "true",
     );
     expect(container.textContent).toContain("Ready when needed");
-    expect(container.textContent).toContain("first approved REA tool call");
+    expect(container.textContent).toContain("first REA tool call");
     expect(container.textContent).toContain("not a sandbox");
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });

@@ -10,12 +10,6 @@ export const TOOL_FILTER_TEXT_EN = {
   "settings.toolFilter.unavailableRuntimeLoadFailed":
     "The on-device model runtime could not start on this computer.",
   "settings.toolFilter.unavailableUnsupportedPlatform": "Not available on this platform.",
-  "settings.toolFilter.confirmTitle": "Turn on local tool filter",
-  "settings.toolFilter.confirmDesc":
-    "Modus downloads the on-device model once, about {size} MB. It runs only on this device. Until the download finishes and passes verification, requests send all tools, as today.",
-  "settings.toolFilter.resumeLine": "{size} MB already downloaded; it will resume.",
-  "settings.toolFilter.confirmButton": "Download and turn on",
-  "settings.toolFilter.cancelButton": "Cancel",
   "settings.toolFilter.downloadProgress": "{received} of {total} MB ({percent}%)",
   "settings.toolFilter.cancelDownloadButton": "Cancel download",
   "settings.toolFilter.verifying": "Verifying files…",
@@ -42,12 +36,6 @@ export const TOOL_FILTER_TEXT_PT: Record<keyof typeof TOOL_FILTER_TEXT_EN, strin
   "settings.toolFilter.unavailableRuntimeLoadFailed":
     "O ambiente de execução do modelo local não pôde ser iniciado neste computador.",
   "settings.toolFilter.unavailableUnsupportedPlatform": "Não disponível nesta plataforma.",
-  "settings.toolFilter.confirmTitle": "Ativar filtro local de ferramentas",
-  "settings.toolFilter.confirmDesc":
-    "O Modus baixa o modelo local uma única vez, cerca de {size} MB. Ele roda só neste dispositivo. Até o download terminar e passar na verificação, as solicitações enviam todas as ferramentas, como hoje.",
-  "settings.toolFilter.resumeLine": "{size} MB já baixados; o download continuará de onde parou.",
-  "settings.toolFilter.confirmButton": "Baixar e ativar",
-  "settings.toolFilter.cancelButton": "Cancelar",
   "settings.toolFilter.downloadProgress": "{received} de {total} MB ({percent}%)",
   "settings.toolFilter.cancelDownloadButton": "Cancelar download",
   "settings.toolFilter.verifying": "Verificando arquivos…",

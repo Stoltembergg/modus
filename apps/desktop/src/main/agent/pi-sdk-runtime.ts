@@ -80,9 +80,13 @@ import type { ToolSelection } from "../local-models/tool-ranker";
 import {
   CORE_TOOL_NAMES,
   getTurnToolFilter,
+  logToolsExpand,
+  logTurnToolFilter,
   TOOL_FILTER_TOP_K,
+  type TurnToolFilterFallbackCause,
   toolDocShort,
   turnToolFilterEnabled,
+  turnToolFilterNow,
 } from "../local-models/turn-tool-filter";
 import { listAllowlistedMcpToolNames } from "../mcp/mcp-service";
 import {
@@ -1065,6 +1069,12 @@ export class PiSdkRuntime implements AgentRuntime {
   private exposedToolNames = new Map<string, string[]>();
   /** RERANK-03: the first-turn selection per session (diagnostics and tests). */
   private toolFilterSelections = new Map<string, ToolSelection>();
+  /**
+   * Log-only: top-level sessions whose first turn the filter decided in this app
+   * run, with that decision's mode and the session's turn count since (for the
+   * tools_expand log line). Counts only.
+   */
+  private toolFilterLogState = new Map<string, { after: "filtered" | "fallback"; turn: number }>();
   /** Tools the current turn may actually call (mode, group membership, subagent limits). */
   private turnToolLimits = new Map<string, TurnToolLimits>();
   private turnSettledListeners = new Set<(event: TurnSettledEvent) => void>();
@@ -4224,6 +4234,8 @@ export class PiSdkRuntime implements AgentRuntime {
       // RERANK-03: with the local tool filter on, the first turn narrows it.
       const toolDecision = await this.decideTurnToolFilter(runtimeSession, profile, input.message);
       this.applyTurnToolSet(runtimeSession, profile, toolDecision);
+      const filterLog = this.toolFilterLogState.get(input.sessionId);
+      if (filterLog) filterLog.turn += 1;
 
       // Per-turn model + thinking: the composer's current selection travels with
       // the prompt and is applied authoritatively here, so the turn never runs
@@ -5451,21 +5463,50 @@ export class PiSdkRuntime implements AgentRuntime {
     if (!filter?.enabled() || runtimeSession.info.parentSessionId) return { mode: "off" };
     const sessionId = runtimeSession.info.id;
     if (this.exposedToolNames.has(sessionId)) return { mode: "on", selected: [] };
+    // One log line for this decision: counts, ms and a reason word only (no text, names or ids).
+    let of = 0;
+    let coreSent = 0;
+    const started = turnToolFilterNow();
+    const fallback = (cause: TurnToolFilterFallbackCause): void => {
+      this.toolFilterLogState.set(sessionId, { after: "fallback", turn: 0 });
+      logTurnToolFilter({
+        mode: "fallback",
+        cause,
+        sent: of,
+        of,
+        core: coreSent,
+        ms: turnToolFilterNow() - started,
+      });
+    };
     try {
       const allowed = activeToolNamesForSession(runtimeSession.info, profile);
       const core = new Set<string>([...CORE_TOOL_NAMES, TOOLS_EXPAND_TOOL_NAME]);
+      coreSent = allowed.filter((name) => core.has(name)).length;
       const described = new Map(
         runtimeSession.session.getAllTools().map((tool) => [tool.name, tool.description]),
       );
       const pool = allowed
         .filter((name) => !core.has(name) && !isGoalToolName(name))
         .map((name) => ({ name, doc: toolDocShort(name, described.get(name)) }));
+      of = pool.length;
       const selection = await filter.select({ query: message, tools: pool, k: TOOL_FILTER_TOP_K });
       this.toolFilterSelections.set(sessionId, selection);
-      return selection.filtered
-        ? { mode: "on", selected: selection.tools, selection }
-        : { mode: "fallback", selection };
+      if (selection.filtered) {
+        const inPool = new Set(pool.map((tool) => tool.name));
+        this.toolFilterLogState.set(sessionId, { after: "filtered", turn: 0 });
+        logTurnToolFilter({
+          mode: "filtered",
+          sent: selection.tools.filter((name) => inPool.has(name)).length,
+          of,
+          core: coreSent,
+          ms: turnToolFilterNow() - started,
+        });
+        return { mode: "on", selected: selection.tools, selection };
+      }
+      fallback(selection.fallback ?? "unknown");
+      return { mode: "fallback", selection };
     } catch {
+      fallback("exception");
       return { mode: "fallback" };
     }
   }
@@ -5478,6 +5519,11 @@ export class PiSdkRuntime implements AgentRuntime {
     const previous = this.exposedToolNames.get(sessionId) ?? [];
     const exposed = growOnlyToolNames(previous, [...limits.allowed]);
     const added = exposed.slice(previous.length);
+    // One log line per call (counts only), for top-level sessions the filter decided.
+    const filterLog = this.toolFilterLogState.get(sessionId);
+    if (filterLog && turnToolFilterEnabled() && !runtimeSession.info.parentSessionId) {
+      logToolsExpand({ turn: filterLog.turn, added: added.length, after: filterLog.after });
+    }
     if (added.length === 0) return [];
     this.exposedToolNames.set(sessionId, exposed);
     runtimeSession.session.setActiveToolsByName(exposed);
@@ -6060,6 +6106,7 @@ export class PiSdkRuntime implements AgentRuntime {
     await this.disposeSessionOnly(sessionId);
     this.exposedToolNames.delete(sessionId);
     this.toolFilterSelections.delete(sessionId);
+    this.toolFilterLogState.delete(sessionId);
   }
 
   async releaseRuntime(sessionId: string): Promise<void> {
