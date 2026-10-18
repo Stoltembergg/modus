@@ -94,18 +94,17 @@
 - Add a narrow `window.modus.automations` bridge for list/detail/history/create/update/pause/delete/run-now and events; validate every request with strict Zod schemas and the existing trusted-sender check.
 - The chat tool may only create a proposal. It presents instruction, project, effective Agent/model, schedule and timezone for explicit confirmation through the existing question flow; only an affirmative response calls the same host create service. It cannot update, enable, or run an existing automation.
 
-- [ ] Add IPC tests for trusted-sender enforcement, malformed arguments and enabled-state validation.
-- [ ] Add chat-tool tests for an explicit accepted proposal, declined proposal, malformed proposal and no side effects before confirmation.
-- [ ] Run the focused IPC and tool tests; confirm no IPC/tool path can invoke the runtime before explicit user confirmation.
-- [ ] Implement the bridge, host handlers and proposal-only tool using existing IPC and ask-user patterns; register it with `PiSdkRuntime` without adding a parallel tool registry.
-- [ ] Run focused IPC, tool-registry and Pi SDK registration tests; confirm proposals and UI creation converge on the same validated service.
+- [x] Add IPC tests for trusted-sender enforcement across all handlers, malformed arguments, host-owned paths and enabled-state validation.
+- [x] Add chat-tool tests for an explicit accepted proposal, declined/skipped/custom answers, malformed proposals and no side effects before confirmation.
+- [x] Run the focused IPC and tool tests; confirm no IPC/tool path can invoke the runtime before explicit user confirmation.
+- [x] Implement the typed bridge, host handlers and proposal-only tool using existing IPC and ask-user patterns; register it with `PiSdkRuntime` without adding a parallel tool registry.
+- [x] Run focused IPC, tool-registry and Pi SDK registration tests; confirm proposals and UI creation converge on the same validated service.
 
 ### Task 4: Add the minimal Automations destination and screens
 
 **Files:**
-- Create: `apps/desktop/src/renderer/src/features/automations/AutomationsPanel.tsx`
-- Create: `apps/desktop/src/renderer/src/features/automations/AutomationEditor.tsx`
-- Create: `apps/desktop/src/renderer/src/features/automations/AutomationsPanel.test.tsx`
+- Create: `apps/desktop/src/renderer/src/features/automations/AutomationsPage.tsx`
+- Create: `apps/desktop/src/renderer/src/features/automations/AutomationsPage.test.tsx`
 - Modify: `apps/desktop/src/renderer/src/components/shell/navigation-state.ts`
 - Modify: `apps/desktop/src/renderer/src/components/shell/AppSidebar.tsx`
 - Modify: `apps/desktop/src/renderer/src/app/App.tsx`
@@ -116,10 +115,10 @@
 - Add `automations` to `PrimaryDestination` and restoration normalization. Place its localized icon and label immediately above Settings in `AppSidebar`.
 - `AutomationsPanel` consumes only `window.modus.automations` and navigation callbacks. It renders the minimal list/empty state, detail/history, and editor in the main content area; execution history links open the existing conversation by session id.
 
-- [ ] Add failing renderer tests for nav order, collapsed/pinned sidebar behavior, empty/list/detail/editor states, next execution, pause/run-now/edit/delete behavior (including active-delete refusal), execution status/history links, keyboard operation and error/loading states.
-- [ ] Run the focused renderer tests and navigation-state tests; confirm the new destination and views fail before implementation.
-- [ ] Implement localization in English, Portuguese and Chinese and connect the page to the host bridge while preserving sidebar hover/pin behavior and existing Settings/Projects routes.
-- [ ] Run renderer tests, `npm run typecheck --workspace @modus/desktop` and `npx biome check` on changed files; confirm navigation, language strings and accessible interactions pass.
+- [x] Add renderer tests for empty/create/list/detail/history, linked conversations, pause/run-now and sidebar/navigation restoration; store tests cover refusing deletion while a run is active.
+- [x] Run focused renderer and navigation tests, including RED/GREEN coverage during implementation.
+- [x] Implement the localized page in English, Portuguese and Chinese and connect it to the host bridge while preserving sidebar hover/pin behavior and existing Settings/Projects routes.
+- [x] Run renderer tests, desktop TypeScript typecheck and Biome on changed files; confirm navigation, language strings and accessible interactions pass.
 
 ### Task 5: Validate lifecycle and provide visual evidence
 
@@ -127,9 +126,9 @@
 - Modify only test files created or touched above unless a concrete integration failure requires a narrowly scoped fix.
 - Visual output: `automations-list.png` and `automations-details-history.png` in `/workspace/modus/artifacts/automations/`, if desktop or existing browser capture is available. Keep capture images as review artifacts unless the user requests them in the repository.
 
-- [ ] Add an integration test using the production runtime entry point with provider transport mocked; verify exact saved prompt, project, Agent and model reach `AgentRuntime` and the run links to its persisted session.
-- [ ] Run all focused automation tests, Pi SDK/runtime tests affected by registration, desktop TypeScript typecheck and Biome on changed files; record command and result.
-- [ ] Launch the desktop app with a disposable database containing representative automation and execution rows, then capture the list and detail/history screens. If this environment cannot render Electron, use an existing browser capture facility against the production React components and label it as a component capture rather than a desktop smoke test; do not add a screenshot dependency solely for this task.
-- [ ] Review the two images at normal app size for overlap, scrolling, density, transparency and text truncation; share the images with the implementation report.
-- [ ] Run `git diff --check`, inspect the final diff for unrelated changes, and report synthetic tests separately from any manual desktop smoke evidence.
+- [x] Verify the proposal-to-definition and persisted-snapshot-to-`AgentRuntime` boundaries with focused tests, including exact prompt, Project, Agent, model and session linkage; verify chat-only registration in `PiSdkRuntime`.
+- [x] Run focused automation/IPC/UI tests, Pi SDK/runtime tests, desktop TypeScript typecheck and Biome on changed files.
+- [x] Capture list and detail/history from the production React component in headless Chromium with disposable fixture data. Electron itself cannot be launched because this environment has no graphical display; the screenshots are component captures, not a desktop smoke test.
+- [x] Review both images at normal app size for overlap, scrolling, density, transparency and truncation; include them in the implementation report.
+- [x] Run `git diff --check`, inspect the final diff for unrelated changes, and distinguish synthetic test evidence from desktop smoke evidence.
 

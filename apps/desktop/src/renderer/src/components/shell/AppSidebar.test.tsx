@@ -46,6 +46,16 @@ describe("AppSidebar", () => {
     expect(screen.queryByRole("button", { name: "Open workspace" })).toBeNull();
   });
 
+  it("offers Automations directly above Settings", () => {
+    const handlers = renderSidebar({ pinned: true });
+    const buttons = screen.getAllByRole("button");
+    const automation = screen.getByRole("button", { name: "Automations" });
+    const settings = screen.getByRole("button", { name: "Settings" });
+    expect(buttons.indexOf(automation)).toBeLessThan(buttons.indexOf(settings));
+    fireEvent.click(automation);
+    expect(handlers.onNavigate).toHaveBeenCalledWith("automations");
+  });
+
   function SettingsNavigation() {
     const [slot, setSlot] = useState<HTMLDivElement | null>(null);
     const [section, setSection] = useState<SettingsSectionId>("general");

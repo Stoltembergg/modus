@@ -27,6 +27,15 @@ describe("primary navigation", () => {
     });
   });
 
+  it("returns from Settings to Automations when that was the last destination", () => {
+    const automations = navigatePrimary(INITIAL_PRIMARY_NAVIGATION, "automations");
+    const settings = navigatePrimary(automations, "settings");
+    expect(closeSettingsNavigation(settings)).toEqual({
+      active: "automations",
+      settingsReturnTo: "automations",
+    });
+  });
+
   it("restores Projects with or without an active chat", () => {
     for (const activeSessionId of ["session-1", null, undefined]) {
       expect(
@@ -49,5 +58,6 @@ describe("primary navigation", () => {
     expect(normalizePrimaryDestination("groups")).toBe("direct-messages");
     expect(normalizePrimaryDestination(undefined)).toBe("direct-messages");
     expect(normalizePrimaryDestination("settings")).toBe("settings");
+    expect(normalizePrimaryDestination("automations")).toBe("automations");
   });
 });
