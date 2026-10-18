@@ -1,3 +1,9 @@
 ﻿Vendored from https://github.com/morluto/rea
 npm package: rea-agents@6.5.0
 Copied from the package bundled skill: skills/reverse-engineer-anything
+Repository tag: rea-agents-6.5.0 (commit 3b79af28e80785afce9f5998d8f03289402a1847)
+npm tarball sha256: 531717a06e92ca651aab52691190f916fac044272c01f875e22c5e293218e699
+License: MIT, "Copyright (c) 2026 morluto" (identical in the repository at that tag and
+in the npm tarball, sha256 798f9e4d18e49b30bf2f12696c8ced73dc4e1413da375a333d01281543a1ea8b).
+Modified for Modus: SKILL.md gains an appended "Modus adapter" section; references/ is
+unmodified. A copy of the LICENSE ships in the skill folder.

@@ -52,7 +52,9 @@ SOFTWARE.
   `49f948faa9258a0c61caceaf225e179651397431`; `agents/openai.yaml` not included
 - Adapted in: `apps/desktop/resources/skills/define-goal/SKILL.md` (modified for Modus:
   adds `complete_goal` and the one-goal-per-session model); the original license ships
-  beside it as `apps/desktop/resources/skills/define-goal/LICENSE.txt`
+  beside it as `apps/desktop/resources/skills/define-goal/LICENSE.txt`, with a copy in
+  `apps/desktop/resources/licenses/openai-skills-define-goal-Apache-2.0.txt` (provenance in
+  `apps/desktop/resources/licenses/openai-skills-define-goal-PROVENANCE.txt`)
 - License: Apache-2.0 (upstream has no NOTICE file)
 
 ```
@@ -257,4 +259,93 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
+```
+
+## Superpowers (obra/superpowers)
+
+- Project: https://github.com/obra/superpowers
+- Components: 15 skills (`skills/<name>`), upstream commit
+  `bb92a77741419a4ab5f06e711a283343f1ada0c3`, copied unmodified
+- Included in: `apps/desktop/resources/skills/brainstorming`,
+  `apps/desktop/resources/skills/diagnosing-superpowers`,
+  `apps/desktop/resources/skills/dispatching-parallel-agents`,
+  `apps/desktop/resources/skills/executing-plans`,
+  `apps/desktop/resources/skills/finishing-a-development-branch`,
+  `apps/desktop/resources/skills/receiving-code-review`,
+  `apps/desktop/resources/skills/requesting-code-review`,
+  `apps/desktop/resources/skills/subagent-driven-development`,
+  `apps/desktop/resources/skills/systematic-debugging`,
+  `apps/desktop/resources/skills/test-driven-development`,
+  `apps/desktop/resources/skills/using-git-worktrees`,
+  `apps/desktop/resources/skills/using-superpowers`,
+  `apps/desktop/resources/skills/verification-before-completion`,
+  `apps/desktop/resources/skills/writing-plans`,
+  `apps/desktop/resources/skills/writing-skills`
+- Each skill folder carries the upstream `LICENSE`; a copy is also in
+  `apps/desktop/resources/licenses/superpowers-MIT.txt` (provenance in
+  `apps/desktop/resources/licenses/superpowers-PROVENANCE.txt`)
+- `writing-skills/anthropic-best-practices.md`: upstream's lightly edited copy of Anthropic's
+  "Skill authoring best practices" documentation
+  (https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices); the
+  original text is Anthropic's
+- License: MIT
+
+```
+MIT License
+
+Copyright (c) 2025 Jesse Vincent
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## REA (morluto/rea)
+
+- Project: https://github.com/morluto/rea (npm package `rea-agents@6.5.0`, repository tag
+  `rea-agents-6.5.0`, commit `3b79af28e80785afce9f5998d8f03289402a1847`)
+- Component: "reverse-engineer-anything" skill (`skills/reverse-engineer-anything`)
+- Adapted in: `apps/desktop/resources/skills/reverse-engineer-anything` (modified for Modus:
+  appended "Modus adapter" section in `SKILL.md`)
+- The skill folder carries the upstream `LICENSE`; a copy is also in
+  `apps/desktop/resources/licenses/rea-agents-MIT.txt` (provenance in
+  `apps/desktop/resources/licenses/rea-agents-PROVENANCE.txt`)
+- License: MIT
+
+```
+MIT License
+
+Copyright (c) 2026 morluto
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ```
