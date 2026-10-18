@@ -2,6 +2,8 @@ import { Menu } from "@base-ui/react/menu";
 import {
   IconArchive,
   IconArchiveOff,
+  IconArrowDown,
+  IconArrowUp,
   IconChevronRight,
   IconDots,
   IconEdit,
@@ -18,6 +20,7 @@ import {
 } from "@tabler/icons-react";
 import { AnimatePresence, m, useMotionValue, useReducedMotion } from "motion/react";
 import {
+  type ContextType,
   createContext,
   type DragEvent,
   type MouseEvent,
@@ -54,6 +57,7 @@ import {
   writeSessionOrder,
 } from "./sidebar-session-order";
 import { CollapsibleMotion } from "./ui/CollapsibleMotion";
+import { useHoldNavRail } from "./ui/NavRail";
 
 /** Former hidden group room sessions are never listed (all are converted by the PR 4 migration). */
 function isListedChat(session: AgentSessionInfo): boolean {
@@ -79,7 +83,6 @@ const SB_ROW =
 const SB_SESSION =
   "flex h-[30px] w-full items-center gap-2 rounded-md pr-1 pl-2 text-xs font-normal transition-colors";
 /** Relative timestamps / meta on session rows. */
-const SB_SESSION_META = "px-1 text-2xs font-normal text-fg-faint tabular-nums";
 const SB_NEST = "pl-5"; // 20px = one rail
 const SB_ICON = ICON.lg;
 const SB_STROKE = ICON_STROKE.lg;
@@ -95,6 +98,8 @@ const SessionMovement = createContext<{
   move(input: MoveAgentSessionInput, before?: string): Promise<void>;
   reorder(id: string, direction: -1 | 1): void;
 } | null>(null);
+
+type SessionMovementValue = NonNullable<ContextType<typeof SessionMovement>>;
 
 type SidebarProps = {
   /** The primary rail destination whose list belongs in this context panel. */
@@ -451,14 +456,8 @@ export function Sidebar({
                       : undefined
                   }
                   onRename={(title) => onRenameSession?.(session.id, title)}
-                  onArchive={(event) => {
-                    event.stopPropagation();
-                    onArchiveSession(session);
-                  }}
-                  onDelete={(event) => {
-                    event.stopPropagation();
-                    onDeleteSession(session);
-                  }}
+                  onArchive={() => onArchiveSession(session)}
+                  onDelete={() => onDeleteSession(session)}
                   title={session.title}
                   updatedAt={session.updatedAt}
                 />
@@ -632,14 +631,8 @@ export function Sidebar({
                           key={session.id}
                           activity={activityBySession[session.id]}
                           isActive={activeSessionId === session.id}
-                          onArchive={(event) => {
-                            event.stopPropagation();
-                            onArchiveSession(session);
-                          }}
-                          onDelete={(event) => {
-                            event.stopPropagation();
-                            onDeleteSession(session);
-                          }}
+                          onArchive={() => onArchiveSession(session)}
+                          onDelete={() => onDeleteSession(session)}
                           onPin={(event) => {
                             event.stopPropagation();
                             onPinSession(session, !session.pinnedAt);
@@ -793,14 +786,8 @@ function InboxChatsSection({
             key={session.id}
             activity={activityBySession[session.id]}
             isActive={activeSessionId === session.id}
-            onArchive={(event) => {
-              event.stopPropagation();
-              onArchiveSession(session);
-            }}
-            onDelete={(event) => {
-              event.stopPropagation();
-              onDeleteSession(session);
-            }}
+            onArchive={() => onArchiveSession(session)}
+            onDelete={() => onDeleteSession(session)}
             onPin={(event) => {
               event.stopPropagation();
               onPinSession(session, !session.pinnedAt);
@@ -972,14 +959,8 @@ function WorkspaceItem({
               agentId={session.agentId}
               activity={activityBySession[session.id]}
               isActive={activeSessionId === session.id}
-              onArchive={(event) => {
-                event.stopPropagation();
-                onArchiveSession(session);
-              }}
-              onDelete={(event) => {
-                event.stopPropagation();
-                onDeleteSession(session);
-              }}
+              onArchive={() => onArchiveSession(session)}
+              onDelete={() => onDeleteSession(session)}
               onPin={(event) => {
                 event.stopPropagation();
                 onPinSession(session, !session.pinnedAt);
@@ -1065,25 +1046,19 @@ function SessionRow({
   onPin(event: MouseEvent<HTMLButtonElement>): void;
   onRename(title: string): void;
   onEditProfile?: (() => void) | undefined;
-  onArchive(event: MouseEvent<HTMLButtonElement>): void;
-  onDelete(event: MouseEvent<HTMLButtonElement>): void;
+  onArchive(): void;
+  onDelete(): void;
 }) {
   const movement = useContext(SessionMovement);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
   const [displayTitle, setDisplayTitle] = useState(title);
   const [newTitle, setNewTitle] = useState(title);
   const renameCommittedRef = useRef(false);
 
   useEffect(() => setDisplayTitle(title), [title]);
-  useEffect(() => {
-    if (!confirmDelete) return;
-    const timeout = window.setTimeout(() => setConfirmDelete(false), 2500);
-    return () => window.clearTimeout(timeout);
-  }, [confirmDelete]);
 
-  const startRename = (event: MouseEvent<HTMLButtonElement>): void => {
-    event.stopPropagation();
+  const startRename = (): void => {
     renameCommittedRef.current = false;
     setIsRenaming(true);
     setNewTitle(displayTitle);
@@ -1116,14 +1091,9 @@ function SessionRow({
         "group",
         movement?.before === sessionId && "border-t border-accent",
         isActive ? "text-fg-subtle" : "text-fg-subtle hover:bg-hover hover:text-fg-muted",
+        menuOpen && !isActive && "bg-hover text-fg-muted",
       )}
       layout
-      onBlurCapture={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) {
-          setConfirmDelete(false);
-        }
-      }}
-      onMouseLeave={() => setConfirmDelete(false)}
       transition={LIST_MOTION}
     >
       <span className={cn(SB_RAIL, "relative")}>
@@ -1187,8 +1157,12 @@ function SessionRow({
           </span>
         </button>
       )}
-      <span className="ml-0.5 hidden shrink-0 items-center group-hover:flex group-focus-within:flex">
-        <span className={SB_SESSION_META}>{formatRelativeTime(updatedAt)}</span>
+      <span
+        className={cn(
+          "sidebar-row-actions ml-0.5 shrink-0 items-center",
+          menuOpen ? "flex" : "hidden group-hover:flex group-focus-within:flex",
+        )}
+      >
         <IconButton
           label={
             agentId ? (pinned ? "Unpin Agent" : "Pin Agent") : pinned ? "Unpin chat" : "Pin chat"
@@ -1201,83 +1175,156 @@ function SessionRow({
             <IconPin size={SB_ACTION} stroke={SB_ACTION_STROKE} />
           )}
         </IconButton>
-        {movement ? (
-          <Menu.Root>
-            <Menu.Trigger
-              aria-label="Move session"
-              className="flex size-6 items-center justify-center rounded-md text-fg-faint hover:bg-active hover:text-fg-muted"
-              disabled={movement.pending}
-            >
-              <IconDots aria-hidden size={SB_ACTION} stroke={SB_ACTION_STROKE} />
-            </Menu.Trigger>
-            <Menu.Portal>
-              <Menu.Positioner align="start" side="bottom" sideOffset={4}>
-                <Menu.Popup className="origin-(--transform-origin) min-w-[184px] popup-chrome popup-motion p-1">
-                  <ProjectMenuItem icon={null} onClick={() => movement.reorder(sessionId, -1)}>
-                    Move up
-                  </ProjectMenuItem>
-                  <ProjectMenuItem icon={null} onClick={() => movement.reorder(sessionId, 1)}>
-                    Move down
-                  </ProjectMenuItem>
-                  {movement.workspaces.map((workspace) => (
-                    <ProjectMenuItem
-                      key={workspace.id}
-                      icon={<IconFolder size={SB_ACTION} stroke={SB_ACTION_STROKE} />}
-                      onClick={() =>
-                        void movement.move({
-                          id: sessionId,
-                          workspaceId: workspace.id,
-                          pinned: false,
-                        })
-                      }
-                    >
-                      Move to {workspace.displayName}
-                    </ProjectMenuItem>
-                  ))}
-                </Menu.Popup>
-              </Menu.Positioner>
-            </Menu.Portal>
-          </Menu.Root>
-        ) : null}
-        <IconButton label="Rename session" onClick={startRename}>
-          <IconPencil size={SB_ACTION} stroke={SB_ACTION_STROKE} />
-        </IconButton>
-        {onEditProfile ? (
-          <IconButton
-            label="Edit agent profile"
-            onClick={(event) => {
-              event.stopPropagation();
-              onEditProfile();
-            }}
-          >
-            <IconUserEdit size={SB_ACTION} stroke={SB_ACTION_STROKE} />
-          </IconButton>
-        ) : null}
-        <IconButton label="Archive" onClick={onArchive}>
-          <IconArchive size={SB_ACTION} stroke={SB_ACTION_STROKE} />
-        </IconButton>
-        {confirmDelete ? (
-          <button
-            className="ml-0.5 h-5 rounded-md px-1.5 text-2xs text-danger transition-colors hover:bg-active"
-            onClick={onDelete}
-            type="button"
-          >
-            Confirm
-          </button>
-        ) : (
-          <IconButton
-            label="Delete"
-            onClick={(event) => {
-              event.stopPropagation();
-              setConfirmDelete(true);
-            }}
-          >
-            <IconTrash size={SB_ACTION} stroke={SB_ACTION_STROKE} />
-          </IconButton>
-        )}
+        <SessionActionsMenu
+          lastActive={formatRelativeTime(updatedAt)}
+          movement={movement}
+          onArchive={onArchive}
+          onDelete={onDelete}
+          onEditProfile={onEditProfile}
+          onOpenChange={setMenuOpen}
+          onRename={startRename}
+          open={menuOpen}
+          sessionId={sessionId}
+        />
       </span>
     </m.div>
   );
+}
+
+/**
+ * The "…" menu of a chat row: everything except Pin, which stays on the row as
+ * its one direct action. Delete asks for a second click inside the menu.
+ */
+function SessionActionsMenu({
+  sessionId,
+  lastActive,
+  movement,
+  open,
+  onOpenChange,
+  onRename,
+  onEditProfile,
+  onArchive,
+  onDelete,
+}: {
+  sessionId: string;
+  /** Compact age of the last activity, shown as the menu's caption. */
+  lastActive: string;
+  movement: SessionMovementValue | null;
+  open: boolean;
+  onOpenChange(open: boolean): void;
+  onRename(): void;
+  onEditProfile?: (() => void) | undefined;
+  onArchive(): void;
+  onDelete(): void;
+}) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  useHoldNavRail(open);
+  return (
+    <Menu.Root
+      onOpenChange={(nextOpen) => {
+        onOpenChange(nextOpen);
+        if (!nextOpen) setConfirmDelete(false);
+      }}
+      open={open}
+    >
+      <Menu.Trigger
+        aria-label="Chat actions"
+        className="flex size-6 items-center justify-center rounded-md text-fg-faint outline-none transition-colors hover:bg-active hover:text-fg-muted focus-visible:ring-2 focus-visible:ring-focus-ring data-popup-open:bg-active data-popup-open:text-fg-muted"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <IconDots aria-hidden size={SB_ACTION} stroke={SB_ACTION_STROKE} />
+      </Menu.Trigger>
+      <Menu.Portal>
+        <Menu.Positioner align="start" side="bottom" sideOffset={4}>
+          <Menu.Popup className="origin-(--transform-origin) min-w-[184px] popup-chrome popup-motion p-1">
+            {lastActive ? (
+              <div
+                className="px-2.5 pt-1 pb-1.5 text-2xs text-fg-faint tabular-nums"
+                data-testid="session-last-active"
+              >
+                {lastActive}
+              </div>
+            ) : null}
+            <ProjectMenuItem
+              icon={<IconPencil size={SB_ACTION} stroke={SB_ACTION_STROKE} />}
+              onClick={onRename}
+            >
+              Rename
+            </ProjectMenuItem>
+            {onEditProfile ? (
+              <ProjectMenuItem
+                icon={<IconUserEdit size={SB_ACTION} stroke={SB_ACTION_STROKE} />}
+                onClick={onEditProfile}
+              >
+                Edit agent profile
+              </ProjectMenuItem>
+            ) : null}
+            {movement ? (
+              <>
+                <ProjectMenuItem
+                  disabled={movement.pending}
+                  icon={<IconArrowUp size={SB_ACTION} stroke={SB_ACTION_STROKE} />}
+                  onClick={() => movement.reorder(sessionId, -1)}
+                >
+                  Move up
+                </ProjectMenuItem>
+                <ProjectMenuItem
+                  disabled={movement.pending}
+                  icon={<IconArrowDown size={SB_ACTION} stroke={SB_ACTION_STROKE} />}
+                  onClick={() => movement.reorder(sessionId, 1)}
+                >
+                  Move down
+                </ProjectMenuItem>
+                {movement.workspaces.map((workspace) => (
+                  <ProjectMenuItem
+                    disabled={movement.pending}
+                    icon={<IconFolder size={SB_ACTION} stroke={SB_ACTION_STROKE} />}
+                    key={workspace.id}
+                    onClick={() =>
+                      void movement.move({
+                        id: sessionId,
+                        workspaceId: workspace.id,
+                        pinned: false,
+                      })
+                    }
+                  >
+                    Move to {workspace.displayName}
+                  </ProjectMenuItem>
+                ))}
+              </>
+            ) : null}
+            <ProjectMenuItem
+              icon={<IconArchive size={SB_ACTION} stroke={SB_ACTION_STROKE} />}
+              onClick={onArchive}
+            >
+              Archive
+            </ProjectMenuItem>
+            <ProjectMenuItem
+              // Stay open on the first click so the confirm step is reachable.
+              closeOnClick={confirmDelete}
+              danger
+              icon={<IconTrash size={SB_ACTION} stroke={SB_ACTION_STROKE} />}
+              onClick={() => {
+                if (!confirmDelete) {
+                  setConfirmDelete(true);
+                  return;
+                }
+                setConfirmDelete(false);
+                onDelete();
+              }}
+            >
+              {confirmDelete ? "Confirm delete" : "Delete"}
+            </ProjectMenuItem>
+          </Menu.Popup>
+        </Menu.Positioner>
+      </Menu.Portal>
+    </Menu.Root>
+  );
+}
+
+function archivedTitle(session: AgentSessionInfo): string {
+  const age = formatRelativeTime(session.archivedAt ?? session.updatedAt);
+  return age ? `Open archived chat · ${age}` : "Open archived chat";
 }
 
 function ArchivedSessionRow({
@@ -1302,15 +1349,12 @@ function ArchivedSessionRow({
       <button
         className="min-w-0 flex-1 truncate-fade pr-1 text-left"
         onClick={onOpen}
-        title="Open archived chat"
+        title={archivedTitle(session)}
         type="button"
       >
         {session.title}
       </button>
-      <span className="hidden shrink-0 items-center group-hover:flex group-focus-within:flex">
-        <span className={SB_SESSION_META}>
-          {formatRelativeTime(session.archivedAt ?? session.updatedAt)}
-        </span>
+      <span className="sidebar-row-actions hidden shrink-0 items-center group-hover:flex group-focus-within:flex">
         <IconButton label="Restore" onClick={onRestore}>
           <IconArchiveOff size={SB_ACTION} stroke={SB_ACTION_STROKE} />
         </IconButton>
@@ -1570,6 +1614,7 @@ function ProjectActions({
   children(open: boolean, trigger: ReactNode): ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  useHoldNavRail(open);
   const [confirmDeleteChats, setConfirmDeleteChats] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const trigger = (
@@ -1678,20 +1723,23 @@ function ProjectMenuItem({
   onClick,
   danger = false,
   closeOnClick = true,
+  disabled = false,
 }: {
   icon: ReactNode;
   children: ReactNode;
   onClick(): void;
   danger?: boolean;
   closeOnClick?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <Menu.Item
       className={cn(
-        "flex cursor-default items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm outline-none select-none data-highlighted:bg-hover",
+        "flex cursor-default items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm outline-none select-none data-highlighted:bg-hover data-disabled:opacity-50",
         danger ? "text-danger" : "text-fg",
       )}
       closeOnClick={closeOnClick}
+      disabled={disabled}
       onClick={onClick}
     >
       <span className="flex size-4 shrink-0 items-center justify-center">{icon}</span>

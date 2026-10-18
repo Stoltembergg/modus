@@ -85,6 +85,7 @@ function Navigation({
   onSelect = () => {},
   onMove = async () => {},
   onArchive = () => {},
+  onDelete = () => {},
   onRestore = () => {},
   onListArchived = async () => [],
   workspaces = [WORKSPACE, SECOND_WORKSPACE],
@@ -96,6 +97,7 @@ function Navigation({
   onSelect?: (session: AgentSessionInfo) => void;
   onMove?: (input: MoveAgentSessionInput) => Promise<void>;
   onArchive?: (session: AgentSessionInfo) => void;
+  onDelete?: (session: AgentSessionInfo) => void;
   onRestore?: (session: AgentSessionInfo) => void;
   onListArchived?: (workspaceId: string) => Promise<AgentSessionInfo[]>;
   workspaces?: WorkspaceInfo[];
@@ -129,7 +131,7 @@ function Navigation({
           onArchiveProjectChats={noop}
           onArchiveSession={onArchive}
           onDeleteProjectChats={noop}
-          onDeleteSession={noop}
+          onDeleteSession={onDelete}
           onListArchivedSessions={onListArchived}
           onNewSession={noop}
           onNewWorkspaceSession={noop}
@@ -308,15 +310,19 @@ describe("sidebar project and Agent navigation", () => {
     expect(within(chats).queryByText("Open in Explorer")).toBeNull();
     expect(within(chats).queryByText("Rename project")).toBeNull();
     expect(within(chats).queryByText("Remove project")).toBeNull();
-    expect(within(chats).getByRole("button", { name: "Rename session" })).toBeTruthy();
-    expect(within(chats).getByRole("button", { name: "Archive" })).toBeTruthy();
+    // The row shows only Pin and the "…" menu; the rest lives in that menu.
     expect(within(chats).getByRole("button", { name: "Pin chat" })).toBeTruthy();
+    expect(within(chats).getByRole("button", { name: "Chat actions" })).toBeTruthy();
+    expect(within(chats).queryByRole("button", { name: "Rename session" })).toBeNull();
+    expect(within(chats).queryByRole("button", { name: "Archive" })).toBeNull();
     fireEvent.click(within(chats).getByRole("button", { name: "Archived chats" }));
     expect(onListArchived).toHaveBeenCalledWith(CHATS_WORKSPACE_ID);
     expect(await within(chats).findByText("Archived inbox chat")).toBeTruthy();
     fireEvent.click(within(chats).getByRole("button", { name: "Restore" }));
     expect(onRestore).toHaveBeenCalledWith(archived);
-    fireEvent.click(within(chats).getByRole("button", { name: "Archive" }));
+    fireEvent.click(within(chats).getByRole("button", { name: "Chat actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Rename" })).toBeTruthy();
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Archive" }));
     expect(onArchive).toHaveBeenCalledWith(inbox);
 
     fireEvent.click(header);
@@ -445,13 +451,13 @@ describe("sidebar project and Agent navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Projects" }));
     await waitFor(() => expect(screen.queryByText("Dayz")).toBeNull());
     fireEvent.mouseLeave(nav);
-    expect(nav.getAttribute("data-open")).toBe("false");
+    expect(nav.getAttribute("data-expanded")).toBe("false");
     fireEvent.mouseEnter(nav);
     expect(screen.queryByText("Dayz")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Projects" }));
     expect(await screen.findByText("Oi")).toBeTruthy();
     fireEvent.mouseLeave(nav);
-    expect(nav.getAttribute("data-open")).toBe("false");
+    expect(nav.getAttribute("data-expanded")).toBe("false");
   });
 
   it.each([
@@ -614,10 +620,10 @@ describe("sidebar session drag and drop", () => {
     const drag = dragSession("Oi");
     fireEvent.mouseLeave(nav);
     fireEvent.drop(screen.getByText("Destination"), { dataTransfer: drag.dataTransfer });
-    await waitFor(() => expect(nav.getAttribute("data-open")).toBe("false"));
+    await waitFor(() => expect(nav.getAttribute("data-expanded")).toBe("false"));
     fireEvent.mouseEnter(nav);
     fireEvent.mouseLeave(nav);
-    expect(nav.getAttribute("data-open")).toBe("false");
+    expect(nav.getAttribute("data-expanded")).toBe("false");
   });
 
   it("offers the same project transfer through the keyboard-accessible menu", async () => {
@@ -625,7 +631,7 @@ describe("sidebar session drag and drop", () => {
     render(
       <Navigation initialSessions={[session("Atlas", { agentId: AGENT.id })]} onMove={onMove} />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Move session" }));
+    fireEvent.click(screen.getByRole("button", { name: "Chat actions" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Move to Destination" }));
     await waitFor(() =>
       expect(onMove).toHaveBeenCalledWith({ id: "Atlas", workspaceId: "modus", pinned: false }),
@@ -638,8 +644,66 @@ describe("sidebar session drag and drop", () => {
     fireEvent.mouseEnter(nav);
     const drag = dragSession("Oi");
     fireEvent.mouseLeave(nav);
-    expect(nav.getAttribute("data-open")).toBe("true");
+    expect(nav.getAttribute("data-expanded")).toBe("true");
     fireEvent.dragEnd(drag.row);
-    expect(nav.getAttribute("data-open")).toBe("false");
+    expect(nav.getAttribute("data-expanded")).toBe("false");
+  });
+});
+
+describe("sidebar chat row actions", () => {
+  it("shows only Pin and the actions menu on a row; the rest moves into the menu", async () => {
+    render(<Navigation initialSessions={[session("Oi")]} />);
+    const row = screen
+      .getByRole("button", { name: "Oi" })
+      .closest("[data-session-id]") as HTMLElement;
+    const actions = within(row)
+      .getAllByRole("button")
+      .map((button) => button.getAttribute("aria-label") ?? button.textContent);
+    expect(actions).toEqual(["Oi", "Pin chat", "Chat actions"]);
+    expect(row.textContent).toBe("Oi");
+
+    fireEvent.click(within(row).getByRole("button", { name: "Chat actions" }));
+    const items = (await screen.findAllByRole("menuitem")).map((item) => item.textContent);
+    expect(items).toEqual([
+      "Rename",
+      "Move up",
+      "Move down",
+      "Move to Dayz",
+      "Move to Destination",
+      "Archive",
+      "Delete",
+    ]);
+    // The relative time left the row and is the menu's caption instead.
+    expect(screen.getByTestId("session-last-active").textContent).not.toBe("");
+  });
+
+  it("asks for a second click before deleting from the menu", async () => {
+    const onDelete = vi.fn();
+    render(<Navigation initialSessions={[session("Oi")]} onDelete={onDelete} />);
+    fireEvent.click(screen.getByRole("button", { name: "Chat actions" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+    expect(onDelete).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Confirm delete" }));
+    expect(onDelete).toHaveBeenCalledWith(expect.objectContaining({ id: "Oi" }));
+  });
+
+  it("renames from the menu with the inline editor", async () => {
+    render(<Navigation initialSessions={[session("Oi")]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Chat actions" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Rename" }));
+    expect(await screen.findByDisplayValue("Oi")).toBeTruthy();
+  });
+
+  it("keeps an unpinned rail expanded while a row menu is open", async () => {
+    render(<Navigation initialSessions={[session("Oi")]} pinned={false} />);
+    const nav = screen.getByRole("navigation");
+    fireEvent.mouseEnter(nav);
+    fireEvent.click(screen.getByRole("button", { name: "Chat actions" }));
+    expect(await screen.findByRole("menu")).toBeTruthy();
+    // The pointer travels into the portalled popup, outside the rail.
+    fireEvent.mouseLeave(nav);
+    expect(nav.getAttribute("data-expanded")).toBe("true");
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    await waitFor(() => expect(nav.getAttribute("data-expanded")).toBe("false"));
   });
 });
