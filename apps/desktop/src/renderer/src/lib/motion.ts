@@ -309,6 +309,28 @@ export function imageViewerMotion(reduced: boolean | null | undefined): ImageVie
   return { backdrop: fade(full.backdrop), stage: fade(full.stage), toolbar: fade(full.toolbar) };
 }
 
+/* Composer image chips (attachments above the toolbar). */
+
+/**
+ * Chip enter/exit/reflow: a small pop with a layout reflow when a sibling is
+ * removed. Reduced motion only fades (120ms) and the reflow snaps.
+ */
+export function composerImageChipMotion(reduced: boolean | null | undefined): MotionPreset {
+  const full: MotionPreset = {
+    initial: { opacity: 0, scale: 0.92 },
+    animate: { opacity: 1, scale: 1 },
+    exit: { opacity: 0, scale: 0.92 },
+    transition: tween("base"),
+  };
+  if (!reduced) return full;
+  return {
+    initial: reducedTarget(full.initial, true),
+    animate: reducedTarget(full.animate, true),
+    exit: reducedTarget(full.exit, true),
+    transition: reducedFade,
+  };
+}
+
 /* Panels whose width opens/closes (Files tree, terminal list, Inspector). */
 
 export type PanelWidthMotion = {
