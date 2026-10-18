@@ -25,6 +25,7 @@ type ToolCardProps = {
   output: string;
   isError?: boolean;
   isComplete?: boolean;
+  summaryOnly?: boolean;
   /** `line` is optional (C2.1): search result rows open at their match. */
   onOpenFile?: ((path: string, line?: number) => void) | undefined;
   /** Session cwd: search rows resolve their paths in it (and never leave it). */
@@ -54,6 +55,7 @@ export const ToolCard = memo(
     output,
     isComplete = false,
     isError = false,
+    summaryOnly = false,
     onOpenFile,
     cwd,
     questionRequest,
@@ -67,6 +69,17 @@ export const ToolCard = memo(
     // here. (todo tools are intercepted upstream in the Timeline and never reach
     // ToolCard, so they fall through to a flat row defensively.)
     const render = toolRenderKind(name);
+    if (summaryOnly) {
+      return (
+        <FlatToolRow
+          args={args}
+          isComplete={isComplete}
+          isError={isError}
+          name={name}
+          output={output}
+        />
+      );
+    }
     if (render === "diff") {
       return (
         <DiffToolCard
@@ -171,6 +184,7 @@ export const ToolCard = memo(
     prev.output === next.output &&
     prev.isComplete === next.isComplete &&
     prev.isError === next.isError &&
+    prev.summaryOnly === next.summaryOnly &&
     prev.onOpenFile === next.onOpenFile &&
     prev.cwd === next.cwd &&
     prev.questionRequest === next.questionRequest &&

@@ -120,6 +120,8 @@ export type ToolBlockItem = {
   output: string;
   isComplete?: boolean;
   isError?: boolean;
+  /** Presentation-only: retain execution details without duplicating the chat visual. */
+  summaryOnly?: boolean;
   questionRequest?: QuestionRequest;
   questionAnswers?: QuestionAnswer[];
   questionSkipped?: boolean;
