@@ -1,3 +1,4 @@
+import { IconAlertCircle } from "@tabler/icons-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   type AgentEventItem,
@@ -67,6 +68,8 @@ export function ActivityTimeline({
   const historyPageRef = useRef(historyPage);
   const requestGenerationRef = useRef(0);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  /** Bumped by Retry after the first page failed: re-runs the initial load. */
+  const [reloadToken, setReloadToken] = useState(0);
   historyRef.current = events;
   historyPageRef.current = historyPage;
 
@@ -121,6 +124,7 @@ export function ActivityTimeline({
     [sessionId, updateHistoryPage],
   );
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reloadToken re-runs the initial load after Retry.
   useEffect(() => {
     const generation = ++requestGenerationRef.current;
     let disposed = false;
@@ -176,7 +180,7 @@ export function ActivityTimeline({
       disposed = true;
       unsubscribe();
     };
-  }, [hub, sessionId, updateHistoryPage]);
+  }, [hub, sessionId, updateHistoryPage, reloadToken]);
 
   useEffect(() => {
     if (
@@ -213,40 +217,52 @@ export function ActivityTimeline({
     [events],
   );
 
+  // Older page failed: retry that page. First page failed: reload from the top.
+  const retry = (): void => {
+    if (historyPage.hasOlder) void loadOlderPage(true);
+    else setReloadToken((token) => token + 1);
+  };
+
+  // One borderless glass surface: no header, count or empty-state copy. The
+  // event count stays machine-readable on the section for tests and tooling.
   return (
     <section
-      aria-label="Activity"
-      className="surface-sidebar flex min-h-0 min-w-0 flex-1 flex-col"
+      aria-label={t("shell.activity")}
+      className="activity-panel surface-sidebar flex min-h-0 min-w-0 flex-1 flex-col"
+      data-event-count={events.length}
       data-testid="activity-timeline"
       data-ui-surface="sidebar"
     >
-      <header className="flex h-10 shrink-0 items-center justify-between border-b border-hairline px-3">
-        <h2 className="text-xs font-medium text-fg-muted">Execution history</h2>
-        <span className="text-2xs text-fg-faint tabular-nums" data-testid="activity-event-count">
-          {events.length} {events.length === 1 ? "event" : "events"}
-        </span>
-      </header>
       <div
-        className="scroll-thin min-h-0 flex-1 overflow-y-auto"
+        className="scroll-thin min-h-0 flex-1 overflow-y-auto pt-2"
         onScroll={(event) => {
           if (event.currentTarget.scrollTop < 40) void loadOlderPage();
         }}
         ref={scrollContainerRef}
       >
-        {historyPage.hasOlder ? (
+        {historyPage.error ? (
           <button
-            className="w-full px-3 py-2 text-xs text-fg-muted hover:text-fg"
+            aria-label={t("shell.activity.loadFailedRetry")}
+            className="mx-auto flex items-center gap-1.5 rounded-md px-2.5 py-2 text-xs text-fg-muted transition-colors duration-(--motion-duration-fast) ease-standard hover:text-fg"
+            data-activity-retry=""
             disabled={historyPage.loadingOlder}
-            onClick={() => void loadOlderPage(historyPage.error)}
+            onClick={retry}
             type="button"
           >
-            {historyPage.loadingOlder ? "Loading earlier activity…" : "Load earlier activity"}
+            <IconAlertCircle aria-hidden className="shrink-0 text-danger" size={13} stroke={1.8} />
+            {t("shell.activity.retry")}
           </button>
-        ) : null}
-        {historyPage.error ? (
-          <p className="px-4 py-2 text-center text-xs text-fg-danger">
-            Unable to load activity history. Try again.
-          </p>
+        ) : historyPage.hasOlder ? (
+          <button
+            className="w-full rounded-md px-3 py-2 text-xs text-fg-muted transition-colors duration-(--motion-duration-fast) ease-standard hover:text-fg"
+            disabled={historyPage.loadingOlder}
+            onClick={() => void loadOlderPage()}
+            type="button"
+          >
+            {historyPage.loadingOlder
+              ? t("shell.activity.loadingEarlier")
+              : t("shell.activity.loadEarlier")}
+          </button>
         ) : null}
         {sessionId && activityBlocks.length > 0 ? (
           <Timeline
@@ -259,11 +275,7 @@ export function ActivityTimeline({
             {...(onOpenPlan ? { onOpenPlan } : {})}
             {...(onOpenSubagent ? { onOpenSubagent } : {})}
           />
-        ) : (
-          <p className="px-4 py-8 text-center text-xs text-fg-muted">
-            {!sessionId ? t("shell.selectChatForActivity") : "No execution activity recorded yet."}
-          </p>
-        )}
+        ) : null}
       </div>
     </section>
   );

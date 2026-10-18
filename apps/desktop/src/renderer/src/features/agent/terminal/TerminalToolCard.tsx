@@ -1,4 +1,4 @@
-import { IconAlertCircle, IconCheck, IconChevronRight } from "@tabler/icons-react";
+import { IconAlertCircle, IconChevronRight } from "@tabler/icons-react";
 import { memo, useMemo, useState } from "react";
 import { CollapsibleMotion } from "../../../components/ui/CollapsibleMotion";
 import { WorkingText } from "../../../components/ui/WorkingText";
@@ -42,14 +42,12 @@ export const TerminalToolCard = memo(
     );
     const exitCode = parsed.status?.match(/^exited\s+(.+)$/i)?.[1];
     const command = parsed.command ?? "command";
-    const success = !running && !isError && (!exitCode || exitCode === "0");
+    // Footer only on failure: success and in-progress need no status line.
     const panelStatus = isError
       ? "Failed"
       : exitCode && exitCode !== "0"
         ? `Exit code ${exitCode}`
-        : success
-          ? "Success"
-          : parsed.status;
+        : undefined;
 
     const summary = running
       ? `Running ${command}`
@@ -85,6 +83,7 @@ export const TerminalToolCard = memo(
               "mt-1 overflow-hidden rounded-lg border bg-card",
               isError ? "border-danger/30" : "border-hairline",
             )}
+            data-activity-inset={isError ? "error" : ""}
           >
             <div className="px-3 py-3">
               <pre className="overflow-x-auto whitespace-pre-wrap font-mono text-xs text-fg leading-relaxed">
@@ -97,14 +96,8 @@ export const TerminalToolCard = memo(
                 </pre>
               ) : null}
               {panelStatus ? (
-                <div
-                  className={cn(
-                    "mt-2 flex items-center justify-end gap-1 text-2xs",
-                    isError || (exitCode && exitCode !== "0") ? "text-danger" : "text-fg-faint",
-                  )}
-                >
-                  {success ? <IconCheck size={12} stroke={1.8} /> : null}
-                  {isError ? <IconAlertCircle size={12} stroke={1.8} /> : null}
+                <div className="mt-2 flex items-center justify-end gap-1 text-2xs text-danger">
+                  <IconAlertCircle size={12} stroke={1.8} />
                   <span>{panelStatus}</span>
                 </div>
               ) : null}

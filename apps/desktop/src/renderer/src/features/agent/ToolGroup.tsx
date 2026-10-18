@@ -95,7 +95,7 @@ export function ToolGroup({
           {windowed ? (
             <div
               aria-hidden
-              className="pointer-events-none absolute inset-x-0 top-0 z-10 h-8 bg-linear-to-b from-canvas to-transparent"
+              className="pointer-events-none absolute inset-x-0 top-0 z-10 h-8 bg-linear-to-b from-[var(--tool-group-mask-from,var(--color-canvas))] to-transparent"
               data-tool-group-mask
             />
           ) : null}
