@@ -453,18 +453,23 @@
   background-color: var(--color-active);
   color: var(--text-primary);
 }
-/* Animated app sidebar (components/ui/sidebar.tsx): one column, 60px rail <-> 300px. */
-.app-animated-sidebar {
+/* Navigation rail (components/ui/NavRail.tsx): 60px icons, 300px expanded. */
+.nav-rail {
   box-sizing: border-box;
   overflow: hidden;
   background-color: var(--surface-sidebar);
 }
-.app-sidebar-slot[data-pinned="false"] .app-animated-sidebar[data-open="true"] {
-  /* Hover overlay floats over main: keep it opaque even when glass clears panels. */
-  background-color: var(--color-panel);
-  box-shadow: 8px 0 24px -12px rgb(0 0 0 / 0.35);
+/* Expanded over main (unpinned hover, or the narrow-window sheet): frosted glass
+   so the content beneath reads as depth, not clutter. The alpha is the overlay
+   tier, whose text contrast is pinned by glassTokens.test.ts; reduced
+   transparency / more contrast / no backdrop-filter zero it back to solid. */
+.nav-rail[data-overlay="true"] {
+  background-color: color-mix(in srgb, var(--color-panel) var(--glass-alpha-overlay), transparent);
+  -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
+  box-shadow: 10px 0 28px -16px rgb(0 0 0 / 0.4);
 }
-.app-sidebar-link {
+.nav-rail-item {
   display: flex;
   width: 100%;
   min-width: 0;
@@ -485,38 +490,34 @@
     background-color var(--motion-ui) var(--ease-ui),
     color var(--motion-ui) var(--ease-ui);
 }
-.app-sidebar-link:hover:not(:disabled) {
+.nav-rail-item:hover:not(:disabled) {
   background-color: var(--color-hover);
   color: var(--text-primary);
 }
-.app-sidebar-link:focus-visible,
-.app-sidebar-icon-button:focus-visible {
-  outline: 2px solid var(--color-focus-ring-soft);
-  outline-offset: 1px;
-}
-.app-sidebar-link:disabled {
+.nav-rail-item:disabled {
   cursor: default;
   opacity: 0.5;
 }
-.app-sidebar-link[data-active="true"] {
-  background-color: var(--color-active);
-  color: var(--text-primary);
+.nav-rail-item[data-current="true"] {
+  color: var(--accent-text, var(--color-accent));
 }
-.app-sidebar-link-icon {
+.nav-rail-item:focus-visible,
+.nav-rail-icon-button:focus-visible {
+  outline: 2px solid var(--color-focus-ring-soft);
+  outline-offset: 1px;
+}
+.nav-rail-item-icon {
   display: grid;
   width: 20px;
   flex-shrink: 0;
   place-items: center;
 }
-.app-sidebar-link-label {
+.nav-rail-item-label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  transition: transform var(--motion-ui) var(--ease-ui);
 }
-.app-sidebar-link:hover .app-sidebar-link-label {
-  transform: translateX(2px);
-}
-.app-sidebar-icon-button {
+.nav-rail-icon-button {
   display: grid;
   width: 26px;
   height: 26px;
@@ -526,10 +527,23 @@
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
+  transition: color var(--motion-ui) var(--ease-ui);
 }
-.app-sidebar-icon-button:hover {
-  background-color: var(--color-hover);
+.nav-rail-icon-button:hover {
   color: var(--text-primary);
+}
+/* Sidebar row actions (components/Sidebar.tsx) fade in when hover / focus
+   reveals them; opacity only, so it reads the same with reduced motion. */
+.sidebar-row-actions {
+  animation: sidebar-row-actions-in var(--motion-fast) var(--ease-ui);
+}
+@keyframes sidebar-row-actions-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 .menu-bar {
   height: var(--space-native-titlebar);
