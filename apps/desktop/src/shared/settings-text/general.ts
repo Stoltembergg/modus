@@ -10,7 +10,8 @@ export const GENERAL_TEXT_EN = {
   "settings.general.openWorkspaceError": "Open a workspace to set a project override.",
   "settings.general.tabHome": "Home",
   "settings.general.approvalModeGlobalTitle": "Global approval mode",
-  "settings.general.approvalModeProjectTitle": "{project} approval mode",
+  "settings.general.approvalModeProjectTitle": "Approval mode · {project}",
+  "settings.general.approvalScopeLabel": "Approval mode scope",
   "settings.general.approvalModeGlobalDesc":
     "Default for every workspace that does not set an override.",
   "settings.general.approvalModeFollowingGlobal":
@@ -48,7 +49,8 @@ export const GENERAL_TEXT_PT: Record<keyof typeof GENERAL_TEXT_EN, string> = {
     "Abra um workspace para definir uma configuração própria do projeto.",
   "settings.general.tabHome": "Início",
   "settings.general.approvalModeGlobalTitle": "Modo de aprovação global",
-  "settings.general.approvalModeProjectTitle": "Modo de aprovação de {project}",
+  "settings.general.approvalModeProjectTitle": "Modo de aprovação · {project}",
+  "settings.general.approvalScopeLabel": "Escopo do modo de aprovação",
   "settings.general.approvalModeGlobalDesc":
     "Padrão para todo workspace que não tem configuração própria.",
   "settings.general.approvalModeFollowingGlobal":

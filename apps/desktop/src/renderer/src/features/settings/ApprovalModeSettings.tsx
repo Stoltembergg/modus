@@ -143,7 +143,7 @@ export function ApprovalModeSettings({ cwd, workspaces = [] }: ApprovalModeSetti
       actions={
         projectTabs.length > 0 ? (
           <SettingsSegmented
-            label={t("settings.general.approvalModeGlobalTitle")}
+            label={t("settings.general.approvalScopeLabel")}
             onChange={(next) => {
               if (next === "user") {
                 setActiveScope("user");
