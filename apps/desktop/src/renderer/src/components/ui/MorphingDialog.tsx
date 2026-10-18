@@ -21,6 +21,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "../../lib/cn";
+import { MOTION_SPRING, motionTransition } from "../../lib/motion";
 
 type MorphingDialogContextValue = {
   isOpen: boolean;
@@ -39,12 +40,7 @@ function useMorphingDialog(): MorphingDialogContextValue {
   return context;
 }
 
-const DEFAULT_TRANSITION: Transition = {
-  type: "spring",
-  stiffness: 280,
-  damping: 28,
-  mass: 0.8,
-};
+const DEFAULT_TRANSITION: Transition = MOTION_SPRING.morph;
 
 export function MorphingDialog({
   children,
@@ -77,7 +73,7 @@ export function MorphingDialog({
 
   return (
     <MorphingDialogContext.Provider value={value}>
-      <MotionConfig reducedMotion="user" transition={reduceMotion ? { duration: 0 } : transition}>
+      <MotionConfig reducedMotion="user" transition={motionTransition(transition, reduceMotion)}>
         {children}
       </MotionConfig>
     </MorphingDialogContext.Provider>

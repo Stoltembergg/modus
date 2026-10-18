@@ -1,7 +1,7 @@
 /*
  * Composer send/stop icon: the arrow and the stop square share one slot and
  * cross-fade with a slight scale when a run starts or ends. Reduced motion
- * swaps them instantly (no transition).
+ * keeps a short cross-fade and drops the scale (lib/motion reduced fade).
  */
 import { IconArrowUp, IconPlayerStopFilled } from "@tabler/icons-react";
 import { cn } from "../../lib/cn";
@@ -12,7 +12,7 @@ type SendStopIconProps = {
 };
 
 const LAYER =
-  "col-start-1 row-start-1 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none";
+  "col-start-1 row-start-1 transition-[opacity,transform] duration-(--motion-duration-slow) ease-standard motion-reduce:transition-reduced-fade motion-reduce:scale-100";
 
 export function SendStopIcon({ busy, className }: SendStopIconProps) {
   return (

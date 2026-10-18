@@ -13,7 +13,8 @@ type TaskCheckProps = {
 /**
  * Read-only task checkbox glyph. Unchecked: muted outline. Checked: accent fill with a
  * check in the accent's contrast colour. Turning checked plays a short pop and draws the
- * mark (stroke-dashoffset); unchecking just switches. It is an image, not an input: if an
+ * mark (stroke-dashoffset); unchecking just switches. Reduced motion skips the pop
+ * and fades the mark in (120ms) instead of drawing it (styles/app.css). It is an image, not an input: if an
  * interactive use appears, use a real `<input type="checkbox">` instead.
  */
 export function TaskCheck({
@@ -36,7 +37,8 @@ export function TaskCheck({
     <span
       aria-label={ariaLabel}
       className={cn("task-check", className)}
-      data-pop={pop && !reduceMotion ? "" : undefined}
+      data-pop={pop ? "" : undefined}
+      data-reduced-motion={reduceMotion ? "" : undefined}
       data-state={checked ? "checked" : "unchecked"}
       onAnimationEnd={(event) => {
         if (event.target === event.currentTarget) setPop(false);

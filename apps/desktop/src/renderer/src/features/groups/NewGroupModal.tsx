@@ -20,6 +20,7 @@ import { GROUP_MAX_MEMBERS } from "../../../../shared/group-blocked";
 import type { GroupTextKey } from "../../../../shared/group-room-locale";
 import { cn } from "../../lib/cn";
 import { selectableModels } from "../../lib/modusModels";
+import { motionOffset, motionTransition, tween } from "../../lib/motion";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import { AgentDialog, type AgentDialogDraftTarget } from "../agents/AgentDialog";
 import type { GroupDialogModel } from "./CreateGroupDialog";
@@ -463,7 +464,7 @@ export function NewGroupModal({
       <Dialog.Portal>
         <Dialog.Backdrop
           className={cn(
-            "fixed inset-0 z-50 bg-black/50 transition-opacity duration-150 ease-out-quint motion-reduce:transition-none",
+            "fixed inset-0 z-50 bg-black/50 transition-opacity duration-(--motion-duration-base) ease-standard motion-reduce:transition-reduced-fade",
             "data-ending-style:opacity-0 data-starting-style:opacity-0",
           )}
         />
@@ -471,7 +472,7 @@ export function NewGroupModal({
           className={cn(
             "-translate-x-1/2 -translate-y-1/2 fixed top-1/2 left-1/2 z-50 flex h-[min(620px,calc(100vh-2rem))] w-[min(780px,calc(100vw-2rem))] flex-col",
             "origin-center overflow-hidden popup-chrome outline-none",
-            "transition-[transform,opacity,scale] duration-150 ease-out-quint motion-reduce:transition-none",
+            "transition-[transform,opacity,scale] duration-(--motion-duration-base) ease-standard motion-reduce:transition-reduced-fade",
             "data-ending-style:scale-[0.96] data-ending-style:opacity-0",
             "data-starting-style:scale-[0.96] data-starting-style:opacity-0",
           )}
@@ -483,10 +484,10 @@ export function NewGroupModal({
               <m.div
                 animate={{ opacity: 1, x: 0 }}
                 className="flex min-h-0 flex-1 flex-col"
-                exit={reduceMotion ? { opacity: 0 } : { opacity: 0, x: 24 }}
-                initial={reduceMotion ? { opacity: 0 } : { opacity: 0, x: 24 }}
+                exit={{ opacity: 0, x: motionOffset(24, reduceMotion) }}
+                initial={{ opacity: 0, x: motionOffset(24, reduceMotion) }}
                 key={`panel-${agentDialog?.nonce ?? 0}`}
-                transition={{ duration: 0.15, ease: "easeOut" }}
+                transition={motionTransition(tween("base"), reduceMotion)}
               >
                 <AgentDialog
                   defaultModelId={defaultModelId}
@@ -504,15 +505,15 @@ export function NewGroupModal({
               <m.form
                 animate={{ opacity: 1, x: 0 }}
                 className="flex min-h-0 flex-1 flex-col"
-                exit={reduceMotion ? { opacity: 0 } : { opacity: 0, x: -24 }}
-                initial={reduceMotion ? { opacity: 0 } : { opacity: 0, x: -24 }}
+                exit={{ opacity: 0, x: motionOffset(-24, reduceMotion) }}
+                initial={{ opacity: 0, x: motionOffset(-24, reduceMotion) }}
                 key="list"
                 noValidate
                 onSubmit={(event) => {
                   event.preventDefault();
                   void submit();
                 }}
-                transition={{ duration: 0.15, ease: "easeOut" }}
+                transition={motionTransition(tween("base"), reduceMotion)}
               >
                 <div className="px-4 pt-3.5 pb-1">
                   <Dialog.Title className="font-medium text-fg text-sm">

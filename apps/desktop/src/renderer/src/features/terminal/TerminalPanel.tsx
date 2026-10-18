@@ -16,6 +16,7 @@ import type { TerminalEvent, TerminalInfo } from "../../../../shared/contracts";
 import { EmptyState } from "../../components/ui/Panel";
 import { Tooltip } from "../../components/ui/Tooltip";
 import { cn } from "../../lib/cn";
+import { MOTION_DURATION, MOTION_EASE } from "../../lib/motion";
 
 /** "C:\\WINDOWS\\system32\\cmd.exe" → "cmd", "/bin/bash" → "bash". */
 function shellLabel(shell: string): string {
@@ -49,7 +50,7 @@ type TerminalSink = {
 type Registry = Map<string, TerminalSink>;
 
 const DEFAULT_TERMINAL_LIST_WIDTH = 240;
-const TERMINAL_LIST_TRANSITION = { duration: 0.2, ease: [0.22, 1, 0.36, 1] } as const;
+const TERMINAL_LIST_TRANSITION = { duration: MOTION_DURATION.slow, ease: MOTION_EASE.standard };
 
 type TerminalPanelProps = {
   workspaceId?: string | undefined;

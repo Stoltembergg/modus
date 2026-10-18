@@ -14,6 +14,7 @@ import type {
 import { EmptyState } from "../../components/ui/Panel";
 import { VortexMark } from "../../components/ui/VortexMark";
 import { lookupModel, modelIdentityLabel } from "../../lib/modelIdentity";
+import { tween } from "../../lib/motion";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { formatUiRelativeTime } from "../../lib/uiIntl";
 import type { AgentEventHub } from "../agent/agentEventHub";
@@ -418,7 +419,7 @@ function SubagentList({
               layout
               onClick={() => onOpen(session)}
               title={subagentTitle(session)}
-              transition={{ duration: 0.14, ease: "easeOut" }}
+              transition={tween("base")}
               type="button"
             >
               <SubagentProviderMark models={models} session={session} />

@@ -23,6 +23,7 @@ import type {
 import { EmptyState } from "../../../components/ui/Panel";
 import { Tooltip } from "../../../components/ui/Tooltip";
 import { WorkingText } from "../../../components/ui/WorkingText";
+import { tween } from "../../../lib/motion";
 import { useSettingsText } from "../../../lib/settingsText";
 import { CustomProviderForm } from "../CustomProviderForm";
 import { DefaultModelSetting } from "../DefaultModelSetting";
@@ -176,7 +177,7 @@ export function ModelProviderSettingsPanel({
             exit={{ opacity: 0, y: -4 }}
             initial={{ opacity: 0, y: -4 }}
             key="settings-error"
-            transition={{ duration: 0.14, ease: "easeOut" }}
+            transition={tween("base")}
           >
             {error}
           </m.div>
@@ -351,9 +352,9 @@ function ProviderConfigDialogShell({
       open={open}
     >
       <Dialog.Portal>
-        <Dialog.Backdrop className="dialog-scrim fixed inset-0 z-50 transition-opacity duration-150 motion-reduce:transition-none data-ending-style:opacity-0 data-starting-style:opacity-0" />
+        <Dialog.Backdrop className="dialog-scrim fixed inset-0 z-50 transition-opacity duration-(--motion-duration-base) motion-reduce:transition-reduced-fade data-ending-style:opacity-0 data-starting-style:opacity-0" />
         <Dialog.Viewport className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden px-6 py-6">
-          <Dialog.Popup className="popup-chrome flex h-[min(820px,calc(100vh-48px))] w-full max-w-[760px] flex-col overflow-hidden outline-none transition-[opacity,transform] duration-150 motion-reduce:transition-none data-ending-style:translate-y-2 data-ending-style:opacity-0 data-starting-style:translate-y-2 data-starting-style:opacity-0">
+          <Dialog.Popup className="popup-chrome flex h-[min(820px,calc(100vh-48px))] w-full max-w-[760px] flex-col overflow-hidden outline-none transition-[opacity,transform] duration-(--motion-duration-base) motion-reduce:transition-reduced-fade data-ending-style:translate-y-2 data-ending-style:opacity-0 data-starting-style:translate-y-2 data-starting-style:opacity-0">
             <div className="flex h-[52px] items-center justify-between gap-3 px-5">
               <Dialog.Close
                 aria-label={t("settings.providers.backFrom", { title })}

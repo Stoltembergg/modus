@@ -256,7 +256,7 @@ function LiveToolCard({
         </span>
         <IconChevronRight
           className={cn(
-            "shrink-0 text-fg-faint transition-transform duration-150",
+            "shrink-0 text-fg-faint transition-transform duration-(--motion-duration-base)",
             bodyOpen && "rotate-90",
           )}
           size={14}
@@ -319,7 +319,7 @@ function FlatToolRow({
       {expandable ? (
         <IconChevronRight
           className={cn(
-            "shrink-0 text-fg-faint transition-transform duration-150",
+            "shrink-0 text-fg-faint transition-transform duration-(--motion-duration-base)",
             open && "rotate-90",
           )}
           size={14}

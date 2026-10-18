@@ -1,8 +1,9 @@
 import { m, useReducedMotion } from "motion/react";
 import { type ReactNode, useState } from "react";
+import { motionOffset, motionTransition, tween } from "../../lib/motion";
 
 const ENTER_OFFSET_PX = 6;
-const ENTER_DURATION_S = 0.24;
+const ENTER_TRANSITION = tween("slow");
 
 type RevealOnMountProps = {
   children: ReactNode;
@@ -17,13 +18,14 @@ type RevealOnMountProps = {
 
 /**
  * One-shot entrance for a timeline block: opacity 0→1 plus a few px of upward travel,
- * ease-out, ~240 ms. No IntersectionObserver, no blur/filter (a filter would create a
- * backdrop root and break the native glass). Reduced motion renders the final state.
+ * standard ease, ~200 ms. No IntersectionObserver, no blur/filter (a filter would create a
+ * backdrop root and break the native glass). Reduced motion keeps only the fade
+ * (lib/motion `reducedFade`): no travel.
  */
 export function RevealOnMount({ children, animate, className }: RevealOnMountProps) {
   const reduceMotion = useReducedMotion() ?? false;
   // Frozen at mount so the wrapper element never swaps type (which would remount children).
-  const [play] = useState(() => animate && !reduceMotion);
+  const [play] = useState(() => animate);
 
   if (!play) {
     return (
@@ -37,8 +39,8 @@ export function RevealOnMount({ children, animate, className }: RevealOnMountPro
       animate={{ opacity: 1, y: 0 }}
       className={className}
       data-reveal="enter"
-      initial={{ opacity: 0, y: ENTER_OFFSET_PX }}
-      transition={{ duration: ENTER_DURATION_S, ease: "easeOut" }}
+      initial={{ opacity: 0, y: motionOffset(ENTER_OFFSET_PX, reduceMotion) }}
+      transition={motionTransition(ENTER_TRANSITION, reduceMotion)}
     >
       {children}
     </m.div>

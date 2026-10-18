@@ -175,13 +175,13 @@ export function LimitsSettingsPanel({ models }: { models: ModelInfo[] }) {
         actions={
           <button
             aria-label="Refresh account usage"
-            className="flex h-8 items-center gap-1.5 rounded-md border border-hairline bg-surface px-2.5 text-xs text-fg transition-colors hover:bg-hover disabled:opacity-50 motion-reduce:transition-none"
+            className="flex h-8 items-center gap-1.5 rounded-md border border-hairline bg-surface px-2.5 text-xs text-fg transition-colors hover:bg-hover disabled:opacity-50 motion-reduce:transition-reduced-fade"
             disabled={loading || refreshing}
             onClick={() => void refreshLimits()}
             type="button"
           >
             <IconRefresh
-              className={refreshing ? "animate-spin motion-reduce:animate-none" : ""}
+              className={refreshing ? "animate-spin motion-reduce:animate-pulse" : ""}
               size={14}
               stroke={1.7}
             />
@@ -258,7 +258,7 @@ export function LimitsSettingsPanel({ models }: { models: ModelInfo[] }) {
 
         {loading ? (
           <div aria-label="Loading account usage" className="grid gap-2" role="status">
-            <div className="h-20 animate-pulse rounded-lg border border-hairline-soft bg-panel motion-reduce:animate-none" />
+            <div className="h-20 animate-pulse rounded-lg border border-hairline-soft bg-panel" />
             <span className="sr-only">Loading account usage…</span>
           </div>
         ) : limits?.accounts.length ? (

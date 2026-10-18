@@ -45,7 +45,7 @@ describe("RevealOnMount", () => {
     expect(wrapper.style.filter ?? "").toBe("");
   });
 
-  it("reduced motion renders the final state directly", () => {
+  it("reduced motion still fades in, without travel", () => {
     motion.reduce = true;
     render(
       <RevealOnMount animate>
@@ -53,7 +53,9 @@ describe("RevealOnMount", () => {
       </RevealOnMount>,
     );
     const wrapper = screen.getByText("fresh").parentElement as HTMLElement;
-    expect(wrapper.dataset.reveal).toBe("static");
+    expect(wrapper.dataset.reveal).toBe("enter");
+    expect(Number(wrapper.style.opacity)).toBeLessThan(1);
+    expect(wrapper.style.transform ?? "").not.toMatch(/translate/);
   });
 
   it("does not replay or remount when the prop flips after mount", () => {
@@ -101,11 +103,13 @@ describe("WorkingText", () => {
     expect(node.dataset.workingText).toBe("static");
   });
 
-  it("reduced motion is static text with no gradient class", () => {
+  it("reduced motion pulses in opacity instead of sweeping a gradient", () => {
     motion.reduce = true;
     render(<WorkingText className="text-canvas">Saving</WorkingText>);
     const node = screen.getByText("Saving");
     expect(node.classList.contains("working-text--sweep")).toBe(false);
+    expect(node.classList.contains("working-text--pulse")).toBe(true);
+    expect(node.dataset.workingText).toBe("pulse");
     expect(node.classList.contains("text-canvas")).toBe(true);
   });
 });
@@ -128,14 +132,17 @@ describe("TaskCheck", () => {
     expect(img.hasAttribute("data-pop")).toBe(true);
   });
 
-  it("mounting already checked does not pop; reduced motion never pops", () => {
+  it("mounting already checked does not pop; reduced motion marks the change for the CSS fade", () => {
     render(<TaskCheck aria-label="Done" checked />);
     expect(screen.getByRole("img", { name: "Done" }).hasAttribute("data-pop")).toBe(false);
     cleanup();
     motion.reduce = true;
     const { rerender } = render(<TaskCheck aria-label="Task" checked={false} />);
     rerender(<TaskCheck aria-label="Task" checked />);
-    expect(screen.getByRole("img", { name: "Task" }).hasAttribute("data-pop")).toBe(false);
+    const img = screen.getByRole("img", { name: "Task" });
+    // The scale pop only exists under no-preference; reduced fades the mark in (app.css).
+    expect(img.hasAttribute("data-pop")).toBe(true);
+    expect(img.hasAttribute("data-reduced-motion")).toBe(true);
   });
 
   it("honours size", () => {
@@ -155,12 +162,14 @@ describe("SendStopIcon", () => {
     expect(container.firstElementChild?.getAttribute("aria-hidden")).toBe("true");
   });
 
-  it("swaps instantly under reduced motion", () => {
+  it("cross-fades without scaling under reduced motion", () => {
     const { container } = render(<SendStopIcon busy />);
     const layers = container.querySelectorAll("[data-icon]");
     expect(layers).toHaveLength(2);
     for (const layer of layers) {
-      expect(layer.getAttribute("class")).toContain("motion-reduce:transition-none");
+      expect(layer.getAttribute("class")).toContain("motion-reduce:transition-reduced-fade");
+      expect(layer.getAttribute("class")).toContain("motion-reduce:scale-100");
+      expect(layer.getAttribute("class")).not.toContain(`motion-reduce:${"transition-none"}`);
     }
   });
 });
@@ -270,9 +279,10 @@ describe("WorkStatusLine", () => {
     expect(screen.getByRole("status").textContent).toBe("Thought");
   });
 
-  it("reduced motion drops the sweep", () => {
+  it("reduced motion swaps the sweep for an opacity pulse", () => {
     motion.reduce = true;
     const { container } = render(<WorkStatusLine label="Working…" working />);
     expect(container.querySelector(".working-text--sweep")).toBeNull();
+    expect(container.querySelector(".working-text--pulse")).not.toBeNull();
   });
 });

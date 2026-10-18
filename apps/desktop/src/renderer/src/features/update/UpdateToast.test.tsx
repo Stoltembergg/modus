@@ -308,11 +308,11 @@ describe("breathing primary button", () => {
     const classes = primary[0]?.className.split(" ") ?? [];
     expect(classes).toEqual(expect.arrayContaining(BREATHE_CLASSES.split(" ")));
     expect(classes).toContain("after:animate-update-breathe");
-    // Stops on hover and focus; never runs with reduced motion.
+    // Stops on hover and focus. Opacity only, so it keeps breathing under reduced motion.
     expect(classes).toContain("hover:after:animate-none");
     expect(classes).toContain("focus:after:animate-none");
     expect(classes).toContain("focus-visible:after:animate-none");
-    expect(classes).toContain("motion-reduce:after:animate-none");
+    expect(classes).not.toContain("motion-reduce:after:animate-none");
     // Not on the other controls (dismiss).
     const others = found.filter((button) => !button.hasAttribute("data-update-action"));
     expect(others.map((button) => button.getAttribute("aria-label"))).toEqual(["Dismiss update"]);

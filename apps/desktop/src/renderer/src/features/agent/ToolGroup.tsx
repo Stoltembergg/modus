@@ -21,6 +21,7 @@ import { Children, type ReactNode, useEffect, useId, useRef } from "react";
 import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
 import { WorkingText } from "../../components/ui/WorkingText";
 import { cn } from "../../lib/cn";
+import { tween } from "../../lib/motion";
 
 export type ToolGroupProps = {
   label: string;
@@ -84,7 +85,7 @@ export function ToolGroup({
           <m.span
             animate={{ rotate: open ? 90 : 0 }}
             className="flex size-4 shrink-0 items-center justify-center text-fg-faint"
-            transition={{ duration: 0.16, ease: "easeOut" }}
+            transition={tween("base")}
           >
             <IconChevronRight size={12} stroke={1.8} />
           </m.span>

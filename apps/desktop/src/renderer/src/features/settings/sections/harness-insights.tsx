@@ -110,7 +110,7 @@ export function HarnessInsightsView({
                 <IconRefresh
                   aria-hidden
                   className={
-                    state.status === "loading" ? "animate-spin motion-reduce:animate-none" : ""
+                    state.status === "loading" ? "animate-spin motion-reduce:animate-pulse" : ""
                   }
                   size={14}
                 />
@@ -132,7 +132,7 @@ export function HarnessInsightsView({
           className="flex min-h-28 items-center justify-center gap-2 rounded-xl border border-hairline-soft bg-panel text-sm text-fg-muted"
           role="status"
         >
-          <IconRefresh aria-hidden className="animate-spin motion-reduce:animate-none" size={16} />
+          <IconRefresh aria-hidden className="animate-spin motion-reduce:animate-pulse" size={16} />
           Loading local insights…
         </div>
       ) : state.status === "error" ? (

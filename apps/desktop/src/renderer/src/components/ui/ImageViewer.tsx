@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import { cn } from "../../lib/cn";
+import { tween } from "../../lib/motion";
 import { useSuppressNativeSurface } from "./nativeSurface";
 
 type Size = { width: number; height: number };
@@ -153,9 +154,6 @@ export function ImageThumb({
   );
 }
 
-/** Easing tuned to feel like a soft, decelerating bezier (easeOutExpo-ish). */
-const EASE_BEZIER = [0.16, 1, 0.3, 1] as const;
-
 function ImageViewerOverlay({ state, onClose }: { state: ViewerState; onClose(): void }) {
   const { src, alt, natural, onSaveEdited } = state;
   const [viewport, setViewport] = useState(getViewportSize);
@@ -277,7 +275,7 @@ function ImageViewerOverlay({ state, onClose }: { state: ViewerState; onClose():
         exit={{ opacity: 0 }}
         initial={{ opacity: 0 }}
         onClick={drawing ? undefined : onClose}
-        transition={{ duration: 0.18, ease: "easeOut" }}
+        transition={tween("slow")}
       />
       <m.div
         animate={{ opacity: 1, scale: 1 }}
@@ -289,7 +287,7 @@ function ImageViewerOverlay({ state, onClose }: { state: ViewerState; onClose():
           height: stage.height,
           padding: stage.padding,
         }}
-        transition={{ duration: 0.18, ease: EASE_BEZIER }}
+        transition={tween("slow", "emphasized")}
       >
         <div className="relative" style={{ width: stage.imageWidth, height: stage.imageHeight }}>
           <img
@@ -335,7 +333,7 @@ function ImageViewerOverlay({ state, onClose }: { state: ViewerState; onClose():
           className="app-no-drag absolute top-3 right-3 flex items-center gap-1.5 popup-chrome p-1"
           exit={{ opacity: 0 }}
           initial={{ opacity: 0, y: -4 }}
-          transition={{ duration: 0.16, ease: "easeOut", delay: 0.04 }}
+          transition={tween("base", "standard", { delay: 0.04 })}
         >
           {drawing ? (
             <>

@@ -11,7 +11,7 @@ export const AGENT_PRESENCE_LABEL: Record<AgentPresenceState, string> = {
   archived: "Archived",
 };
 
-/** Compact presence marker with reduced-motion-aware activity animation. */
+/** Compact presence marker; activity pulses in opacity only, so it also runs under reduced motion. */
 export function AgentPresenceDot({
   state,
   className,
@@ -25,9 +25,9 @@ export function AgentPresenceDot({
       className={cn(
         "size-2 shrink-0 rounded-full",
         state === "working"
-          ? "bg-success motion-safe:animate-pulse"
+          ? "bg-success animate-pulse"
           : state === "waiting"
-            ? "bg-amber-400 motion-safe:animate-pulse"
+            ? "bg-amber-400 animate-pulse"
             : state === "queued"
               ? "bg-focus-ring-soft"
               : state === "archived"

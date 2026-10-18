@@ -22,6 +22,7 @@ import {
 import { shellText } from "../../../../shared/shell-text";
 import { cn } from "../../lib/cn";
 import { selectableModels } from "../../lib/modusModels";
+import { MOTION_SPRING, reducedFade, tween } from "../../lib/motion";
 import type { GroupDialogModel } from "../groups/CreateGroupDialog";
 import { describeGroupError } from "../groups/groupErrors";
 import { AgentAvatar } from "./AgentAvatar";
@@ -34,21 +35,21 @@ export const AGENT_GENERATED_HINT = "Generated. Review the instructions, then sa
 
 const FIELD = cn(
   "h-9 w-full rounded-lg border border-hairline bg-canvas/70 px-3 text-sm text-fg outline-none",
-  "transition-colors duration-150 placeholder:text-fg-faint hover:border-hairline-strong",
+  "transition-colors duration-(--motion-duration-base) placeholder:text-fg-faint hover:border-hairline-strong",
   "focus:border-hairline-strong focus-visible:ring-2 focus-visible:ring-focus-ring/40",
 );
 /** Field labels: small and quiet, but readable over glass. */
 const LABEL = "font-medium text-2xs text-fg-muted";
 /** Subtle press feedback (transform only; none with reduced motion). */
 const PRESS =
-  "transition-[background-color,color,opacity,transform] duration-150 ease-out-quint active:scale-[0.97] motion-reduce:transition-none motion-reduce:active:scale-100";
+  "transition-[background-color,color,opacity,transform] duration-(--motion-duration-base) ease-standard active:scale-[0.97] motion-reduce:transition-reduced-fade motion-reduce:active:scale-100";
 /** Open/close spring of the dialog (transform + opacity only). */
-const DIALOG_SPRING: Transition = { type: "spring", stiffness: 420, damping: 34, mass: 0.8 };
-const DIALOG_EXIT: Transition = { duration: 0.14, ease: [0.4, 0, 1, 1] };
+const DIALOG_SPRING: Transition = MOTION_SPRING.dialog;
+const DIALOG_EXIT: Transition = tween("base", "exit");
 /** Reduced motion: a short fade instead of the spring, never no animation at all. */
-const DIALOG_FADE: Transition = { duration: 0.12, ease: "easeOut" };
+const DIALOG_FADE: Transition = reducedFade;
 /** The preview's pop when face, shape or color changes. */
-const PREVIEW_SPRING: Transition = { type: "spring", stiffness: 480, damping: 26, mass: 0.7 };
+const PREVIEW_SPRING: Transition = MOTION_SPRING.bouncy;
 const PREVIEW_SIZE = 64;
 
 /**
@@ -711,7 +712,7 @@ export function AgentDialog(props: AgentDialogProps) {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0, transition: reduceMotion ? DIALOG_FADE : DIALOG_EXIT }}
               initial={{ opacity: 0 }}
-              transition={reduceMotion ? DIALOG_FADE : { duration: 0.18, ease: "easeOut" }}
+              transition={reduceMotion ? DIALOG_FADE : tween("slow")}
             />
           }
         />

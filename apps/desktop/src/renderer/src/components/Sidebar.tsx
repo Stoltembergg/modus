@@ -46,6 +46,7 @@ import type { SessionActivity } from "../features/agent/agentEventHub";
 import { SessionStatusDot } from "../features/agent/SessionStatusDot";
 import { AgentAvatar } from "../features/agents/AgentAvatar";
 import { cn } from "../lib/cn";
+import { motionOffset, motionTransition, tween } from "../lib/motion";
 import { beginResizeGesture, endResizeGesture } from "../lib/resizeGesture";
 import { useShellText } from "../lib/shellText";
 import { ICON, ICON_STROKE } from "../lib/uiDensity";
@@ -70,7 +71,7 @@ const NO_AGENTS: readonly AgentInfo[] = [];
 
 export const SIDEBAR_MIN_WIDTH = 240;
 const SIDEBAR_MAX_WIDTH = 480;
-export const SIDEBAR_TRANSITION = { duration: 0.18, ease: [0.25, 0.1, 0.25, 1] } as const;
+export const SIDEBAR_TRANSITION = tween("slow", "gentle");
 
 /**
  * Sidebar density contract — one icon rail for nav / folder / session dots.
@@ -89,7 +90,7 @@ const SB_ICON = ICON.lg;
 const SB_STROKE = ICON_STROKE.lg;
 const SB_ACTION = ICON.sm;
 const SB_ACTION_STROKE = ICON_STROKE.sm;
-const LIST_MOTION = { duration: 0.16, ease: "easeOut" } as const;
+const LIST_MOTION = tween("base");
 
 // Scoped to this sidebar; drag payloads never authorize a workspace or executable path.
 const SessionMovement = createContext<{
@@ -605,8 +606,8 @@ export function Sidebar({
                     {projectWorkspaces.map((workspace) => (
                       <m.div
                         animate={{ opacity: 1, y: 0 }}
-                        exit={reduceMotion ? { opacity: 1 } : { opacity: 0, y: -4 }}
-                        initial={reduceMotion ? false : { opacity: 0, y: 4 }}
+                        exit={{ opacity: 0, y: motionOffset(-4, reduceMotion) }}
+                        initial={{ opacity: 0, y: motionOffset(4, reduceMotion) }}
                         key={workspace.id}
                         data-workspace-drop={workspace.id}
                         className={cn(
@@ -614,10 +615,7 @@ export function Sidebar({
                           dropTarget?.dataset.workspaceDrop === workspace.id && "bg-hover",
                         )}
                         layout
-                        transition={{
-                          duration: reduceMotion ? 0 : LIST_MOTION.duration,
-                          ease: LIST_MOTION.ease,
-                        }}
+                        transition={motionTransition(LIST_MOTION, reduceMotion)}
                       >
                         {renderWorkspaceItem(workspace)}
                       </m.div>
@@ -1436,7 +1434,7 @@ function ProjectRow({
             menuOpen && "bg-hover text-fg",
           )}
           layout
-          transition={{ duration: 0.16, ease: "easeOut" }}
+          transition={LIST_MOTION}
         >
           <button
             aria-expanded={expanded}
@@ -1452,14 +1450,14 @@ function ProjectRow({
             <m.span
               animate={{ rotate: expanded ? 90 : 0 }}
               className="flex size-3 shrink-0 items-center justify-center text-fg-faint opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
-              transition={{ duration: 0.16, ease: [0.25, 0.1, 0.25, 1] }}
+              transition={tween("base", "gentle")}
             >
               <IconChevronRight size={ICON.xs} stroke={ICON_STROKE.xs} />
             </m.span>
           </button>
           <span
             className={cn(
-              "flex shrink-0 items-center gap-0.5 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100",
+              "flex shrink-0 items-center gap-0.5 transition-opacity duration-(--motion-duration-base) group-hover:opacity-100 group-focus-within:opacity-100",
               menuOpen ? "opacity-100" : "opacity-0",
             )}
           >
@@ -1573,7 +1571,7 @@ function NavRow({
         <m.span
           className="absolute inset-0 rounded-md bg-active"
           layoutId="sidebar-active"
-          transition={{ duration: 0.2, ease: "easeOut" }}
+          transition={SIDEBAR_TRANSITION}
         />
       ) : null}
       <span className={cn(SB_RAIL, "relative text-current")}>{icon}</span>
@@ -1796,8 +1794,8 @@ function SectionHeader({
         <span>{children}</span>
         <m.span
           animate={{ rotate: expanded ? 90 : 0 }}
-          className="flex size-3 items-center justify-center opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
-          transition={{ duration: 0.24, ease: "easeOut" }}
+          className="flex size-3 items-center justify-center opacity-0 transition-opacity duration-(--motion-duration-base) group-hover:opacity-100 group-focus-within:opacity-100"
+          transition={tween("slow")}
         >
           <IconChevronRight size={ICON.xs} stroke={ICON_STROKE.xs} />
         </m.span>

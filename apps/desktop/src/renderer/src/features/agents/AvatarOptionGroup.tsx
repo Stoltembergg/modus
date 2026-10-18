@@ -1,10 +1,10 @@
 import { m, useReducedMotion } from "motion/react";
 import { type KeyboardEvent, type ReactNode, useId, useRef } from "react";
 import { cn } from "../../lib/cn";
+import { MOTION_SPRING, reducedFade } from "../../lib/motion";
 
 /** Selection ring spring (transform only); reduced motion gets a short fade instead. */
-const RING_SPRING = { type: "spring", stiffness: 520, damping: 38, mass: 0.6 } as const;
-const RING_FADE = { duration: 0.12, ease: "easeOut" } as const;
+const RING_SPRING = MOTION_SPRING.snappy;
 
 export type AvatarOptionGroupProps<T extends string> = {
   /** Group name read by assistive tech ("Face", "Shape", "Color"); also the visible label. */
@@ -94,9 +94,9 @@ export function AvatarOptionGroup<T extends string>({
               aria-label={optionLabel(option)}
               className={cn(
                 "relative flex items-center justify-center outline-none",
-                "transition-[background-color,opacity,transform] duration-150 ease-out-quint",
+                "transition-[background-color,opacity,transform] duration-(--motion-duration-base) ease-standard",
                 "focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-elevated",
-                "motion-reduce:transition-opacity motion-reduce:active:scale-100",
+                "motion-reduce:transition-reduced-fade motion-reduce:active:scale-100",
                 swatch
                   ? "size-6 rounded-full active:scale-90"
                   : "size-8 rounded-lg active:scale-95",
@@ -133,7 +133,7 @@ export function AvatarOptionGroup<T extends string>({
                   data-testid="avatar-option-ring"
                   initial={reduceMotion ? { opacity: 0 } : false}
                   {...(reduceMotion ? {} : { layoutId: `${labelId}-ring` })}
-                  transition={reduceMotion ? RING_FADE : { layout: RING_SPRING }}
+                  transition={reduceMotion ? reducedFade : { layout: RING_SPRING }}
                 />
               ) : null}
               <span className={cn("relative", swatch && "size-full rounded-full")}>

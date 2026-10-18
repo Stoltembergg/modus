@@ -152,7 +152,7 @@ export function PlanToolCard({
         {writing ? (
           <IconLoader2
             aria-hidden
-            className="shrink-0 animate-spin text-fg-faint motion-reduce:animate-none"
+            className="shrink-0 animate-spin text-fg-faint motion-reduce:animate-pulse"
             size={14}
             stroke={1.7}
           />
@@ -176,7 +176,7 @@ export function PlanToolCard({
         ) : null}
         <span className="flex-1" />
         {actions ? (
-          <div className="flex items-center gap-1 opacity-0 transition-opacity duration-150 group-hover/plan:opacity-100 group-focus-within/plan:opacity-100">
+          <div className="flex items-center gap-1 opacity-0 transition-opacity duration-(--motion-duration-base) group-hover/plan:opacity-100 group-focus-within/plan:opacity-100">
             {actions}
           </div>
         ) : null}

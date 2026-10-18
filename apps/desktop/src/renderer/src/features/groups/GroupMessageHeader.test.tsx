@@ -75,9 +75,9 @@ describe("GroupDeliveryFooter", () => {
     const footer = screen.getByTestId("group-delivery-status");
     expect(screen.getByTestId("group-delivery-members").textContent).toBe("· Alpha");
     expect(footer.getAttribute("title")).toBe("Alpha: Working · Beta: Answered");
-    // Spinner respects reduced motion.
+    // Spinner respects reduced motion: it pulses in opacity instead of spinning.
     expect(footer.querySelector("svg")?.getAttribute("class")).toContain(
-      "motion-reduce:animate-none",
+      "motion-reduce:animate-pulse",
     );
   });
 

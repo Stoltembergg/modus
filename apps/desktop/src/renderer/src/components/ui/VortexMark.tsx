@@ -29,8 +29,13 @@ export function VortexMark({ className }: { className?: string }) {
           26% { opacity: 0.08; }
           100% { opacity: 0; }
         }
+        @keyframes vortex-mark-breathe {
+          0%, 100% { opacity: 0.25; }
+          50% { opacity: 0.6; }
+        }
         @media (prefers-reduced-motion: reduce) {
-          .vortex-mark .vl { animation: none; opacity: 0.4; }
+          /* Every dot breathes together: still busy, but nothing appears to travel. */
+          .vortex-mark .vl { animation-name: vortex-mark-breathe; animation-timing-function: ease-in-out; animation-delay: 0ms !important; }
         }
         .vortex-mark .d00, .vortex-mark .d11, .vortex-mark .d22 { animation-delay: 0ms; }
         .vortex-mark .d01 { animation-delay: 150ms; }

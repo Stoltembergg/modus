@@ -34,6 +34,7 @@ import { m, useReducedMotion } from "motion/react";
 import { type KeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import type { QuestionAnswer, QuestionPrompt } from "../../../../shared/contracts";
 import { cn } from "../../lib/cn";
+import { motionOffset, motionTransition, tween } from "../../lib/motion";
 import { useSettingsText } from "../../lib/settingsText";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { CollapsibleMotion } from "../ui/CollapsibleMotion";
@@ -288,11 +289,11 @@ function QuestionMode({
       data-kind={kind}
       data-mode="question"
       data-status={sent && status === "pending" ? "answered" : status}
-      initial={reduceMotion ? false : { opacity: 0, y: 4 }}
+      initial={{ opacity: 0, y: motionOffset(4, reduceMotion) }}
       onKeyDown={onKeyDown}
       ref={containerRef}
       tabIndex={-1}
-      transition={{ duration: reduceMotion ? 0 : 0.14, ease: "easeOut" }}
+      transition={motionTransition(tween("base"), reduceMotion)}
     >
       <CardHeader
         icon={<IconMessageCircleQuestion size={ICON.sm} stroke={ICON_STROKE.sm} />}
@@ -555,11 +556,11 @@ function ApprovalMode({
       className={cn(SHELL, className)}
       data-mode="approval"
       data-status={status}
-      initial={reduceMotion ? false : { opacity: 0, y: 4 }}
+      initial={{ opacity: 0, y: motionOffset(4, reduceMotion) }}
       onKeyDown={handleKeyDown}
       ref={panelRef}
       tabIndex={-1}
-      transition={{ duration: reduceMotion ? 0 : 0.14, ease: "easeOut" }}
+      transition={motionTransition(tween("base"), reduceMotion)}
     >
       <CardHeader
         icon={<IconLock size={ICON.sm} stroke={ICON_STROKE.sm} />}
@@ -760,7 +761,7 @@ function SummaryMode({ running = false, items, label, className }: QuestionCardS
         <span className="font-medium">{text}</span>
         <IconChevronRight
           className={cn(
-            "shrink-0 text-fg-faint transition-transform duration-150",
+            "shrink-0 text-fg-faint transition-transform duration-(--motion-duration-base)",
             open && "rotate-90",
           )}
           size={13}

@@ -73,7 +73,7 @@ export const TerminalToolCard = memo(
           </span>
           <IconChevronRight
             className={cn(
-              "shrink-0 text-fg-faint transition-transform duration-150",
+              "shrink-0 text-fg-faint transition-transform duration-(--motion-duration-base)",
               open && "rotate-90",
             )}
             size={13}

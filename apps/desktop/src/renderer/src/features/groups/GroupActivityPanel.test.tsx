@@ -148,7 +148,7 @@ describe("GroupActivityPanel", () => {
     ).toBeTruthy();
   });
 
-  it("uses an in-flow height reveal and disables motion for reduced-motion preferences", () => {
+  it("uses an in-flow height reveal and only fades it for reduced-motion preferences", () => {
     expect(activityStyles.includes("@keyframes group-activity-checklist-reveal")).toBe(true);
     expect(
       /\.group-activity-checklist-enter\s*\{[^}]*grid-template-rows:\s*1fr/s.test(activityStyles),
@@ -159,7 +159,7 @@ describe("GroupActivityPanel", () => {
       ),
     ).toBe(true);
     expect(
-      /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*\.group-activity-checklist-enter\s*\{[^}]*animation:\s*none;/s.test(
+      /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[^{]*\.group-activity-checklist-enter\s*\{[^}]*animation:\s*motion-reduced-fade-in\s+var\(--motion-duration-reduced\)/s.test(
         activityStyles,
       ),
     ).toBe(true);

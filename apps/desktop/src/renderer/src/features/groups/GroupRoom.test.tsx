@@ -640,7 +640,7 @@ describe("GroupRoom", () => {
       "Agent 3 profile unavailable. Waiting for you",
     );
     expect(presence.querySelector('[data-presence="working"]')?.className).toContain(
-      "motion-safe:animate-pulse",
+      "animate-pulse",
     );
     expect(presence.querySelector('[data-presence="idle"]')?.className).not.toContain("animate");
     expect(

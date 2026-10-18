@@ -28,6 +28,7 @@ import { PanelHeader } from "../../components/ui/Panel";
 import { TOOLBAR_ICON } from "../../components/ui/ToolbarButton";
 import { Tooltip } from "../../components/ui/Tooltip";
 import { cn } from "../../lib/cn";
+import { MOTION_DURATION, MOTION_EASE, tween } from "../../lib/motion";
 import { beginResizeGesture, endResizeGesture } from "../../lib/resizeGesture";
 import { ActivityTimeline } from "../agent/ActivityTimeline";
 import type { AgentEventHub } from "../agent/agentEventHub";
@@ -84,7 +85,7 @@ type InspectorProps = {
 const INSPECTOR_MAX_WIDTH = 1040;
 const INSPECTOR_BROWSER_PREFERRED_WIDTH = 760;
 const INSPECTOR_COLLAPSED_WIDTH = 0;
-const INSPECTOR_TRANSITION = { duration: 0.18, ease: [0.25, 0.1, 0.25, 1] } as const;
+const INSPECTOR_TRANSITION = { duration: MOTION_DURATION.slow, ease: MOTION_EASE.gentle };
 const INSPECTOR_TAB_PANEL_CLASS =
   "inspector-tab-panel flex min-h-0 flex-1 flex-col overflow-hidden outline-none";
 const loadBrowserPanel = () => import("../browser/BrowserPanel");
@@ -328,7 +329,7 @@ export function Inspector({
               className="flex min-h-0 flex-1 flex-col"
               initial={{ opacity: 0 }}
               style={{ width: panelWidth }}
-              transition={{ duration: 0.08, ease: "linear" }}
+              transition={tween("instant", "linear")}
             >
               <Tabs.Root
                 className="flex min-h-0 flex-1 flex-col"
@@ -350,7 +351,7 @@ export function Inspector({
                         </Tabs.Tab>
                       </Tooltip>
                     ))}
-                    <Tabs.Indicator className="absolute top-1/2 left-0 z-0 h-6.5 w-(--active-tab-width) -translate-y-1/2 translate-x-(--active-tab-left) rounded-md bg-active transition-all duration-200 ease-out-quint" />
+                    <Tabs.Indicator className="absolute top-1/2 left-0 z-0 h-6.5 w-(--active-tab-width) -translate-y-1/2 translate-x-(--active-tab-left) rounded-md bg-active transition-all duration-(--motion-duration-slow) ease-standard" />
                   </Tabs.List>
                 </div>
 

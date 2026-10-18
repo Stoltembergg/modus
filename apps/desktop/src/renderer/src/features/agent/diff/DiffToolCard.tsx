@@ -172,7 +172,10 @@ export const DiffToolCard = memo(
                 type="button"
               >
                 <IconChevronRight
-                  className={cn("transition-transform duration-150", bodyOpen && "rotate-90")}
+                  className={cn(
+                    "transition-transform duration-(--motion-duration-base)",
+                    bodyOpen && "rotate-90",
+                  )}
                   size={14}
                   stroke={1.7}
                 />

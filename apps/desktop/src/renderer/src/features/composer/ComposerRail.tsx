@@ -39,7 +39,7 @@ export function ComposerRail({
         >
           <IconChevronRight
             className={cn(
-              "shrink-0 text-fg-faint transition-[color,transform] duration-150 group-hover/rail:text-fg-muted",
+              "shrink-0 text-fg-faint transition-[color,transform] duration-(--motion-duration-base) group-hover/rail:text-fg-muted",
               expanded && "rotate-90",
             )}
             size={13}
