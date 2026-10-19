@@ -218,8 +218,8 @@
 :root[data-ui="new"] .app-rail-item,
 :root[data-ui="new"] .nav-rail-item,
 :root[data-ui="new"] .nav-rail-icon-button {
-  background-color: transparent !important;
-  box-shadow: none !important;
+  background-color: transparent;
+  box-shadow: none;
 }
 :root[data-ui="new"] .toolbar-icon-button:hover,
 :root[data-ui="new"] .app-rail-item:hover,

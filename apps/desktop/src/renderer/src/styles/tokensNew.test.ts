@@ -271,7 +271,7 @@ describe("new look tokens: contrast gate", () => {
           worst(color(theme, "--color-fg-muted"), surface, [GREY, likely]),
           `${at} muted`,
         ).toBeGreaterThanOrEqual(4.5);
-                expect(
+        expect(
           worst(color(theme, "--color-fg-subtle"), surface, [GREY]),
           `${at} subtle`,
         ).toBeGreaterThanOrEqual(4.5);
