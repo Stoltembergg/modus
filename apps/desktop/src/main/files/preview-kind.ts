@@ -3,7 +3,7 @@
  * Filename never participates in the decision.
  */
 
-import { readFileSync, statSync } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import type { PreviewKind, PreviewReadResult } from "../../shared/contracts";
 import { resolveWithin } from "./path-within";
@@ -85,21 +85,24 @@ export type ReadPreviewOptions = {
 };
 
 /** Read workspace file bytes for in-app preview (separate from text `files.read`). */
-export function readWorkspacePreview(
+export async function readWorkspacePreview(
   root: string,
   path: string,
   options: ReadPreviewOptions = {},
-): PreviewReadResult {
+): Promise<PreviewReadResult> {
   const maxBytes = options.maxBytes ?? DEFAULT_PREVIEW_MAX_BYTES;
   const abs = resolveWithin(root, path);
-  const stat = statSync(abs);
-  if (stat.isDirectory()) {
+  const fileStat = await stat(abs);
+  if (fileStat.isDirectory()) {
     throw new Error("Path is a directory, not a file.");
   }
-  if (stat.size > maxBytes) {
+  if (fileStat.size > maxBytes) {
     throw new Error(`File too large for in-app preview (limit ${maxBytes} bytes).`);
   }
-  const bytes = readFileSync(abs);
+
+  // Optimization: use async readFile to avoid blocking the event loop on large files (e.g., 50MB)
+  const bytes = await readFile(abs);
+
   const previewKind = detectPreviewKind(bytes);
   const relativePath = relative(resolve(root), abs).split(/[/\\]/).join("/");
   return {
