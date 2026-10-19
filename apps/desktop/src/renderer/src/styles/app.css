@@ -64,7 +64,7 @@
   /* 文本灰阶 —— 用颜色做层级，不靠字号。主色略软于纯近白，输入/正文更护眼。 */
   --color-fg: #d8d8d7;
   --color-fg-muted: #b4b4b1;
-  --color-fg-subtle: #8a8a87;
+  --color-fg-subtle: #9faaba;
   --color-fg-faint: #5a5a5d;
   /* Hint / empty-state copy — one step quieter than faint chrome labels. */
   --color-fg-placeholder: #454548;
@@ -831,7 +831,7 @@
   /* Text — soft near-black (Cursor-like): deep enough with weight 400, not chalk #111. */
   --color-fg: #222222;
   --color-fg-muted: #3f3f3f;
-  --color-fg-subtle: #666666;
+  --color-fg-subtle: #4d5667;
   --color-fg-faint: #8f8f8f;
   --color-fg-placeholder: #b5b5b5;
   --color-icon: #222222;
@@ -944,7 +944,7 @@
 
   --color-fg: #cccccc;
   --color-fg-muted: #bfbfbf;
-  --color-fg-subtle: #989898;
+  --color-fg-subtle: #9faaba;
   --color-fg-faint: #6a6a6a;
   --color-fg-placeholder: #525252;
   --color-icon: #cccccc;
@@ -1540,9 +1540,9 @@ body {
     /* Label swaps cross-fade in place; the moving shimmer becomes a highlight
        that breathes in opacity. */
     .t-think-text {
-      transition: opacity var(--motion-duration-reduced) var(--motion-ease-linear) !important;
-      transform: none !important;
-      filter: none !important;
+      transition: opacity var(--motion-duration-reduced) var(--motion-ease-linear);
+      transform: none;
+      filter: none;
     }
     .t-think-text::before {
       background-image: none;
@@ -2638,7 +2638,7 @@ body {
   width: 100%;
   height: auto;
   flex: none;
-  transform: none !important;
+  transform: none;
   will-change: auto;
   cursor: default;
 }
@@ -2700,10 +2700,10 @@ body
 body > div.fixed.inset-0:has([data-streamdown="mermaid"])
   [data-streamdown="mermaid"]
   [class*="absolute"][class*="rounded-md"] {
-  top: 1rem !important;
-  right: 3.35rem !important;
-  bottom: auto !important;
-  left: auto !important;
+  top: 1rem;
+  right: 3.35rem;
+  bottom: auto;
+  left: auto;
   flex-direction: row;
   border-radius: var(--radius-sm) 0 0 var(--radius-sm);
   border-right: none;

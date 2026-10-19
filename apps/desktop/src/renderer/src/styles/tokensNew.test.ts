@@ -96,7 +96,7 @@ const ANY_DESKTOP: Rgb[] = [WHITE, LIGHT_GREY, GREY, DARK_GREY, BLACK];
 const DESKTOP_GATE: Record<string, number> = {
   "--color-fg": 4.5,
   "--color-fg-muted": 4.5,
-  "--color-fg-subtle": 3,
+  "--color-fg-subtle": 4.5,
   "--color-fg-faint": 3,
 };
 
@@ -169,8 +169,8 @@ describe("new look tokens: values", () => {
       "--color-surface": "#151d2a",
       "--color-elevated": "#1a2333",
       "--color-fg": "#f2f4f8",
-      "--color-fg-muted": "#a9b2c0",
-      "--color-fg-subtle": "#939dac",
+      "--color-fg-muted": "#b5bdc9",
+      "--color-fg-subtle": "#9faaba",
       "--color-fg-faint": "#7d8797",
       "--color-accent": "#863ff5",
       "--color-accent-hover": "#8d4bf6",
@@ -189,7 +189,7 @@ describe("new look tokens: values", () => {
       "--color-elevated": "#ffffff",
       "--color-fg": "#161c27",
       "--color-fg-muted": "#3f4959",
-      "--color-fg-subtle": "#535d6f",
+      "--color-fg-subtle": "#4d5667",
       "--color-fg-faint": "#626c7e",
       "--color-accent": "#863ff5",
       "--color-accent-hover": "#7a35e8",
@@ -209,7 +209,7 @@ describe("new look tokens: values", () => {
       saturateLight: decl(light, "--glass-saturate"),
       radii: ["xs", "sm", "md", "lg", "xl", "2xl"].map((r) => decl(dark, `--radius-${r}`)),
     }).toEqual({
-      chrome: "82%",
+      chrome: "84%",
       overlay: "89%",
       blur: "24px",
       saturateDark: "1.3",
@@ -271,13 +271,10 @@ describe("new look tokens: contrast gate", () => {
           worst(color(theme, "--color-fg-muted"), surface, [GREY, likely]),
           `${at} muted`,
         ).toBeGreaterThanOrEqual(4.5);
-        // TODO(redesign shell PR): subtle carries text-2xs labels and should reach
-        // 4.5:1 here (today ~3.99 dark / ~3.79 light over window glass on grey);
-        // see "Redesign pending" item 1 in HANDOFF.md.
         expect(
           worst(color(theme, "--color-fg-subtle"), surface, [GREY]),
           `${at} subtle`,
-        ).toBeGreaterThanOrEqual(3);
+        ).toBeGreaterThanOrEqual(4.5);
         expect(
           worst(color(theme, "--color-fg-faint"), surface, [GREY, likely]),
           `${at} faint`,
@@ -309,7 +306,7 @@ describe("new look tokens: contrast gate", () => {
       expect(
         stacked(color(theme, "--color-fg-subtle"), [GREY]),
         `${at} subtle`,
-      ).toBeGreaterThanOrEqual(3);
+      ).toBeGreaterThanOrEqual(4.5);
       expect(
         stacked(color(theme, "--color-fg-faint"), [GREY, likely]),
         `${at} faint`,
@@ -516,7 +513,7 @@ describe("new look tokens: opacity floor over any desktop (v0.1.11)", () => {
   const ratio = (theme: Theme, text: string, surface: (bg: Rgb) => Rgb, backdrops: Rgb[]) =>
     Math.min(...backdrops.map((bg) => contrast(color(theme, text), surface(bg))));
 
-  it("(c) fg / muted >= 4.5:1 and subtle / faint >= 3:1 on the window, the overlay and the #245 tint, white to black, both themes", () => {
+  it("(c) fg / muted / subtle >= 4.5:1 and faint >= 3:1 on glass over any desktop, both themes", () => {
     let checked = 0;
     for (const theme of THEMES) {
       for (const [name, surface] of Object.entries(surfaces(theme, chrome(), overlay()))) {
@@ -534,8 +531,11 @@ describe("new look tokens: opacity floor over any desktop (v0.1.11)", () => {
 
   it("(c) the opposite desktop is the binding case: main's 60% / 86% failed it, the floor is tight", () => {
     // What main shipped (#254): muted fell to 2.34:1 (dark over white) and 2.87:1 (light over black).
+    const shippedDarkMuted: Rgb = [0xa9, 0xb2, 0xc0];
     expect(
-      ratio("dark", "--color-fg-muted", surfaces("dark", 0.6, 0.86).window, [WHITE]),
+      Math.min(
+        ...[WHITE].map((bg) => contrast(shippedDarkMuted, surfaces("dark", 0.6, 0.86).window(bg))),
+      ),
     ).toBeLessThan(2.4);
     expect(
       ratio("light", "--color-fg-muted", surfaces("light", 0.6, 0.86).window, [BLACK]),
