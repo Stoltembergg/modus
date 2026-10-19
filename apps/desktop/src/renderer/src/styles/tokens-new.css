@@ -33,7 +33,7 @@
      faint is for auxiliary/disabled text only, never text needed to use the app. */
   --color-fg: #f2f4f8;
   --color-fg-muted: #a9b2c0;
-  --color-fg-subtle: #939dac;
+  --color-fg-subtle: #9faaba;
   --color-fg-faint: #7d8797;
   --color-fg-placeholder: #5f6979;
   --color-icon: #dce1e8;
@@ -133,7 +133,7 @@
 
   --color-fg: #161c27;
   --color-fg-muted: #3f4959;
-  --color-fg-subtle: #535d6f;
+  --color-fg-subtle: #4d5667;
   --color-fg-faint: #626c7e;
   --color-fg-placeholder: #9aa3b2;
   --color-icon: #161c27;

@@ -64,7 +64,7 @@
   /* 文本灰阶 —— 用颜色做层级，不靠字号。主色略软于纯近白，输入/正文更护眼。 */
   --color-fg: #d8d8d7;
   --color-fg-muted: #b4b4b1;
-  --color-fg-subtle: #8a8a87;
+  --color-fg-subtle: #9faaba;
   --color-fg-faint: #5a5a5d;
   /* Hint / empty-state copy — one step quieter than faint chrome labels. */
   --color-fg-placeholder: #454548;
@@ -831,7 +831,7 @@
   /* Text — soft near-black (Cursor-like): deep enough with weight 400, not chalk #111. */
   --color-fg: #222222;
   --color-fg-muted: #3f3f3f;
-  --color-fg-subtle: #666666;
+  --color-fg-subtle: #4d5667;
   --color-fg-faint: #8f8f8f;
   --color-fg-placeholder: #b5b5b5;
   --color-icon: #222222;
@@ -944,7 +944,7 @@
 
   --color-fg: #cccccc;
   --color-fg-muted: #bfbfbf;
-  --color-fg-subtle: #989898;
+  --color-fg-subtle: #9faaba;
   --color-fg-faint: #6a6a6a;
   --color-fg-placeholder: #525252;
   --color-icon: #cccccc;

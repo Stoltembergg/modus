@@ -96,7 +96,7 @@ const ANY_DESKTOP: Rgb[] = [WHITE, LIGHT_GREY, GREY, DARK_GREY, BLACK];
 const DESKTOP_GATE: Record<string, number> = {
   "--color-fg": 4.5,
   "--color-fg-muted": 4.5,
-  "--color-fg-subtle": 3,
+  "--color-fg-subtle": 4.5,
   "--color-fg-faint": 3,
 };
 
@@ -170,7 +170,7 @@ describe("new look tokens: values", () => {
       "--color-elevated": "#1a2333",
       "--color-fg": "#f2f4f8",
       "--color-fg-muted": "#a9b2c0",
-      "--color-fg-subtle": "#939dac",
+      "--color-fg-subtle": "#9faaba",
       "--color-fg-faint": "#7d8797",
       "--color-accent": "#863ff5",
       "--color-accent-hover": "#8d4bf6",
@@ -189,7 +189,7 @@ describe("new look tokens: values", () => {
       "--color-elevated": "#ffffff",
       "--color-fg": "#161c27",
       "--color-fg-muted": "#3f4959",
-      "--color-fg-subtle": "#535d6f",
+      "--color-fg-subtle": "#4d5667",
       "--color-fg-faint": "#626c7e",
       "--color-accent": "#863ff5",
       "--color-accent-hover": "#7a35e8",
@@ -271,13 +271,10 @@ describe("new look tokens: contrast gate", () => {
           worst(color(theme, "--color-fg-muted"), surface, [GREY, likely]),
           `${at} muted`,
         ).toBeGreaterThanOrEqual(4.5);
-        // TODO(redesign shell PR): subtle carries text-2xs labels and should reach
-        // 4.5:1 here (today ~3.99 dark / ~3.79 light over window glass on grey);
-        // see "Redesign pending" item 1 in HANDOFF.md.
-        expect(
+                expect(
           worst(color(theme, "--color-fg-subtle"), surface, [GREY]),
           `${at} subtle`,
-        ).toBeGreaterThanOrEqual(3);
+        ).toBeGreaterThanOrEqual(4.5);
         expect(
           worst(color(theme, "--color-fg-faint"), surface, [GREY, likely]),
           `${at} faint`,
@@ -309,7 +306,7 @@ describe("new look tokens: contrast gate", () => {
       expect(
         stacked(color(theme, "--color-fg-subtle"), [GREY]),
         `${at} subtle`,
-      ).toBeGreaterThanOrEqual(3);
+      ).toBeGreaterThanOrEqual(4.5);
       expect(
         stacked(color(theme, "--color-fg-faint"), [GREY, likely]),
         `${at} faint`,
