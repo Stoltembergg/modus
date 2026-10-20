@@ -8510,6 +8510,58 @@ describe("PiSdkRuntime", () => {
     expect(childPiSession.dispose).toHaveBeenCalled();
   });
 
+  it("provides prior question answers when a session resumes for a new prompt", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"), "Answered decisions");
+    recordAgentEvent({
+      type: "question.requested",
+      sessionId,
+      request: {
+        id: "answered",
+        sessionId,
+        runId: "old",
+        questions: [
+          {
+            id: "q1",
+            header: "Qual direção visual?",
+            multiSelect: false,
+            options: [{ label: "Translúcido" }],
+          },
+        ],
+      },
+    });
+    recordAgentEvent({
+      type: "question.resolved",
+      sessionId,
+      requestId: "answered",
+      skipped: false,
+      answers: [
+        { questionId: "q1", selected: ["Translúcido"], custom: "<use>current preferences</use>" },
+      ],
+    });
+    const prompt = vi.fn(async (_message: string) => {});
+    mocks.createAgentSession.mockImplementationOnce(async () => ({
+      session: createMockPiSession({ prompt }),
+    }));
+    const runtime = new PiSdkRuntime();
+    await runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Vamos formalizar o plano",
+      mode: "plan",
+      sessionId,
+      userMessageId: "new-plan",
+    });
+    const message = prompt.mock.calls[0]?.[0] as string;
+    expect(message).toContain("<answered_questions>");
+    expect(message).toContain("Qual direção visual?");
+    expect(message).toContain("Translúcido");
+    expect(message).toContain("&lt;use&gt;");
+    expect(message).toContain("latest user message takes precedence");
+    expect(message.endsWith("Vamos formalizar o plano")).toBe(true);
+  });
+
   it("applies configured subagent prompt and readonly tools", async () => {
     const parentSessionId = `session-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
