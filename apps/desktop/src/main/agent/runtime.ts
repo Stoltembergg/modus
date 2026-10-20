@@ -6,6 +6,8 @@ import type {
   AgentSessionInfo,
   CodeGraphDiscoveryRef,
   ContextItem,
+  HarnessDeliveryAssessment,
+  HarnessQAResult,
   ModelInfo,
   MoveAgentSessionInput,
   ProjectMemoryCategory,
@@ -194,6 +196,11 @@ export type BackgroundWaitResult = {
     task: string;
     status: "running" | "completed" | "error" | "missing";
     output?: string;
+    /** Host-recorded child evidence; provisional until revalidated against the parent's source. */
+    runId?: string;
+    qa?: HarnessQAResult;
+    delivery?: HarnessDeliveryAssessment;
+    evidenceScope?: { cwd: string; provisional: true };
     memoryCandidates?: WaitMemoryCandidateSummary[];
     discoveries?: Array<CodeGraphDiscoveryRef & { provisional?: true }>;
   }>;

@@ -621,9 +621,7 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
       ),
     ),
   ];
-  if (input.requiredChecks.length === 0) {
-    return { required: false, status: "not_required", reasonCode: "qa_not_required", evidence: [] };
-  }
+  const required = input.requiredChecks.length > 0;
 
   const events = input.events
     .slice(-MAX_EVENTS)
@@ -641,6 +639,7 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
     }
   >();
   const invalidatingActions = new Set<string>();
+  const observedChecks = new Set<RecognizedCheckName>();
   const latest = new Map<string, HarnessEvidenceRef>();
   const latestSequence = new Map<string, number>();
   let generation = 0;
@@ -660,6 +659,7 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
         ["write", "edit", "terminal_write"].includes(event.toolName) ||
         (event.toolName.startsWith("mcp_") && !event.toolName.startsWith("mcp_v1_allowlisted_"));
       const unclassifiedShellAction = shellTool && !invocation && !checkName;
+      if (checkName && !sourceMutation) observedChecks.add(checkName);
       if (sourceMutation || unclassifiedShellAction) {
         generation += 1;
         latest.clear();
@@ -693,12 +693,8 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
 
     if (event.type === "check.confirmed") {
       const check = checkKey(event.checkName);
-      if (
-        !check ||
-        !requested.includes(check) ||
-        !coversChangedPaths(event.paths, input.changedPaths, false)
-      )
-        continue;
+      if (!check || !coversChangedPaths(event.paths, input.changedPaths, false)) continue;
+      observedChecks.add(check);
       latest.set(
         check,
         evidenceRef(
@@ -725,7 +721,6 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
     const check = started.checkName;
     if (
       !check ||
-      !requested.includes(check) ||
       started.mutatesSource === true ||
       started.generation !== generation ||
       !coversChangedPaths(
@@ -764,7 +759,6 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
     const check = started.checkName;
     if (
       !check ||
-      !requested.includes(check) ||
       started.mutatesSource === true ||
       started.generation !== generation ||
       started.sequence <= (latestSequence.get(check) ?? -1)
@@ -785,10 +779,18 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
     latestSequence.set(check, started.sequence);
   }
 
-  const evidence = requested
-    .map((check) => latest.get(check) ?? evidenceRef(input, check, "missing"))
-    .slice(0, MAX_EVIDENCE);
-  const statuses = evidence.map(({ status }) => status);
+  const requiredEvidence = requested.map(
+    (check) => latest.get(check) ?? evidenceRef(input, check, "missing"),
+  );
+  const observedEvidence = [...observedChecks]
+    .filter((check) => !requested.includes(check))
+    .map((check) => latest.get(check) ?? evidenceRef(input, check, "missing"));
+  const evidence = [...requiredEvidence, ...observedEvidence].slice(0, MAX_EVIDENCE);
+  if (!required && evidence.length === 0) {
+    return { required: false, status: "not_required", reasonCode: "qa_not_required", evidence: [] };
+  }
+  // Optional evidence cannot fulfill or dilute a required check obligation.
+  const statuses = (required ? requiredEvidence : observedEvidence).map(({ status }) => status);
   let status: AutoQAStatus;
   let reasonCode: string;
   if (statuses.includes("failed")) {
@@ -817,7 +819,8 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
     reasonCode = "required_checks_passed";
   }
 
-  return { required: true, status, reasonCode, evidence };
+  if (!required) reasonCode = `observed_check_${status}`;
+  return { required, status, reasonCode, evidence };
 }
 
 /** Keep passing evidence valid only for the source content observed at check start, end, and QA time. */
@@ -826,7 +829,6 @@ export function bindRunQAtoWorkspaceRevision(input: {
   events: RunQAEvent[];
   workspaceRevision: string | undefined;
 }): HarnessQAResult {
-  if (!input.result.required) return input.result;
   const starts = new Map<string, Extract<RunQAEvent, { type: "tool.started" }>>();
   for (const event of input.events) {
     if (event.type === "tool.started") starts.set(event.toolCallId, event);
@@ -863,7 +865,12 @@ export function bindRunQAtoWorkspaceRevision(input: {
   return {
     ...input.result,
     ...(input.result.status === "passed" && invalidatedPass
-      ? { status: "unavailable" as const, reasonCode: "required_check_unavailable" }
+      ? {
+          status: "unavailable" as const,
+          reasonCode: input.result.required
+            ? "required_check_unavailable"
+            : "observed_check_unavailable",
+        }
       : {}),
     evidence,
   };

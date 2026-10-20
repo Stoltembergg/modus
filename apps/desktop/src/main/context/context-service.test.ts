@@ -2,8 +2,23 @@ import { execFile } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveContext } from "./context-service";
+
+// File context needs no Electron process, database, browser, or terminal host.
+vi.mock("../agent/agent-event-store", () => ({
+  listAgentEventRawPage: vi.fn(),
+  MAX_AGENT_EVENT_PAGE_SIZE: 256,
+}));
+vi.mock("../agent/agent-store", () => ({ listAgentSessions: vi.fn() }));
+vi.mock("../browser/browser-service", () => ({ activeBrowserContext: vi.fn() }));
+vi.mock("../docs/docs-service", () => ({ getDocChunk: vi.fn() }));
+vi.mock("../git/git-service", () => ({
+  isGitRepository: vi.fn(),
+  readBranchDiff: vi.fn(),
+  readDiff: vi.fn(),
+}));
+vi.mock("../terminal/terminal-service", () => ({ getTerminalOutput: vi.fn() }));
 
 const execFileAsync = promisify(execFile);
 let repo: string;
@@ -43,6 +58,69 @@ describe("context-service", () => {
 
     expect(resolved[0]?.title).toContain(":L2-3");
     expect(resolved[0]?.content).toBe("two\nthree");
+  });
+
+  it("keeps a large whole-file attachment as an actionable path and size reference", async () => {
+    const path = join(repo, "large.txt");
+    await writeFile(path, "private body\n".repeat(6000));
+
+    const resolved = await resolveContext(repo, [{ type: "file", path }]);
+
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]?.title).toBe("file:large.txt");
+    expect(resolved[0]?.content).toContain("large.txt");
+    expect(resolved[0]?.content).toContain("78000 bytes");
+    expect(resolved[0]?.content).toMatch(/read tool/i);
+    expect(resolved[0]?.content).not.toContain("private body");
+  });
+
+  it("reads selected lines beyond 64KiB without losing UTF-8 or CRLF characters", async () => {
+    const path = join(repo, "large.ts");
+    // Put a multibyte character across a 16KiB read boundary in the selection.
+    await writeFile(
+      path,
+      `${"padding\n".repeat(9000)}${"x".repeat(9919)}🙂 café\r\n終わり\r\nafter\n`,
+    );
+
+    const resolved = await resolveContext(repo, [
+      { type: "file", path, range: { fromLine: 9001, toLine: 9002 } },
+    ]);
+
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]?.title).toBe("file:large.ts:L9001-9002");
+    expect(resolved[0]?.content).toBe(`${"x".repeat(9919)}🙂 café\r\n終わり\r`);
+  });
+
+  it("retains the precise range when selected content exceeds the inline budget", async () => {
+    const path = join(repo, "large-line.txt");
+    await writeFile(path, `header\n${"é".repeat(40000)}\ntail\n`);
+
+    const resolved = await resolveContext(repo, [
+      { type: "file", path, range: { fromLine: 2, toLine: 2 } },
+    ]);
+
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]?.title).toBe("file:large-line.txt:L2");
+    expect(resolved[0]?.content).toContain("large-line.txt");
+    expect(resolved[0]?.content).toContain("L2");
+    expect(resolved[0]?.content).toMatch(/read tool/i);
+    expect(Buffer.byteLength(resolved[0]?.content ?? "", "utf8")).toBeLessThan(61_440);
+  });
+
+  it("keeps a distant range actionable when scanning reaches its byte budget", async () => {
+    const path = join(repo, "distant.txt");
+    await writeFile(path, `${"padding\n".repeat(200000)}selected\n`);
+
+    const resolved = await resolveContext(repo, [
+      { type: "file", path, range: { fromLine: 200001, toLine: 200001 } },
+    ]);
+
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]?.title).toBe("file:distant.txt:L200001");
+    expect(resolved[0]?.content).toContain("distant.txt");
+    expect(resolved[0]?.content).toContain("L200001");
+    expect(resolved[0]?.content).toMatch(/read tool/i);
+    expect(resolved[0]?.content).not.toContain("\nselected");
   });
 
   it("resolves project rules", async () => {

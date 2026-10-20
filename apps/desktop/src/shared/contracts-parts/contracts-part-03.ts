@@ -3,6 +3,7 @@ import type {
   AdaptiveFailureAttempt,
   CompactionReason,
   ContextUsageInfo,
+  HarnessDeliveryAssessment,
   HarnessQAResult,
   HarnessRouteEvent,
   HarnessTaskState,
@@ -72,6 +73,8 @@ type AgentEventPayload =
       sessionId: string;
       runId: string;
       summary?: string;
+      /** Acceptance of tracked obligations; completed only terminates execution. */
+      delivery?: HarnessDeliveryAssessment;
       /** What this turn changed on disk (vs the pre-run snapshot). */
       changes?: WorkingChangeStats;
       tokenUsage?: AgentRunTokenUsage;
@@ -210,7 +213,7 @@ type AgentEventPayload =
       /** Original/root run whose single continuation budget this marker consumes. */
       runId: string;
       attempt: 1;
-      reasonCode: "actionable_todos" | "missing_qa";
+      reasonCode: "actionable_todos" | "missing_qa" | "failed_qa";
     }
   | { type: "harness.qa"; sessionId: string; runId: string; result: HarnessQAResult }
   | {

@@ -5,10 +5,6 @@ const runtimeRegistryMocks = vi.hoisted(() => ({
   shutdownCalls: 0,
 }));
 
-vi.mock("./harness/adaptive-oracle-bridge", () => ({
-  installAdaptiveOracleBridge: vi.fn(),
-}));
-
 vi.mock("./pi-sdk-runtime", async () => {
   return {
     PiSdkRuntime: class {

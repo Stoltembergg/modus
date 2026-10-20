@@ -1,109 +1,159 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { AdaptiveDecisionSnapshot } from "../../../shared/contracts";
+import * as bridge from "./adaptive-oracle-bridge";
 import {
-  clearPendingOracleEnvelope,
-  installAdaptiveOracleBridge,
+  ADAPTIVE_ORACLE_WAIT_MS,
+  type AdaptiveOracleTrackerFields,
   joinAdaptiveOracleFindings,
-  peekPendingOracleEnvelope,
-  resetAdaptiveOracleBridgeForTests,
 } from "./adaptive-oracle-bridge";
 import { decideNext, formatAdaptiveDecisionHint } from "./meta-controller";
+import { ORACLE_DIGEST_MAX_BYTES } from "./oracle-findings";
 
-afterEach(() => {
-  resetAdaptiveOracleBridgeForTests();
-  clearPendingOracleEnvelope();
-});
+// Policy storage opens the desktop database; these tests exercise caller-owned run data.
+vi.mock("./promoted-policy-store", () => ({ loadPromotedPolicies: () => [] }));
 
-function baseFailedSnapshot() {
+function failedSnapshot(
+  sessionId: string,
+  tracker: AdaptiveOracleTrackerFields,
+): AdaptiveDecisionSnapshot {
   return {
-    sessionId: "s1",
-    runId: "r1",
-    workspaceId: "w1",
-    mode: "build" as const,
+    sessionId,
+    runId: `${sessionId}-run`,
+    workspaceId: "fixture-workspace",
+    mode: "build",
     classification: {
-      taskType: "implementation" as const,
-      complexity: "complex" as const,
-      risk: "high" as const,
-      confidence: "high" as const,
-      reasons: ["test"],
-      suggestedRole: "oracle" as const,
+      taskType: "implementation",
+      complexity: "complex",
+      risk: "high",
+      confidence: "high",
+      reasons: ["fixture"],
+      suggestedRole: "oracle",
     },
-    failureAttempts: [
-      {
-        id: "a1",
-        sessionId: "s1",
-        runId: "r1",
-        strategyCode: "same_edit_retry",
-        status: "failed" as const,
-        reasonCode: "qa_failed",
-        evidenceEventIds: [] as string[],
-        createdAt: new Date().toISOString(),
-      },
-    ],
+    failureAttempts: [],
     remainingContinuationBudget: 0,
-    enabledModelIds: [] as string[],
-    decisionMode: "active" as const,
+    enabledModelIds: [],
+    decisionMode: "active",
     openQuestionCount: 0,
-    unresolvedCriterionCount: 0,
-    qaStatus: "failed" as const,
-    impact: {
-      blastRadius: "cross_module" as const,
-      impactedPathCount: 4,
-      confidence: "medium" as const,
-      unknownReasons: [] as string[],
-      reasonCodes: [] as string[],
-    },
-    taskState: {
-      phase: "verifying" as const,
-      verificationStatus: "failed" as const,
-      criteria: [],
-      openQuestionRefs: [] as string[],
-      hypothesisRefs: [] as string[],
-    },
+    unresolvedCriterionCount: 1,
+    qaStatus: "failed",
+    oracleConsulted: tracker.adaptiveOracleConsulted === true,
+    oracleDigestPresent: Boolean(tracker.adaptiveOracleDigest),
+    promotedPolicies: [],
   };
 }
 
 describe("adaptive-oracle-bridge", () => {
-  it("caps findings and sets oracleConsulted on bounded join success", async () => {
-    const tracker: {
-      adaptiveOracleChildSessionId: string;
-      adaptiveOracleConsulted?: boolean;
-      adaptiveOracleDigest?: string;
-      taskState: { hypothesisRefs: string[] };
-    } = {
-      adaptiveOracleChildSessionId: "child-1",
-      taskState: { hypothesisRefs: [] },
+  it("keeps concurrent session findings and the next run isolated", async () => {
+    type Result = {
+      timedOut: boolean;
+      subagents: Array<{ id: string; status: string; output?: string }>;
     };
+    const pending = new Map<string, (result: Result) => void>();
+    const runtime = {
+      waitBackground: ({ sessionId }: { sessionId: string }) =>
+        new Promise<Result>((resolve) => pending.set(sessionId, resolve)),
+    };
+    const trackerA: AdaptiveOracleTrackerFields = {
+      adaptiveOracleChildSessionId: "child-a",
+      taskState: { hypothesisRefs: [], evidenceEventIds: [], verificationStatus: "failed" },
+    };
+    const trackerB: AdaptiveOracleTrackerFields = { adaptiveOracleChildSessionId: "child-b" };
+    const joinA = joinAdaptiveOracleFindings(runtime, "session-a", trackerA);
+    const joinB = joinAdaptiveOracleFindings(runtime, "session-b", trackerB);
+    pending.get("session-b")?.({
+      timedOut: false,
+      subagents: [{ id: "child-b", status: "completed", output: "SESSION_B_ONLY" }],
+    });
+    await joinB;
+    const decisionB = decideNext(failedSnapshot("session-b", trackerB));
+    const hintB = formatAdaptiveDecisionHint(decisionB, trackerB.adaptiveOracleDigest);
+    expect(hintB).toContain("SESSION_B_ONLY");
+    expect(hintB).not.toContain("SESSION_A_ONLY");
+
+    // A is still pending: B's completed advisory must not reach A's hint or decision.
+    const pendingDecisionA = decideNext(failedSnapshot("session-a", trackerA));
+    expect(
+      formatAdaptiveDecisionHint(pendingDecisionA, trackerA.adaptiveOracleDigest),
+    ).not.toContain("SESSION_B_ONLY");
+    pending.get("session-a")?.({
+      timedOut: false,
+      subagents: [{ id: "child-a", status: "completed", output: "SESSION_A_ONLY" }],
+    });
+    await joinA;
+    const decisionA = decideNext(failedSnapshot("session-a", trackerA));
+    const hintA = formatAdaptiveDecisionHint(decisionA, trackerA.adaptiveOracleDigest);
+    expect(hintA).toContain("SESSION_A_ONLY");
+    expect(hintA).not.toContain("SESSION_B_ONLY");
+    expect(decisionA.action).toBe("replan");
+    expect(decisionB.action).toBe("replan");
+    expect(trackerA.taskState).toMatchObject({
+      hypothesisRefs: ["oracle:child-a"],
+      evidenceEventIds: [],
+      verificationStatus: "failed",
+    });
+
+    const nextRun: AdaptiveOracleTrackerFields = {};
+    const nextDecision = decideNext(failedSnapshot("session-a", nextRun));
+    const nextHint = formatAdaptiveDecisionHint(nextDecision);
+    expect(nextDecision.action).toBe("spawn_readonly_specialist");
+    expect(nextHint).not.toContain("SESSION_A_ONLY");
+    expect(nextHint).not.toContain("SESSION_B_ONLY");
+  });
+
+  it("caps findings and waits only for the tracker-owned child", async () => {
+    const tracker: AdaptiveOracleTrackerFields = { adaptiveOracleChildSessionId: "child-1" };
     const runtime = {
       waitBackground: vi.fn(async () => ({
         timedOut: false,
         subagents: [
-          {
-            id: "child-1",
-            status: "completed",
-            output: "root cause: missing null check in parser",
-          },
+          { id: "other-child", status: "completed", output: "UNRELATED" },
+          { id: "child-1", status: "completed", output: "x".repeat(4000) },
         ],
       })),
     };
     await joinAdaptiveOracleFindings(runtime, "parent-1", tracker);
+    expect(runtime.waitBackground).toHaveBeenCalledWith({
+      sessionId: "parent-1",
+      timeoutMs: ADAPTIVE_ORACLE_WAIT_MS,
+      subagentIds: ["child-1"],
+    });
     expect(tracker.adaptiveOracleConsulted).toBe(true);
-    expect(tracker.adaptiveOracleDigest).toMatch(/null check/);
-    expect(peekPendingOracleEnvelope()).toMatch(/adaptive_oracle_findings/);
-    expect(tracker.taskState.hypothesisRefs[0]).toMatch(/^oracle:/);
+    expect(Buffer.byteLength(tracker.adaptiveOracleDigest ?? "", "utf8")).toBeLessThanOrEqual(
+      ORACLE_DIGEST_MAX_BYTES,
+    );
+    expect(tracker.adaptiveOracleDigest).not.toContain("UNRELATED");
   });
 
-  it("records timeout without throwing", async () => {
-    const tracker: {
-      adaptiveOracleChildSessionId: string;
-      adaptiveOracleConsulted?: boolean;
-      adaptiveOracleWaitReason?: "oracle_wait_timeout" | "oracle_wait_failed";
-      adaptiveOracleDigest?: string;
-    } = { adaptiveOracleChildSessionId: "child-2" };
+  it.each([
+    "running",
+    "error",
+    "missing",
+    "cancelled",
+  ])("never treats %s child output as findings", async (status) => {
+    const tracker: AdaptiveOracleTrackerFields = { adaptiveOracleChildSessionId: "child-1" };
+    await joinAdaptiveOracleFindings(
+      {
+        waitBackground: async () => ({
+          timedOut: false,
+          subagents: [{ id: "child-1", status, output: "incomplete advice" }],
+        }),
+      },
+      "parent-1",
+      tracker,
+    );
+    expect(tracker.adaptiveOracleDigest).toBeUndefined();
+    expect(tracker.adaptiveOracleWaitReason).toBe(
+      status === "running" ? "oracle_wait_timeout" : "oracle_wait_failed",
+    );
+  });
+
+  it("records timeout without throwing or promoting incomplete output", async () => {
+    const tracker: AdaptiveOracleTrackerFields = { adaptiveOracleChildSessionId: "child-2" };
     await joinAdaptiveOracleFindings(
       {
         waitBackground: async () => ({
           timedOut: true,
-          subagents: [{ id: "child-2", status: "running" }],
+          subagents: [{ id: "child-2", status: "completed", output: "unconfirmed" }],
         }),
       },
       "parent-1",
@@ -114,44 +164,25 @@ describe("adaptive-oracle-bridge", () => {
     expect(tracker.adaptiveOracleDigest).toBeUndefined();
   });
 
-  it("installs consult augmenter so decideNext sees oracleConsulted", async () => {
-    class FakeRuntime {
-      runOutputTrackers = new Map();
-      async waitBackground() {
-        return { timedOut: false, subagents: [] as Array<{ id: string; status: string }> };
-      }
-      async runSubagent() {
-        return { session: { id: "x" } };
-      }
-      async flushPendingAdaptiveSpawn() {}
-      recordAdaptiveFailure() {}
-    }
-    // Put consult on the prototype so installAdaptiveOracleBridge can wrap it.
-    (
-      FakeRuntime.prototype as unknown as {
-        consultAdaptiveController: (
-          rs: unknown,
-          tracker: unknown,
-          input: unknown,
-        ) => Promise<unknown>;
-      }
-    ).consultAdaptiveController = async () => decideNext(baseFailedSnapshot());
+  it("records failed waits without throwing", async () => {
+    const tracker: AdaptiveOracleTrackerFields = { adaptiveOracleChildSessionId: "child-2" };
+    await joinAdaptiveOracleFindings(
+      {
+        waitBackground: async () => {
+          throw new Error("fixture wait failed");
+        },
+      },
+      "parent-1",
+      tracker,
+    );
+    expect(tracker.adaptiveOracleWaitReason).toBe("oracle_wait_failed");
+    expect(tracker.adaptiveOracleDigest).toBeUndefined();
+  });
 
-    installAdaptiveOracleBridge(FakeRuntime);
-    const runtime = new FakeRuntime() as unknown as {
-      consultAdaptiveController: (
-        rs: unknown,
-        tracker: unknown,
-        input: unknown,
-      ) => Promise<ReturnType<typeof decideNext>>;
-    };
-    const tracker = {
-      adaptiveOracleConsulted: true,
-      adaptiveOracleDigest: "digest",
-    };
-    const decision = await runtime.consultAdaptiveController({}, tracker, {});
-    expect(decision.action).toBe("replan");
-    expect(decision.changeStrategy?.recommended).toBe("replan_scope");
-    expect(formatAdaptiveDecisionHint(decision)).toMatch(/replan/i);
+  it("exposes no prototype installation or shared envelope state", () => {
+    expect(bridge).not.toHaveProperty("installAdaptiveOracleBridge");
+    expect(bridge).not.toHaveProperty("peekPendingOracleEnvelope");
+    expect(bridge).not.toHaveProperty("clearPendingOracleEnvelope");
+    expect(bridge).not.toHaveProperty("resetAdaptiveOracleBridgeForTests");
   });
 });

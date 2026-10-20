@@ -98,6 +98,23 @@ describe("wait memory candidate summaries", () => {
               task: "Find implementation",
               status: "completed",
               output: "Ordinary child output excerpt.",
+              runId: "child-run",
+              qa: {
+                required: true,
+                status: "failed",
+                reasonCode: "required_check_failed",
+                evidence: [
+                  {
+                    kind: "check",
+                    label: "Tests",
+                    status: "failed",
+                    eventId: "check-event",
+                    revision: "source-123",
+                  },
+                ],
+              },
+              delivery: { status: "verification_failed", reasonCodes: ["qa_failed"] },
+              evidenceScope: { cwd: "/child-worktree", provisional: true },
               discoveries: [
                 {
                   runId: "child-run",
@@ -125,6 +142,11 @@ describe("wait memory candidate summaries", () => {
     };
     const discoveries = details.subagents[0]?.discoveries ?? [];
 
+    expect(text).toContain("QA: failed; required=true");
+    expect(text).toContain("delivery: verification_failed");
+    expect(text).toContain("check-event");
+    expect(text).toContain("source-123");
+    expect(text).toContain("revalidate against the parent's current source");
     expect(text).toContain("CodeGraph discoveries:");
     expect(text).toContain("src/agent.ts:19");
     expect(text).toContain("Agent.run");

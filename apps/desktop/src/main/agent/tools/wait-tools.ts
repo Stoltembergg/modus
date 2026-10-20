@@ -121,6 +121,21 @@ const waitTool: ToolDefinition = defineTool({
     }
     for (const child of result.subagents) {
       lines.push(`subagent ${child.id} [${child.status}] ${child.task}`);
+      if (child.runId) lines.push(`run ${child.runId}`);
+      if (child.delivery)
+        lines.push(`delivery: ${child.delivery.status} (${child.delivery.reasonCodes.join(", ")})`);
+      if (child.qa) {
+        lines.push(`QA: ${child.qa.status}; required=${child.qa.required}`);
+        for (const evidence of child.qa.evidence.slice(0, 16)) {
+          lines.push(
+            `- ${evidence.label}: ${evidence.status}${evidence.eventId ? ` [event ${evidence.eventId}]` : ""}${evidence.revision ? ` [revision ${evidence.revision}]` : ""}`,
+          );
+        }
+      }
+      if (child.evidenceScope)
+        lines.push(
+          `Evidence source: ${child.evidenceScope.cwd} [provisional; revalidate against the parent's current source before acceptance]`,
+        );
       for (const memory of child.memoryCandidates ?? []) {
         lines.push(`memory candidate ${memory.id} [${memory.category}]: ${memory.claim}`);
       }
