@@ -52,27 +52,31 @@ describe("detectPreviewKind (authoritative magic / part peek)", () => {
 });
 
 describe("readWorkspacePreview", () => {
-  it("returns bytes + kind for a PDF under the workspace", () => {
+  it("returns bytes + kind for a PDF under the workspace", async () => {
     const path = join(root, "doc.pdf");
     const bytes = Buffer.from("%PDF-1.4\n%%EOF\n");
     writeFileSync(path, bytes);
-    const result = readWorkspacePreview(root, path);
+    const result = await readWorkspacePreview(root, path);
     expect(result.previewKind).toBe("pdf");
     expect(result.mime).toBe("application/pdf");
     expect(result.size).toBe(bytes.length);
     expect(Buffer.from(result.bytes)).toEqual(bytes);
   });
 
-  it("rejects paths outside the workspace", () => {
-    expect(() => readWorkspacePreview(root, join(root, "..", "secret.pdf"))).toThrow(/outside/);
+  it("rejects paths outside the workspace", async () => {
+    await expect(readWorkspacePreview(root, join(root, "..", "secret.pdf"))).rejects.toThrow(
+      /outside/,
+    );
   });
 
-  it("rejects files over the preview size cap", () => {
+  it("rejects files over the preview size cap", async () => {
     mkdirSync(join(root, "big"), { recursive: true });
     const path = join(root, "big", "huge.bin");
     // Cap is enforced by size check before full read — write a stub and spy via tiny file
     // that we treat as over-cap by calling with an explicit low limit in the test helper.
     writeFileSync(path, Buffer.from("%PDF-1.4\noversize\n"));
-    expect(() => readWorkspacePreview(root, path, { maxBytes: 4 })).toThrow(/too large|limit/i);
+    await expect(readWorkspacePreview(root, path, { maxBytes: 4 })).rejects.toThrow(
+      /too large|limit/i,
+    );
   });
 });

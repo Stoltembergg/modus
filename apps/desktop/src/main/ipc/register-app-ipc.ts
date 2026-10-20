@@ -1205,7 +1205,7 @@ export function registerAppIpc({
   ipcMain.handle(IPC_CHANNELS.previewRead, async (event, input) => {
     assertTrustedSender(event);
     const parsed = parseIpcInput(previewReadSchema, input, IPC_CHANNELS.previewRead);
-    return readWorkspacePreview(parsed.cwd, parsed.path);
+    return await readWorkspacePreview(parsed.cwd, parsed.path);
   });
 
   ipcMain.handle(IPC_CHANNELS.gitBranches, async (event, cwd: string) => {
