@@ -358,7 +358,7 @@ export function Inspector({
                         <Tabs.Tab
                           aria-label={tab.label}
                           className={cn(
-                            "toolbar-icon-button relative z-10 flex items-center justify-center rounded-md text-sm font-normal transition-colors outline-none hover:bg-hover data-selected:text-[var(--color-icon)]",
+                            "toolbar-icon-button relative z-10 flex items-center justify-center rounded-md text-sm font-normal transition-colors hover:bg-hover data-selected:text-[var(--color-icon)]",
                           )}
                           value={tab.value}
                         >
