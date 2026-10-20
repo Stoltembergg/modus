@@ -857,7 +857,7 @@ function FileActions({
       <Menu.Root>
         <Menu.Trigger
           aria-label={t("files.options")}
-          className="toolbar-icon-button flex items-center justify-center rounded-md outline-none transition-colors hover:bg-hover data-popup-open:bg-hover disabled:opacity-35"
+          className="toolbar-icon-button flex items-center justify-center rounded-md transition-colors hover:bg-hover data-popup-open:bg-hover disabled:opacity-35"
           disabled={disabled}
         >
           <IconDots size={18} stroke={1.8} />
