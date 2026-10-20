@@ -149,6 +149,46 @@ describe("quality runtime event reporter", () => {
     expect(result.combined.totalUsage).toBeNull();
     expect(result.runs[0]?.elapsedMs).toBeNull();
   });
+
+  it.each([
+    ["timed out", { timedOut: true }],
+    ["aborted", { aborted: true }],
+    ["skipped", { skipped: true }],
+    ["errored", { isError: true }],
+  ] as const)("does not count a %s wait as successful delegation", (_label, outcome) => {
+    const reporter = new QualityRunReporter();
+    reporter.observe(
+      {
+        type: "tool.ended",
+        sessionId: "parent",
+        runId: "parent-run",
+        toolCallId: "wait-call",
+        toolName: "wait",
+        isError: false,
+        ...outcome,
+      },
+      10,
+    );
+
+    expect(reporter.successfulWaits).toBe(0);
+  });
+
+  it("counts a completed wait as successful delegation", () => {
+    const reporter = new QualityRunReporter();
+    reporter.observe(
+      {
+        type: "tool.ended",
+        sessionId: "parent",
+        runId: "parent-run",
+        toolCallId: "wait-call",
+        toolName: "wait",
+        isError: false,
+      },
+      10,
+    );
+
+    expect(reporter.successfulWaits).toBe(1);
+  });
 });
 
 describe("quality fixture scope", () => {

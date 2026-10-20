@@ -1143,6 +1143,48 @@ export function getLatestSessionTodos(sessionId: string): TodoItem[] | undefined
   }
 }
 
+/** Latest to-do list written after the specified durable start of this run. */
+export function getSessionTodosForRun(
+  sessionId: string,
+  runId: string,
+  runStartedRowId: number,
+): TodoItem[] | undefined {
+  if (
+    !SAFE_TASK_STATE_ID.test(sessionId) ||
+    !SAFE_TASK_STATE_ID.test(runId) ||
+    !Number.isSafeInteger(runStartedRowId) ||
+    runStartedRowId <= 0
+  ) {
+    return undefined;
+  }
+  const db = getDatabase();
+  const ownsStart = db
+    .prepare(
+      `select 1 from agent_events
+       where session_id = ? and type = 'run.started'
+         and json_extract(payload_json, '$.runId') = ? and rowid = ?
+       limit 1`,
+    )
+    .get(sessionId, runId, runStartedRowId);
+  if (!ownsStart) return undefined;
+
+  const row = db
+    .prepare(
+      `select payload_json from agent_events
+       where session_id = ? and type = 'todos.updated' and rowid > ?
+       order by rowid desc
+       limit 1`,
+    )
+    .get(sessionId, runStartedRowId) as { payload_json: string } | undefined;
+  if (!row) return undefined;
+  try {
+    const event = JSON.parse(row.payload_json) as Extract<AgentEvent, { type: "todos.updated" }>;
+    return Array.isArray(event.todos) ? event.todos : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Latest bounded continuation marker for one original/root run. */
 export function getLatestTodoContinuationAttempt(sessionId: string, runId: string): number {
   const row = getDatabase()

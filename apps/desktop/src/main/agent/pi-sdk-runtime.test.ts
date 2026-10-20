@@ -3239,6 +3239,44 @@ describe("PiSdkRuntime", () => {
     expect(markers[0]?.payload_json).not.toContain("Implement the feature");
   });
 
+  it("does not accept a new turn from completed todos left by an earlier task", async () => {
+    const sessionId = `stale-delivery-todos-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    recordAgentEvent({
+      type: "todos.updated",
+      sessionId,
+      todos: [{ id: "old-task", content: "Finish a previous task", status: "completed" }],
+    });
+    const session = createMockPiSession({
+      prompt: vi.fn(async () => {
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "A new unrelated answer." },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Answer this unrelated question.",
+      sessionId,
+    });
+
+    const completed = listAgentEvents(sessionId).findLast(
+      ({ event }) => event.type === "run.completed",
+    )?.event;
+    expect(completed).toMatchObject({
+      type: "run.completed",
+      delivery: {
+        status: "unverified",
+        reasonCodes: expect.arrayContaining(["no_tracked_requirements"]),
+      },
+    });
+  });
+
   it("records the tool-call count of each assistant message_end (group_start_worktree must be alone)", async () => {
     const { lastAssistantToolCallCount } = await import("./tools/tool-batch");
     const sessionId = `session-${crypto.randomUUID()}`;

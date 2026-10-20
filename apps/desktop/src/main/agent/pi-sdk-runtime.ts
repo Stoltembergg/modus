@@ -124,6 +124,7 @@ import {
   getRunToolEvidence,
   getRunWorkspaceRevision,
   getSessionCodeGraphDiscoveries,
+  getSessionTodosForRun,
   listAgentEvents,
   listUnterminatedAgentRunIds,
   recordAgentEvent,
@@ -6308,7 +6309,10 @@ export class PiSdkRuntime implements AgentRuntime {
         reasonCode: "qa_not_required",
         evidence: [],
       },
-      todos: getLatestSessionTodos(sessionId) ?? [],
+      todos:
+        tracker.runStartedRowId !== undefined
+          ? (getSessionTodosForRun(sessionId, tracker.runId, tracker.runStartedRowId) ?? [])
+          : [],
       criteria: tracker.taskState?.criteria ?? [],
     });
     return tracker.deliveryUncertain

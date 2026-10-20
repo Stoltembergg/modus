@@ -29,7 +29,13 @@ export class QualityRunReporter {
   observe(event: AgentEvent, observedMs: number): void {
     if (event.type === "tool.ended") {
       if (event.isError) this.toolErrors.add(`${event.sessionId}:${event.toolCallId}`);
-      if (event.toolName === "wait" && !event.isError) {
+      if (
+        event.toolName === "wait" &&
+        !event.isError &&
+        !event.timedOut &&
+        !event.aborted &&
+        !event.skipped
+      ) {
         this.successfulWaitIds.add(`${event.sessionId}:${event.toolCallId}`);
       }
     }
