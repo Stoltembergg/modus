@@ -25,6 +25,7 @@ const {
   getLatestCheckpointRestoreRowId,
   getLatestHarnessTaskState,
   getSessionTodosForRun,
+  getSessionQuestionHistory,
   getLatestTodoContinuationAttempt,
   getRunToolEvidence,
   getHarnessQAEventByRowId,
@@ -3484,7 +3485,8 @@ fs.renameSync("original-manifest-link", "package.json");
     expect(page.events.map(({ event }) => event.type)).toEqual(["run.started", "run.started"]);
     expect(page.summaryEvents.map(({ event }) => event.type)).toContain("session.status");
     expect(page.summaryEvents.map(({ event }) => event.type)).toContain("permission.requested");
-    expect(page.summaryEvents).toHaveLength(2);
+    expect(page.summaryEvents).toHaveLength(3);
+    expect(page.summaryEvents.map(({ event }) => event.type)).toContain("run.started");
     expect(page.activityEvents.map(({ event }) => event.type)).toEqual(["run.started"]);
     expect(page.activityEvents[0]?.event).toMatchObject({ runId: "paged-state-run-4" });
   });
@@ -3631,5 +3633,83 @@ fs.renameSync("original-manifest-link", "package.json");
     } finally {
       db.close();
     }
+  });
+});
+
+describe("persisted question decisions", () => {
+  it("ignores malformed persisted answers instead of breaking the next prompt", () => {
+    const sessionId = `malformed-question-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    recordAgentEvent({
+      type: "question.requested",
+      sessionId,
+      request: {
+        id: "malformed",
+        questions: [
+          { id: "q1", header: "Theme?", multiSelect: false, options: [{ label: "Dark" }] },
+        ],
+      },
+    });
+    recordAgentEvent({
+      type: "question.resolved",
+      sessionId,
+      requestId: "malformed",
+      answers: [{ questionId: "q1", selected: null }] as never,
+      skipped: false,
+    });
+    expect(getSessionQuestionHistory(sessionId)).toEqual([]);
+  });
+
+  it("keeps session answers while limiting automatic reuse to the current user turn", () => {
+    const sessionId = `questions-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    recordAgentEvent({ type: "run.started", sessionId, runId: "r1", delivery: "normal" });
+    recordAgentEvent({
+      type: "question.requested",
+      sessionId,
+      request: {
+        id: "q",
+        sessionId,
+        runId: "r1",
+        questions: [
+          { id: "q1", header: "Theme?", multiSelect: false, options: [{ label: "Dark" }] },
+        ],
+      },
+    });
+    recordAgentEvent({
+      type: "question.resolved",
+      sessionId,
+      requestId: "q",
+      answers: [{ questionId: "q1", selected: ["Dark"] }],
+      skipped: false,
+    });
+    expect(getSessionQuestionHistory(sessionId, "r1")).toHaveLength(1);
+    expect(getSessionQuestionHistory("other-session", "r1")).toEqual([]);
+    expect(getSessionQuestionHistory(sessionId, "r2")).toEqual([]);
+    recordAgentEvent({
+      type: "message.started",
+      sessionId,
+      messageId: "new-instruction",
+      role: "user",
+    });
+    expect(getSessionQuestionHistory(sessionId, "r1")).toEqual([]);
+    expect(getSessionQuestionHistory(sessionId)).toHaveLength(1);
+    recordAgentEvent({ type: "checkpoint.restored", sessionId, checkpointId: "restore" });
+    expect(getSessionQuestionHistory(sessionId)).toEqual([]);
+  });
+
+  it("does not resurrect a stale request after its run ended outside the visible page", () => {
+    const sessionId = `orphan-question-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    recordAgentEvent({
+      type: "question.requested",
+      sessionId,
+      request: { id: "orphan", questions: [] },
+    });
+    recordAgentEvent({ type: "run.completed", sessionId, runId: "r" });
+    recordAgentEvent({ type: "message.delta", sessionId, messageId: "later", delta: "later" });
+    const page = listAgentEventPage(sessionId, { includeSummary: true, limit: 1 });
+    expect(page.summaryEvents.some(({ event }) => event.type === "question.requested")).toBe(false);
+    expect(page.summaryEvents.some(({ event }) => event.type === "run.completed")).toBe(true);
   });
 });

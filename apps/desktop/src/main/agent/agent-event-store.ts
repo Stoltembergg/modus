@@ -16,6 +16,8 @@ import type {
   HarnessTaskCriterionState,
   HarnessTaskEvidenceRef,
   HarnessTaskState,
+  QuestionRequest,
+  QuestionResponse,
   TodoItem,
   VerificationEvidenceStatus,
 } from "../../shared/contracts";
@@ -1120,6 +1122,104 @@ export function getLatestCheckpointRestoreRowId(
     )
     .get(sessionId, runStartedRowId) as { rowid: number } | undefined;
   return row?.rowid;
+}
+
+/** Recent durable question resolutions; run-scoped reuse ends at the next delivered user input. */
+export function getSessionQuestionHistory(
+  sessionId: string,
+  runId?: string,
+): Array<{ request: QuestionRequest; response: QuestionResponse }> {
+  const db = getDatabase();
+  let boundary = 0;
+  if (runId !== undefined) {
+    const start = db
+      .prepare(
+        `select rowid as rowid from agent_events where session_id = ? and type = 'run.started'
+       and json_valid(payload_json) and json_extract(payload_json, '$.runId') = ?
+       order by rowid desc limit 1`,
+      )
+      .get(sessionId, runId) as { rowid: number } | undefined;
+    if (!start) return [];
+    boundary = start.rowid;
+  }
+  const reset = db
+    .prepare(
+      `select max(rowid) as rowid from agent_events where session_id = ? and rowid > ?
+     and (type = 'checkpoint.restored' or (? is not null and
+       (type = 'run.started' or (type = 'message.started' and json_valid(payload_json)
+         and json_extract(payload_json, '$.role') = 'user'))))`,
+    )
+    .get(sessionId, boundary, runId ?? null) as { rowid: number | null };
+  boundary = reset.rowid ?? boundary;
+  const rows = db
+    .prepare(
+      `select request.payload_json as request_json, resolution.payload_json as response_json
+     from agent_events resolution join agent_events request
+       on request.session_id = resolution.session_id and request.type = 'question.requested'
+       and request.rowid < resolution.rowid and json_valid(request.payload_json)
+       and json_extract(request.payload_json, '$.request.id') = json_extract(resolution.payload_json, '$.requestId')
+     where resolution.session_id = ? and resolution.type = 'question.resolved'
+       and json_valid(resolution.payload_json) and request.rowid > ?
+       and (? is null or json_extract(request.payload_json, '$.request.runId') = ?)
+     order by resolution.rowid desc limit 32`,
+    )
+    .all(sessionId, boundary, runId ?? null, runId ?? null) as Array<{
+    request_json: string;
+    response_json: string;
+  }>;
+  return rows.reverse().flatMap((row) => {
+    try {
+      const requested = JSON.parse(row.request_json) as Extract<
+        AgentEvent,
+        { type: "question.requested" }
+      >;
+      const resolved = JSON.parse(row.response_json) as Extract<
+        AgentEvent,
+        { type: "question.resolved" }
+      >;
+      if (
+        !Array.isArray(requested.request?.questions) ||
+        !Array.isArray(resolved.answers) ||
+        !requested.request.questions.every(
+          (question) =>
+            question &&
+            typeof question.id === "string" &&
+            typeof question.header === "string" &&
+            typeof question.multiSelect === "boolean" &&
+            (question.detail === undefined || typeof question.detail === "string") &&
+            Array.isArray(question.options) &&
+            question.options.every(
+              (option) =>
+                option &&
+                typeof option.label === "string" &&
+                (option.description === undefined || typeof option.description === "string"),
+            ),
+        ) ||
+        !resolved.answers.every(
+          (answer) =>
+            answer &&
+            typeof answer.questionId === "string" &&
+            Array.isArray(answer.selected) &&
+            answer.selected.every((label) => typeof label === "string") &&
+            (answer.custom === undefined || typeof answer.custom === "string"),
+        ) ||
+        typeof resolved.skipped !== "boolean"
+      )
+        return [];
+      return [
+        {
+          request: requested.request,
+          response: {
+            requestId: resolved.requestId,
+            answers: resolved.answers,
+            skipped: resolved.skipped,
+          },
+        },
+      ];
+    } catch {
+      return [];
+    }
+  });
 }
 
 /** Latest persisted to-do list of a session (rehydrates the todo tool store). */
@@ -2488,6 +2588,10 @@ function listAgentEventSummary(sessionId: string, snapshotCursor: number): Agent
     { types: ["plan.updated"], limit: 1 },
     { types: ["session.status"], limit: 1 },
     {
+      types: ["run.started", "run.completed", "run.failed", "run.cancelled", "run.blocked"],
+      limit: 1,
+    },
+    {
       types: ["subagent.started", "subagent.updated"],
       limit: MAX_AGENT_EVENT_SUMMARY_ROWS_PER_KIND,
     },
@@ -2538,6 +2642,12 @@ function listLatestPendingRequest(
          and request.type = ?
          and json_valid(request.payload_json)
          and json_type(request.payload_json, '$.request.id') = 'text'
+         and (? <> 'question.requested' or not exists (
+           select 1 from agent_events boundary
+           where boundary.session_id = request.session_id and boundary.rowid > request.rowid
+             and boundary.rowid <= ?
+             and boundary.type in ('run.started', 'run.completed', 'run.failed', 'run.cancelled', 'run.blocked')
+         ))
          and not exists (
            select 1 from agent_events resolution
            where resolution.session_id = request.session_id
@@ -2552,7 +2662,15 @@ function listLatestPendingRequest(
        order by request.rowid desc
        limit 1`,
     )
-    .all(sessionId, snapshotCursor, requestType, snapshotCursor, resolutionType) as AgentEventRow[];
+    .all(
+      sessionId,
+      snapshotCursor,
+      requestType,
+      requestType,
+      snapshotCursor,
+      snapshotCursor,
+      resolutionType,
+    ) as AgentEventRow[];
 }
 
 function backfillUserPromptEventsForPage(

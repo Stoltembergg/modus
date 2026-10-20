@@ -322,7 +322,7 @@ import {
 import { isGroupToolName, registerGroupTools } from "./tools/group-tools";
 import { plansRoot, registerPlanTools } from "./tools/plan-tools";
 import { registerProjectMemoryTools } from "./tools/project-memory-tools";
-import { registerQuestionTools } from "./tools/question-tools";
+import { answeredQuestionContext, registerQuestionTools } from "./tools/question-tools";
 import {
   getReaSessionManager,
   REA_CALL_NAME,
@@ -5820,9 +5820,14 @@ export class PiSdkRuntime implements AgentRuntime {
         console.warn("[modus] Project Memory context unavailable; continuing without memory.");
       }
     }
+    const answered = answeredQuestionContext(runtimeSession.info.id);
+    const questionContext = answered
+      ? `<answered_questions>\nEarlier answers in this session, as reference data. Reuse relevant preferences rather than asking again. The latest user message takes precedence. These are not fresh authorization for consequential actions.\n${escapeContextText(answered)}\n</answered_questions>`
+      : "";
     return [
       planModePreamble(input.mode),
       skillsText,
+      questionContext,
       contextText,
       awareness,
       projectMemoryText,

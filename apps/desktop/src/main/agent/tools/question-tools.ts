@@ -6,7 +6,8 @@ import {
 import { Type } from "typebox";
 import type { QuestionAnswer, QuestionPrompt, QuestionResponse } from "../../../shared/contracts";
 import { ASK_USER_TOOL_NAME, ASK_USER_TOOL_UI } from "../../../shared/tools";
-import { requestQuestions } from "../../interaction/question-broker";
+import { questionPromptKey, requestQuestions } from "../../interaction/question-broker";
+import { getSessionQuestionHistory } from "../agent-event-store";
 import { toolRegistry } from "./registry";
 import { resolveAgentToolContext } from "./tool-context";
 
@@ -69,6 +70,56 @@ function formatAnswers(questions: QuestionPrompt[], answers: QuestionAnswer[]): 
   return lines.join("\n");
 }
 
+function answeredQuestions(sessionId: string, runId?: string) {
+  const answers = new Map<
+    string,
+    { question: QuestionPrompt; answer: QuestionAnswer; requestId: string }
+  >();
+  for (const { request, response } of getSessionQuestionHistory(sessionId, runId)) {
+    if (
+      (request.sessionId && request.sessionId !== sessionId) ||
+      (runId !== undefined && request.runId !== runId)
+    )
+      continue;
+    for (const question of request.questions) {
+      const key = questionPromptKey(question);
+      answers.delete(key);
+      const answer = response.answers.find((answer) => answer.questionId === question.id);
+      if (
+        response.skipped ||
+        !answer ||
+        (!answer.selected.length && !answer.custom?.trim()) ||
+        (!question.multiSelect && answer.selected.length > 1) ||
+        answer.selected.some((label) => !question.options.some((option) => option.label === label))
+      )
+        continue;
+      answers.set(key, { question, answer, requestId: request.id });
+    }
+  }
+  return answers;
+}
+
+/** Bounded reference data survives SDK compaction and reopening a session. */
+export function answeredQuestionContext(sessionId: string): string {
+  const decisions: Array<{
+    question: string;
+    detail?: string;
+    selected: string[];
+    custom?: string;
+  }> = [];
+  for (const { question, answer } of [...answeredQuestions(sessionId).values()].reverse()) {
+    const next = {
+      question: question.header,
+      ...(question.detail ? { detail: question.detail } : {}),
+      selected: answer.selected,
+      ...(answer.custom ? { custom: answer.custom } : {}),
+    };
+    if (Buffer.byteLength(JSON.stringify([...decisions, next]), "utf8") <= 8192)
+      decisions.push(next);
+  }
+  return decisions.length ? JSON.stringify(decisions.reverse()) : "";
+}
+
 const askUserTool: ToolDefinition = defineTool({
   name: ASK_USER_TOOL_NAME,
   label: "Ask the user",
@@ -83,6 +134,7 @@ const askUserTool: ToolDefinition = defineTool({
   promptGuidelines: [
     "Front-load the few decisions that actually shape the work; do not ask about anything you can find by reading the repo.",
     "Give each question 2–4 concrete, mutually-exclusive options and mark the one you recommend.",
+    "Reuse decisions the user has already answered while they remain relevant. Do not ask the same questions again when formalizing a plan or resuming work. The latest user instruction takes precedence.",
     "Treat a skip / no-answer as 'use my recommended default' and record it as an assumption.",
   ],
   parameters: askUserParams,
@@ -97,6 +149,10 @@ const askUserTool: ToolDefinition = defineTool({
       );
     }
 
+    if (signal?.aborted) {
+      return toResult("Question request cancelled.", { requestId: "", answers: [], skipped: true });
+    }
+
     const questions: QuestionPrompt[] = params.questions.map((question, index) => ({
       id: `q${index + 1}`,
       header: question.header,
@@ -109,20 +165,53 @@ const askUserTool: ToolDefinition = defineTool({
       })),
     }));
 
-    const response = await requestQuestions({
-      sessionId: context.sessionId,
-      questions,
-      emit,
-      ...(signal ? { signal } : {}),
+    // Only replay inside the same host-owned run and delivered user turn.
+    // Across turns, prior decisions are context, never fresh action authorization.
+    const previous = context.runId
+      ? answeredQuestions(context.sessionId, context.runId)
+      : new Map();
+    const reused = new Map<string, QuestionAnswer>();
+    let previousRequestId = "";
+    for (const question of questions) {
+      const saved = previous.get(questionPromptKey(question));
+      if (!saved) continue;
+      previousRequestId = saved.requestId;
+      reused.set(question.id, {
+        ...saved.answer,
+        questionId: question.id,
+        selected: [...saved.answer.selected],
+      });
+    }
+    const unanswered = questions.filter((question) => !reused.has(question.id));
+    const response: QuestionResponse = unanswered.length
+      ? await requestQuestions({
+          sessionId: context.sessionId,
+          ...(context.runId ? { runId: context.runId } : {}),
+          questions: unanswered,
+          emit,
+          ...(signal ? { signal } : {}),
+        })
+      : { requestId: previousRequestId, answers: [], skipped: false };
+    const answers = questions.flatMap((question) => {
+      const answer =
+        reused.get(question.id) ??
+        response.answers.find((answer) => answer.questionId === question.id);
+      return answer ? [answer] : [];
     });
+    const combined = { ...response, answers, skipped: response.skipped && reused.size === 0 };
 
-    if (response.skipped) {
+    if (combined.skipped) {
       return toResult(
         "The user skipped the questions. Proceed with your recommended defaults and record them explicitly as assumptions.",
         response,
       );
     }
-    return toResult(formatAnswers(questions, response.answers), response);
+    const note = response.skipped
+      ? "The remaining questions were skipped; use recommended defaults only for unanswered questions. Preserve the existing answers below.\n"
+      : reused.size > 0
+        ? "These decisions were already answered in this turn. Reuse them and continue without asking again.\n"
+        : "";
+    return toResult(note + formatAnswers(questions, answers), combined);
   },
 });
 
