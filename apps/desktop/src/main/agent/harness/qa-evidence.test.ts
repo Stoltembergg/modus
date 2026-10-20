@@ -399,6 +399,26 @@ const summarize = (events: RunQAEvent[], changedPaths = ["src/a.ts"], requiredCh
   summarizeRunQA({ sessionId, runId, changedPaths, requiredChecks, events });
 
 describe("workspace-bound QA", () => {
+  it("binds an observed pass to the current revision even when QA was not required", () => {
+    const revision = "a".repeat(64);
+    const events = pair({ sourceStable: true, workspaceRevision: revision });
+    const started = events[0];
+    if (started?.type === "tool.started") started.workspaceRevision = revision;
+    const result = summarize(events, ["src/a.ts"], []);
+
+    expect(
+      bindRunQAtoWorkspaceRevision({ result, events, workspaceRevision: revision }),
+    ).toMatchObject({ required: false, status: "passed" });
+    expect(
+      bindRunQAtoWorkspaceRevision({ result, events, workspaceRevision: "changed" }),
+    ).toMatchObject({
+      required: false,
+      status: "unavailable",
+      reasonCode: "observed_check_unavailable",
+      evidence: [expect.objectContaining({ status: "unavailable" })],
+    });
+  });
+
   it("keeps a pass only while its start, end, and current source revisions match", () => {
     const revision = "a".repeat(64);
     const events = pair({ sourceStable: true, workspaceRevision: revision });
@@ -454,6 +474,87 @@ function commandPair(command: string, toolName = "terminal_run", paths?: string[
 }
 
 describe("summarizeRunQA", () => {
+  it.each([
+    0, 1,
+  ])("keeps invalidated observed checks missing after a write (exit %i)", (exitCode) => {
+    const edit: RunQAEvent = {
+      type: "tool.started",
+      sessionId,
+      runId,
+      eventId: "source-write",
+      toolCallId: "source-write",
+      toolName: "write",
+    };
+    expect(summarize([...pair({ exitCode }), edit], ["src/a.ts"], [])).toMatchObject({
+      required: false,
+      status: "missing",
+      reasonCode: "observed_check_missing",
+      evidence: [expect.objectContaining({ checkName: "tests", status: "missing" })],
+    });
+  });
+
+  it("allows a fresh observed pass after an invalidating write", () => {
+    const edit: RunQAEvent = {
+      type: "tool.started",
+      sessionId,
+      runId,
+      eventId: "source-write",
+      toolCallId: "source-write",
+      toolName: "write",
+    };
+    expect(
+      summarize([...pair({ exitCode: 1 }), edit, ...commandPair("vitest run")], [], []),
+    ).toMatchObject({ required: false, status: "passed", reasonCode: "observed_check_passed" });
+  });
+
+  it.each([
+    [{ exitCode: 0 }, "passed"],
+    [{ exitCode: 1 }, "failed"],
+    [{ timedOut: true }, "timed_out"],
+    [{ aborted: true }, "cancelled"],
+    [{ skipped: true }, "skipped"],
+  ] as const)("preserves observed checks without requiring QA: %j", (outcome, status) => {
+    expect(summarize(pair(outcome), ["src/a.ts"], [])).toMatchObject({
+      required: false,
+      status,
+      reasonCode: `observed_check_${status}`,
+      evidence: [expect.objectContaining({ status, checkName: "tests" })],
+    });
+  });
+
+  it("keeps recognized optional evidence without fulfilling a different required check", () => {
+    const result = summarize(pair(), ["src/a.ts"], ["typecheck"]);
+    expect(result).toMatchObject({ required: true, status: "missing" });
+    expect(result.evidence).toEqual([
+      expect.objectContaining({ status: "missing", checkName: "typecheck" }),
+      expect.objectContaining({ status: "passed", checkName: "tests" }),
+    ]);
+  });
+
+  it("does not let an optional pass dilute a required failure", () => {
+    const optional = commandPair("tsc --noEmit");
+    const result = summarize([...pair({ exitCode: 1 }), ...optional]);
+    expect(result).toMatchObject({ status: "failed", reasonCode: "required_check_failed" });
+    expect(result.evidence).toEqual([
+      expect.objectContaining({ status: "failed", checkName: "tests" }),
+      expect.objectContaining({ status: "passed", checkName: "typecheck" }),
+    ]);
+  });
+
+  it("ignores unrelated commands and foreign-run checks when QA is not required", () => {
+    expect(summarize(commandPair("echo passed"), [], [])).toMatchObject({
+      status: "not_required",
+      evidence: [],
+    });
+    expect(
+      summarize(
+        pair().map((event) => ({ ...event, runId: "foreign-run" })),
+        [],
+        [],
+      ),
+    ).toMatchObject({ status: "not_required", evidence: [] });
+  });
+
   it("passes a recognized check only when a matching tool call starts and completes successfully", () => {
     expect(summarize(pair())).toMatchObject({ required: true, status: "passed" });
     expect(summarize(pair()).evidence).toEqual([

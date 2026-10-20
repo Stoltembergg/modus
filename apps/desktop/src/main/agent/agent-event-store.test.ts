@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { constants, DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { MAX_RUN_EVENT_PAYLOAD_PAGE_BYTES } from "../../shared/agent-events";
-import type { HarnessTaskClassification, HarnessTaskState } from "../../shared/contracts";
+import type { HarnessTaskClassification, HarnessTaskState, TodoItem } from "../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
 
 let userData: string;
@@ -24,6 +24,7 @@ const { lastAssistantOutput, runAssistantOutput } = await import("./runtime-suba
 const {
   getLatestCheckpointRestoreRowId,
   getLatestHarnessTaskState,
+  getSessionTodosForRun,
   getLatestTodoContinuationAttempt,
   getRunToolEvidence,
   getHarnessQAEventByRowId,
@@ -533,6 +534,50 @@ describe("post-restore QA evidence", () => {
         events: getRunToolEvidence(sessionId, run.id, restoreRowId),
       }).status,
     ).toBe("passed");
+  });
+});
+
+describe("run-scoped session todos", () => {
+  it("does not carry a previous run's todo list into delivery assessment", () => {
+    const sessionId = `todos-scope-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    recordAgentEvent({
+      type: "todos.updated",
+      sessionId,
+      todos: [{ id: "old", content: "Earlier task", status: "completed" }],
+    });
+    const run = createAgentRun({ sessionId, prompt: "Unrelated new task" });
+    const runStartedRowId = recordAgentEvent({
+      type: "run.started",
+      sessionId,
+      runId: run.id,
+      delivery: "normal",
+    });
+
+    expect(getSessionTodosForRun(sessionId, run.id, runStartedRowId)).toBeUndefined();
+  });
+
+  it("returns only the latest todo list updated during the current run", () => {
+    const sessionId = `todos-current-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    recordAgentEvent({
+      type: "todos.updated",
+      sessionId,
+      todos: [{ id: "old", content: "Earlier task", status: "blocked" }],
+    });
+    const run = createAgentRun({ sessionId, prompt: "Current task" });
+    const runStartedRowId = recordAgentEvent({
+      type: "run.started",
+      sessionId,
+      runId: run.id,
+      delivery: "normal",
+    });
+    const currentTodos: TodoItem[] = [
+      { id: "current", content: "Current task", status: "completed" },
+    ];
+    recordAgentEvent({ type: "todos.updated", sessionId, todos: currentTodos });
+
+    expect(getSessionTodosForRun(sessionId, run.id, runStartedRowId)).toEqual(currentTodos);
   });
 });
 

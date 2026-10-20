@@ -9,6 +9,7 @@ import { selectExecutionPolicy } from "./execution-policy";
 import { listAvoidedStrategyCodes } from "./failure-intelligence";
 import { isFeatureFlagEnabled } from "./feature-flags";
 import { detectRepeatHypothesis } from "./guards/repeat-hypothesis-guard";
+import { formatOracleFindingsEnvelope } from "./oracle-findings";
 import { mergePolicyEffects } from "./policy-dsl";
 import { loadPromotedPolicies } from "./promoted-policy-store";
 
@@ -38,37 +39,12 @@ function withChangeStrategy(
   return { ...decision, changeStrategy };
 }
 
-/** Gap 5: optional runtime hooks so Oracle bridge can augment without editing pi-sdk-runtime. */
-export type AdaptiveSnapshotAugmenter = (
-  snapshot: AdaptiveDecisionSnapshot,
-) => AdaptiveDecisionSnapshot;
-export type AdaptiveHintAugmenter = (
-  hint: string | undefined,
-  decision: AdaptiveDecision,
-) => string | undefined;
-
-let snapshotAugmenter: AdaptiveSnapshotAugmenter | undefined;
-let hintAugmenter: AdaptiveHintAugmenter | undefined;
-
-export function setAdaptiveSnapshotAugmenter(
-  augmenter: AdaptiveSnapshotAugmenter | undefined,
-): void {
-  snapshotAugmenter = augmenter;
-}
-
-export function setAdaptiveHintAugmenter(augmenter: AdaptiveHintAugmenter | undefined): void {
-  hintAugmenter = augmenter;
-}
-
 /**
  * Meta Controller. Returns one next action with reason codes.
  * Does not execute tools or bypass permissions — runtime adapters interpret.
  * Loads promoted policies from storage when the snapshot omits them (Gap 4).
  */
 export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision {
-  if (snapshotAugmenter) {
-    snapshot = snapshotAugmenter(snapshot);
-  }
   // Gap 4: hydrate promoted policies when the adapter omitted them (pi-sdk parity).
   // Fail-closed if storage/Electron is unavailable (unit tests, early boot).
   if (snapshot.promotedPolicies === undefined) {
@@ -509,7 +485,10 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
 }
 
 /** Bounded advisory hint injected into the turn message (never system policy). */
-export function formatAdaptiveDecisionHint(decision: AdaptiveDecision): string | undefined {
+export function formatAdaptiveDecisionHint(
+  decision: AdaptiveDecision,
+  oracleDigest?: string,
+): string | undefined {
   if (decision.mode === "shadow") return undefined;
   const recommended = decision.changeStrategy?.recommended;
   const strategySuffix =
@@ -556,5 +535,6 @@ export function formatAdaptiveDecisionHint(decision: AdaptiveDecision): string |
     default:
       hint = undefined;
   }
-  return hintAugmenter ? hintAugmenter(hint, decision) : hint;
+  const envelope = oracleDigest ? formatOracleFindingsEnvelope(oracleDigest) : undefined;
+  return envelope ? (hint ? `${hint}\n\n${envelope}` : envelope) : hint;
 }

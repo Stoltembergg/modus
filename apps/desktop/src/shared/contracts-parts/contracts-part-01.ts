@@ -161,6 +161,11 @@ export type HarnessEvidenceRef = {
   label: string;
   checkName?: HarnessTaskCheckKind;
 };
+/** Tracked delivery acceptance, independent from execution lifecycle and freeform semantic quality. */
+export type HarnessDeliveryAssessment = {
+  status: "accepted" | "incomplete" | "blocked" | "verification_failed" | "unverified";
+  reasonCodes: string[];
+};
 export type HarnessQAResult = {
   required: boolean;
   status: AutoQAStatus;

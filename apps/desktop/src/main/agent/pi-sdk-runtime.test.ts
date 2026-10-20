@@ -3239,6 +3239,44 @@ describe("PiSdkRuntime", () => {
     expect(markers[0]?.payload_json).not.toContain("Implement the feature");
   });
 
+  it("does not accept a new turn from completed todos left by an earlier task", async () => {
+    const sessionId = `stale-delivery-todos-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    recordAgentEvent({
+      type: "todos.updated",
+      sessionId,
+      todos: [{ id: "old-task", content: "Finish a previous task", status: "completed" }],
+    });
+    const session = createMockPiSession({
+      prompt: vi.fn(async () => {
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "A new unrelated answer." },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Answer this unrelated question.",
+      sessionId,
+    });
+
+    const completed = listAgentEvents(sessionId).findLast(
+      ({ event }) => event.type === "run.completed",
+    )?.event;
+    expect(completed).toMatchObject({
+      type: "run.completed",
+      delivery: {
+        status: "unverified",
+        reasonCodes: expect.arrayContaining(["no_tracked_requirements"]),
+      },
+    });
+  });
+
   it("records the tool-call count of each assistant message_end (group_start_worktree must be alone)", async () => {
     const { lastAssistantToolCallCount } = await import("./tools/tool-batch");
     const sessionId = `session-${crypto.randomUUID()}`;
@@ -3380,6 +3418,102 @@ describe("PiSdkRuntime", () => {
       },
     });
     expect(qaPayload).not.toContain("npm test");
+  });
+
+  it("retains prohibited plan checks across neutral instructions until explicitly reauthorized", () => {
+    const runtime = new PiSdkRuntime();
+    const internal = runtime as unknown as {
+      runOutputTrackers: Map<string, unknown>;
+      noteDeliveredRequirements(
+        session: unknown,
+        input: { sessionId: string; message: string; context: [] },
+      ): void;
+    };
+    const tracker = {
+      mode: "build",
+      requiredChecks: ["tests"],
+      taskPlan: {
+        spec: {
+          acceptanceCriteria: [{ id: "ac", todoIds: ["todo"], requiredCheckKinds: ["tests"] }],
+        },
+        todos: [{ id: "todo" }],
+      },
+    };
+    internal.runOutputTrackers.set("owner", tracker);
+    const session = { info: { id: "owner" }, emit: vi.fn() };
+    for (const message of ["Não execute testes.", "Continue the implementation."]) {
+      internal.noteDeliveredRequirements(session, { sessionId: "owner", message, context: [] });
+      expect(tracker.requiredChecks).toEqual([]);
+    }
+    internal.noteDeliveredRequirements(session, {
+      sessionId: "owner",
+      message: "Agora execute testes.",
+      context: [],
+    });
+    expect(tracker.requiredChecks).toEqual(["tests"]);
+  });
+
+  it("recovers a failed required check once even without pending todos", async () => {
+    const sessionId = `qa-recovery-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    await initGitRepoWithKnownEmptyScope();
+    await writeFile(join(cwd, "package.json"), JSON.stringify({ scripts: { test: "vitest run" } }));
+    const prompts: string[] = [];
+    const runtime = new PiSdkRuntime();
+    // The synthetic child result must reach the next actual prompt, not a discarded hint.
+    vi.spyOn(runtime, "runSubagent").mockResolvedValue({
+      session: { id: "synthetic-oracle" },
+    } as never);
+    vi.spyOn(runtime, "waitBackground").mockResolvedValue({
+      waitedMs: 0,
+      timedOut: false,
+      subagents: [
+        {
+          id: "synthetic-oracle",
+          task: "adaptive:oracle",
+          status: "completed",
+          output: "Inspect the boundary condition in src/calc.ts.",
+        },
+      ],
+    });
+    const session = createMockPiSession({
+      prompt: vi.fn(async (message: string) => {
+        prompts.push(message);
+        mocks.emitPiEvent({
+          type: "tool_execution_start",
+          toolCallId: `recovery-${prompts.length}`,
+          toolName: "terminal_run",
+          args: { command: "npm test" },
+        });
+        mocks.emitPiEvent({
+          type: "tool_execution_end",
+          toolCallId: `recovery-${prompts.length}`,
+          toolName: "terminal_run",
+          isError: true,
+          result: { details: { exitCode: 1 } },
+        });
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "Checks failed." },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockResolvedValueOnce({ session });
+    await runtime.prompt(createWindowStub(), {
+      sessionId,
+      message: "Fix the security permission regression in src/calc.ts and run tests",
+      context: [],
+    });
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("failed");
+    expect(prompts[1]).toContain("Inspect the boundary condition");
+    expect(runtime.runSubagent).toHaveBeenCalledTimes(1);
+    const events = listAgentEvents(sessionId).map(({ event }) => event);
+    expect(events.filter((event) => event.type === "harness.continuation")).toHaveLength(1);
+    expect(events.findLast((event) => event.type === "run.completed")).toMatchObject({
+      delivery: { status: "verification_failed" },
+    });
   });
 
   it("does not accept scoped passing QA when the run change scope is unavailable", async () => {
@@ -8032,6 +8166,18 @@ describe("PiSdkRuntime", () => {
         id: started.session.id,
         status: "completed",
         output: "survived release",
+        runId: expect.any(String),
+        qa: {
+          required: false,
+          status: "not_required",
+          reasonCode: "qa_not_required",
+          evidence: [],
+        },
+        delivery: {
+          status: "unverified",
+          reasonCodes: expect.arrayContaining(["no_tracked_requirements"]),
+        },
+        evidenceScope: { cwd, provisional: true },
       }),
     ]);
   });
@@ -10446,7 +10592,35 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
     }
   });
 
-  it("shows a queued follow-up in chat only when pi sends it, and a removed one never", async () => {
+  it.each([
+    {
+      initial: "Start the long task.",
+      delivered: "Run tests.",
+      removed: "Run lint.",
+      required: true,
+      delivery: "follow-up" as const,
+    },
+    {
+      initial: "Run tests.",
+      delivered: "Não execute testes.",
+      removed: "Run lint.",
+      required: false,
+      delivery: "follow-up" as const,
+    },
+    {
+      initial: "Start the long task.",
+      delivered: "Run tests.",
+      removed: "Run lint.",
+      required: true,
+      delivery: "normal" as const,
+    },
+  ])("updates QA only from consumed follow-up instructions ($delivered)", async ({
+    initial,
+    delivered,
+    removed,
+    required,
+    delivery,
+  }) => {
     const sessionId = `queue-strip-${crypto.randomUUID()}`;
     insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
     let announceStreamStarted!: () => void;
@@ -10481,23 +10655,34 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
       const promptTask = runtime.prompt(window, {
         context: [],
         delivery: "normal",
-        message: "Start the long task.",
+        message: initial,
         sessionId,
       });
       await streamStarted;
-      for (const message of ["Then add a test.", "Then delete everything."]) {
-        await runtime.prompt(window, { context: [], delivery: "follow-up", message, sessionId });
+      for (const message of [delivered, removed]) {
+        await runtime.prompt(window, {
+          context: [],
+          delivery: message === delivered ? delivery : "follow-up",
+          message,
+          sessionId,
+        });
       }
 
       // Queued, not in chat: the strip carries them, each with its own id.
       const queued = runtime.listQueuedPrompts(sessionId);
       expect(queued.map(({ text, delivery }) => [text, delivery])).toEqual([
-        ["Then add a test.", "follow-up"],
-        ["Then delete everything.", "follow-up"],
+        [delivered, "follow-up"],
+        [removed, "follow-up"],
       ]);
       expect(new Set(queued.map(({ id }) => id)).size).toBe(2);
       expect(snapshots().at(-1)?.items).toEqual(queued);
-      expect(userTexts()).not.toContain("Then add a test.");
+      if (delivery !== "normal") expect(userTexts()).not.toContain(delivered);
+      const trackerBeforeConsumption = (
+        runtime as unknown as { runOutputTrackers: Map<string, { requiredChecks: string[] }> }
+      ).runOutputTrackers.get(sessionId);
+      expect(trackerBeforeConsumption?.requiredChecks).toEqual(
+        initial === "Run tests." ? ["tests"] : [],
+      );
 
       expect(runtime.removeQueuedPrompt(sessionId, queued[1]?.id ?? "")).toEqual({ removed: true });
       expect(runtime.removeQueuedPrompt(sessionId, "unknown")).toEqual({ removed: false });
@@ -10507,10 +10692,19 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
       await sessionAt().agent.waitForIdle();
 
       const sent = JSON.stringify(messagesFor(sessionAt()));
-      expect(sent).toContain("Then add a test.");
-      expect(sent).not.toContain("Then delete everything.");
-      expect(userTexts().filter((text) => text === "Then add a test.")).toHaveLength(1);
-      expect(userTexts()).not.toContain("Then delete everything.");
+      expect(sent).toContain(delivered);
+      expect(sent).not.toContain(removed);
+      expect(userTexts().filter((text) => text === delivered)).toHaveLength(1);
+      expect(userTexts()).not.toContain(removed);
+      const qa = listAgentEvents(sessionId)
+        .map(({ event }) => event)
+        .findLast((event) => event.type === "harness.qa");
+      expect(qa).toMatchObject({
+        result: {
+          required,
+          evidence: required ? [expect.objectContaining({ label: "Tests" })] : [],
+        },
+      });
       expect(runtime.listQueuedPrompts(sessionId)).toEqual([]);
       expect(snapshots().at(-1)?.items).toEqual([]);
     } finally {

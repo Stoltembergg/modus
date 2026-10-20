@@ -1,4 +1,3 @@
-import { installAdaptiveOracleBridge } from "./harness/adaptive-oracle-bridge";
 import { validateFeatureFlags } from "./harness/feature-flags";
 import { PiSdkRuntime } from "./pi-sdk-runtime";
 import type { AgentRuntime } from "./runtime";
@@ -9,9 +8,6 @@ if (featureFlagErrors.length > 0) {
     `[modus] Invalid Harness feature flag configuration; dependent features are disabled: ${featureFlagErrors.join("; ")}`,
   );
 }
-
-// Gap 5: install Oracle findings bridge before constructing the singleton.
-installAdaptiveOracleBridge(PiSdkRuntime);
 
 const runtime = new PiSdkRuntime();
 

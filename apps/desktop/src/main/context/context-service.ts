@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { open, readdir, readFile, stat } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import type {
@@ -19,6 +19,8 @@ const MAX_FILE_BYTES = 64 * 1024;
 const MAX_FOLDER_ENTRIES = 80;
 /** Byte cap for a branch/working diff or a past-chat transcript injected as context. */
 const MAX_CONTEXT_TEXT_BYTES = 60 * 1024;
+/** Bound range discovery as well as retained content, including very long lines. */
+const MAX_FILE_SCAN_BYTES = 1024 * 1024;
 const execFileAsync = promisify(execFile);
 
 /** Cap large context text so a single @ item can't blow the context window. */
@@ -41,6 +43,59 @@ function inside(root: string, target: string): boolean {
 
 function toRelative(cwd: string, path: string): string {
   return relative(cwd, path).replace(/\\/g, "/") || basename(path);
+}
+
+/** Read only through the selected lines, retaining at most the inline byte budget. */
+async function readLargeFileRange(
+  path: string,
+  from: number,
+  to: number,
+): Promise<{ content: string; endLine: number } | { reason: string }> {
+  const file = await open(path, "r");
+  try {
+    const buffer = Buffer.alloc(16 * 1024);
+    const selected: Buffer[] = [];
+    let selectedBytes = 0;
+    let scannedBytes = 0;
+    let line = 1;
+    while (scannedBytes < MAX_FILE_SCAN_BYTES) {
+      const { bytesRead } = await file.read(
+        buffer,
+        0,
+        Math.min(buffer.length, MAX_FILE_SCAN_BYTES - scannedBytes),
+        null,
+      );
+      if (bytesRead === 0) {
+        return line >= from
+          ? { content: Buffer.concat(selected).toString("utf8"), endLine: line }
+          : { reason: "The requested range is beyond the end of the file." };
+      }
+      scannedBytes += bytesRead;
+      let offset = 0;
+      while (offset < bytesRead) {
+        const newline = buffer.subarray(0, bytesRead).indexOf(10, offset);
+        const end = newline < 0 ? bytesRead : newline;
+        if (line >= from) {
+          const selectedEnd = newline >= 0 && line < to ? end + 1 : end;
+          const length = selectedEnd - offset;
+          if (selectedBytes + length > MAX_CONTEXT_TEXT_BYTES) {
+            return { reason: "The selected content exceeds the 60 KiB inline budget." };
+          }
+          selected.push(Buffer.from(buffer.subarray(offset, selectedEnd)));
+          selectedBytes += length;
+        }
+        if (newline < 0) break;
+        if (line === to) {
+          return { content: Buffer.concat(selected).toString("utf8"), endLine: line };
+        }
+        line += 1;
+        offset = end + 1;
+      }
+    }
+    return { reason: "Finding the selected lines exceeds the 1 MiB scan budget." };
+  } finally {
+    await file.close();
+  }
 }
 
 async function searchFiles(cwd: string, query: string): Promise<ContextSuggestion[]> {
@@ -271,13 +326,39 @@ export async function resolveContext(
         continue;
       }
       const info = await stat(item.path).catch(() => undefined);
-      if (!info || info.size > MAX_FILE_BYTES) {
+      if (!info) {
         continue;
       }
       const relative = toRelative(cwd, item.path);
-      const raw = await readFile(item.path, "utf8");
       const from = item.range?.fromLine;
       const to = item.range?.toLine ?? from;
+      if (info.size > MAX_FILE_BYTES) {
+        let title = `file:${relative}`;
+        let reason = "The file exceeds the 64 KiB whole-file inline budget.";
+        if (from !== undefined && Number.isSafeInteger(from) && from >= 1) {
+          const end = to !== undefined && Number.isSafeInteger(to) ? Math.max(from, to) : from;
+          title += `:L${from}${end === from ? "" : `-${end}`}`;
+          const selected = await readLargeFileRange(item.path, from, end).catch(() => ({
+            reason: "The selected content could not be read.",
+          }));
+          if ("content" in selected) {
+            resolvedItems.push({
+              item,
+              title: `file:${relative}:L${from}${selected.endLine === from ? "" : `-${selected.endLine}`}`,
+              content: selected.content,
+            });
+            continue;
+          }
+          reason = selected.reason;
+        }
+        resolvedItems.push({
+          item,
+          title,
+          content: `File attachment: ${title} (${info.size} bytes).\n${reason}\nUse the read tool to inspect this file${title.includes(":L") ? " at the requested lines" : ""}.`,
+        });
+        continue;
+      }
+      const raw = await readFile(item.path, "utf8");
       let content = raw;
       let title = `file:${relative}`;
       if (from !== undefined && from >= 1) {
