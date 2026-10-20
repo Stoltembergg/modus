@@ -2,7 +2,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { detectPreviewKind, readWorkspacePreview } from "./preview-kind";
+import {
+  detectPreviewKind,
+  readPreviewBytesFromHandle,
+  readWorkspacePreview,
+} from "./preview-kind";
 
 /** Synthetic ZIP-like buffer whose local headers contain OOXML part names as plain strings. */
 function zipWithParts(...parts: string[]): Buffer {
@@ -52,27 +56,62 @@ describe("detectPreviewKind (authoritative magic / part peek)", () => {
 });
 
 describe("readWorkspacePreview", () => {
-  it("returns bytes + kind for a PDF under the workspace", () => {
+  it("returns bytes + kind for a PDF under the workspace", async () => {
     const path = join(root, "doc.pdf");
     const bytes = Buffer.from("%PDF-1.4\n%%EOF\n");
     writeFileSync(path, bytes);
-    const result = readWorkspacePreview(root, path);
+    const result = await readWorkspacePreview(root, path);
     expect(result.previewKind).toBe("pdf");
     expect(result.mime).toBe("application/pdf");
     expect(result.size).toBe(bytes.length);
     expect(Buffer.from(result.bytes)).toEqual(bytes);
   });
 
-  it("rejects paths outside the workspace", () => {
-    expect(() => readWorkspacePreview(root, join(root, "..", "secret.pdf"))).toThrow(/outside/);
+  it("returns only bytes actually read when the filesystem returns short reads", async () => {
+    const source = Buffer.from("%PDF-1.4\nshort read\n");
+    const handle = {
+      async read(buffer: Buffer, offset: number, length: number, position: number) {
+        const bytesRead = Math.min(3, length, Math.max(0, source.length - position));
+        source.copy(buffer, offset, position, position + bytesRead);
+        return { bytesRead, buffer };
+      },
+    };
+
+    await expect(readPreviewBytesFromHandle(handle, source.length)).resolves.toEqual(source);
   });
 
-  it("rejects files over the preview size cap", () => {
+  it("rejects content that grows past the cap after the initial file stat", async () => {
+    const initial = Buffer.from("12345678");
+    const grown = Buffer.from("12345678901234567890123456789012");
+    let contents = initial;
+    let position = 0;
+    const handle = {
+      async read(buffer: Buffer, offset: number, length: number) {
+        if (position === 0) contents = grown;
+        const bytesRead = Math.min(length, contents.length - position);
+        contents.copy(buffer, offset, position, position + bytesRead);
+        position += bytesRead;
+        return { bytesRead, buffer };
+      },
+    };
+
+    await expect(readPreviewBytesFromHandle(handle, 16)).rejects.toThrow(/too large|limit/i);
+  });
+
+  it("rejects paths outside the workspace", async () => {
+    await expect(readWorkspacePreview(root, join(root, "..", "secret.pdf"))).rejects.toThrow(
+      /outside/,
+    );
+  });
+
+  it("rejects files over the preview size cap", async () => {
     mkdirSync(join(root, "big"), { recursive: true });
     const path = join(root, "big", "huge.bin");
     // Cap is enforced by size check before full read — write a stub and spy via tiny file
     // that we treat as over-cap by calling with an explicit low limit in the test helper.
     writeFileSync(path, Buffer.from("%PDF-1.4\noversize\n"));
-    expect(() => readWorkspacePreview(root, path, { maxBytes: 4 })).toThrow(/too large|limit/i);
+    await expect(readWorkspacePreview(root, path, { maxBytes: 4 })).rejects.toThrow(
+      /too large|limit/i,
+    );
   });
 });

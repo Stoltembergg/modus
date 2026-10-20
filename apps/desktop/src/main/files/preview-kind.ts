@@ -3,7 +3,7 @@
  * Filename never participates in the decision.
  */
 
-import { readFileSync, statSync } from "node:fs";
+import { open } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import type { PreviewKind, PreviewReadResult } from "../../shared/contracts";
 import { resolveWithin } from "./path-within";
@@ -12,6 +12,16 @@ import { resolveWithin } from "./path-within";
 export const DEFAULT_PREVIEW_MAX_BYTES = 50 * 1024 * 1024;
 
 const SNIFF = 16_384;
+const PREVIEW_READ_CHUNK_BYTES = 64 * 1024;
+
+type PreviewReadHandle = {
+  read(
+    buffer: Buffer,
+    offset: number,
+    length: number,
+    position: number,
+  ): Promise<{ bytesRead: number }>;
+};
 
 const MIME_BY_KIND: Record<PreviewKind, string> = {
   pdf: "application/pdf",
@@ -84,22 +94,54 @@ export type ReadPreviewOptions = {
   maxBytes?: number;
 };
 
+/** Read from one already-open file, honoring short reads and enforcing the cap while reading. */
+export async function readPreviewBytesFromHandle(
+  handle: PreviewReadHandle,
+  maxBytes: number,
+): Promise<Buffer> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes >= Number.MAX_SAFE_INTEGER) {
+    throw new Error("Invalid in-app preview size limit.");
+  }
+
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+  while (true) {
+    // Read one byte beyond the cap so growth after fstat cannot escape the limit.
+    const buffer = Buffer.alloc(Math.min(PREVIEW_READ_CHUNK_BYTES, maxBytes + 1 - totalBytes));
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, totalBytes);
+    if (bytesRead === 0) break;
+    totalBytes += bytesRead;
+    if (totalBytes > maxBytes) {
+      throw new Error(`File too large for in-app preview (limit ${maxBytes} bytes).`);
+    }
+    chunks.push(buffer.subarray(0, bytesRead));
+  }
+  return Buffer.concat(chunks, totalBytes);
+}
+
 /** Read workspace file bytes for in-app preview (separate from text `files.read`). */
-export function readWorkspacePreview(
+export async function readWorkspacePreview(
   root: string,
   path: string,
   options: ReadPreviewOptions = {},
-): PreviewReadResult {
+): Promise<PreviewReadResult> {
   const maxBytes = options.maxBytes ?? DEFAULT_PREVIEW_MAX_BYTES;
   const abs = resolveWithin(root, path);
-  const stat = statSync(abs);
-  if (stat.isDirectory()) {
-    throw new Error("Path is a directory, not a file.");
+  const handle = await open(abs, "r");
+  let bytes: Buffer;
+  try {
+    const fileStat = await handle.stat();
+    if (fileStat.isDirectory()) {
+      throw new Error("Path is a directory, not a file.");
+    }
+    if (fileStat.size > maxBytes) {
+      throw new Error(`File too large for in-app preview (limit ${maxBytes} bytes).`);
+    }
+    bytes = await readPreviewBytesFromHandle(handle, maxBytes);
+  } finally {
+    await handle.close();
   }
-  if (stat.size > maxBytes) {
-    throw new Error(`File too large for in-app preview (limit ${maxBytes} bytes).`);
-  }
-  const bytes = readFileSync(abs);
+
   const previewKind = detectPreviewKind(bytes);
   const relativePath = relative(resolve(root), abs).split(/[/\\]/).join("/");
   return {
