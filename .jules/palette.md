@@ -1,3 +1,6 @@
 ## 2026-10-18 - [Add missing focus-visible styles to UI icon buttons]
 **Learning:** Several shared UI icon buttons (`CopyButton`, `ToolbarButton`, and `MorphingDialog` close button) were missing explicit `focus-visible` styles, creating keyboard accessibility traps where focus state was invisible to users.
 **Action:** When adding new icon buttons, always verify tab focus states visually or ensure standard `outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/35` utility classes are included alongside hover state tokens.
+## 2026-10-20 - [Centralize focus styles for toolbar icon buttons]
+**Learning:** `focus-visible` styles should be maintained in CSS for globally shared classes like `.toolbar-icon-button` to avoid duplicating `focus-visible:ring-2 focus-visible:ring-focus-ring/35` scattered in numerous `className` attributes. Shared component styles like `CopyButton` and `MorphingDialog` are better left with inline utilities because `aria-label` based CSS overrides in `app.css` are brittle and could break with internationalization.
+**Action:** When updating shared component styles, if they use a global UI class like `.toolbar-icon-button`, define states centrally in `app.css`. Use explicit inline utility classes only for isolated, self-contained components like `CopyButton`.

@@ -34,7 +34,7 @@ export function ToolbarButton({
         aria-label={label}
         aria-pressed={pressed}
         className={cn(
-          "toolbar-icon-button app-no-drag flex items-center justify-center rounded-md outline-none transition-colors hover:bg-hover focus-visible:ring-2 focus-visible:ring-focus-ring/35",
+          "toolbar-icon-button app-no-drag flex items-center justify-center rounded-md transition-colors hover:bg-hover ",
           active && "bg-active",
           disabled && "cursor-not-allowed opacity-40 hover:bg-transparent",
         )}

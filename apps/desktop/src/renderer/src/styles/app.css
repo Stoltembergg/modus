@@ -1288,6 +1288,10 @@ body {
     color: var(--color-icon-muted);
     width: 26px;
     height: 26px;
+    outline: none;
+  }
+  .toolbar-icon-button:focus-visible {
+    @apply ring-2 ring-focus-ring/35;
   }
   .toolbar-icon-button svg {
     width: 15px;
