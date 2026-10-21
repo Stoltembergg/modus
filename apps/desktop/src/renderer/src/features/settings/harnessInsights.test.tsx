@@ -1,5 +1,9 @@
+// @vitest-environment happy-dom
+
+import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { CHATS_WORKSPACE_ID, type HarnessInsightsResult } from "../../../../shared/contracts";
 import {
   HarnessInsightsView,
@@ -30,6 +34,8 @@ const result: HarnessInsightsResult = {
     },
   ],
 };
+
+afterEach(() => cleanup());
 
 function renderView(state: Parameters<typeof HarnessInsightsView>[0]["state"]): string {
   return renderToStaticMarkup(
@@ -134,8 +140,9 @@ describe("HarnessInsightsView", () => {
     expect(markup).not.toContain("Try again");
   });
 
-  it("exposes an accessible period selector with the selected range", () => {
-    const markup = renderToStaticMarkup(
+  it("exposes an accessible period selector with the available ranges", async () => {
+    const user = userEvent.setup();
+    render(
       <HarnessInsightsView
         onPeriodChange={() => {}}
         onRefresh={() => {}}
@@ -144,10 +151,14 @@ describe("HarnessInsightsView", () => {
       />,
     );
 
-    expect(markup).toContain('aria-label="Insights time window"');
-    expect(markup).toContain("7 days");
-    expect(markup).toContain("30 days");
-    expect(markup).toContain("90 days");
+    const selector = screen.getByRole("combobox", { name: "Insights time window" });
+    expect(selector.textContent).toBe("7 days");
+    await user.click(selector);
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "7 days",
+      "30 days",
+      "90 days",
+    ]);
   });
 
   it("does not expose Harness Insights in user Settings", () => {

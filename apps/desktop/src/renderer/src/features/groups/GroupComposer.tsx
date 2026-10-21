@@ -13,6 +13,7 @@ import {
   writeGroupComposerDraft,
 } from "../../../../shared/group-conversation-minors";
 import { groupRoomLabel } from "../../../../shared/group-room-locale";
+import { SelectControl } from "../../components/ui/SelectControl";
 import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { GroupMemberQuestions } from "./GroupMemberQuestions";
@@ -156,7 +157,7 @@ export function GroupComposer({
   const [error, setError] = useState<string | undefined>();
   const [dragOver, setDragOver] = useState(false);
   const [kickoffOutcome, setKickoffOutcome] = useState("");
-  const [kickoffOwner, setKickoffOwner] = useState("");
+  const [kickoffOwnerSessionId, setKickoffOwnerSessionId] = useState("");
   const [draftGroupId, setDraftGroupId] = useState(groupId);
   const [executionMode, setExecutionMode] = useState<GroupExecutionMode>("new");
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -212,11 +213,17 @@ export function GroupComposer({
   }, [seed, onSeedConsumed]);
 
   useEffect(() => {
-    if (!showKickoff || kickoffOwner || members.length === 0) return;
+    if (
+      !showKickoff ||
+      members.length === 0 ||
+      members.some((member) => member.sessionId === kickoffOwnerSessionId)
+    ) {
+      return;
+    }
     // Prefer a Planner-named member, else the first roster entry.
     const planner = members.find((member) => /^planner$/i.test(member.title.trim()));
-    setKickoffOwner((planner ?? members[0])?.title ?? "");
-  }, [showKickoff, members, kickoffOwner]);
+    setKickoffOwnerSessionId((planner ?? members[0])?.sessionId ?? "");
+  }, [showKickoff, members, kickoffOwnerSessionId]);
 
   useEffect(() => {
     if (!activeExecutionId && executionMode === "complement") {
@@ -370,29 +377,30 @@ export function GroupComposer({
               value={kickoffOutcome}
             />
           </label>
-          <label className="block text-2xs text-fg-muted">
+          <label className="block text-2xs text-fg-muted" htmlFor="group-kickoff-owner">
             {t("composer.kickoffFirstOwner")}
-            <select
-              className="mt-1 h-8 w-full rounded-lg border border-hairline bg-canvas px-2.5 text-fg text-sm outline-none"
-              data-testid="group-kickoff-owner"
-              onChange={(event) => setKickoffOwner(event.currentTarget.value)}
-              value={kickoffOwner}
-            >
-              {members.map((member) => (
-                <option key={member.sessionId} value={member.title}>
-                  {member.title}
-                </option>
-              ))}
-            </select>
+            <SelectControl
+              ariaLabel={t("composer.kickoffFirstOwner")}
+              className="mt-1 flex h-8 w-full items-center justify-between gap-2 rounded-lg border border-hairline bg-canvas px-2.5 text-fg text-sm outline-none"
+              id="group-kickoff-owner"
+              onValueChange={setKickoffOwnerSessionId}
+              options={members.map((member) => ({
+                label: member.title,
+                value: member.sessionId,
+              }))}
+              testId="group-kickoff-owner"
+              value={kickoffOwnerSessionId}
+            />
           </label>
           <button
             className="rounded-lg bg-focus-ring px-2.5 py-1.5 font-medium text-2xs text-white transition-colors hover:bg-focus-ring-soft disabled:opacity-40"
             data-testid="group-kickoff-insert"
-            disabled={!kickoffOwner.trim()}
+            disabled={!kickoffOwnerSessionId}
             onClick={() => {
               const draft = formatGroupKickoffDraft({
                 outcome: kickoffOutcome,
-                firstOwner: kickoffOwner,
+                firstOwner:
+                  members.find((member) => member.sessionId === kickoffOwnerSessionId)?.title ?? "",
                 nextSteps: COLLAB_PIPELINE_NEXT,
                 approval: COLLAB_PIPELINE_APPROVAL,
               });

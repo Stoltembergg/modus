@@ -361,7 +361,8 @@ describe("GroupTaskDetails", () => {
     await userEvent.click(screen.getByRole("checkbox", { name: /Design assets/ }));
     await userEvent.click(screen.getByRole("checkbox", { name: "tests" }));
     await userEvent.click(screen.getByRole("checkbox", { name: "build" }));
-    await userEvent.selectOptions(screen.getByLabelText("Mode"), "required");
+    await userEvent.click(screen.getByRole("combobox", { name: "Mode" }));
+    await userEvent.click(screen.getByRole("option", { name: "Require QA" }));
     await userEvent.click(screen.getByRole("button", { name: "Save task" }));
 
     await waitFor(() => expect(updateTask).toHaveBeenCalledOnce());

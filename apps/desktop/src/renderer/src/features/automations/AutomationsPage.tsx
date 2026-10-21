@@ -17,6 +17,7 @@ import type {
   CreateAutomationRequest,
 } from "../../../../shared/automations";
 import type { AgentInfo, ModelInfo, WorkspaceInfo } from "../../../../shared/contracts";
+import { SelectControl } from "../../components/ui/SelectControl";
 import { cn } from "../../lib/cn";
 import { useShellText } from "../../lib/shellText";
 
@@ -28,6 +29,7 @@ type AutomationFormInput = Omit<CreateAutomationRequest, "thinkingVariant"> & {
 
 const FIELD_CLASS =
   "w-full rounded-lg border border-hairline bg-surface/60 px-3 py-2 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus:border-accent/60 focus:bg-surface";
+const SELECT_CLASS = cn("flex h-10 items-center justify-between gap-2", FIELD_CLASS);
 const BUTTON_CLASS =
   "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg px-3 text-sm text-fg-subtle transition-colors hover:bg-hover hover:text-fg disabled:pointer-events-none disabled:opacity-45";
 const PRIMARY_BUTTON_CLASS =
@@ -519,57 +521,51 @@ function AutomationEditor({
         </Field>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field id="automation-project" label={t("automation.project")}>
-            <select
-              className={FIELD_CLASS}
+            <SelectControl
+              ariaLabel={t("automation.project")}
+              className={SELECT_CLASS}
               id="automation-project"
-              onChange={(event) => setWorkspaceId(event.target.value)}
+              onValueChange={setWorkspaceId}
+              options={projects.map((workspace) => ({
+                label: workspace.displayName,
+                value: workspace.id,
+              }))}
+              placeholder={t("automation.selectProject")}
               required
-              value={workspaceId}
-            >
-              <option value="">{t("automation.selectProject")}</option>
-              {projects.map((workspace) => (
-                <option key={workspace.id} value={workspace.id}>
-                  {workspace.displayName}
-                </option>
-              ))}
-            </select>
+              value={workspaceId || null}
+            />
           </Field>
           <Field id="automation-agent" label={t("automation.agent")}>
-            <select
-              className={FIELD_CLASS}
+            <SelectControl
+              ariaLabel={t("automation.agent")}
+              className={SELECT_CLASS}
               id="automation-agent"
-              onChange={(event) => setAgentId(event.target.value)}
-              value={agentId}
-            >
-              <option value="">Modus</option>
-              {agents
+              onValueChange={setAgentId}
+              options={agents
                 .filter((agent) => !agent.archivedAt)
-                .map((agent) => (
-                  <option key={agent.id} value={agent.id}>
-                    {agent.name}
-                  </option>
-                ))}
-            </select>
+                .map((agent) => ({ label: agent.name, value: agent.id }))}
+              placeholder="Modus"
+              value={agentId || null}
+            />
           </Field>
           <Field id="automation-model" label={t("automation.model")}>
-            <select
-              className={FIELD_CLASS}
+            <SelectControl
+              ariaLabel={t("automation.model")}
+              className={SELECT_CLASS}
               id="automation-model"
-              onChange={(event) => setModelId(event.target.value)}
-              required
-              value={modelId}
-            >
-              <option value="">{t("automation.selectModel")}</option>
-              {models.map((model) => {
+              onValueChange={setModelId}
+              options={models.map((model) => {
                 const enabled = availableModels.includes(model);
-                return (
-                  <option disabled={!enabled} key={model.id} value={model.id}>
-                    {model.name}
-                    {enabled ? "" : ` · ${t("automation.unavailable")}`}
-                  </option>
-                );
+                return {
+                  disabled: !enabled,
+                  label: `${model.name}${enabled ? "" : ` · ${t("automation.unavailable")}`}`,
+                  value: model.id,
+                };
               })}
-            </select>
+              placeholder={t("automation.selectModel")}
+              required
+              value={modelId || null}
+            />
           </Field>
           <Field id="automation-time-zone" label={t("automation.timeZone")}>
             <input
@@ -582,16 +578,18 @@ function AutomationEditor({
           </Field>
         </div>
         <Field id="automation-schedule" label={t("automation.schedule")}>
-          <select
-            className={FIELD_CLASS}
+          <SelectControl
+            ariaLabel={t("automation.schedule")}
+            className={SELECT_CLASS}
             id="automation-schedule"
-            onChange={(event) => setKind(event.target.value as AutomationSchedule["kind"])}
+            onValueChange={(next) => setKind(next as AutomationSchedule["kind"])}
+            options={[
+              { label: t("automation.once"), value: "once" },
+              { label: t("automation.daily"), value: "daily" },
+              { label: t("automation.weekly"), value: "weekly" },
+            ]}
             value={kind}
-          >
-            <option value="once">{t("automation.once")}</option>
-            <option value="daily">{t("automation.daily")}</option>
-            <option value="weekly">{t("automation.weekly")}</option>
-          </select>
+          />
         </Field>
         {kind === "once" ? (
           <Field id="automation-at" label={`${t("automation.dateTime")} · ${timeZone}`}>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { GroupRuntimeEvent } from "../../../../shared/contracts";
 import type { GroupProactivityMode, GroupSuggestion } from "../../../../shared/group-work-state";
+import { SelectControl } from "../../components/ui/SelectControl";
 import { describeGroupError } from "./groupErrors";
 import { useGroupText } from "./groupRoomI18n";
 
@@ -183,22 +184,17 @@ function SuggestionCard({
       <p className="mt-1 text-2xs text-fg-muted" data-testid="group-suggestion-origin">
         {t("proactivity.source")} {sourceLabel}
       </p>
-      <label className="mt-2 flex items-center gap-2 text-2xs text-fg-muted">
+      <div className="mt-2 flex items-center gap-2 text-2xs text-fg-muted">
         <span>{t("proactivity.delegateTo")}</span>
-        <select
-          aria-label={t("proactivity.delegateTo")}
-          className="min-w-0 flex-1 rounded border border-hairline bg-base px-1.5 py-1"
+        <SelectControl
+          ariaLabel={t("proactivity.delegateTo")}
+          className="flex h-8 min-w-0 flex-1 items-center justify-between gap-2 rounded border border-hairline bg-base px-1.5 py-1 text-2xs text-fg outline-none"
           disabled={busy || options.length === 0}
-          onChange={(event) => setTargetSessionId(event.currentTarget.value)}
+          onValueChange={setTargetSessionId}
+          options={options.map((member) => ({ label: member.label, value: member.sessionId }))}
           value={targetSessionId}
-        >
-          {options.map((member) => (
-            <option key={member.sessionId} value={member.sessionId}>
-              {member.label}
-            </option>
-          ))}
-        </select>
-      </label>
+        />
+      </div>
       <p className="mt-1 text-2xs text-fg-muted" data-testid="group-suggestion-destination">
         {t("proactivity.destination")} {targetLabel ?? t("proactivity.chooseActiveMember")}
       </p>

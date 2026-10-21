@@ -1025,6 +1025,24 @@
   background: var(--surface-glass);
   box-shadow: var(--menu-shadow);
 }
+
+/* If a native select is retained in a future compact form, keep its OS-painted
+   option popup readable and aligned with the active Modus palette. */
+select option,
+select optgroup {
+  background-color: var(--color-elevated);
+  color: var(--color-fg);
+}
+
+select option:checked {
+  background-color: var(--color-selected);
+  color: var(--color-fg);
+}
+
+select option:disabled {
+  color: var(--color-fg-faint);
+}
+
 /*
  * Modal dialog surface (agent dialog): pairs with .popup-chrome, which owns the
  * border and the fill (glass only under native glass + Transparency "full",
