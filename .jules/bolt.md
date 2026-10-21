@@ -5,3 +5,6 @@
 ## 2023-10-19 - [Bolt: Optimize readWorkspacePreview]
 **Learning:** `readFileSync` blocks the event loop in the main Electron process for long durations (e.g. 5+ seconds for repeated reads of a 50MB file).
 **Action:** Use `fs/promises` (`readFile` and `stat`) for large file I/O such as in preview features to ensure the event loop remains responsive.
+## 2025-02-27 - [Batch Group Task Branch Updates]
+**Learning:** SQLite `UPDATE ... FROM json_each(?)` is highly effective for removing N+1 update loops on modern node:sqlite. We observed query count going from N to 1 and runtime halving in benchmarks.
+**Action:** Always look for loops over .run() and replace with json_each when mapping IDs to shared update values.
