@@ -350,12 +350,19 @@ function runInTransaction(
         "select id, group_id from group_jobs where status in ('pending','running','awaiting_user')",
       )
       .all() as Array<{ id: string; group_id: string }>;
-    const cancel = db.prepare(
-      "update group_jobs set status = 'cancelled', updated_at = ? where id = ?",
-    );
-    for (const job of jobs) {
-      cancel.run(at, job.id);
-      note(job.group_id, `- Job ${job.id} was cancelled.`);
+    if (jobs.length > 0) {
+      const CHUNK_SIZE = 500;
+      for (let i = 0; i < jobs.length; i += CHUNK_SIZE) {
+        const chunk = jobs.slice(i, i + CHUNK_SIZE);
+        const placeholders = chunk.map(() => "?").join(",");
+        const cancel = db.prepare(
+          `update group_jobs set status = 'cancelled', updated_at = ? where id in (${placeholders})`,
+        );
+        cancel.run(at, ...chunk.map((j) => j.id));
+      }
+      for (const job of jobs) {
+        note(job.group_id, `- Job ${job.id} was cancelled.`);
+      }
     }
   }
   if (tableExists(db, "group_task_integrations")) {
