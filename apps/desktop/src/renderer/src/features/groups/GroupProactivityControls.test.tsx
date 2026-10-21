@@ -73,7 +73,8 @@ describe("GroupProactivityControls", () => {
     expect(screen.getByRole("button", { name: "Accept suggestion" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Discard suggestion" })).toBeTruthy();
 
-    await userEvent.selectOptions(screen.getByLabelText("Delegate to"), "session-reviewer");
+    await userEvent.click(screen.getByRole("combobox", { name: "Delegate to" }));
+    await userEvent.click(screen.getByRole("option", { name: "Reviewer" }));
     await userEvent.click(screen.getByRole("button", { name: "Accept suggestion" }));
     await waitFor(() =>
       expect(api.resolveSuggestion).toHaveBeenCalledWith(

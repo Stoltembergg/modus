@@ -98,16 +98,19 @@ describe("CreateGroupDialog in edit mode (Manage members)", () => {
     await user.type(within(dialog).getByRole("textbox", { name: "Agent 1 name" }), "Cy");
     await user.click(within(dialog).getByRole("button", { name: "Add agent" }));
     await user.type(within(dialog).getByRole("textbox", { name: "Agent 2 name" }), "Di");
-    await user.selectOptions(
-      within(dialog).getByRole("combobox", { name: "Model for new agents" }),
-      "m-1",
-    );
+    await user.click(within(dialog).getByRole("combobox", { name: "Model for new agents" }));
+    await user.click(screen.getByRole("option", { name: "Model 1" }));
     await user.click(within(dialog).getByRole("button", { name: "Remove Ana" }));
     await user.click(within(dialog).getByRole("button", { name: "Remove Bo" }));
-    const lead = within(dialog).getByRole("combobox", { name: /Lead/ }) as HTMLSelectElement;
-    expect([...lead.options].map((option) => option.textContent)).toEqual(["No lead", "Cy", "Di"]);
-    const di = [...lead.options].find((option) => option.textContent === "Di");
-    await user.selectOptions(lead, di?.value ?? "");
+    const lead = within(dialog).getByRole("combobox", { name: /Lead/ });
+    await user.click(lead);
+    const leadListbox = screen.getByRole("listbox");
+    expect(
+      within(leadListbox)
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual(["No lead", "Cy", "Di"]);
+    await user.click(within(leadListbox).getByRole("option", { name: "Di" }));
     await user.click(within(dialog).getByRole("button", { name: "Save members" }));
     expect(onSave).toHaveBeenCalledTimes(1);
     expect(onSave).toHaveBeenCalledWith({

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelInfo } from "../../../../shared/contracts";
@@ -51,16 +51,19 @@ describe("L3b0 Settings default model picker", () => {
         onSetDefaultModel={onSetDefaultModel}
       />,
     );
-    const select = screen.getByRole("combobox", { name: "Default model" }) as HTMLSelectElement;
-    expect(
-      [...select.querySelectorAll("optgroup")].map((group) => [group.label, group.textContent]),
-    ).toEqual([
-      ["Modus", "Flash"],
-      ["OpenAI", "GPT X"],
-    ]);
-    expect(select.querySelector('option[value="modus/anthropic/claude-fable-5-1"]')).toBeNull();
+    const select = screen.getByRole("combobox", { name: "Default model" });
+    expect(select.textContent).toBe("Flash");
     expect(select.textContent).not.toMatch(/\p{Extended_Pictographic}/u);
-    await user.selectOptions(select, "openai/gpt-x");
+    await user.click(select);
+    const listbox = screen.getByRole("listbox");
+    expect(within(listbox).getByRole("group", { name: "Modus" })).toBeTruthy();
+    expect(within(listbox).getByRole("group", { name: "OpenAI" })).toBeTruthy();
+    expect(
+      within(listbox)
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual(["Flash", "GPT X"]);
+    await user.click(within(listbox).getByRole("option", { name: "GPT X" }));
     expect(onSetDefaultModel).toHaveBeenCalledWith("openai/gpt-x");
   });
 
@@ -74,16 +77,15 @@ describe("L3b0 Settings default model picker", () => {
         onSetDefaultModel={onSetDefaultModel}
       />,
     );
-    const select = screen.getByRole("combobox", { name: "Default model" }) as HTMLSelectElement;
-    expect(select.value).toBe("modus/anthropic/claude-fable-5-1");
-    expect(select.selectedOptions[0]?.textContent).toBe("Fable (unavailable)");
-    expect(select.selectedOptions[0]?.parentElement).toBe(select);
+    const select = screen.getByRole("combobox", { name: "Default model" });
+    expect(select.textContent).toBe("Fable (unavailable)");
     expect(onSetDefaultModel).not.toHaveBeenCalled();
-    await user.selectOptions(select, "modus/deepseek/deepseek-flash");
+    await user.click(select);
+    await user.click(screen.getByRole("option", { name: "Flash" }));
     expect(onSetDefaultModel).toHaveBeenCalledWith("modus/deepseek/deepseek-flash");
   });
 
-  it("never hides a BYOK model, even if it carries a locked flag", () => {
+  it("never hides a BYOK model, even if it carries a locked flag", async () => {
     render(
       <DefaultModelSetting
         defaultModel={undefined}
@@ -99,11 +101,11 @@ describe("L3b0 Settings default model picker", () => {
         onSetDefaultModel={vi.fn()}
       />,
     );
-    const select = screen.getByRole("combobox", { name: "Default model" }) as HTMLSelectElement;
+    const select = screen.getByRole("combobox", { name: "Default model" }) as HTMLButtonElement;
     expect(select.disabled).toBe(false);
-    expect([...select.options].map((option) => option.textContent)).toEqual([
-      "Choose a model",
-      "GPT X",
-    ]);
+    expect(select.textContent).toBe("Choose a model");
+    const user = userEvent.setup();
+    await user.click(select);
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["GPT X"]);
   });
 });

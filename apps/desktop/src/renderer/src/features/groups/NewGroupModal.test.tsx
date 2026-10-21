@@ -112,8 +112,7 @@ function renderModal({
 
 const createButton = (modal: HTMLElement) =>
   within(modal).getByRole("button", { name: "Create group" }) as HTMLButtonElement;
-const folder = (modal: HTMLElement) =>
-  within(modal).getByRole("combobox", { name: "Folder" }) as HTMLSelectElement;
+const folder = (modal: HTMLElement) => within(modal).getByRole("combobox", { name: "Folder" });
 const counter = (modal: HTMLElement) => within(modal).getByTestId("new-group-counter").textContent;
 const hint = (modal: HTMLElement) => within(modal).getByTestId("new-group-hint").textContent;
 
@@ -124,19 +123,23 @@ describe("NewGroupModal (A4 redesigned)", () => {
     const user = userEvent.setup();
     const added = workspace("ws-3", "New repo");
     const { modal, addFolder } = renderModal({ addFolder: vi.fn(async () => added) });
-    const options = Array.from(folder(modal).options).map((option) => option.textContent);
-    expect(options).toEqual(["Choose a folder", "Repo", "Docs", "Add folder…"]);
+    await user.click(folder(modal));
+    const options = screen.getAllByRole("option").map((option) => option.textContent);
+    expect(options).toEqual(["Repo", "Docs", "Add folder…"]);
+    await user.keyboard("{Escape}");
     await user.click(within(modal).getByRole("button", { name: "Add Builder" }));
     await user.click(within(modal).getByRole("button", { name: "Add Reviewer" }));
     expect(createButton(modal).disabled).toBe(true);
     expect(hint(modal)).toBe(NEW_GROUP_HINTS.folder);
 
-    await user.selectOptions(folder(modal), "__add_folder__");
+    await user.click(folder(modal));
+    await user.click(screen.getByRole("option", { name: "Add folder…" }));
     expect(addFolder).toHaveBeenCalledTimes(1);
-    await waitFor(() => expect(folder(modal).value).toBe("ws-3"));
+    await waitFor(() => expect(folder(modal).textContent).toBe("New repo"));
     expect(createButton(modal).disabled).toBe(false);
-    await user.selectOptions(folder(modal), "ws-2");
-    expect(folder(modal).value).toBe("ws-2");
+    await user.click(folder(modal));
+    await user.click(screen.getByRole("option", { name: "Docs" }));
+    expect(folder(modal).textContent).toBe("Docs");
   });
 
   it("has no right-hand Members column", () => {
