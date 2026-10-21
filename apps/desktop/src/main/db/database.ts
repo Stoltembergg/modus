@@ -1220,7 +1220,7 @@ function normalizeGroupedAvatarShapes(db: DatabaseSync): void {
     byGroup.set(row.group_id, members);
   }
 
-  const update = db.prepare("update agents set avatar_shape = ? where id = ?");
+  const updates: Record<string, string> = {};
   for (const members of byGroup.values()) {
     // Old app builds could leave groups over the current 10-member limit. Keep
     // those extra rows intact; there are only ten shapes to assign uniquely.
@@ -1230,16 +1230,31 @@ function normalizeGroupedAvatarShapes(db: DatabaseSync): void {
     );
     for (const member of inLimitMembers) {
       const shape = allocated.get(member.id);
-      if (shape && shape !== member.avatar_shape) update.run(shape, member.id);
+      if (shape && shape !== member.avatar_shape) updates[member.id] = shape;
     }
+  }
+
+  const updatesJson = JSON.stringify(updates);
+  if (updatesJson !== "{}") {
+    db.prepare(
+      `update agents set avatar_shape = j.value
+       from json_each(?) j where agents.id = j.key`,
+    ).run(updatesJson);
   }
 }
 
 function assignDeterministicAvatarShapes(db: DatabaseSync): void {
   const rows = db.prepare("select id from agents").all() as Array<{ id: string }>;
-  const update = db.prepare("update agents set avatar_shape = ? where id = ?");
+  const updates: Record<string, string> = {};
   for (const row of rows) {
-    update.run(agentAvatarForId(row.id).avatarShape, row.id);
+    updates[row.id] = agentAvatarForId(row.id).avatarShape;
+  }
+  const updatesJson = JSON.stringify(updates);
+  if (updatesJson !== "{}") {
+    db.prepare(
+      `update agents set avatar_shape = j.value
+       from json_each(?) j where agents.id = j.key`,
+    ).run(updatesJson);
   }
 }
 
