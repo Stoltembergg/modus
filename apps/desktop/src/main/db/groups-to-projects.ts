@@ -362,12 +362,17 @@ function runInTransaction(
     const rows = db
       .prepare("select id, group_id from group_task_integrations where status = 'applying'")
       .all() as Array<{ id: string; group_id: string }>;
-    const abort = db.prepare(
-      "update group_task_integrations set status = 'aborted', updated_at = ? where id = ?",
-    );
-    for (const row of rows) {
-      abort.run(at, row.id);
-      note(row.group_id, `- Integration ${row.id} was being applied and was aborted.`);
+    if (rows.length > 0) {
+      for (let i = 0; i < rows.length; i += 100) {
+        const chunk = rows.slice(i, i + 100);
+        const ids = chunk.map((r) => r.id);
+        db.prepare(
+          `update group_task_integrations set status = 'aborted', updated_at = ? where id in (${ids.map(() => "?").join(",")})`,
+        ).run(at, ...ids);
+      }
+      for (const row of rows) {
+        note(row.group_id, `- Integration ${row.id} was being applied and was aborted.`);
+      }
     }
   }
   if (tableExists(db, "group_integration_previews")) {
