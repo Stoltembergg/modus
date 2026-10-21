@@ -18,6 +18,7 @@ import type {
 } from "../../../../shared/contracts";
 import { GROUP_MAX_MEMBERS } from "../../../../shared/group-blocked";
 import type { GroupTextKey } from "../../../../shared/group-room-locale";
+import { SelectControl } from "../../components/ui/SelectControl";
 import { cn } from "../../lib/cn";
 import { selectableModels } from "../../lib/modusModels";
 import { motionOffset, motionTransition, tween } from "../../lib/motion";
@@ -525,23 +526,23 @@ export function NewGroupModal({
                 </div>
 
                 <div className="grid grid-cols-2 gap-2 px-4 pt-2">
-                  <label className="flex flex-col gap-1">
+                  <label className="flex flex-col gap-1" htmlFor="new-group-folder">
                     <span className="text-2xs text-fg-subtle">{t("newGroup.folder")}</span>
-                    <select
-                      className={cn(FIELD, "px-2")}
-                      onChange={(event) => void chooseFolder(event.target.value)}
-                      value={workspaceId}
-                    >
-                      <option disabled value="">
-                        {t("newGroup.chooseFolder")}
-                      </option>
-                      {projects.map((project) => (
-                        <option key={project.id} value={project.id}>
-                          {project.displayName}
-                        </option>
-                      ))}
-                      <option value={ADD_FOLDER}>{t("newGroup.addFolder")}</option>
-                    </select>
+                    <SelectControl
+                      ariaLabel={t("newGroup.folder")}
+                      className={cn("flex items-center justify-between gap-2", FIELD, "px-2")}
+                      id="new-group-folder"
+                      onValueChange={(folderId) => void chooseFolder(folderId)}
+                      options={[
+                        ...projects.map((project) => ({
+                          label: project.displayName,
+                          value: project.id,
+                        })),
+                        { label: t("newGroup.addFolder"), value: ADD_FOLDER },
+                      ]}
+                      placeholder={t("newGroup.chooseFolder")}
+                      value={workspaceId || null}
+                    />
                   </label>
                   <label className="flex flex-col gap-1">
                     <span className="text-2xs text-fg-subtle">{t("newGroup.name")}</span>

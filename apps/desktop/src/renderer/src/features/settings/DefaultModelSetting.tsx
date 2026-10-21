@@ -1,6 +1,7 @@
 import type { ModelInfo } from "../../../../shared/contracts";
-import { ModelOptions, selectableModels } from "../../lib/modusModels";
+import { buildModelPickerGroups, selectableModels } from "../../lib/modusModels";
 import { useSettingsText } from "../../lib/settingsText";
+import { SelectField } from "./form-controls";
 import { SettingsList, SettingsRow } from "./settings-layout";
 
 /**
@@ -29,26 +30,30 @@ export function DefaultModelSetting({
     locked: Boolean(model.locked),
   }));
   const selectable = selectableModels(pickable);
+  const picker = buildModelPickerGroups(pickable, defaultModel);
   return (
     <SettingsList>
       <SettingsRow
         control={
-          <select
-            aria-label={t("settings.providers.defaultModel")}
-            className="h-8 max-w-[320px] rounded-md border border-hairline bg-canvas px-2 text-sm text-fg outline-none focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
+          <SelectField
             disabled={busy || selectable.length === 0}
-            onChange={(event) => onSetDefaultModel(event.target.value)}
-            value={defaultModel ?? ""}
-          >
-            {defaultModel ? null : (
-              <option disabled value="">
-                {selectable.length === 0
-                  ? t("settings.providers.noModelConfigured")
-                  : t("settings.providers.chooseModel")}
-              </option>
-            )}
-            <ModelOptions models={pickable} savedModelId={defaultModel} />
-          </select>
+            groups={picker.groups.map((group) => ({
+              key: group.providerId,
+              label: group.label,
+              options: group.models.map((model) => ({ label: model.name, value: model.id })),
+            }))}
+            label={t("settings.providers.defaultModel")}
+            labelHidden
+            onChange={onSetDefaultModel}
+            options={picker.loose.map((option) => ({ label: option.label, value: option.id }))}
+            placeholder={
+              selectable.length === 0
+                ? t("settings.providers.noModelConfigured")
+                : t("settings.providers.chooseModel")
+            }
+            triggerClassName="flex h-8 w-[min(320px,calc(100vw-48px))] min-w-[180px] items-center justify-between gap-2 rounded-md border border-hairline bg-canvas px-2 text-sm text-fg outline-none transition-colors hover:border-hairline-strong focus-visible:border-focus-ring/60 focus-visible:ring-2 focus-visible:ring-focus-ring/35 data-popup-open:border-hairline-strong"
+            value={defaultModel}
+          />
         }
         title={t("settings.providers.defaultModel")}
       />

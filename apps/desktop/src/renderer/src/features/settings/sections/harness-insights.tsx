@@ -7,6 +7,7 @@ import type {
   HarnessInsightsResult,
 } from "../../../../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../../../../shared/contracts";
+import { SelectControl } from "../../../components/ui/SelectControl";
 import { uiIntlLocale } from "../../../lib/uiIntl";
 import { SettingsPageHeader } from "../settings-layout";
 
@@ -85,20 +86,25 @@ export function HarnessInsightsView({
         actions={
           state.status !== "unavailable" ? (
             <>
-              <label className="flex h-8 items-center gap-1.5 rounded-md bg-chip-faint px-2 text-xs text-fg-muted">
+              <label
+                className="flex h-8 items-center gap-1.5 rounded-md bg-chip-faint px-2 text-xs text-fg-muted"
+                htmlFor="harness-insights-window"
+              >
                 <span className="sr-only">Insights time window</span>
-                <select
-                  aria-label="Insights time window"
-                  className="h-full cursor-pointer bg-transparent text-fg outline-none"
-                  onChange={(event) =>
-                    onPeriodChange(Number(event.target.value) as HarnessInsightsWindowDays)
+                <SelectControl
+                  ariaLabel="Insights time window"
+                  className="flex h-full w-[88px] items-center justify-between gap-1 bg-transparent text-fg text-xs outline-none"
+                  id="harness-insights-window"
+                  onValueChange={(days) =>
+                    onPeriodChange(Number(days) as HarnessInsightsWindowDays)
                   }
-                  value={periodDays}
-                >
-                  <option value={7}>7 days</option>
-                  <option value={30}>30 days</option>
-                  <option value={90}>90 days</option>
-                </select>
+                  options={[
+                    { label: "7 days", value: "7" },
+                    { label: "30 days", value: "30" },
+                    { label: "90 days", value: "90" },
+                  ]}
+                  value={String(periodDays)}
+                />
               </label>
               <button
                 aria-label="Refresh Harness Insights"

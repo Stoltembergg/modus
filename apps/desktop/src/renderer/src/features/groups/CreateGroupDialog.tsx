@@ -9,8 +9,13 @@ import type {
   WorkspaceInfo,
 } from "../../../../shared/contracts";
 import { GROUP_MAX_MEMBERS, GROUP_MIN_MEMBERS } from "../../../../shared/group-blocked";
+import { SelectControl } from "../../components/ui/SelectControl";
 import { cn } from "../../lib/cn";
-import { ModelOptions, type PickableModel, selectableModels } from "../../lib/modusModels";
+import {
+  buildModelPickerGroups,
+  type PickableModel,
+  selectableModels,
+} from "../../lib/modusModels";
 import { describeGroupError } from "./groupErrors";
 import { useGroupText } from "./groupRoomI18n";
 
@@ -73,6 +78,7 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
   const [error, setError] = useState<string | undefined>();
 
   const projects = useMemo(() => workspaces.filter((workspace) => !workspace.inbox), [workspaces]);
+  const modelPicker = buildModelPickerGroups(models, modelId);
 
   // Reset only when the dialog opens (or switches group), not on every list refresh.
   const editGroupId = editGroup?.id;
@@ -279,39 +285,49 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
               </fieldset>
 
               {agents.length > 0 ? (
-                <label className="flex flex-col gap-1">
+                <label className="flex flex-col gap-1" htmlFor="manage-model-for-new">
                   <span className="text-2xs text-fg-subtle">{t("manage.modelForNew")}</span>
-                  <select
-                    className={cn(FIELD, "px-2")}
-                    onChange={(event) => setModelId(event.target.value)}
-                    value={modelId}
-                  >
-                    {models.length === 0 ? (
-                      <option value="">{t("common.noModelConfigured")}</option>
-                    ) : null}
-                    <ModelOptions models={models} />
-                  </select>
+                  <SelectControl
+                    ariaLabel={t("manage.modelForNew")}
+                    className={cn("flex items-center justify-between gap-2", FIELD, "px-2")}
+                    groups={modelPicker.groups.map((group) => ({
+                      key: group.providerId,
+                      label: group.label,
+                      options: group.models.map((model) => ({
+                        label: model.name,
+                        value: model.id,
+                      })),
+                    }))}
+                    id="manage-model-for-new"
+                    onValueChange={setModelId}
+                    options={modelPicker.loose.map((option) => ({
+                      label: option.label,
+                      value: option.id,
+                    }))}
+                    placeholder={models.length === 0 ? t("common.noModelConfigured") : ""}
+                    value={modelId || null}
+                  />
                 </label>
               ) : null}
 
-              <label className="flex flex-col gap-1">
+              <label className="flex flex-col gap-1" htmlFor="manage-group-lead">
                 <span className="flex items-center gap-1 text-2xs text-fg-subtle">
                   <IconCrown size={12} stroke={1.7} />
                   {t("common.lead")}
                 </span>
-                <select
-                  className={cn(FIELD, "px-2 disabled:opacity-50")}
+                <SelectControl
+                  ariaLabel={t("common.lead")}
+                  className={cn(
+                    "flex items-center justify-between gap-2",
+                    FIELD,
+                    "px-2 disabled:opacity-50",
+                  )}
                   disabled={leadOptions.length === 0}
-                  onChange={(event) => setLead(event.target.value)}
+                  id="manage-group-lead"
+                  onValueChange={setLead}
+                  options={[{ label: t("manage.noLead"), value: "" }, ...leadOptions]}
                   value={leadOptions.some((option) => option.value === lead) ? lead : ""}
-                >
-                  <option value="">{t("manage.noLead")}</option>
-                  {leadOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
+                />
               </label>
               {hint ? <p className="text-2xs text-fg-muted">{hint}</p> : null}
             </div>

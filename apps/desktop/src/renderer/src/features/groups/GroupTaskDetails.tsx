@@ -11,6 +11,7 @@ import type {
   GroupTaskTransitionEvent,
   GroupTaskUserDraft,
 } from "../../../../shared/group-work-state";
+import { SelectControl } from "../../components/ui/SelectControl";
 import { GroupIntegrationDialog } from "./GroupIntegrationDialog";
 import { describeGroupError } from "./groupErrors";
 import { type GroupTextFn, useGroupText } from "./groupRoomI18n";
@@ -27,6 +28,8 @@ type Props = {
 };
 
 const CHECK_KINDS: readonly HarnessTaskCheckKind[] = ["tests", "typecheck", "lint", "build"];
+const COMPACT_SELECT_CLASS =
+  "flex h-8 w-full items-center justify-between gap-2 rounded-md border border-hairline bg-canvas px-2 text-xs text-fg outline-none transition-colors hover:border-hairline-strong focus-visible:border-focus-ring/60 focus-visible:ring-2 focus-visible:ring-focus-ring/35";
 
 function statusLabel(status: GroupTaskStatus, t: GroupTextFn): string {
   switch (status) {
@@ -476,40 +479,36 @@ export function GroupTaskDetails({
                 value={draft.description ?? ""}
               />
             </label>
-            <label className="flex flex-col gap-1">
+            <label className="flex flex-col gap-1" htmlFor="group-task-kind">
               {t("taskDetails.kind")}
-              <select
-                onChange={(event) =>
-                  setDraft({ ...draft, kind: event.target.value as GroupTaskUserDraft["kind"] })
+              <SelectControl
+                ariaLabel={t("taskDetails.kind")}
+                className={COMPACT_SELECT_CLASS}
+                id="group-task-kind"
+                onValueChange={(kind) =>
+                  setDraft({ ...draft, kind: kind as GroupTaskUserDraft["kind"] })
                 }
-                value={draft.kind}
-              >
-                {(
+                options={(
                   ["legacy", "code", "docs", "design", "review", "research", "question"] as const
-                ).map((kind) => (
-                  <option key={kind} value={kind}>
-                    {kindLabel(kind, t)}
-                  </option>
-                ))}
-              </select>
+                ).map((kind) => ({ label: kindLabel(kind, t), value: kind }))}
+                value={draft.kind}
+              />
             </label>
-            <label className="flex flex-col gap-1">
+            <label className="flex flex-col gap-1" htmlFor="group-task-priority">
               {t("taskDetails.priority")}
-              <select
-                onChange={(event) =>
-                  setDraft({
-                    ...draft,
-                    priority: event.target.value as GroupTaskUserDraft["priority"],
-                  })
+              <SelectControl
+                ariaLabel={t("taskDetails.priority")}
+                className={COMPACT_SELECT_CLASS}
+                id="group-task-priority"
+                onValueChange={(priority) =>
+                  setDraft({ ...draft, priority: priority as GroupTaskUserDraft["priority"] })
                 }
+                options={(["low", "normal", "high"] as const).map((priority) => ({
+                  label: priorityLabel(priority, t),
+                  value: priority,
+                }))}
                 value={draft.priority}
-              >
-                {(["low", "normal", "high"] as const).map((priority) => (
-                  <option key={priority} value={priority}>
-                    {priorityLabel(priority, t)}
-                  </option>
-                ))}
-              </select>
+              />
             </label>
             <fieldset className="flex flex-col gap-1">
               <legend>{t("taskDetails.dependencies")}</legend>
@@ -620,24 +619,27 @@ export function GroupTaskDetails({
             </fieldset>
             <fieldset className="flex flex-col gap-2">
               <legend>{t("taskDetails.verificationPolicy")}</legend>
-              <label className="flex flex-col gap-1">
+              <label className="flex flex-col gap-1" htmlFor="group-task-verification-mode">
                 {t("taskDetails.mode")}
-                <select
-                  onChange={(event) =>
+                <SelectControl
+                  ariaLabel={t("taskDetails.mode")}
+                  className={COMPACT_SELECT_CLASS}
+                  id="group-task-verification-mode"
+                  onValueChange={(mode) =>
                     setDraft({
                       ...draft,
                       verificationPolicy: {
                         ...draft.verificationPolicy,
-                        mode: event.target
-                          .value as GroupTaskUserDraft["verificationPolicy"]["mode"],
+                        mode: mode as GroupTaskUserDraft["verificationPolicy"]["mode"],
                       },
                     })
                   }
+                  options={[
+                    { label: t("taskDetails.noRequiredQa"), value: "none" },
+                    { label: t("taskDetails.requireQa"), value: "required" },
+                  ]}
                   value={draft.verificationPolicy.mode}
-                >
-                  <option value="none">{t("taskDetails.noRequiredQa")}</option>
-                  <option value="required">{t("taskDetails.requireQa")}</option>
-                </select>
+                />
               </label>
               <label className="flex items-center gap-2">
                 <input
@@ -656,26 +658,27 @@ export function GroupTaskDetails({
                 {t("taskDetails.requireReviewerApproval")}
               </label>
             </fieldset>
-            <label className="flex flex-col gap-1">
+            <label className="flex flex-col gap-1" htmlFor="group-task-reviewer">
               {t("taskDetails.reviewer")}
-              <select
-                onChange={(event) => {
+              <SelectControl
+                ariaLabel={t("taskDetails.reviewer")}
+                className={COMPACT_SELECT_CLASS}
+                id="group-task-reviewer"
+                onValueChange={(reviewerSessionId) => {
                   const { reviewerSessionId: _reviewerSessionId, ...withoutReviewer } = draft;
                   setDraft(
-                    event.target.value
-                      ? { ...withoutReviewer, reviewerSessionId: event.target.value }
-                      : withoutReviewer,
+                    reviewerSessionId ? { ...withoutReviewer, reviewerSessionId } : withoutReviewer,
                   );
                 }}
+                options={[
+                  { label: t("taskDetails.noReviewer"), value: "" },
+                  ...[...labels.entries()].map(([sessionId, label]) => ({
+                    label: memberLabelText(label),
+                    value: sessionId,
+                  })),
+                ]}
                 value={draft.reviewerSessionId ?? ""}
-              >
-                <option value="">{t("taskDetails.noReviewer")}</option>
-                {[...labels.entries()].map(([sessionId, label]) => (
-                  <option key={sessionId} value={sessionId}>
-                    {memberLabelText(label)}
-                  </option>
-                ))}
-              </select>
+              />
             </label>
             {saveError ? <p className="text-danger">{saveError}</p> : null}
             <div className="flex justify-end gap-2">

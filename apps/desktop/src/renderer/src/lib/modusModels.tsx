@@ -1,8 +1,8 @@
 import type { ModusModelsStatus } from "../../../shared/contracts";
 
 /**
- * Modus models in the renderer pickers (Settings default model, AgentDialog, NewGroupModal,
- * CreateGroupDialog) and the "Modus unavailable" notice.
+ * Shared model availability and provider grouping for renderer pickers and the "Modus
+ * unavailable" notice.
  * - The pickers list models grouped by provider (`buildModelPickerGroups`): the Modus group
  *   first, then one group per user provider, alphabetical by the name Settings › Providers
  *   shows (ModelInfo.providerName).
@@ -110,7 +110,7 @@ export function buildModelPickerGroups<M extends PickableModel>(
   return { loose, groups };
 }
 
-/** `<option>`s / `<optgroup>`s of a native model `<select>` (see buildModelPickerGroups). */
+/** `<option>` / `<optgroup>` output for model pickers that intentionally use a native select. */
 export function ModelOptions({
   models,
   savedModelId,

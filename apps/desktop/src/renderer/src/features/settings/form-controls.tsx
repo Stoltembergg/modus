@@ -1,15 +1,13 @@
-import { Select } from "@base-ui/react/select";
 import { Switch } from "@base-ui/react/switch";
-import {
-  IconCheck,
-  IconChevronDown,
-  IconChevronRight,
-  IconPlus,
-  IconTrash,
-} from "@tabler/icons-react";
+import { IconChevronRight, IconPlus, IconTrash } from "@tabler/icons-react";
 import { AnimatePresence, m, useReducedMotion } from "motion/react";
 import { type ReactNode, useId, useState } from "react";
 import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
+import {
+  SelectControl,
+  type SelectControlGroup,
+  type SelectControlOption,
+} from "../../components/ui/SelectControl";
 import { cn } from "../../lib/cn";
 import { MOTION_SPRING, motionTransition, tween } from "../../lib/motion";
 import { useSettingsText } from "../../lib/settingsText";
@@ -38,6 +36,9 @@ export function optionLabel<T extends string>(
 ): string {
   return options.find((option) => option.value === value)?.label ?? value;
 }
+
+export type SelectFieldOption<T extends string> = SelectControlOption<T>;
+export type SelectFieldOptionGroup<T extends string> = SelectControlGroup<T>;
 
 export function Field({
   autoComplete,
@@ -83,68 +84,40 @@ export function SelectField<T extends string>({
   labelHidden = false,
   value,
   options,
+  groups = [],
   onChange,
+  placeholder,
   disabled = false,
+  triggerClassName,
 }: {
   label: string;
   /** Keep the label for screen readers only (the row title already shows it). */
   labelHidden?: boolean;
-  value: T;
+  value: T | null | undefined;
   /** `lang` marks an option written in another language (native language names). */
-  options: readonly { label: string; value: T; lang?: string }[];
+  options: readonly SelectFieldOption<T>[];
+  /** Provider or category groups, rendered inside the same themed popup. */
+  groups?: readonly SelectFieldOptionGroup<T>[];
+  /** Shown while no option is selected. */
+  placeholder?: string;
   onChange(value: T): void;
   disabled?: boolean;
+  /** Replaces the default trigger classes for compact or context-specific controls. */
+  triggerClassName?: string;
 }) {
   return (
     <div className="grid gap-2">
       <span className={labelHidden ? "sr-only" : "text-xs text-fg-muted"}>{label}</span>
-      <Select.Root
-        onValueChange={(next) => {
-          if (typeof next === "string") {
-            onChange(next as T);
-          }
-        }}
+      <SelectControl
+        ariaLabel={label}
+        className={triggerClassName}
         disabled={disabled}
+        groups={groups}
+        onValueChange={onChange}
+        options={options}
+        placeholder={placeholder}
         value={value}
-      >
-        <Select.Trigger
-          aria-label={label}
-          className="flex h-10 w-full items-center justify-between gap-3 rounded-md border border-hairline bg-canvas px-3 text-sm text-fg outline-none transition-colors hover:border-hairline-strong focus-visible:border-focus-ring/60 focus-visible:ring-2 focus-visible:ring-focus-ring/35 data-popup-open:border-hairline-strong"
-        >
-          <Select.Value>{(selected) => optionLabel(options, String(selected))}</Select.Value>
-          <Select.Icon>
-            <IconChevronDown className="text-fg-faint" size={14} stroke={1.8} />
-          </Select.Icon>
-        </Select.Trigger>
-        <Select.Portal>
-          <Select.Positioner
-            align="start"
-            alignItemWithTrigger={false}
-            collisionAvoidance={{ side: "flip", align: "shift", fallbackAxisSide: "none" }}
-            side="bottom"
-            sideOffset={5}
-          >
-            <Select.Popup className="scroll-thin origin-(--transform-origin) min-w-[var(--anchor-width)] overflow-y-auto popup-chrome p-1 transition-[transform,opacity] duration-(--motion-duration-fast) data-[side=bottom]:data-ending-style:translate-y-[-4px] data-[side=bottom]:data-starting-style:translate-y-[-4px] data-[side=top]:data-ending-style:translate-y-[4px] data-[side=top]:data-starting-style:translate-y-[4px] data-ending-style:opacity-0 data-starting-style:opacity-0">
-              {options.map((option) => (
-                <Select.Item
-                  className="grid h-8 cursor-default grid-cols-[minmax(0,1fr)_16px] items-center gap-2 rounded-md px-2 text-sm text-fg-muted outline-none select-none data-highlighted:bg-hover data-highlighted:text-fg"
-                  key={option.value}
-                  value={option.value}
-                >
-                  <Select.ItemText className="min-w-0 truncate" lang={option.lang}>
-                    {option.label}
-                  </Select.ItemText>
-                  <span className="flex justify-center text-fg">
-                    <Select.ItemIndicator>
-                      <IconCheck size={13} stroke={2} />
-                    </Select.ItemIndicator>
-                  </span>
-                </Select.Item>
-              ))}
-            </Select.Popup>
-          </Select.Positioner>
-        </Select.Portal>
-      </Select.Root>
+      />
     </div>
   );
 }
