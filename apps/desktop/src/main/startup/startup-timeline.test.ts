@@ -19,4 +19,18 @@ describe("createStartupTimeline", () => {
     ]);
     expect(log).toHaveBeenCalledTimes(3);
   });
+
+  it("ignores duplicate milestones and logs only the first occurrence", () => {
+    const clock = vi.fn().mockReturnValue(100);
+    const log = vi.fn();
+    const timeline = createStartupTimeline({ clock, enabled: true, log });
+
+    timeline.mark("main.entry");
+    timeline.mark("main.entry");
+    timeline.mark("main.entry");
+
+    expect(timeline.timings()).toEqual([{ milestone: "main.entry", processElapsedMs: 100 }]);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(clock).toHaveBeenCalledTimes(1);
+  });
 });
