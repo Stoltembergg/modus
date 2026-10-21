@@ -1237,9 +1237,30 @@ function normalizeGroupedAvatarShapes(db: DatabaseSync): void {
 
 function assignDeterministicAvatarShapes(db: DatabaseSync): void {
   const rows = db.prepare("select id from agents").all() as Array<{ id: string }>;
-  const update = db.prepare("update agents set avatar_shape = ? where id = ?");
+  if (rows.length === 0) return;
+
+  const shapeGroups = new Map<string, string[]>();
   for (const row of rows) {
-    update.run(agentAvatarForId(row.id).avatarShape, row.id);
+    const shape = agentAvatarForId(row.id).avatarShape;
+    let group = shapeGroups.get(shape);
+    if (!group) {
+      group = [];
+      shapeGroups.set(shape, group);
+    }
+    group.push(row.id);
+  }
+
+  for (const [shape, ids] of shapeGroups.entries()) {
+    if (ids.length === 0) continue;
+    const BATCH_SIZE = 500;
+    for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+      const batch = ids.slice(i, i + BATCH_SIZE);
+      const placeholders = batch.map(() => "?").join(",");
+      db.prepare(`update agents set avatar_shape = ? where id in (${placeholders})`).run(
+        shape,
+        ...batch,
+      );
+    }
   }
 }
 
