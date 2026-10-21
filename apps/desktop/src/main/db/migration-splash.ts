@@ -2,7 +2,7 @@ import { BrowserWindow } from "electron";
 
 /** Static, no preload, no IPC (plan §2.4): painted before the synchronous migration blocks main. */
 export const MIGRATION_SPLASH_HTML = `<!doctype html><html><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'sha256-qVvw9Fc2YTr6hqLSG9uLfnqUZo9QL88GtcANzzCtCIc='">
 <style>html,body{margin:0;height:100%;background:#111214;color:#e8e8ea;font:14px -apple-system,system-ui,sans-serif}
 body{display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px}
 .s{width:22px;height:22px;border:2px solid #444;border-top-color:#e8e8ea;border-radius:50%;animation:r 1s linear infinite}
