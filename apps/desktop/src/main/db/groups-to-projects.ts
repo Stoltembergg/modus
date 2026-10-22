@@ -337,11 +337,18 @@ function runInTransaction(
         where s.kind = 'group_member' and r.status in ('running','blocked')`,
     )
     .all() as Array<{ id: string; session_id: string }>;
-  const cancelRun = db.prepare(
-    "update agent_runs set status = 'cancelled', completed_at = ?, error = ? where id = ?",
-  );
+  if (liveRuns.length > 0) {
+    const chunkSize = 500;
+    for (let i = 0; i < liveRuns.length; i += chunkSize) {
+      const chunk = liveRuns.slice(i, i + chunkSize);
+      const placeholders = chunk.map(() => "?").join(",");
+      const cancelRun = db.prepare(
+        `update agent_runs set status = 'cancelled', completed_at = ?, error = ? where id in (${placeholders})`,
+      );
+      cancelRun.run(at, GROUPS_MIGRATION_RUN_ERROR, ...chunk.map((r) => r.id));
+    }
+  }
   for (const run of liveRuns) {
-    cancelRun.run(at, GROUPS_MIGRATION_RUN_ERROR, run.id);
     note(memberGroup.get(run.session_id) ?? null, `- Run ${run.id} was cancelled.`);
   }
   if (tableExists(db, "group_jobs")) {
