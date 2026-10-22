@@ -1,0 +1,197 @@
+{
+  "schemaVersion": 1,
+  "kind": "offline-verifier-calibration",
+  "inferenceExecuted": false,
+  "selectedModel": null,
+  "liveBaselineStatus": "not_run_requires_explicit_provider_model_choice",
+  "sourceRevision": "ba6ca5e56d4393316653b6542a9311be08008295",
+  "nodeVersion": "v24.19.0",
+  "fixtureId": "repair-command-line-pt",
+  "fixtureHash": "8d8964d3ecd410334b418b9b3449fab875e71bd2242e8e2713d4de6de5836c88",
+  "provenance": {
+    "revision": "ba6ca5e56d4393316653b6542a9311be08008295",
+    "source": "apps/desktop/src/shared/command-line.ts",
+    "sourceSha256": "99157e8a187b73579088d3f5af1a001eaa6ab1cc8780eed4b974a9a94edf3945",
+    "tests": "apps/desktop/src/shared/command-line.test.ts",
+    "testsSha256": "02454b1261988ba1b7a7603ff3f215a431e249b7f5f7ca6558d60d770d9a203b"
+  },
+  "sourceHashes": {
+    "apps/desktop/scripts/harness-quality/fixtures.ts": "021b0a203cd7d163e7a0c906587c73752412fd12568bbe95b80fe3f31a8f1096",
+    "apps/desktop/scripts/harness-quality/code-repair.ts": "87b81f889c56507ecfbd983d768b6eb7d3345e59696031d87b3023c2a963e42b",
+    "apps/desktop/scripts/harness-quality/code-repair.test.ts": "3061c0059c5cf4bb79cebc12dc9acecabd51e1786125e5157c588f8d23189fe0",
+    "apps/desktop/scripts/harness-quality/quality.test.ts": "2e929bf385c715b91dc10dede056649c004e6095b4bfa4849e067a6e4a813c9f",
+    "apps/desktop/scripts/harness-quality/report.ts": "9cd97654661410025b4bb8c20740bc4ff96388629cb6587a5d97374bf9271f01",
+    "apps/desktop/scripts/harness-quality/scope.ts": "a225e4e480a380fcd9b17b7c58833f50731a55e673514a3cbb29dd05beaed252",
+    "apps/desktop/scripts/harness-quality/code-repair/command-line.ts.txt": "99157e8a187b73579088d3f5af1a001eaa6ab1cc8780eed4b974a9a94edf3945",
+    "apps/desktop/scripts/harness-quality/code-repair/command-line.test.ts.txt": "02454b1261988ba1b7a7603ff3f215a431e249b7f5f7ca6558d60d770d9a203b",
+    "apps/desktop/scripts/harness-quality/code-repair/reference.ts.txt": "0b3f818c5d507f1283bc706b8f3a0bddc588b349a6d9da1a3c262e30a5a9bbc1",
+    "apps/desktop/src/main/agent/harness/harness-quality.live.test.ts": "30d023c3a321c72cab3d1b091fff5cf6af94b37ee4244abc519a79b9a46c30ee"
+  },
+  "command": "MODUS_HARNESS_QUALITY_LIVE=0 MODUS_HARNESS_QUALITY_BASELINE=docs/evaluations/harness-quality-code-repair-baseline.json node_modules/.bin/vitest run apps/desktop/scripts/harness-quality/code-repair.test.ts apps/desktop/scripts/harness-quality/quality.test.ts apps/desktop/src/shared/command-line.test.ts apps/desktop/src/main/agent/harness/harness-quality.live.test.ts",
+  "controls": [
+    {
+      "candidate": "unmodified-repository-source",
+      "passed": false,
+      "checks": [
+        {
+          "name": "command-line.ts: plain command",
+          "passed": true
+        },
+        {
+          "name": "command-line.ts: Windows quoted path",
+          "passed": true
+        },
+        {
+          "name": "command-line.ts: single quoted input",
+          "passed": true
+        },
+        {
+          "name": "command-line.ts: empty quoted input",
+          "passed": true
+        },
+        {
+          "name": "command-line.ts: blank input",
+          "passed": true
+        },
+        {
+          "name": "command-line.ts: existing path formatting",
+          "passed": true
+        },
+        {
+          "name": "command-line.ts: existing empty formatting",
+          "passed": true
+        },
+        {
+          "name": "command-line.ts: round trip 1",
+          "passed": true
+        },
+        {
+          "name": "command-line.ts: round trip 2",
+          "passed": false
+        },
+        {
+          "name": "command-line.ts: round trip 3",
+          "passed": true
+        },
+        {
+          "name": "command-line.ts: round trip 4",
+          "passed": false
+        },
+        {
+          "name": "command-line.ts: round trip 5",
+          "passed": true
+        },
+        {
+          "name": "command-line.ts: round trip 6",
+          "passed": false
+        },
+        {
+          "name": "command-line.ts: round trip 7",
+          "passed": true
+        },
+        {
+          "name": "command-line.ts: round trip 8",
+          "passed": false
+        },
+        {
+          "name": "command-line.ts: round trip 9",
+          "passed": true
+        },
+        {
+          "name": "README.md: input preserved",
+          "passed": true
+        },
+        {
+          "name": "command-line.test.ts: input preserved",
+          "passed": true
+        },
+        {
+          "name": "only declared files present",
+          "passed": true
+        }
+      ]
+    },
+    {
+      "candidate": "reference-repair-not-a-model-output",
+      "passed": true,
+      "checks": [
+        {
+          "name": "command-line.ts: plain command",
+          "passed": true
+        },
+        {
+          "name": "command-line.ts: Windows quoted path",
+          "passed": true
+        },
+        {
+          "name": "command-line.ts: single quoted input",
+          "passed": true
+        },
+        {
+          "name": "command-line.ts: empty quoted input",
+          "passed": true
+        },
+        {
+          "name": "command-line.ts: blank input",
+          "passed": true
+        },
+        {
+          "name": "command-line.ts: existing path formatting",
+          "passed": true
+        },
+        {
+          "name": "command-line.ts: existing empty formatting",
+          "passed": true
+        },
+        {
+          "name": "command-line.ts: round trip 1",
+          "passed": true
+        },
+        {
+          "name": "command-line.ts: round trip 2",
+          "passed": true
+        },
+        {
+          "name": "command-line.ts: round trip 3",
+          "passed": true
+        },
+        {
+          "name": "command-line.ts: round trip 4",
+          "passed": true
+        },
+        {
+          "name": "command-line.ts: round trip 5",
+          "passed": true
+        },
+        {
+          "name": "command-line.ts: round trip 6",
+          "passed": true
+        },
+        {
+          "name": "command-line.ts: round trip 7",
+          "passed": true
+        },
+        {
+          "name": "command-line.ts: round trip 8",
+          "passed": true
+        },
+        {
+          "name": "command-line.ts: round trip 9",
+          "passed": true
+        },
+        {
+          "name": "README.md: input preserved",
+          "passed": true
+        },
+        {
+          "name": "command-line.test.ts: input preserved",
+          "passed": true
+        },
+        {
+          "name": "only declared files present",
+          "passed": true
+        }
+      ]
+    }
+  ]
+}

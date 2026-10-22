@@ -1,11 +1,12 @@
 # Harness real-inference quality evaluation
 
-This opt-in suite runs six fixed tasks through `PiSdkRuntime`, the actual Pi SDK,
-and actual provider inference. Three tasks are English and three are Portuguese.
+This opt-in suite runs seven fixed tasks through `PiSdkRuntime`, the actual Pi SDK,
+and actual provider inference. Three tasks are English and four are Portuguese.
 The tasks cover grounded answers, configuration repair, CSV aggregation,
 Portuguese release notes, consistent edits across two files, and a parent task
-that must start and collect a real child session. Independent code checks file
-contents and preserves inputs; the model does not grade itself.
+that must start and collect a real child session, plus a real repository code repair.
+Independent code checks file contents and preserves inputs; the model does not
+grade itself. The coding task also executes independent behavioral checks.
 
 ## Run
 
@@ -39,7 +40,7 @@ the real SDK runs. Thinking defaults to `off`; supported inputs are `off`,
 `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. The product's normal model
 capability mapping still applies. Record the source revision and keep the report
 with the evaluated patch. Keep all model, thinking, fixture, and flag settings
-fixed when comparing runs. Inference remains stochastic; these six examples do
+fixed when comparing runs. Inference remains stochastic; these seven examples do
 not support broad statistical quality claims.
 
 Without `MODUS_HARNESS_QUALITY_LIVE=1`, all live cases are skipped before model
@@ -47,11 +48,59 @@ lookup or temporary app setup. An enabled run with a missing/unavailable model
 or missing credentials fails configuration and writes `configuration_error`;
 it cannot report passed tasks. Provider failures after setup are failed tasks.
 
-Pure verifier, scope, and reporter checks make no inference requests:
+Local verifier, scope, and reporter checks make no inference requests:
 
 ```sh
-node_modules/.bin/vitest run apps/desktop/scripts/harness-quality/quality.test.ts
+node_modules/.bin/vitest run apps/desktop/scripts/harness-quality/quality.test.ts apps/desktop/scripts/harness-quality/code-repair.test.ts
 ```
+
+## First repository coding task and baseline
+
+`repair-command-line-pt` uses exact snapshots of the real
+`apps/desktop/src/shared/command-line.ts` and its existing tests at revision
+`ba6ca5e56d4393316653b6542a9311be08008295`. This is an existing bug, not a seeded
+mutation: `splitCommandLine(joinCommandLine(['a"b']))` returns `['a\\b']`.
+The existing six unit tests pass despite this failure. The task asks for an
+encoder repair that preserves the splitter's literal-backslash, no-shell-expansion
+contract. Production source is deliberately unchanged by this evaluation patch.
+
+The model gets a tiny flat workspace containing the source, existing tests, and
+a README. Only the source is writable. Neither the reference repair nor the
+independent checks are copied into its workspace. Sixteen behavioral checks
+cover the existing commands and formatting, both quote kinds, empty tokens,
+Windows paths, backslashes, Unicode, whitespace and empty argument lists. These
+are behavioral checks, not a source-text comparison or model self-assessment.
+The host runs them after the model finishes; the model cannot run a test command
+or observe test feedback during its turn. This is a small repository-derived
+repair, not yet full-repository debugging or an iterative edit/test loop.
+
+The checked-in [local baseline](evaluations/harness-quality-code-repair-baseline.json)
+is explicitly **offline verifier calibration**, not an agent/model score. It
+records the base revision, fixture/source hashes, Node version and per-check
+results for the original source (rejected) and a reference repair (accepted).
+The reference is a human-authored positive control, not a model output. No live
+inference was run to produce it; provider, model, tokens, latency and cost are
+therefore not measured. There is no live quality baseline yet.
+
+Reproduce or refresh the local record from the repository root:
+
+```sh
+MODUS_HARNESS_QUALITY_LIVE=0 \
+MODUS_HARNESS_QUALITY_BASELINE=docs/evaluations/harness-quality-code-repair-baseline.json \
+node_modules/.bin/vitest run \
+  apps/desktop/scripts/harness-quality/code-repair.test.ts \
+  apps/desktop/scripts/harness-quality/quality.test.ts \
+  apps/desktop/src/shared/command-line.test.ts \
+  apps/desktop/src/main/agent/harness/harness-quality.live.test.ts
+```
+
+This runs local checks and skips all seven live tasks. It needs the already
+installed dependencies, no provider credentials. Without the baseline variable,
+tests check the stored hashes/results without rewriting the record. Changes to
+hashed harness files require an explicit refresh. To create the actual live
+baseline, first choose the exact provider/model, then use the opt-in command above
+with fixed thinking/flags and a report path. Do not compare scores from the old
+six-task fixture set directly with this seven-task set.
 
 ## Measurements
 
@@ -87,15 +136,26 @@ Permitted file approvals use the real broker with `allow-once`. Delegation is
 limited to one built-in read-only `explore` child in the delegation case.
 
 No shell, browser, network, process, MCP, group, or generated-code execution
-tool is allowed. The provider inference request itself uses the network. Host
-runtime setup and storage still run on the host; this is not an OS sandbox or
-an evaluation for untrusted repositories. The file checks and tool guard are
-covered by local unit tests. Live end-to-end enforcement remains unverified
-until this suite is run with an explicitly chosen and configured model.
+tool is allowed to the agent. The provider inference request itself uses the
+network. For the coding task only, the host verifier transpiles the edited pure
+TypeScript and executes it in a fresh Node subprocess with an empty environment
+(no provider credentials or inherited `NODE_OPTIONS`). Each check uses a fresh
+VM context without injected host objects, `require`, or `process`; dynamic code
+generation is disabled. Limits are 64 KiB source/output, 100 ms per VM check,
+3 seconds per subprocess, and 64 MiB V8 old-space. Errors and limits fail checks.
+This introduces host-side candidate-code execution, not an agent execution tool.
+
+Node VM and these resource limits are **not a security sandbox**, nor is the V8
+limit a total OS memory cap. Host runtime setup and storage still run on the host.
+Use only these trusted fixed tasks, never untrusted repositories or adversarial
+code; do not generalize this verifier into arbitrary code execution. The file
+checks, tool guard, bug reproduction and verifier failure paths have local tests.
+Live end-to-end enforcement remains unverified until the suite is run with an
+explicitly chosen and configured model.
 
 Each task requests cancellation after 90 seconds; provider cancellation is
 cooperative, and Vitest has a 120-second case timeout. This is not a provider
-spending limit. The suite exercises data/documentation work with a restricted
-tool set. It does not establish coding, shell, browser, large-context,
+spending limit. The suite exercises data/documentation and one small code repair
+with a restricted tool set. It does not establish general coding, shell, browser, large-context,
 compaction, or general autonomous-agent quality. Existing synthetic Harness
 benchmarks remain component checks and are not included as real-task results.
