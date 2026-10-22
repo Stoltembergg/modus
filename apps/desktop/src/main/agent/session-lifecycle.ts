@@ -16,6 +16,7 @@ import {
 } from "./agent-store";
 import { deleteSessionCheckpoints } from "./checkpoint-service";
 import { clearPlanBuildStateForSession } from "./harness/plan-build-store";
+import { deleteOwnedPiSessionFile } from "./pi-session-file-cleanup";
 import { getAgentRuntime } from "./runtime-registry";
 
 /** Best-effort explicit-close/archive sweep; running and blocked runs are not completion signals. */
@@ -60,6 +61,12 @@ export async function deleteAgentSessionTree(sessionId: string): Promise<void> {
     clearPlanBuildStateForSession(sessionId);
   } catch {
     console.warn("[modus] Plan build session cleanup failed.");
+  }
+  // Refresh ownership metadata after all awaited work; do not yield between
+  // the final reference checks, file cleanup, and database record deletion.
+  const currentSession = getAgentSession(sessionId);
+  if (currentSession && deleteOwnedPiSessionFile(currentSession) === "failed") {
+    console.warn("[modus] Pi session file cleanup failed.");
   }
   deleteAgentSession(sessionId);
 }
