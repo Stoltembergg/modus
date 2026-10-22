@@ -21,6 +21,7 @@ const {
   getAgentSession,
   createAgentSessionRecord,
   listAgentSessions,
+  listOtherAgentSessionPiSessionFiles,
   listArchivedAgentSessions,
   setAgentSessionArchived,
   setAgentSessionPinned,
@@ -63,6 +64,23 @@ afterAll(async () => {
 });
 
 describe("agent-store", () => {
+  it("lists all other Pi file references, including archived and group-member sessions", () => {
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertWorkspace(workspaceId);
+    const ids = ["target", "active", "archived", "group", "no-file"].map(
+      (name) => `${name}-${crypto.randomUUID()}`,
+    );
+    for (const id of ids) insertSession(workspaceId, id, id);
+    const paths = ids.slice(0, 4).map((id) => join(userData, `${id}.jsonl`));
+    ids.slice(0, 4).forEach((id, index) =>
+      updateAgentSessionMetadata(id, { piSessionFile: paths[index]! }),
+    );
+    setAgentSessionArchived(ids[2]!, true);
+    getDatabase().prepare("update agent_sessions set kind = 'group_member' where id = ?").run(ids[3]!);
+
+    expect(listOtherAgentSessionPiSessionFiles(ids[0]!).sort()).toEqual(paths.slice(1).sort());
+  });
+
   it("persists an optional Agent identity on a newly created session", () => {
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     const agentId = `agent-${crypto.randomUUID()}`;

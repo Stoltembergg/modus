@@ -330,6 +330,17 @@ export function getAgentSession(sessionId: string): AgentSessionInfo | undefined
   return row ? toSession(row) : undefined;
 }
 
+/** Every surviving reference matters, including archived and hidden group sessions. */
+export function listOtherAgentSessionPiSessionFiles(sessionId: string): string[] {
+  const rows = getDatabase()
+    .prepare(
+      `select pi_session_file from agent_sessions
+       where id <> ? and pi_session_file is not null`,
+    )
+    .all(sessionId) as { pi_session_file: string }[];
+  return rows.map((row) => row.pi_session_file);
+}
+
 export function listAgentSessions(options: { includeSessionId?: string } = {}): AgentSessionInfo[] {
   const rows = getDatabase()
     .prepare(
