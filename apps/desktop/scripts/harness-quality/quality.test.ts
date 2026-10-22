@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -25,6 +26,12 @@ describe("quality fixture independent verifiers", () => {
       "featured.json": '{"productId":"p2","label":"Travel mug","rank":1}',
     },
     "delegate-inventory-pt": { "estoque.json": '{"depositoA":11,"depositoB":10,"total":21}' },
+    "repair-command-line-pt": {
+      "command-line.ts": readFileSync(
+        new URL("./code-repair/reference.ts.txt", import.meta.url),
+        "utf8",
+      ),
+    },
   };
 
   for (const fixture of QUALITY_FIXTURES) {

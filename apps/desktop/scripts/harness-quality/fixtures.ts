@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { CODE_REPAIR_FIXTURE } from "./code-repair";
 
 export type QualityCheck = { name: string; passed: boolean; detail?: string };
 export type FixtureObservation = {
@@ -147,6 +148,7 @@ export const QUALITY_FIXTURES: readonly QualityFixture[] = [
       { name: "wait completed successfully", passed: successfulWaits >= 1 },
     ],
   },
+  CODE_REPAIR_FIXTURE,
 ];
 
 export function verifyFixture(

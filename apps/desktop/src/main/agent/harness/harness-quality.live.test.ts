@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import type { BrowserWindow } from "electron";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { CODE_REPAIR_PROVENANCE } from "../../../../scripts/harness-quality/code-repair";
 import { QUALITY_FIXTURES, verifyFixture } from "../../../../scripts/harness-quality/fixtures";
 import { QualityRunReporter } from "../../../../scripts/harness-quality/report";
 import {
@@ -122,11 +123,13 @@ describe.skipIf(!enabled)("Harness real-inference quality evaluation (explicit o
         .update(JSON.stringify(QUALITY_FIXTURES.map(({ verify: _verify, ...fixture }) => fixture)))
         .digest("hex"),
       inference: "real-pi-sdk",
+      codeRepairProvenance: CODE_REPAIR_PROVENANCE,
       boundaries: [
         "temporary Electron userData and home",
         "scoped real SDK tools",
         "fixture-only file approvals",
-        "no generated code execution",
+        "no agent shell or code execution tool",
+        "host verifier executes edited pure TypeScript in a bounded credential-free subprocess/VM; not a security sandbox",
       ],
     };
     try {
@@ -165,6 +168,15 @@ describe.skipIf(!enabled)("Harness real-inference quality evaluation (explicit o
         new URL("../pi-sdk-runtime.ts", import.meta.url),
         new URL("../model-service.ts", import.meta.url),
         new URL("../../../../scripts/harness-quality/fixtures.ts", import.meta.url),
+        new URL("../../../../scripts/harness-quality/code-repair.ts", import.meta.url),
+        new URL(
+          "../../../../scripts/harness-quality/code-repair/command-line.ts.txt",
+          import.meta.url,
+        ),
+        new URL(
+          "../../../../scripts/harness-quality/code-repair/command-line.test.ts.txt",
+          import.meta.url,
+        ),
         new URL("../../../../scripts/harness-quality/report.ts", import.meta.url),
         new URL("../../../../scripts/harness-quality/scope.ts", import.meta.url),
         new URL("./harness-quality.live.test.ts", import.meta.url),
