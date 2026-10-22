@@ -1724,10 +1724,14 @@ export function fillMemberTaskBranches(
       )
       .all(groupId, sessionId, IN_PROGRESS_TASK_STATUS) as Array<{ id: string }>;
     const now = new Date().toISOString();
-    const update = db.prepare(
-      "update group_tasks set branch = ?, updated_at = ? where id = ? and branch is null",
-    );
-    for (const row of rows) update.run(branch, now, row.id);
+    if (rows.length > 0) {
+      db.prepare(
+        `update group_tasks
+         set branch = ?, updated_at = ?
+         from json_each(?)
+         where group_tasks.id = json_each.value and group_tasks.branch is null`,
+      ).run(branch, now, JSON.stringify(rows.map((r) => r.id)));
+    }
     for (const row of rows) {
       // Branch changes are task state changes even though status stays in progress.
       // The pre-update DTO is reconstructed with the preceding version.

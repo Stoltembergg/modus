@@ -571,15 +571,15 @@ if (mode === "privileges") {
   const insert = db.prepare("INSERT INTO harness_group_messages VALUES(?,?,?,?,?,?,?,?,?)");
   for (let i = 0; i < 20001; i++)
     insert.run(
-      "n" + i,
+      `n${i}`,
       "g",
       "a",
-      "r" + i,
-      "m" + i,
+      `r${i}`,
+      `m${i}`,
       1,
       new Date(100000 + i).toISOString(),
       null,
-      "h" + i,
+      `h${i}`,
     );
   db.exec("COMMIT");
   const large = new GroupMailbox({}, () => db);
@@ -718,7 +718,7 @@ if (mode === "privileges") {
     registryToWasm: await bench(() => s.registry.execute("audit.cap", {}), 1000),
   });
 } else if (mode === "upgrade-crash" || mode === "rollback-crash") {
-  const file = path.join(dir, mode + ".db");
+  const file = path.join(dir, `${mode}.db`);
   const s = setup(file);
   if (phase === "crash") {
     await s.service.install(manifest());

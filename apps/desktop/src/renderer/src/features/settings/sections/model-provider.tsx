@@ -125,7 +125,7 @@ export function ModelProviderSettingsPanel({
 }) {
   const t = useSettingsText();
   const [providerQuery, setProviderQuery] = useState("");
-  const providers = useMemo(() => [...connected, ...popular], [connected, popular]);
+  const _providers = useMemo(() => [...connected, ...popular], [connected, popular]);
 
   return (
     <>

@@ -337,11 +337,18 @@ function runInTransaction(
         where s.kind = 'group_member' and r.status in ('running','blocked')`,
     )
     .all() as Array<{ id: string; session_id: string }>;
-  const cancelRun = db.prepare(
-    "update agent_runs set status = 'cancelled', completed_at = ?, error = ? where id = ?",
-  );
+  if (liveRuns.length > 0) {
+    const chunkSize = 500;
+    for (let i = 0; i < liveRuns.length; i += chunkSize) {
+      const chunk = liveRuns.slice(i, i + chunkSize);
+      const placeholders = chunk.map(() => "?").join(",");
+      const cancelRun = db.prepare(
+        `update agent_runs set status = 'cancelled', completed_at = ?, error = ? where id in (${placeholders})`,
+      );
+      cancelRun.run(at, GROUPS_MIGRATION_RUN_ERROR, ...chunk.map((r) => r.id));
+    }
+  }
   for (const run of liveRuns) {
-    cancelRun.run(at, GROUPS_MIGRATION_RUN_ERROR, run.id);
     note(memberGroup.get(run.session_id) ?? null, `- Run ${run.id} was cancelled.`);
   }
   if (tableExists(db, "group_jobs")) {
@@ -350,24 +357,36 @@ function runInTransaction(
         "select id, group_id from group_jobs where status in ('pending','running','awaiting_user')",
       )
       .all() as Array<{ id: string; group_id: string }>;
-    const cancel = db.prepare(
-      "update group_jobs set status = 'cancelled', updated_at = ? where id = ?",
-    );
-    for (const job of jobs) {
-      cancel.run(at, job.id);
-      note(job.group_id, `- Job ${job.id} was cancelled.`);
+    if (jobs.length > 0) {
+      const CHUNK_SIZE = 500;
+      for (let i = 0; i < jobs.length; i += CHUNK_SIZE) {
+        const chunk = jobs.slice(i, i + CHUNK_SIZE);
+        const placeholders = chunk.map(() => "?").join(",");
+        const cancel = db.prepare(
+          `update group_jobs set status = 'cancelled', updated_at = ? where id in (${placeholders})`,
+        );
+        cancel.run(at, ...chunk.map((j) => j.id));
+      }
+      for (const job of jobs) {
+        note(job.group_id, `- Job ${job.id} was cancelled.`);
+      }
     }
   }
   if (tableExists(db, "group_task_integrations")) {
     const rows = db
       .prepare("select id, group_id from group_task_integrations where status = 'applying'")
       .all() as Array<{ id: string; group_id: string }>;
-    const abort = db.prepare(
-      "update group_task_integrations set status = 'aborted', updated_at = ? where id = ?",
-    );
-    for (const row of rows) {
-      abort.run(at, row.id);
-      note(row.group_id, `- Integration ${row.id} was being applied and was aborted.`);
+    if (rows.length > 0) {
+      for (let i = 0; i < rows.length; i += 100) {
+        const chunk = rows.slice(i, i + 100);
+        const ids = chunk.map((r) => r.id);
+        db.prepare(
+          `update group_task_integrations set status = 'aborted', updated_at = ? where id in (${ids.map(() => "?").join(",")})`,
+        ).run(at, ...ids);
+      }
+      for (const row of rows) {
+        note(row.group_id, `- Integration ${row.id} was being applied and was aborted.`);
+      }
     }
   }
   if (tableExists(db, "group_integration_previews")) {
