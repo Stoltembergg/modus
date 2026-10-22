@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const lifecycleState = vi.hoisted(() => ({
   calls: [] as string[],
-  session: undefined as { id: string; cwd: string; piSessionId?: string; piSessionFile?: string } | undefined,
+  session: undefined as
+    | { id: string; cwd: string; piSessionId?: string; piSessionFile?: string }
+    | undefined,
   cleanupPiFile: vi.fn<(...args: unknown[]) => "deleted" | "preserved" | "failed">(() => {
     lifecycleState.calls.push("cleanup-pi-file");
     return "preserved";
@@ -61,10 +63,12 @@ describe("session lifecycle PlanBuild cleanup", () => {
   beforeEach(() => {
     lifecycleState.calls.length = 0;
     lifecycleState.session = undefined;
-    vi.mocked(getAgentSession).mockReset().mockImplementation(() => {
-      lifecycleState.calls.push("get-session");
-      return lifecycleState.session as ReturnType<typeof getAgentSession>;
-    });
+    vi.mocked(getAgentSession)
+      .mockReset()
+      .mockImplementation(() => {
+        lifecycleState.calls.push("get-session");
+        return lifecycleState.session as ReturnType<typeof getAgentSession>;
+      });
     vi.mocked(listSubagentSessions).mockReset().mockReturnValue([]);
     lifecycleState.cleanupPiFile.mockReset().mockImplementation(() => {
       lifecycleState.calls.push("cleanup-pi-file");
@@ -150,11 +154,20 @@ describe("session lifecycle PlanBuild cleanup", () => {
     expect(lifecycleState.calls.indexOf("clear-drafts")).toBeGreaterThan(
       lifecycleState.calls.indexOf("draft-created-during-checkpoint-cleanup"),
     );
-    expect(lifecycleState.calls.slice(-4)).toEqual(["clear-drafts", "get-session", "cleanup-pi-file", "delete-session"]);
+    expect(lifecycleState.calls.slice(-4)).toEqual([
+      "clear-drafts",
+      "get-session",
+      "cleanup-pi-file",
+      "delete-session",
+    ]);
   });
 
   it("logs only a generic warning and deletes the record when file cleanup fails", async () => {
-    lifecycleState.session = { id: "session-1", cwd: "/secret/workspace", piSessionFile: "/secret/file.jsonl" };
+    lifecycleState.session = {
+      id: "session-1",
+      cwd: "/secret/workspace",
+      piSessionFile: "/secret/file.jsonl",
+    };
     lifecycleState.cleanupPiFile.mockReturnValue("failed");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
@@ -170,8 +183,8 @@ describe("session lifecycle PlanBuild cleanup", () => {
     vi.mocked(listSubagentSessions).mockImplementation((id) =>
       id === "parent" ? [{ id: "child" } as ReturnType<typeof getAgentSession> & {}] : [],
     );
-    vi.mocked(getAgentSession).mockImplementation((id) =>
-      ({ id, cwd: "/temporary-workspace" }) as ReturnType<typeof getAgentSession>,
+    vi.mocked(getAgentSession).mockImplementation(
+      (id) => ({ id, cwd: "/temporary-workspace" }) as ReturnType<typeof getAgentSession>,
     );
     lifecycleState.dispose.mockImplementation(async (id?: string) => {
       lifecycleState.calls.push(`dispose:${id}`);
@@ -185,9 +198,15 @@ describe("session lifecycle PlanBuild cleanup", () => {
       lifecycleState.calls.push(`delete:${id}`),
     );
     await deleteAgentSessionTree("parent");
-    expect(lifecycleState.calls.filter((call) => /^(dispose:|cleanup:|delete:)/.test(call))).toEqual([
-      "dispose:child", "cleanup:child", "delete:child",
-      "dispose:parent", "cleanup:parent", "delete:parent",
+    expect(
+      lifecycleState.calls.filter((call) => /^(dispose:|cleanup:|delete:)/.test(call)),
+    ).toEqual([
+      "dispose:child",
+      "cleanup:child",
+      "delete:child",
+      "dispose:parent",
+      "cleanup:parent",
+      "delete:parent",
     ]);
   });
 

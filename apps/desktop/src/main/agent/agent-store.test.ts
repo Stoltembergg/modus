@@ -72,11 +72,13 @@ describe("agent-store", () => {
     );
     for (const id of ids) insertSession(workspaceId, id, id);
     const paths = ids.slice(0, 4).map((id) => join(userData, `${id}.jsonl`));
-    ids.slice(0, 4).forEach((id, index) =>
-      updateAgentSessionMetadata(id, { piSessionFile: paths[index]! }),
-    );
+    ids.slice(0, 4).forEach((id, index) => {
+      updateAgentSessionMetadata(id, { piSessionFile: paths[index]! });
+    });
     setAgentSessionArchived(ids[2]!, true);
-    getDatabase().prepare("update agent_sessions set kind = 'group_member' where id = ?").run(ids[3]!);
+    getDatabase()
+      .prepare("update agent_sessions set kind = 'group_member' where id = ?")
+      .run(ids[3]!);
 
     expect(listOtherAgentSessionPiSessionFiles(ids[0]!).sort()).toEqual(paths.slice(1).sort());
   });

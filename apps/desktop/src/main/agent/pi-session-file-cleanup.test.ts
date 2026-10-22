@@ -51,7 +51,12 @@ afterEach(() => {
 
 describe("deleteOwnedPiSessionFile", () => {
   it("deletes only a proven owned file and leaves unrelated data intact", () => {
-    const protectedPaths = ["memories/data", "backups/data", "workspace/export.jsonl", "pi-sessions/other.jsonl"];
+    const protectedPaths = [
+      "memories/data",
+      "backups/data",
+      "workspace/export.jsonl",
+      "pi-sessions/other.jsonl",
+    ];
     for (const path of protectedPaths) {
       const full = join(state.userData, path);
       fs.mkdirSync(join(full, ".."), { recursive: true });
@@ -60,7 +65,8 @@ describe("deleteOwnedPiSessionFile", () => {
     expect(deleteOwnedPiSessionFile(session())).toBe("deleted");
     expect(fs.existsSync(candidate)).toBe(false);
     expect(state.references).toHaveBeenCalledExactlyOnceWith("app-session");
-    for (const path of protectedPaths) expect(fs.readFileSync(join(state.userData, path), "utf8")).toBe("must survive");
+    for (const path of protectedPaths)
+      expect(fs.readFileSync(join(state.userData, path), "utf8")).toBe("must survive");
   });
 
   it.each(["piSessionId", "piSessionFile"] as const)("preserves when %s is missing", (key) => {
@@ -104,12 +110,20 @@ describe("deleteOwnedPiSessionFile", () => {
     expectPreserved();
   });
 
-  it.each(["", "{broken\n", "null\n", "[]\n", '{"type":"message","id":"pi-session"}\n', header("different"), '{"type":"session"}\n', `\n${header()}`, `${" ".repeat(70_000)}${header()}`])(
-    "preserves missing, invalid, mismatched or unbounded headers (%#)", (contents) => {
-      fs.writeFileSync(candidate, contents);
-      expectPreserved();
-    },
-  );
+  it.each([
+    "",
+    "{broken\n",
+    "null\n",
+    "[]\n",
+    '{"type":"message","id":"pi-session"}\n',
+    header("different"),
+    '{"type":"session"}\n',
+    `\n${header()}`,
+    `${" ".repeat(70_000)}${header()}`,
+  ])("preserves missing, invalid, mismatched or unbounded headers (%#)", (contents) => {
+    fs.writeFileSync(candidate, contents);
+    expectPreserved();
+  });
 
   it("accepts a header-only JSONL without a trailing newline", () => {
     fs.writeFileSync(candidate, header().trimEnd());
@@ -175,15 +189,18 @@ describe("deleteOwnedPiSessionFile", () => {
     expect(fs.existsSync(join(store, "original.jsonl"))).toBe(true);
   });
 
-  it.skipIf(process.platform === "win32")("preserves a symlink replacement immediately before unlink", () => {
-    state.references.mockImplementation(() => {
-      const target = join(store, "original.jsonl");
-      fs.renameSync(candidate, target);
-      fs.symlinkSync(target, candidate);
-      return [];
-    });
-    expectPreserved();
-  });
+  it.skipIf(process.platform === "win32")(
+    "preserves a symlink replacement immediately before unlink",
+    () => {
+      state.references.mockImplementation(() => {
+        const target = join(store, "original.jsonl");
+        fs.renameSync(candidate, target);
+        fs.symlinkSync(target, candidate);
+        return [];
+      });
+      expectPreserved();
+    },
+  );
 
   it("preserves if the inspected file is modified in place", () => {
     state.references.mockImplementation(() => {
@@ -201,24 +218,31 @@ describe("deleteOwnedPiSessionFile", () => {
     expectPreserved();
   });
 
-  it.skipIf(process.platform === "win32")("preserves if the store is replaced by a symlink after inspection", () => {
-    state.references.mockImplementation(() => {
-      const moved = join(state.userData, "moved-store");
-      fs.renameSync(store, moved);
-      fs.symlinkSync(moved, store, "dir");
-      return [];
-    });
-    expectPreserved();
-  });
+  it.skipIf(process.platform === "win32")(
+    "preserves if the store is replaced by a symlink after inspection",
+    () => {
+      state.references.mockImplementation(() => {
+        const moved = join(state.userData, "moved-store");
+        fs.renameSync(store, moved);
+        fs.symlinkSync(moved, store, "dir");
+        return [];
+      });
+      expectPreserved();
+    },
+  );
 
   it("returns failed without exposing the filesystem error", () => {
-    vi.mocked(fs.unlinkSync).mockImplementationOnce(() => { throw new Error(`secret ${candidate}`); });
+    vi.mocked(fs.unlinkSync).mockImplementationOnce(() => {
+      throw new Error(`secret ${candidate}`);
+    });
     expect(deleteOwnedPiSessionFile(session())).toBe("failed");
     expect(fs.existsSync(candidate)).toBe(true);
   });
 
   it("returns failed when the reference query fails, without deleting", () => {
-    state.references.mockImplementation(() => { throw new Error("database unavailable"); });
+    state.references.mockImplementation(() => {
+      throw new Error("database unavailable");
+    });
     expect(deleteOwnedPiSessionFile(session())).toBe("failed");
     expect(fs.existsSync(candidate)).toBe(true);
     expect(fs.unlinkSync).not.toHaveBeenCalled();

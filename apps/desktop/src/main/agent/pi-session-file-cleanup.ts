@@ -6,8 +6,8 @@ import {
   openSync,
   readSync,
   realpathSync,
-  unlinkSync,
   type Stats,
+  unlinkSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { app } from "electron";
@@ -24,8 +24,16 @@ function sameIdentity(a: Stats, b: Stats): boolean {
 }
 
 function sameFile(a: Stats, b: Stats): boolean {
-  return sameIdentity(a, b) && b.isFile() && !b.isSymbolicLink() && b.nlink === 1 &&
-    a.mode === b.mode && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
+  return (
+    sameIdentity(a, b) &&
+    b.isFile() &&
+    !b.isSymbolicLink() &&
+    b.nlink === 1 &&
+    a.mode === b.mode &&
+    a.size === b.size &&
+    a.mtimeMs === b.mtimeMs &&
+    a.ctimeMs === b.ctimeMs
+  );
 }
 
 function hasOwnedHeader(fd: number, piSessionId: string): boolean {
@@ -44,9 +52,14 @@ function hasOwnedHeader(fd: number, piSessionId: string): boolean {
   if (length === 0 || length >= MAX_HEADER_BYTES) return false;
   try {
     const header: unknown = JSON.parse(buffer.subarray(0, length).toString("utf8"));
-    return typeof header === "object" && header !== null &&
-      "type" in header && header.type === "session" &&
-      "id" in header && header.id === piSessionId;
+    return (
+      typeof header === "object" &&
+      header !== null &&
+      "type" in header &&
+      header.type === "session" &&
+      "id" in header &&
+      header.id === piSessionId
+    );
   } catch {
     return false;
   }
@@ -61,8 +74,13 @@ export function deleteOwnedPiSessionFile(
   session: Pick<AgentSessionInfo, "id" | "piSessionId" | "piSessionFile">,
 ): CleanupResult {
   const candidate = session.piSessionFile;
-  if (!candidate || !session.piSessionId || !isAbsolute(candidate) ||
-    candidate.split(/[\\/]/).includes("..")) return "preserved";
+  if (
+    !candidate ||
+    !session.piSessionId ||
+    !isAbsolute(candidate) ||
+    candidate.split(/[\\/]/).includes("..")
+  )
+    return "preserved";
 
   let fd: number | undefined;
   try {
@@ -76,9 +94,14 @@ export function deleteOwnedPiSessionFile(
     if (canonicalCandidate !== join(canonicalStore, basename(candidate))) return "preserved";
 
     const inspected = lstatSync(candidate);
-    if (!inspected.isFile() || inspected.isSymbolicLink() || inspected.nlink !== 1) return "preserved";
-    fd = openSync(candidate, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
-    if (!sameFile(inspected, fstatSync(fd)) || !hasOwnedHeader(fd, session.piSessionId)) return "preserved";
+    if (!inspected.isFile() || inspected.isSymbolicLink() || inspected.nlink !== 1)
+      return "preserved";
+    fd = openSync(
+      candidate,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
+    );
+    if (!sameFile(inspected, fstatSync(fd)) || !hasOwnedHeader(fd, session.piSessionId))
+      return "preserved";
 
     for (const reference of listOtherAgentSessionPiSessionFiles(session.id)) {
       // Legacy relative references have no reliable base: preserve rather than guess.
@@ -95,19 +118,30 @@ export function deleteOwnedPiSessionFile(
     // Check both the held descriptor and the pathname, plus the store itself.
     // This also rejects a new hard link, in-place modification or swapped directory.
     const finalStore = lstatSync(store);
-    if (!finalStore.isDirectory() || finalStore.isSymbolicLink() ||
-      !sameIdentity(storeStat, finalStore) || realpathSync(store) !== canonicalStore ||
+    if (
+      !finalStore.isDirectory() ||
+      finalStore.isSymbolicLink() ||
+      !sameIdentity(storeStat, finalStore) ||
+      realpathSync(store) !== canonicalStore ||
       realpathSync(candidate) !== canonicalCandidate ||
-      !sameFile(inspected, fstatSync(fd)) || !sameFile(inspected, lstatSync(candidate))) return "preserved";
+      !sameFile(inspected, fstatSync(fd)) ||
+      !sameFile(inspected, lstatSync(candidate))
+    )
+      return "preserved";
 
     unlinkSync(candidate);
     return "deleted";
   } catch (error) {
-    if (isMissingPath(error) || (error as NodeJS.ErrnoException).code === "ELOOP") return "preserved";
+    if (isMissingPath(error) || (error as NodeJS.ErrnoException).code === "ELOOP")
+      return "preserved";
     return "failed";
   } finally {
     if (fd !== undefined) {
-      try { closeSync(fd); } catch { /* Descriptor cleanup must never block session deletion. */ }
+      try {
+        closeSync(fd);
+      } catch {
+        /* Descriptor cleanup must never block session deletion. */
+      }
     }
   }
 }
