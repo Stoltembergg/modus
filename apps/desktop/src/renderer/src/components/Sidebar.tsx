@@ -220,13 +220,21 @@ export function Sidebar({
     () => new Set(workspaces.map((workspace) => workspace.id)),
     [workspaces],
   );
-  const isInboxWorkspace = (workspace: WorkspaceInfo) =>
-    workspace.inbox === true || workspace.id === CHATS_WORKSPACE_ID;
-  const inboxWorkspace = workspaces.find(isInboxWorkspace);
-  const projectWorkspaces = workspaces.filter((workspace) => !isInboxWorkspace(workspace));
-  const sessionsByWorkspace = groupSessionsByWorkspace(
-    // Agent (profile) chats are listed in their project like any chat.
-    ungroupedSessions.filter((session) => !session.pinnedAt),
+  const inboxWorkspace = useMemo(
+    () => workspaces.find((w) => w.inbox === true || w.id === CHATS_WORKSPACE_ID),
+    [workspaces],
+  );
+  const projectWorkspaces = useMemo(
+    () => workspaces.filter((w) => w.inbox !== true && w.id !== CHATS_WORKSPACE_ID),
+    [workspaces],
+  );
+  const sessionsByWorkspace = useMemo(
+    () =>
+      groupSessionsByWorkspace(
+        // Agent (profile) chats are listed in their project like any chat.
+        ungroupedSessions.filter((session) => !session.pinnedAt),
+      ),
+    [ungroupedSessions],
   );
   // Pinned sessions have one location. Other sessions belong to their project.
   const pinnedSessions = useMemo(
