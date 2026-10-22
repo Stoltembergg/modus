@@ -27,11 +27,12 @@ type Options = {
   port?: number;
 };
 
-const DONE_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Modus</title></head><body style="font-family:system-ui;padding:3rem;text-align:center"><h1>You can close this tab</h1><p>Return to Modus to continue.</p></body></html>`;
+const DONE_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Modus</title><style>body{font-family:system-ui;padding:3rem;text-align:center}</style></head><body><h1>You can close this tab</h1><p>Return to Modus to continue.</p></body></html>`;
 
 const SECURITY_HEADERS = {
   "Cache-Control": "no-store",
-  "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
+  "Content-Security-Policy":
+    "default-src 'none'; style-src 'sha256-cjFtfpd/dZKWDxBWFXQ2Wy5WRYMHYhgAt8xPhP0QnAs='",
   "Referrer-Policy": "no-referrer",
   "X-Content-Type-Options": "nosniff",
 };

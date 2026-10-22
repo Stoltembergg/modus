@@ -1,9 +1,5 @@
 import { useEffect, useState } from "react";
-import type {
-  AppearanceState,
-  LookPreference,
-  TransparencyPreference,
-} from "../../../shared/appearance";
+import type { AppearanceState, TransparencyPreference } from "../../../shared/appearance";
 import { setThemeLook } from "./theme";
 
 function appearanceApi() {

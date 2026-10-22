@@ -170,7 +170,7 @@ function Brand({
             <button
               aria-label={pinLabel}
               aria-pressed={pinned}
-              className="nav-rail-icon-button"
+              className="nav-rail-icon-button outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/35"
               onClick={() => onPinnedChange(!pinned)}
               title={pinLabel}
               type="button"

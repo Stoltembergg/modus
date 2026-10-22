@@ -31,9 +31,9 @@ const FIELD_CLASS =
   "w-full rounded-lg border border-hairline bg-surface/60 px-3 py-2 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus:border-accent/60 focus:bg-surface";
 const SELECT_CLASS = cn("flex h-10 items-center justify-between gap-2", FIELD_CLASS);
 const BUTTON_CLASS =
-  "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg px-3 text-sm text-fg-subtle transition-colors hover:bg-hover hover:text-fg disabled:pointer-events-none disabled:opacity-45";
+  "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg px-3 text-sm text-fg-subtle outline-none transition-colors hover:bg-hover hover:text-fg focus-visible:ring-2 focus-visible:ring-focus-ring/35 disabled:pointer-events-none disabled:opacity-45";
 const PRIMARY_BUTTON_CLASS =
-  "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-accent px-3 text-sm font-medium text-accent-contrast transition-opacity hover:opacity-90 disabled:pointer-events-none disabled:opacity-45";
+  "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg bg-accent px-3 text-sm font-medium text-accent-contrast outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-focus-ring/35 disabled:pointer-events-none disabled:opacity-45";
 
 export function AutomationsPage({
   api,
