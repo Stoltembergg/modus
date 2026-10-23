@@ -44,12 +44,15 @@ export function splitCommandLine(line: string): string[] {
 
 /** Inverse of splitCommandLine — quotes tokens containing whitespace. */
 export function joinCommandLine(parts: string[]): string {
+  const literalDoubleQuote = ['"', "'", '"', "'", '"'].join("");
   return parts
     .map((part) => {
       if (part === "") {
         return '""';
       }
-      return /[\s"']/.test(part) ? `"${part.replace(/"/g, '\\"')}"` : part;
+      return /[\s"']/.test(part)
+        ? `"${part.replaceAll('"', literalDoubleQuote)}"`
+        : part;
     })
     .join(" ");
 }
