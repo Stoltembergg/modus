@@ -50,9 +50,7 @@ export function joinCommandLine(parts: string[]): string {
       if (part === "") {
         return '""';
       }
-      return /[\s"']/.test(part)
-        ? `"${part.replaceAll('"', literalDoubleQuote)}"`
-        : part;
+      return /[\s"']/.test(part) ? `"${part.replaceAll('"', literalDoubleQuote)}"` : part;
     })
     .join(" ");
 }
