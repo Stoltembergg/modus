@@ -711,6 +711,7 @@ export function registerAppIpc({
     assertTrustedSender(event);
     await getAgentRuntime().abort(
       parseIpcInput(sessionIdSchema, sessionId, IPC_CHANNELS.agentAbort),
+      getSenderWindow(event),
     );
   });
 

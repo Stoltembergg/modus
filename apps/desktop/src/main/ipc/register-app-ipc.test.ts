@@ -880,3 +880,26 @@ describe("agent queue IPC", () => {
     expect(removeQueuedPrompt).not.toHaveBeenCalled();
   });
 });
+
+describe("agent abort IPC", () => {
+  const sender = { mainFrame: { url: "file:///app/index.html" } };
+  const trustedEvent = { sender, senderFrame: sender.mainFrame };
+  const abort = vi.fn(async () => undefined);
+
+  beforeEach(() => {
+    mocks.handlers.clear();
+    abort.mockClear();
+    mocks.fromWebContents.mockReturnValue(mocks.senderWindow);
+    mocks.getAgentRuntime.mockReturnValue({ abort });
+    registerTrustedSender(sender, "file:///app/index.html");
+    registerAppIpc();
+  });
+
+  it("passes the trusted sender window so cold-session events reach the renderer", async () => {
+    await expect(
+      mocks.handlers.get(IPC_CHANNELS.agentAbort)?.(trustedEvent as never, "session-1" as never),
+    ).resolves.toBeUndefined();
+
+    expect(abort).toHaveBeenCalledWith("session-1", mocks.senderWindow);
+  });
+});

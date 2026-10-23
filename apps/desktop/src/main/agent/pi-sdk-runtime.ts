@@ -2722,6 +2722,26 @@ export class PiSdkRuntime implements AgentRuntime {
     };
   }
 
+  private emitDetachedEvent(event: AgentEvent): void {
+    const eventCursor = recordAgentEvent(event);
+    const observable = { ...event, eventCursor };
+    for (const listener of this.eventListeners) {
+      try {
+        listener(observable);
+      } catch (error) {
+        console.warn("[modus] agent event listener failed:", error);
+      }
+    }
+    if (
+      event.type === "run.completed" ||
+      event.type === "run.failed" ||
+      event.type === "run.blocked" ||
+      event.type === "run.cancelled"
+    ) {
+      releasePlanBuildRunReservation({ sessionId: event.sessionId, runId: event.runId });
+    }
+  }
+
   private parentSessionIdFor(sessionId: string): string | undefined {
     if (this.parentSessionByChild.has(sessionId)) {
       return this.parentSessionByChild.get(sessionId) ?? undefined;
@@ -3138,6 +3158,9 @@ export class PiSdkRuntime implements AgentRuntime {
     sessionId: string,
     requestedModelId?: string | null,
   ): Promise<AgentSessionInfo> {
+    if (getAgentSession(sessionId)) {
+      this.reconcileOrphanedRuns(sessionId, this.emitToWindow(window));
+    }
     const runtimeSession = await this.getOrResume(window, sessionId, requestedModelId);
     if (!runtimeSession) {
       throw new Error(`Agent session not found: ${sessionId}`);
@@ -4209,27 +4232,63 @@ export class PiSdkRuntime implements AgentRuntime {
    * session fails closed with "run boundaries overlap". A run owned by a live
    * output tracker is never touched.
    */
-  private closeOrphanedRuns(sessionId: string, emit: EmitAgentEvent, keepRunId?: string): void {
+  private closeOrphanedRuns(sessionId: string, emit: EmitAgentEvent, keepRunId?: string): boolean {
     const liveRunId = this.runOutputTrackers.get(sessionId)?.runId;
     let orphanRunIds: string[];
     try {
       orphanRunIds = listUnterminatedAgentRunIds(sessionId);
     } catch (error) {
       console.warn("[modus] open run lookup failed:", error);
-      return;
+      return false;
     }
+    let closedAny = false;
     for (const runId of orphanRunIds) {
       if (runId === liveRunId || runId === keepRunId) continue;
       try {
-        if (getAgentRun(runId)?.status === "running") {
+        const run = getAgentRun(runId);
+        if (run && run.status !== "cancelled") {
           updateAgentRunStatus(runId, "cancelled", "The run ended without a recorded outcome.");
           finalizeProjectMemoryRunBestEffort({ sessionId, runId, outcome: "cancelled" });
         }
         emit({ type: "run.cancelled", sessionId, runId });
+        closedAny = true;
       } catch (error) {
         console.warn("[modus] open run could not be closed:", error);
       }
     }
+    return closedAny;
+  }
+
+  /** Reconcile durable runs only when no current-process owner can still settle them. */
+  private reconcileOrphanedRuns(sessionId: string, emit: EmitAgentEvent): void {
+    if (isPlanBuildSessionReserved(sessionId) || this.preflightReservations.has(sessionId)) return;
+    const runtimeSession = this.sessions.get(sessionId);
+    if (runtimeSession?.session.isStreaming || runtimeSession?.session.isCompacting) return;
+
+    this.closeOrphanedRuns(sessionId, emit);
+    if (
+      this.runOutputTrackers.has(sessionId) ||
+      runtimeSession?.session.isStreaming ||
+      runtimeSession?.session.isCompacting
+    ) {
+      return;
+    }
+    const persistedSession = getAgentSession(sessionId);
+    if (persistedSession?.status !== "running") return;
+    try {
+      // A crash can occur after run.cancelled is durable but before the
+      // session-status write. Verify no open boundary remains before retrying
+      // that second half of the reconciliation.
+      if (listUnterminatedAgentRunIds(sessionId).length > 0) return;
+    } catch (error) {
+      console.warn("[modus] open run verification failed:", error);
+      return;
+    }
+    updateAgentSessionStatus(sessionId, "idle");
+    if (runtimeSession) {
+      runtimeSession.info = { ...runtimeSession.info, status: "idle" };
+    }
+    emit({ type: "session.status", sessionId, status: { type: "idle" } });
   }
 
   private async executePromptInTurn(
@@ -6412,30 +6471,37 @@ export class PiSdkRuntime implements AgentRuntime {
     return false;
   }
 
-  async abort(sessionId: string): Promise<void> {
+  async abort(sessionId: string, window?: BrowserWindowType): Promise<void> {
     this.cancelPendingIntentGate(sessionId);
     clearTodoSessionCache(sessionId);
     const activeRunId = getActiveAgentRun(sessionId)?.id;
+    const runtimeWasLoaded = this.sessions.has(sessionId);
     try {
       await this.closeSubagentTree(sessionId, "Parent session aborted");
       const currentRunId = getActiveAgentRun(sessionId)?.id;
       if (currentRunId === undefined || currentRunId === activeRunId) {
         this.clearBackgroundTasksForParent(sessionId);
         this.backgroundChildTasks.delete(sessionId);
-        await this.abortSessionOnly(sessionId);
+        await this.abortSessionOnly(sessionId, window);
       }
     } finally {
-      if (activeRunId) await this.cleanupRunProcesses(sessionId, activeRunId);
+      if (activeRunId && (runtimeWasLoaded || getAgentRun(activeRunId)?.status === "cancelled")) {
+        await this.cleanupRunProcesses(sessionId, activeRunId);
+      }
     }
   }
 
-  private async abortSessionOnly(sessionId: string): Promise<void> {
+  private async abortSessionOnly(sessionId: string, window?: BrowserWindowType): Promise<void> {
     this.cancelPendingIntentGate(sessionId);
     clearTodoSessionCache(sessionId);
     const activeRun = getActiveAgentRun(sessionId);
     if (activeRun) clearMcpCitationRun(sessionId, activeRun.id);
     const runtimeSession = this.sessions.get(sessionId);
     if (!runtimeSession) {
+      this.reconcileOrphanedRuns(
+        sessionId,
+        window ? this.emitToWindow(window) : (event) => this.emitDetachedEvent(event),
+      );
       return;
     }
     const outputTracker = this.runOutputTrackers.get(sessionId);

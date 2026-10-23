@@ -157,7 +157,7 @@ export type AgentRuntime = {
     signal?: AbortSignal;
     onProgress?: (text: string) => void;
   }): Promise<BackgroundWaitResult>;
-  abort(sessionId: string): Promise<void>;
+  abort(sessionId: string, window?: BrowserWindowType): Promise<void>;
   /** The chat's visible prompt queue (prompts waiting for the running turn). */
   listQueuedPrompts(sessionId: string): QueuedPromptItem[];
   /** Remove one queued prompt by id; `removed: false` when pi already took it to send. */
