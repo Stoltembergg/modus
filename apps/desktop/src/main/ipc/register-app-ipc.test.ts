@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   isUsableModelId: vi.fn(),
   requireAgentChatWritable: vi.fn(),
   restoreCheckpoint: vi.fn(),
+  approveMcpServer: vi.fn(),
   fromWebContents: vi.fn(),
   reaGetStatus: vi.fn(),
   reaSetEnabled: vi.fn(),
@@ -93,6 +94,10 @@ vi.mock("../permissions/permission-store", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../permissions/permission-store")>()),
   recordPermissionDecision: mocks.recordPermissionDecision,
 }));
+vi.mock("../mcp/mcp-service", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../mcp/mcp-service")>()),
+  approveMcpServer: mocks.approveMcpServer,
+}));
 
 import { IPC_CHANNELS } from "./channels";
 import { registerAppIpc } from "./register-app-ipc";
@@ -144,6 +149,45 @@ describe("permission decision IPC", () => {
       ),
     ).toThrow("Permission request is no longer active.");
     expect(mocks.recordPermissionDecision).not.toHaveBeenCalled();
+  });
+});
+
+describe("project MCP trust IPC", () => {
+  const sender = { mainFrame: { url: "file:///app/index.html" } };
+  const trustedEvent = { sender, senderFrame: sender.mainFrame };
+
+  beforeEach(() => {
+    mocks.handlers.clear();
+    mocks.approveMcpServer.mockReset();
+    registerTrustedSender(sender, "file:///app/index.html");
+    registerAppIpc();
+  });
+
+  it("forwards only a validated fingerprinted project approval from the trusted renderer", async () => {
+    const handler = mocks.handlers.get(IPC_CHANNELS.mcpApprove);
+    if (!handler) throw new Error("MCP approval IPC handler was not registered.");
+    const fingerprint = "a".repeat(64);
+    mocks.approveMcpServer.mockResolvedValue([]);
+
+    await handler(
+      trustedEvent as never,
+      { cwd: "/work/project", name: "docs", expectedFingerprint: fingerprint } as never,
+    );
+
+    expect(mocks.approveMcpServer).toHaveBeenCalledWith("/work/project", "docs", fingerprint);
+  });
+
+  it("rejects malformed fingerprints before the trust decision is reached", async () => {
+    const handler = mocks.handlers.get(IPC_CHANNELS.mcpApprove);
+    if (!handler) throw new Error("MCP approval IPC handler was not registered.");
+
+    await expect(
+      handler(
+        trustedEvent as never,
+        { cwd: "/work/project", name: "docs", expectedFingerprint: "secret" } as never,
+      ),
+    ).rejects.toThrow();
+    expect(mocks.approveMcpServer).not.toHaveBeenCalled();
   });
 });
 

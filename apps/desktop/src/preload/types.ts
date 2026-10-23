@@ -712,6 +712,11 @@ export type ModusApi = {
   mcp: {
     list(): Promise<McpServerInfo[]>;
     sync(cwd: string): Promise<McpServerInfo[]>;
+    approve(input: {
+      cwd: string;
+      name: string;
+      expectedFingerprint: string;
+    }): Promise<McpServerInfo[]>;
     openConfig(cwd: string): Promise<string>;
     upsert(input: { cwd: string } & McpServerUpsertInput): Promise<McpServerInfo[]>;
     delete(input: { cwd: string; name: string }): Promise<McpServerInfo[]>;
