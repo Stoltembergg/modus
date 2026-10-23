@@ -115,6 +115,7 @@ jobs:
           # Test compile only — no Developer ID / notarization in this workflow.
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
           NODE_OPTIONS: --max-old-space-size=8192
+          MODUS_REA_RUST_TARGET: ${{ matrix.rust_target }}
           MODUS_CODEGRAPH_PLATFORM: darwin
           MODUS_CODEGRAPH_ARCH: ${{ matrix.codegraph_arch }}
         run: |

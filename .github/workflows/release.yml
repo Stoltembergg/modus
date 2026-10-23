@@ -212,6 +212,7 @@ jobs:
           # No Developer ID / notarization yet: builds are ad-hoc signed at best.
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
           NODE_OPTIONS: --max-old-space-size=8192
+          MODUS_REA_RUST_TARGET: ${{ matrix.rust_target }}
           MODUS_CODEGRAPH_PLATFORM: darwin
           MODUS_CODEGRAPH_ARCH: ${{ matrix.codegraph_arch }}
           # electron-builder skips ALL mac signing when GITHUB_BASE_REF is set (PR runs),
