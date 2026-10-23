@@ -234,6 +234,7 @@ import {
   resolvePackageCheckScript,
   summarizeRunQA,
 } from "./harness/qa-evidence";
+import { requestedCheckKinds } from "./harness/required-checks";
 import {
   defaultPromptBuildResponsePolicyHook,
   defaultTurnSettleResponsePolicyHook,
@@ -557,69 +558,6 @@ function projectMemoryHints(
     }
   }
   return { paths: [...paths], symbols: [...symbols] };
-}
-
-function negatedCheckAction(text: string, actionStart: number): boolean {
-  const before = text.slice(0, actionStart);
-  const boundaries = /[.!?;,\n]|\b(?:but|however|instead|mas|porém|porem)\b/gi;
-  let clauseStart = 0;
-  for (const match of before.matchAll(boundaries)) {
-    clauseStart = (match.index ?? 0) + match[0].length;
-  }
-  return /\b(?:do\s+not|don't|dont|never|avoid|skip|not|não|nao|nunca|evite)\s*$/i.test(
-    before.slice(clauseStart),
-  );
-}
-
-function negatedCheckTarget(text: string, targetStart: number): boolean {
-  const before = text.slice(0, targetStart);
-  const boundaries = /[.!?;,\n]|\b(?:but|however|instead|mas|porém|porem)\b/gi;
-  let clauseStart = 0;
-  for (const match of before.matchAll(boundaries)) {
-    clauseStart = (match.index ?? 0) + match[0].length;
-  }
-  return /\b(?:do\s+not|don't|dont|never|avoid|skip|não|nao|nunca|evite)\s+(?:(?:run|execute|rerun|verify|check|executar|rode|rodar|verifique|verificar|reexecute)\s+)?$/i.test(
-    before.slice(clauseStart),
-  );
-}
-
-function requestsCheck(text: string, target: RegExp, prohibited = false): boolean {
-  const actions =
-    /\b(?:run|execute|rerun|verify|check|executar|rode|rodar|verifique|verificar|reexecute|skip|avoid|evite)\b/gi;
-  const clauseBoundaries =
-    /[.!?;,\n]|\b(?:but|however|instead|mas|porém|porem)\b|\b(?:run|execute|rerun|verify|check|executar|rode|rodar|verifique|verificar|reexecute|skip|avoid|evite)\b/gi;
-  const targetMatches = new RegExp(target.source, `${target.flags.replace(/[gy]/g, "")}g`);
-  for (const action of text.matchAll(actions)) {
-    const start = action.index ?? 0;
-    const afterAction = start + action[0].length;
-    clauseBoundaries.lastIndex = afterAction;
-    const boundary = clauseBoundaries.exec(text);
-    const targetWindow = text.slice(start, boundary?.index ?? text.length);
-    if (
-      [...targetWindow.matchAll(targetMatches)].some((match) => {
-        const negative =
-          negatedCheckAction(text, start) ||
-          negatedCheckTarget(text, start + (match.index ?? 0)) ||
-          /^(?:skip|avoid|evite)$/i.test(action[0]);
-        return negative === prohibited;
-      })
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-const CHECK_TARGETS: Array<[HarnessTaskCheckKind, RegExp]> = [
-  ["tests", /\b(?:tests?|testes?|vitest|jest)\b/i],
-  ["typecheck", /\btype[ -]?check\b/i],
-  ["lint", /\b(?:lint|eslint|biome)\b/i],
-  ["build", /\bbuild\b/i],
-];
-function requestedCheckKinds(message: string, prohibited = false): HarnessTaskCheckKind[] {
-  return CHECK_TARGETS.filter(([, target]) => requestsCheck(message, target, prohibited)).map(
-    ([kind]) => kind,
-  );
 }
 
 function requiredChecksForRun(input: PromptAgentInput, plan?: PlanRef): HarnessTaskCheckKind[] {
