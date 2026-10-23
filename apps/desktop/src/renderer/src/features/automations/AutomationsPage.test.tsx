@@ -82,11 +82,19 @@ function execution(overrides: Partial<AutomationExecution> = {}): AutomationExec
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 function setup(definitions: AutomationDefinition[] = []) {
   const api = {
     list: vi.fn(async () => definitions),
     get: vi.fn(),
-    history: vi.fn(async () => [] as AutomationExecution[]),
+    history: vi.fn(async (_id: string, _limit: number) => [] as AutomationExecution[]),
     create: vi.fn(async (input) => definition({ ...input, id: "created-1" })),
     update: vi.fn(async ({ id }) => definition({ id })),
     setEnabled: vi.fn(async (id, enabled) => definition({ id, enabled })),
@@ -155,5 +163,46 @@ describe("AutomationsPage", () => {
     await waitFor(() => expect(api.setEnabled).toHaveBeenCalledWith("automation-1", false));
     fireEvent.click(screen.getByRole("button", { name: "Run now" }));
     await waitFor(() => expect(api.runNow).toHaveBeenCalledWith("automation-1"));
+  });
+
+  it("keeps history and Stop bound to the selected automation when history resolves out of order", async () => {
+    const first = definition({ id: "automation-a", name: "Automation A" });
+    const second = definition({ id: "automation-b", name: "Automation B" });
+    const firstHistory = deferred<AutomationExecution[]>();
+    const secondHistory = deferred<AutomationExecution[]>();
+    const { api } = setup([first, second]);
+    api.history.mockImplementation((id) =>
+      id === first.id ? firstHistory.promise : secondHistory.promise,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /Automation A/ }));
+    await waitFor(() => expect(api.history).toHaveBeenCalledWith(first.id, 50));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Automation B/ }));
+    await waitFor(() => expect(api.history).toHaveBeenCalledWith(second.id, 50));
+
+    secondHistory.resolve([
+      execution({
+        id: "execution-b",
+        automationId: second.id,
+        status: "running",
+        sessionId: "session-b",
+      }),
+    ]);
+    await screen.findByRole("button", { name: "Stop" });
+    firstHistory.resolve([
+      execution({
+        id: "execution-a",
+        automationId: first.id,
+        status: "running",
+        sessionId: "session-a",
+      }),
+    ]);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Stop" }));
+
+    expect(screen.getByRole("heading", { name: "Automation B" })).toBeTruthy();
+    expect(api.stop).toHaveBeenCalledWith("execution-b");
+    expect(api.stop).not.toHaveBeenCalledWith("execution-a");
   });
 });
