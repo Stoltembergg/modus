@@ -5700,6 +5700,7 @@ describe("PiSdkRuntime", () => {
           changedPaths: ["src/renamed-cache.ts", "src/untracked-cache.ts"],
         },
       }),
+      [expect.objectContaining({ sourceId: "project-model-codegraph" })],
     );
   });
 
@@ -5735,7 +5736,9 @@ describe("PiSdkRuntime", () => {
       }),
     ).resolves.toEqual({ outcome: "ok", finalText: "done" });
     expect(git).toHaveBeenCalledOnce();
-    expect(planner).toHaveBeenCalledWith(expect.objectContaining({ git: { changedPaths: [] } }));
+    expect(planner).toHaveBeenCalledWith(expect.objectContaining({ git: { changedPaths: [] } }), [
+      expect.objectContaining({ sourceId: "project-model-codegraph" }),
+    ]);
   });
 
   it("queues an overlapping normal prompt into the active run without losing its metadata", async () => {

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
+import * as projectModel from "../agent/harness/project-model-store";
 import { getDatabase } from "../db/database";
 import * as memory from "../memory/project-memory-service";
 import {
@@ -14,6 +15,7 @@ import {
   diagnoseTurnContext,
   planTurnContext,
 } from "./context-planner";
+import { createProjectModelContextSource } from "./project-model-context-source";
 
 const testState = vi.hoisted(() => ({ userDataPath: "" }));
 let root: string;
@@ -240,6 +242,35 @@ describe("Context Planner fixed corpus", () => {
     );
 
     expect(digest.memoryIds).toContain(relevant.id);
+  });
+
+  it("adds only Project Model discoveries from the current commit to the context digest", async () => {
+    const head = "c".repeat(40);
+    const staleHead = "d".repeat(40);
+    projectModel.upsertProjectModelDiscoveries({
+      workspaceId: "ws-a",
+      revision: head,
+      hits: [{ path: "src/cache-index.ts" }],
+    });
+    projectModel.upsertProjectModelDiscoveries({
+      workspaceId: "ws-a",
+      revision: staleHead,
+      hits: [{ path: "src/stale-cache.ts" }],
+    });
+    projectModel.upsertProjectModelDiscoveries({
+      workspaceId: "ws-b",
+      revision: head,
+      hits: [{ path: "src/foreign-cache.ts" }],
+    });
+
+    const digest = await planTurnContext(
+      plannerInput({ query: "cache index", git: { head, changedPaths: [] } }),
+      [createProjectModelContextSource()],
+    );
+
+    expect(digest.text).toContain("src/cache-index.ts");
+    expect(digest.text).not.toContain("src/stale-cache.ts");
+    expect(digest.text).not.toContain("src/foreign-cache.ts");
   });
 
   it("prefers recent verified evidence over equally relevant old unverified evidence", async () => {

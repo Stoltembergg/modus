@@ -55,6 +55,7 @@ import {
 import { releaseAgentBrowserControl } from "../browser/browser-service";
 import { planTurnContext } from "../context/context-planner";
 import { formatResolvedContext, resolveContext } from "../context/context-service";
+import { createProjectModelContextSource } from "../context/project-model-context-source";
 import {
   cleanupSubagentWorktree,
   createSubagentWorktree,
@@ -1861,16 +1862,22 @@ export class PiSdkRuntime implements AgentRuntime {
         !tracker.adaptiveRetrievalDigest
       ) {
         try {
-          const memoryDigest = await planTurnContext({
-            workspaceId: input.workspaceId,
-            inbox: false,
-            query: tracker.taskQuery ?? input.classification.taskType,
-            contextPaths: [],
-            contextSymbols: [],
-            git: { changedPaths: input.changedPaths ?? [] },
-            sessionId: input.sessionId,
-            runId: input.runId,
-          });
+          const memoryDigest = await planTurnContext(
+            {
+              workspaceId: input.workspaceId,
+              inbox: false,
+              query: tracker.taskQuery ?? input.classification.taskType,
+              contextPaths: [],
+              contextSymbols: [],
+              git: {
+                ...(input.revision ? { head: input.revision } : {}),
+                changedPaths: input.changedPaths ?? [],
+              },
+              sessionId: input.sessionId,
+              runId: input.runId,
+            },
+            [createProjectModelContextSource()],
+          );
           if (memoryDigest.text) tracker.adaptiveRetrievalDigest = memoryDigest.text.slice(0, 4000);
         } catch {
           // Local retrieval is best-effort; decision still stands.
@@ -5791,16 +5798,19 @@ export class PiSdkRuntime implements AgentRuntime {
       }
       try {
         const workspaceId = runtimeSession.info.workspaceId;
-        const memoryDigest = await planTurnContext({
-          ...(workspaceId ? { workspaceId } : {}),
-          inbox: !workspaceId || workspaceId === CHATS_WORKSPACE_ID,
-          query: input.message,
-          contextPaths: paths,
-          contextSymbols: symbols,
-          git: gitMetadata,
-          sessionId: runtimeSession.info.id,
-          ...(options.runId ? { runId: options.runId } : {}),
-        });
+        const memoryDigest = await planTurnContext(
+          {
+            ...(workspaceId ? { workspaceId } : {}),
+            inbox: !workspaceId || workspaceId === CHATS_WORKSPACE_ID,
+            query: input.message,
+            contextPaths: paths,
+            contextSymbols: symbols,
+            git: gitMetadata,
+            sessionId: runtimeSession.info.id,
+            ...(options.runId ? { runId: options.runId } : {}),
+          },
+          [createProjectModelContextSource()],
+        );
         if (memoryDigest.text.trim()) {
           const safeDigest = memoryDigest.text.replace(
             /<\/?project_memory_context/gi,
