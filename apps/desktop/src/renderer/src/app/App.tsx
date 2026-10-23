@@ -42,6 +42,7 @@ import { MainSurface } from "../components/shell/MainSurface";
 import {
   closeSettingsNavigation,
   INITIAL_PRIMARY_NAVIGATION,
+  isSessionConversationVisible,
   navigatePrimary,
   restorePrimaryNavigation,
 } from "../components/shell/navigation-state";
@@ -54,6 +55,7 @@ import {
   AgentEventHub,
   type AgentEventItem,
   affectsActivity,
+  mergeActivitySnapshots,
   optimisticUserPromptEvents,
   reduceActivity,
   type SessionActivity,
@@ -119,6 +121,7 @@ const SettingsPanel = lazy(() =>
     default: Component,
   })),
 );
+
 function logInitialHydrationError(resource: string, error: unknown): void {
   console.error(`Unable to load initial ${resource}.`, error);
 }
@@ -231,6 +234,12 @@ export function App() {
 
   const hubRef = useRef(new AgentEventHub());
   const activeSessionIdRef = useRef<string | undefined>(undefined);
+  const visibleConversationSessionIdRef = useRef<string | undefined>(undefined);
+  visibleConversationSessionIdRef.current = activeSessionId
+    ? isSessionConversationVisible(primaryNavigation.active, activeSessionId, activeSessionId)
+      ? activeSessionId
+      : undefined
+    : undefined;
   const activeWorkspaceRef = useRef<WorkspaceInfo | null>(null);
   const workspaceSelectionRevisionRef = useRef(0);
   const reviewScopeRef = useRef<{
@@ -309,9 +318,11 @@ export function App() {
   }, []);
 
   const refreshSessions = useCallback(async (): Promise<void> => {
-    setAgentSessions(
-      await window.modus.agent.list({ includeSessionId: activeSessionIdRef.current }),
-    );
+    const sessions = await window.modus.agent.list({
+      includeSessionId: activeSessionIdRef.current,
+    });
+    setAgentSessions(sessions);
+    setActivityBySession((current) => mergeActivitySnapshots(current, sessions));
   }, []);
 
   function publishLocalAgentEvent(event: AgentEvent): void {
@@ -386,6 +397,7 @@ export function App() {
       .then((sessions) => {
         if (active) {
           setAgentSessions(sessions);
+          setActivityBySession((current) => mergeActivitySnapshots(current, sessions));
         }
       })
       .catch((error: unknown) => {
@@ -555,7 +567,7 @@ export function App() {
       });
 
       if (affectsActivity(event)) {
-        const watched = activeSessionIdRef.current === event.sessionId;
+        const watched = visibleConversationSessionIdRef.current === event.sessionId;
         setActivityBySession((current) => {
           const next = reduceActivity(current[event.sessionId], event, watched);
           if (next === current[event.sessionId]) {
@@ -611,7 +623,7 @@ export function App() {
 
   // The open session is "watched": its unread flag clears.
   useEffect(() => {
-    if (!activeSessionId) {
+    if (!activeSessionId || primaryNavigation.active !== "direct-messages") {
       return;
     }
     setActivityBySession((current) => {
@@ -621,7 +633,7 @@ export function App() {
       }
       return { ...current, [activeSessionId]: { ...activity, unread: false } };
     });
-  }, [activeSessionId]);
+  }, [activeSessionId, primaryNavigation.active]);
 
   useEffect(() => {
     if (!activeSessionId) {

@@ -3,6 +3,7 @@ import type { AgentSessionInfo, SubagentWorktreeInfo } from "../../shared/contra
 import { getDatabase } from "../db/database";
 import { detachSessionFromGroupRows } from "../groups/group-store";
 import { getWorkspace } from "../workspace/workspace-store";
+import { listAgentSessionActivitySnapshots } from "./agent-event-store";
 
 type AgentSessionRow = {
   id: string;
@@ -365,7 +366,13 @@ export function listAgentSessions(options: { includeSessionId?: string } = {}): 
       sessions.push(included);
     }
   }
-  return sessions;
+  const snapshots = listAgentSessionActivitySnapshots(sessions.map((session) => session.id));
+  return sessions.map((session) => {
+    const snapshot = snapshots.get(session.id);
+    return snapshot && snapshot.eventCursor > 0
+      ? { ...session, activitySnapshot: snapshot }
+      : session;
+  });
 }
 
 export function listArchivedAgentSessions(workspaceId: string): AgentSessionInfo[] {

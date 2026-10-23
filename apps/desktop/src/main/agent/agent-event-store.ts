@@ -2475,6 +2475,73 @@ function listAgentRunAssistantMessageRows(
   }
 }
 
+export function listAgentSessionActivitySnapshots(
+  sessionIds: string[],
+): Map<string, { eventCursor: number; pendingInputRequestIds: string[] }> {
+  const snapshots = new Map<string, { eventCursor: number; pendingInputRequestIds: string[] }>(
+    sessionIds.map((sessionId) => [sessionId, { eventCursor: 0, pendingInputRequestIds: [] }]),
+  );
+  if (sessionIds.length === 0) return snapshots;
+
+  const db = getDatabase();
+  const cursors = db
+    .prepare(
+      `select session_id, coalesce(max(rowid), 0) as event_cursor
+       from agent_events
+       where session_id in (select value from json_each(?))
+       group by session_id`,
+    )
+    .all(JSON.stringify(sessionIds)) as Array<{ session_id: string; event_cursor: number }>;
+  for (const row of cursors) {
+    const snapshot = snapshots.get(row.session_id);
+    if (snapshot) snapshot.eventCursor = row.event_cursor;
+  }
+
+  const pending = db
+    .prepare(
+      `select request.session_id, request.type,
+              json_extract(request.payload_json, '$.request.id') as request_id
+       from agent_events request
+       where request.session_id in (select value from json_each(?))
+         and request.type in ('permission.requested', 'question.requested')
+         and json_valid(request.payload_json)
+         and json_type(request.payload_json, '$.request.id') = 'text'
+         and not exists (
+           select 1 from agent_events resolution
+           where resolution.session_id = request.session_id
+             and resolution.rowid > request.rowid
+             and resolution.type = case request.type
+               when 'permission.requested' then 'permission.resolved'
+               else 'question.resolved' end
+             and json_valid(resolution.payload_json)
+             and json_extract(resolution.payload_json, '$.requestId') =
+               json_extract(request.payload_json, '$.request.id')
+         )
+         and (request.type <> 'question.requested' or not exists (
+           select 1 from agent_events boundary
+           where boundary.session_id = request.session_id
+             and boundary.rowid > request.rowid
+             and boundary.type in (
+               'run.started', 'run.completed', 'run.failed', 'run.cancelled', 'run.blocked'
+             )
+         ))
+       order by request.session_id, request.rowid`,
+    )
+    .all(JSON.stringify(sessionIds)) as Array<{
+    session_id: string;
+    type: "permission.requested" | "question.requested";
+    request_id: string;
+  }>;
+  for (const row of pending) {
+    const snapshot = snapshots.get(row.session_id);
+    if (!snapshot) continue;
+    const kind = row.type === "permission.requested" ? "permission" : "question";
+    const id = `${kind}:${row.request_id}`;
+    if (!snapshot.pendingInputRequestIds.includes(id)) snapshot.pendingInputRequestIds.push(id);
+  }
+  return snapshots;
+}
+
 /**
  * Runs in this session whose `run.started` has no later terminal event. Used to
  * close runs that are no longer live (app quit/crash mid-run) before a new run
