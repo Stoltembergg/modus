@@ -972,7 +972,8 @@ export function App() {
     }
     const session = await createSession(activeWorkspace, heroModel);
     if (!session) {
-      return;
+      setSessionCreateError(undefined);
+      throw new Error("Could not create the chat session. Your message is still in the composer.");
     }
     setHeroModel("");
     const userMessageId = `local-user:${crypto.randomUUID()}`;
@@ -1550,7 +1551,7 @@ export function App() {
                                     skills,
                                     mode,
                                   ) =>
-                                    void submitHeroPrompt(
+                                    submitHeroPrompt(
                                       message,
                                       context,
                                       delivery,
