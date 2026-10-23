@@ -216,6 +216,32 @@ describe("Context Planner fixed corpus", () => {
     );
   });
 
+  it("passes the current query to local memory recall before recency completes the candidate window", async () => {
+    const relevant = propose(
+      "Rare archived token invariant",
+      "The archived token invariant preserves resumable local context.",
+    );
+    for (let index = 0; index < CONTEXT_PLANNER_LOCAL_RESULT_LIMIT + 1; index += 1) {
+      propose(
+        `Recent unrelated record ${index}`,
+        `This recent record contains no archived-token context match ${index}.`,
+      );
+    }
+    finalize();
+    db.prepare(
+      "update project_memory_records set verification = 'unverified', last_verified_at = null, created_at = ? where id = ?",
+    ).run("2020-01-01T00:00:00.000Z", relevant.id);
+    db.prepare(
+      "update project_memory_records set created_at = '2026-09-26T00:00:00.000Z' where id != ?",
+    ).run(relevant.id);
+
+    const digest = await planTurnContext(
+      plannerInput({ query: "archived token resumable context" }),
+    );
+
+    expect(digest.memoryIds).toContain(relevant.id);
+  });
+
   it("prefers recent verified evidence over equally relevant old unverified evidence", async () => {
     const old = propose(
       "Old retention policy",
