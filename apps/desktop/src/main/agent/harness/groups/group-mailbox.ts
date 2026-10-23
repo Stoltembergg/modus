@@ -281,6 +281,10 @@ export class GroupMailbox {
     nowIso?: string,
   ): { success: boolean; ackedCount: number } {
     if (!groupId) return { success: false, ackedCount: 0 };
+
+    const uniqueMessageIds = [...new Set(messageIds)];
+    if (uniqueMessageIds.length === 0) return { success: true, ackedCount: 0 };
+
     const db = this.requireDb();
     const ackTime = nowIso || new Date().toISOString();
     const ackTimestamp = Date.parse(ackTime);
@@ -291,25 +295,37 @@ export class GroupMailbox {
     try {
       db.exec("begin immediate");
       transactionStarted = true;
-      let ackedCount = 0;
-      for (const messageId of new Set(messageIds)) {
-        const row = db
-          .prepare(
-            `select group_id, to_agent, sent_at, acked_at
-               from harness_group_messages where id = ?`,
-          )
-          .get(messageId) as
-          | { group_id: string; to_agent: string; sent_at: string; acked_at: string | null }
-          | undefined;
-        if (
-          !row ||
-          row.group_id !== groupId ||
-          (row.to_agent !== "*" && row.to_agent !== agentId)
-        ) {
+
+      const rows = db
+        .prepare(
+          `SELECT id, group_id, to_agent, sent_at, acked_at
+           FROM harness_group_messages
+           WHERE id IN (SELECT value FROM json_each(?))`,
+        )
+        .all(JSON.stringify(uniqueMessageIds)) as Array<{
+        id: string;
+        group_id: string;
+        to_agent: string;
+        sent_at: string;
+        acked_at: string | null;
+      }>;
+
+      if (rows.length !== uniqueMessageIds.length) {
+        db.exec("rollback");
+        transactionStarted = false;
+        return { success: false, ackedCount: 0 };
+      }
+
+      const broadcastIds: string[] = [];
+      const directIds: string[] = [];
+
+      for (const row of rows) {
+        if (row.group_id !== groupId || (row.to_agent !== "*" && row.to_agent !== agentId)) {
           db.exec("rollback");
           transactionStarted = false;
           return { success: false, ackedCount: 0 };
         }
+
         const expired = row.acked_at ? row.acked_at < ackExpiryIso : row.sent_at < unackExpiryIso;
         if (expired) {
           db.exec("rollback");
@@ -318,34 +334,38 @@ export class GroupMailbox {
         }
 
         if (row.to_agent === "*") {
-          db.prepare(
-            `insert or ignore into harness_group_message_acks (message_id, agent_id, acked_at)
-             values (?, ?, ?)`,
-          ).run(messageId, agentId, ackTime);
+          broadcastIds.push(row.id);
         } else if (!row.acked_at) {
-          const result = db
-            .prepare(
-              `update harness_group_messages set acked_at = ?
-                where id = ? and group_id = ? and to_agent = ? and acked_at is null`,
-            )
-            .run(ackTime, messageId, groupId, agentId);
-          if (Number(result.changes) === 0) {
-            const current = db
-              .prepare(`select acked_at from harness_group_messages where id = ?`)
-              .get(messageId) as { acked_at: string | null } | undefined;
-            if (!current?.acked_at) {
-              db.exec("rollback");
-              transactionStarted = false;
-              return { success: false, ackedCount: 0 };
-            }
-          }
+          directIds.push(row.id);
         }
-        ackedCount++;
+      }
+
+      if (broadcastIds.length > 0) {
+        db.prepare(
+          `INSERT OR IGNORE INTO harness_group_message_acks (message_id, agent_id, acked_at)
+           SELECT value, ?, ? FROM json_each(?)`,
+        ).run(agentId, ackTime, JSON.stringify(broadcastIds));
+      }
+
+      if (directIds.length > 0) {
+        db.prepare(
+          `UPDATE harness_group_messages SET acked_at = ?
+           FROM json_each(?)
+           WHERE harness_group_messages.id = json_each.value
+             AND harness_group_messages.group_id = ?
+             AND harness_group_messages.to_agent = ?
+             AND harness_group_messages.acked_at IS NULL`,
+        ).run(ackTime, JSON.stringify(directIds), groupId, agentId);
+
+        // Emulate previous behavior: ensure all intended direct messages were updated.
+        // This fails if another process acknowledged it first, but the previous code didn't fail
+        // if it found it was already acknowledged, however, we pre-filtered to !row.acked_at.
+        // Since we are inside `begin immediate`, no other process can change acked_at here.
       }
 
       db.exec("commit");
       transactionStarted = false;
-      return { success: true, ackedCount };
+      return { success: true, ackedCount: uniqueMessageIds.length };
     } catch (error) {
       if (transactionStarted) {
         try {
