@@ -122,7 +122,7 @@ export function ImageThumb({
   return (
     <button
       aria-label={`Open image: ${alt}`}
-      className="contents"
+      className="group contents"
       onClick={(event) => {
         // Don't let the click reach a parent (e.g. a context token that removes
         // itself on click) — opening the viewer is the thumbnail's own action.
@@ -144,7 +144,10 @@ export function ImageThumb({
     >
       <img
         alt={alt}
-        className={cn("cursor-zoom-in", className)}
+        className={cn(
+          "cursor-zoom-in outline-none group-focus-visible:ring-2 group-focus-visible:ring-focus-ring/35 group-focus-visible:ring-offset-2",
+          className,
+        )}
         draggable={false}
         ref={imgRef}
         src={src}
@@ -396,7 +399,7 @@ function ViewerAction({
 }) {
   return (
     <button
-      className="app-no-drag flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-fg-muted transition-colors hover:bg-hover hover:text-fg disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg-muted"
+      className="app-no-drag flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-fg-muted outline-none transition-colors hover:bg-hover hover:text-fg focus-visible:ring-2 focus-visible:ring-focus-ring/35 disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-fg-muted"
       disabled={disabled}
       onClick={(event) => {
         event.stopPropagation();
