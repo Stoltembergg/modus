@@ -133,16 +133,6 @@ describe("Modus semantic design tokens", () => {
     expect(mainSurface).not.toContain("backdrop-filter");
   });
 
-  it("keeps the Groups prompt bar focus treatment neutral and its toolbar integrated", () => {
-    const focusState = css.match(/\.group-prompt-bar:focus-within\s*\{([^}]+)\}/)?.[1] ?? "";
-
-    expect(focusState).toContain("border-color: var(--border-strong)");
-    expect(focusState).toContain("box-shadow: var(--shadow-composer)");
-    expect(focusState).not.toContain("--color-focus-ring");
-    expect(focusState).not.toContain("shadow-composer-focus");
-    expect(css).toContain(".group-composer-toolbar");
-  });
-
   it("does not render custom caption controls in the application chrome", () => {
     expect(app).not.toContain("WindowControls");
     expect(app).not.toContain("CaptionButton");

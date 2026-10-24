@@ -7,7 +7,8 @@ import type {
   AgentAvatarShape,
   AgentGroupMember,
 } from "../../../../shared/contracts";
-import type { GroupActivityState } from "../groups/useWorkingGroups";
+/** Agent activity state (chip / presence dot). */
+export type GroupActivityState = "waiting" | "working" | "queued" | "idle";
 
 /** What the avatar shows: idle (blink + float), working, waiting for you, archived (grey). */
 export type AgentAvatarState = "idle" | "working" | "waiting" | "archived";
