@@ -257,7 +257,10 @@ export function AutomationsPage({
           ) : (
             <ul className="-mx-3 flex flex-col gap-1">
               {history.map((execution) => (
-                <li className="flex min-w-0 items-center gap-3 rounded-lg px-3 py-3 transition-colors hover:bg-hover/40" key={execution.id}>
+                <li
+                  className="flex min-w-0 items-center gap-3 rounded-lg px-3 py-3 transition-colors hover:bg-hover/40"
+                  key={execution.id}
+                >
                   <span
                     className={cn("size-1.5 shrink-0 rounded-full", statusDot(execution.status))}
                   />
