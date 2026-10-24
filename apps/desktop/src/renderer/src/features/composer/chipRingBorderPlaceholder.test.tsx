@@ -41,7 +41,9 @@ describe("composer chips and placeholder", () => {
 
   it("composer placeholder clears 4.5:1 in dark and light", () => {
     expect(composer).toContain("text-fg-placeholder");
-    const vals = [...tokens.matchAll(/--color-fg-placeholder:\s*(#[0-9a-f]{6})/g)].map((m) => m[1] ?? "");
+    const vals = [...tokens.matchAll(/--color-fg-placeholder:\s*(#[0-9a-f]{6})/g)].map(
+      (m) => m[1] ?? "",
+    );
     expect(vals).toHaveLength(2);
     const [dark = "", light = ""] = vals;
     expect(ratio(dark, DARK_BG)).toBeGreaterThanOrEqual(4.5);
