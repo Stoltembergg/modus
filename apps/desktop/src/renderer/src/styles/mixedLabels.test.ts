@@ -73,7 +73,7 @@ const HELP_EMPTY_ANCHORS: Record<string, string[]> = {
   "../features/agent/TodosCard.tsx": ["data-todos-empty>"],
   // The New Agent dialog has no visible subtitle any more; its picker labels are readable.
   "../features/agents/AvatarOptionGroup.tsx": ["id={labelId}>"],
-  "../features/agents/ModelPicker.tsx": [">No models match</p>"],
+  "../features/agents/ModelPicker.tsx": [`{query.trim() ? "No models match" : "No models"}`],
   "../features/composer/SlashMenu.tsx": [
     '{item.kind === "skill" ? "Skills" : "Commands"}',
     ">{item.description}</span>",

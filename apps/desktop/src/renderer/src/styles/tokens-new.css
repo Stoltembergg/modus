@@ -70,6 +70,10 @@
   --color-link: #b48cfa;
   --color-link-hover: #c9acfc;
   --accent-text: #b48cfa;
+  /* Model picker: check mark derived from the accent (>= 4.5:1 on the popup and the
+     highlighted row), and a keyboard-highlight fill strong enough to track. */
+  --color-accent-check: color-mix(in srgb, var(--color-accent) 40%, white);
+  --color-picker-highlight: color-mix(in srgb, var(--color-fg) 20%, transparent);
   --accent-soft: rgba(134, 63, 245, 0.16);
   --accent-edge: rgba(180, 140, 250, 0.28);
 
@@ -161,6 +165,8 @@
   --color-link: #6c2bd9;
   --color-link-hover: #5b21b6;
   --accent-text: #6c2bd9;
+  --color-accent-check: var(--color-accent);
+  --color-picker-highlight: color-mix(in srgb, var(--color-fg) 10%, transparent);
   --accent-soft: rgba(134, 63, 245, 0.1);
   --accent-edge: rgba(134, 63, 245, 0.22);
 
