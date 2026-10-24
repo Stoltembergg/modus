@@ -367,6 +367,22 @@ export function listAgentSessions(options: { includeSessionId?: string } = {}): 
   return sessions;
 }
 
+/**
+ * Sessions still linked to a legacy group of a Project through
+ * `agent_group_members` (the groups migration keeps those rows). "Remove
+ * project" tears them down too, wherever they live.
+ */
+export function listWorkspaceGroupMemberSessionIds(workspaceId: string): string[] {
+  const rows = getDatabase()
+    .prepare(
+      `select m.session_id from agent_group_members m
+       join agent_groups g on g.id = m.group_id
+       where g.workspace_id = ? order by m.rowid`,
+    )
+    .all(workspaceId) as Array<{ session_id: string }>;
+  return rows.map((row) => row.session_id);
+}
+
 export function listArchivedAgentSessions(workspaceId: string): AgentSessionInfo[] {
   const rows = getDatabase()
     .prepare(

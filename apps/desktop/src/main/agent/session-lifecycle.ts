@@ -12,6 +12,7 @@ import {
   listArchivedAgentSessions,
   listSubagentSessions,
   setAgentSessionArchived,
+  listWorkspaceGroupMemberSessionIds,
 } from "./agent-store";
 import { deleteSessionCheckpoints } from "./checkpoint-service";
 import { clearPlanBuildStateForSession } from "./harness/plan-build-store";
@@ -97,15 +98,25 @@ export async function archiveWorkspaceSessions(workspaceId: string): Promise<num
 }
 
 /**
- * Permanently delete a workspace's root chats (live and archived).
+ * Permanently delete a workspace's root chats (live and archived). Sessions
+ * still linked to the workspace's legacy groups are only torn down with
+ * `includeGroupMembers`, which only "Remove project" sets.
  * Returns the count of chats removed.
  */
-export async function deleteWorkspaceSessions(workspaceId: string): Promise<number> {
+export async function deleteWorkspaceSessions(
+  workspaceId: string,
+  options: { includeGroupMembers?: boolean } = {},
+): Promise<number> {
   const sessions = [...listAgentSessions(), ...listArchivedAgentSessions(workspaceId)].filter(
     (session) => session.workspaceId === workspaceId && !session.parentSessionId,
   );
   for (const session of sessions) {
     await deleteAgentSessionTree(session.id);
+  }
+  if (options.includeGroupMembers) {
+    for (const sessionId of listWorkspaceGroupMemberSessionIds(workspaceId)) {
+      await deleteAgentSessionTree(sessionId);
+    }
   }
   return sessions.length;
 }

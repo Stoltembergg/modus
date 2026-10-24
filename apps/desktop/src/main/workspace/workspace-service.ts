@@ -59,8 +59,8 @@ export async function deleteProjectChats(id: string): Promise<number> {
  * runtimes/checkpoints), then drop the workspace row. Files on disk are kept.
  */
 export async function removeProject(id: string): Promise<WorkspaceInfo[]> {
-  // Everything goes; the legacy group rows cascade with the workspace row.
-  await deleteWorkspaceSessions(id);
+  // Everything goes, legacy group members included; the group rows cascade with the workspace row.
+  await deleteWorkspaceSessions(id, { includeGroupMembers: true });
   removeWorkspace(id);
   return listProjectWorkspaces();
 }
