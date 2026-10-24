@@ -32,12 +32,12 @@ const LIGHT_CHIP_BGS = ["#f7f7f7", "#ffffff"];
 afterEach(cleanup);
 
 describe("first-launch model chip", () => {
-  it("keyboard focus draws the 2px accent ring (the chip drops the default outline)", () => {
+  it("keyboard focus draws the 2px accent ring, 3px out (the chip drops the default outline)", () => {
     expect(MODEL_CHIP_INTERACTIVE).toContain("outline-none");
     expect(MODEL_CHIP_INTERACTIVE.split(" ")).toContain("model-chip");
     const ring = block(".model-chip:focus-visible");
     expect(ring).toContain("outline: 2px solid var(--color-accent)");
-    expect(ring).toContain("outline-offset: 2px");
+    expect(ring).toContain("outline-offset: 3px");
   });
 
   it("light warning text clears 4.5:1 on the chip; the base danger token did not", () => {
