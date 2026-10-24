@@ -10,6 +10,7 @@ import {
   MODEL_CHIP_BASE,
   MODEL_CHIP_INTERACTIVE,
   MODEL_CHIP_TONE,
+  MODEL_CHIP_WARNING,
 } from "../composer/modelChipStyle";
 import {
   BRANCH_MENU_POPUP_CLASS,
@@ -125,7 +126,7 @@ export function SessionBranchPicker({
           className={cn(
             MODEL_CHIP_BASE,
             MODEL_CHIP_INTERACTIVE,
-            missing ? "border-danger/40 text-danger" : MODEL_CHIP_TONE,
+            missing ? MODEL_CHIP_WARNING : MODEL_CHIP_TONE,
             tier === "sm" && "px-1.5",
           )}
           data-branch-missing={missing ? "" : undefined}
