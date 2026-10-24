@@ -54,6 +54,11 @@ describe("message cards", () => {
     const reveal = button.parentElement?.className ?? "";
     expect(reveal).toContain("group-hover/msg:opacity-100");
     expect(reveal).toContain("group-focus-within/msg:opacity-100");
+    // Hidden = not clickable (matches the turn footer); revealed = clickable.
+    expect(reveal).toContain("pointer-events-none");
+    for (const state of ["group-hover/msg", "group-focus-within/msg", "pointer-coarse"]) {
+      expect(reveal).toContain(`${state}:pointer-events-auto`);
+    }
     fireEvent.click(button);
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(markdown));
     await waitFor(() => expect(button.dataset.copied).toBe("true"));
