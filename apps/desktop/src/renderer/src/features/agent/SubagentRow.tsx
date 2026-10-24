@@ -83,7 +83,7 @@ export function SubagentSettledDot({ status }: { status: AgentSessionInfo["statu
   if (status === "blocked") {
     return (
       <span className="relative flex size-2 shrink-0" title="Needs input">
-        <span className="absolute inset-0 hidden rounded-full bg-fg-muted/50 motion-safe:block motion-safe:animate-ping" />
+        <span className="status-ping absolute inset-0 rounded-full bg-fg-muted/50" />
         <span className="relative size-2 rounded-full bg-fg-muted" />
       </span>
     );
