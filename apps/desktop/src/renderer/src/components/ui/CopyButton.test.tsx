@@ -45,7 +45,9 @@ describe("message copy button", () => {
 
   it("copied state cross-fades on motion tokens; reduced motion is a 120 ms fade", () => {
     expect(block(".copy-button-icon")).toMatch(/opacity var\(--motion-duration-base\)/);
-    const reduced = css.slice(css.lastIndexOf("@media (prefers-reduced-motion: reduce)"));
+    const reduced = css.slice(
+      css.indexOf("@media (prefers-reduced-motion: reduce)", css.indexOf(".copy-reveal {")),
+    );
     expect(reduced).toMatch(
       /\.copy-button-icon,\s*\.copy-reveal\s*\{\s*transition:\s*opacity var\(--motion-duration-reduced\) var\(--motion-ease-linear\);/,
     );
