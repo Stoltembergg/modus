@@ -9,7 +9,10 @@ type CopyButtonProps = {
   className?: string;
 };
 
-/** Small icon button that copies `text` and flips to a check for ~1.6s. */
+/**
+ * Small icon button that copies `text` and cross-fades to a check for ~1.6s.
+ * Icon only: the check is the confirmation (styles in `.copy-button`, app.css).
+ */
 export function CopyButton({ text, label = "Copy", className }: CopyButtonProps) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<number | undefined>(undefined);
@@ -34,14 +37,15 @@ export function CopyButton({ text, label = "Copy", className }: CopyButtonProps)
     <button
       aria-label={label}
       className={cn(
-        "flex size-6 items-center justify-center rounded-md text-fg-faint outline-none transition-colors hover:bg-hover hover:text-fg-muted focus-visible:ring-2 focus-visible:ring-focus-ring/35",
+        "copy-button relative flex size-6 items-center justify-center rounded-md text-fg-faint hover:bg-hover hover:text-fg-muted",
         className,
       )}
+      data-copied={copied ? "true" : undefined}
       onClick={handleCopy}
-      title={copied ? "Copied" : label}
       type="button"
     >
-      {copied ? <IconCheck size={13} stroke={1.9} /> : <IconCopy size={13} stroke={1.8} />}
+      <IconCopy aria-hidden className="copy-button-icon copy-button-idle" size={13} stroke={1.8} />
+      <IconCheck aria-hidden className="copy-button-icon copy-button-done" size={13} stroke={1.9} />
     </button>
   );
 }

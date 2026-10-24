@@ -1395,7 +1395,7 @@ function TurnFooter({ turn, models }: { turn: TimelineTurn; models?: ModelInfo[]
           coarse pointers). The metadata beside it is always visible. Copy is
           shown only when the turn actually produced answer text. */}
       {answer ? (
-        <span className="pointer-events-none absolute top-1/2 left-1 -translate-y-1/2 opacity-0 transition-opacity duration-(--motion-duration-base) group-hover/turn:pointer-events-auto group-hover/turn:opacity-100 group-focus-within/turn:pointer-events-auto group-focus-within/turn:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100">
+        <span className="pointer-events-none absolute top-1/2 left-1 -translate-y-1/2 copy-reveal opacity-0 group-hover/turn:pointer-events-auto group-hover/turn:opacity-100 group-focus-within/turn:pointer-events-auto group-focus-within/turn:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100">
           <CopyButton label="Copy response" text={answer} />
         </span>
       ) : null}

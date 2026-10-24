@@ -925,6 +925,52 @@ select option:disabled {
   outline-offset: 3px;
   box-shadow: none;
 }
+/* Message copy (components/ui/CopyButton.tsx): icon only, the check is the
+   confirmation. Keyboard focus gets the same accent ring as Activity (#322). */
+.copy-button {
+  outline: none;
+  transition:
+    background-color var(--motion-ui) var(--ease-ui),
+    color var(--motion-ui) var(--ease-ui);
+}
+.copy-button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+  box-shadow: none;
+}
+.copy-button-icon {
+  position: absolute;
+  transition:
+    opacity var(--motion-duration-base) var(--motion-ease-standard),
+    scale var(--motion-duration-base) var(--motion-ease-standard);
+}
+.copy-button-done {
+  opacity: 0;
+  scale: 0.6;
+  color: var(--color-accent);
+}
+.copy-button[data-copied="true"] .copy-button-idle {
+  opacity: 0;
+  scale: 0.6;
+}
+.copy-button[data-copied="true"] .copy-button-done {
+  opacity: 1;
+  scale: 1;
+}
+/* Turn footer: copy appears on hover or keyboard focus. */
+.copy-reveal {
+  transition: opacity var(--motion-duration-base) var(--motion-ease-standard);
+}
+@media (prefers-reduced-motion: reduce) {
+  .copy-button-icon,
+  .copy-reveal {
+    transition: opacity var(--motion-duration-reduced) var(--motion-ease-linear);
+  }
+  .copy-button-done,
+  .copy-button[data-copied="true"] .copy-button-idle {
+    scale: 1;
+  }
+}
 /* First-page loading skeleton: borderless bars on the glass with a soft sweep.
    It fades in after a beat so fast loads don't flash; under reduced motion it
    is a 120 ms fade with no sweep. */
