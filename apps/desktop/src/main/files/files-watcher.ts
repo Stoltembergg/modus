@@ -2,7 +2,6 @@ import { type FSWatcher, watch } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { BrowserWindow } from "electron";
 import type { FilesChangeEvent } from "../../shared/contracts";
-import { notifyGroupProjectPathsChanged } from "../groups/group-project-setup";
 import { IPC_CHANNELS } from "../ipc/channels";
 
 /**
@@ -32,8 +31,6 @@ export function emitFilesEvent(event: FilesChangeEvent): void {
       window.webContents.send(IPC_CHANNELS.filesEvent, event);
     }
   }
-  // Incremental Agent Groups project Setup (selective invalidate via fingerprint).
-  notifyGroupProjectPathsChanged(event.cwd, event.paths ?? []);
 }
 
 /**

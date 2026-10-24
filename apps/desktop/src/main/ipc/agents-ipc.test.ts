@@ -52,7 +52,6 @@ const MODEL = "openai/gpt-5";
 function mockService() {
   return {
     listAgents: vi.fn((): AgentInfo[] => [AGENT]),
-    createAgentInGroup: vi.fn((_input: unknown): AgentInfo => AGENT),
     createProfile: vi.fn((_input: unknown): AgentInfo => AGENT),
     getAgent: vi.fn((_id: string): AgentInfo | undefined => ({ ...AGENT, modelId: MODEL })),
     isModelAvailable: vi.fn((modelId: string) => modelId === MODEL),
@@ -89,7 +88,7 @@ async function trustedEvent() {
 }
 
 describe("agents IPC", () => {
-  it("creates a standalone profile when groupId is omitted (same model rule)", async () => {
+  it("creates a standalone profile (same model rule)", async () => {
     const service = mockService();
     const handlers = await register(service);
     const { trusted, unregister } = await trustedEvent();
@@ -106,7 +105,6 @@ describe("agents IPC", () => {
         modelId: MODEL,
         defaultWorkspaceId: "ws-1",
       });
-      expect(service.createAgentInGroup).not.toHaveBeenCalled();
       expect(() => handlers.get("agents:create")?.(trusted, { name: "NoModel" })).toThrow(
         /agent-model-required/,
       );
@@ -171,7 +169,6 @@ describe("agents IPC", () => {
       expect(handlers.get("agents:list")?.(trusted, undefined)).toEqual([AGENT]);
       expect(
         handlers.get("agents:create")?.(trusted, {
-          groupId: "g-1",
           name: " Jennie ",
           role: "Reviewer",
           modelId: MODEL,
@@ -179,8 +176,7 @@ describe("agents IPC", () => {
           avatarFace: "wink",
         }),
       ).toEqual(AGENT);
-      expect(service.createAgentInGroup).toHaveBeenCalledWith({
-        groupId: "g-1",
+      expect(service.createProfile).toHaveBeenCalledWith({
         name: "Jennie",
         role: "Reviewer",
         modelId: MODEL,
@@ -215,15 +211,13 @@ describe("agents IPC", () => {
     const call = (channel: string, input: unknown) => () => handlers.get(channel)?.(trusted, input);
     try {
       expect(call("agents:list", { all: true })).toThrow(/Invalid IPC payload/);
-      expect(call("agents:create", { groupId: "g", name: "  " })).toThrow(/Invalid IPC payload/);
-      expect(call("agents:create", { groupId: "g", name: "A", extra: 1 })).toThrow(
-        /Invalid IPC payload/,
-      );
-      expect(call("agents:create", { groupId: "", name: "A", modelId: MODEL })).toThrow(
+      expect(call("agents:create", { name: "  " })).toThrow(/Invalid IPC payload/);
+      expect(call("agents:create", { name: "A", extra: 1 })).toThrow(/Invalid IPC payload/);
+      expect(call("agents:create", { groupId: "g", name: "A", modelId: MODEL })).toThrow(
         /Invalid IPC payload/,
       );
       expect(call("agents:update", { name: "A" })).toThrow(/Invalid IPC payload/);
-      expect(call("agents:create", { groupId: "g", name: "A", avatarFace: "angry" })).toThrow(
+      expect(call("agents:create", { name: "A", avatarFace: "angry" })).toThrow(
         /Invalid IPC payload/,
       );
       expect(call("agents:update", { id: "a-1", avatarColor: "black" })).toThrow(
@@ -237,23 +231,23 @@ describe("agents IPC", () => {
     }
   });
 
-  it("serializes store error codes like the group IPC", async () => {
-    const { GroupStoreError } = await import("../groups/group-store");
+  it("serializes store error codes in the [group-error:code] wire format", async () => {
+    const { GroupStoreError } = await import("../agents/agents-store");
     const service = mockService();
-    service.createAgentInGroup.mockImplementation(() => {
+    service.createProfile.mockImplementation(() => {
       throw new GroupStoreError("agent-name-taken", "taken");
     });
     service.deleteAgent.mockImplementation(() => {
-      throw new GroupStoreError("group-min-members", "A group needs at least 2 agents.");
+      throw new GroupStoreError("agent-not-found", "No such agent.");
     });
     const handlers = await register(service);
     const { trusted, unregister } = await trustedEvent();
     try {
       expect(() =>
-        handlers.get("agents:create")?.(trusted, { groupId: "g", name: "Jennie", modelId: MODEL }),
+        handlers.get("agents:create")?.(trusted, { name: "Jennie", modelId: MODEL }),
       ).toThrow("[group-error:agent-name-taken] taken");
       expect(() => handlers.get("agents:delete")?.(trusted, { id: "a-1" })).toThrow(
-        /^\[group-error:group-min-members\] /,
+        /^\[group-error:agent-not-found\] /,
       );
     } finally {
       unregister();
@@ -265,18 +259,17 @@ describe("agents IPC", () => {
     const handlers = await register(service);
     const { trusted, unregister } = await trustedEvent();
     const create = (input: Record<string, unknown>) => () =>
-      handlers.get("agents:create")?.(trusted, { groupId: "g", name: "A", ...input });
+      handlers.get("agents:create")?.(trusted, { name: "A", ...input });
     try {
       expect(create({})).toThrow(/^\[group-error:agent-model-required\] /);
       expect(create({ modelId: null })).toThrow(/^\[group-error:agent-model-required\] /);
       expect(create({ modelId: "gone/model" })).toThrow(
         /^\[group-error:agent-model-unavailable\] /,
       );
-      expect(service.createAgentInGroup).not.toHaveBeenCalled();
+      expect(service.createProfile).not.toHaveBeenCalled();
       // A template agent needs no model (the app default applies).
       create({ templateId: "planner" })();
-      expect(service.createAgentInGroup).toHaveBeenCalledWith({
-        groupId: "g",
+      expect(service.createProfile).toHaveBeenCalledWith({
         name: "A",
         templateId: "planner",
       });
@@ -321,7 +314,6 @@ describe("agents IPC", () => {
     const { trusted, unregister } = await trustedEvent();
     const generate = (input: Record<string, unknown>) => () =>
       handlers.get("agents:generate-profile")?.(trusted, {
-        groupId: "g-1",
         modelId: MODEL,
         name: "Cy",
         ...input,
@@ -337,7 +329,6 @@ describe("agents IPC", () => {
         generated: true,
       });
       expect(service.generateAgentProfile).toHaveBeenCalledWith({
-        groupId: "g-1",
         modelId: MODEL,
         name: "Cy",
         description: "Tests things",
@@ -348,7 +339,7 @@ describe("agents IPC", () => {
     }
   });
 
-  it("agents:generate-profile without a group (A4 create modal) forwards the chosen roles", async () => {
+  it("agents:generate-profile forwards the chosen roles", async () => {
     const service = mockService();
     const handlers = await register(service);
     const { trusted, unregister } = await trustedEvent();
@@ -382,13 +373,11 @@ it("never accepts work lists from the renderer: main derives them from the role"
   const { trusted, unregister } = await trustedEvent();
   try {
     handlers.get("agents:create")?.(trusted, {
-      groupId: "g-1",
       name: "Custom",
       role: "Builder",
       modelId: MODEL,
     });
-    expect(service.createAgentInGroup).toHaveBeenCalledWith({
-      groupId: "g-1",
+    expect(service.createProfile).toHaveBeenCalledWith({
       name: "Custom",
       role: "Builder",
       modelId: MODEL,
@@ -400,7 +389,6 @@ it("never accepts work lists from the renderer: main derives them from the role"
     ]) {
       expect(() =>
         handlers.get("agents:create")?.(trusted, {
-          groupId: "g-1",
           name: "Custom",
           modelId: MODEL,
           ...extra,

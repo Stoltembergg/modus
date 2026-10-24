@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AgentSessionInfo, SubagentWorktreeInfo } from "../../shared/contracts";
 import { getDatabase } from "../db/database";
-import { detachSessionFromGroupRows } from "../groups/group-store";
 import { getWorkspace } from "../workspace/workspace-store";
 
 type AgentSessionRow = {
@@ -405,39 +404,14 @@ export function setAgentSessionPinned(
   return getAgentSession(sessionId);
 }
 
-/**
- * Archives / unarchives a session. Archiving also removes it from its Agent
- * Group (same path as removeAgentGroupMember: lead cleared, open tasks
- * released owner-first) in the same transaction. Restoring does not re-add it.
- */
+/** Archives / unarchives a session. */
 export function setAgentSessionArchived(
   sessionId: string,
   archived: boolean,
 ): AgentSessionInfo | undefined {
-  const db = getDatabase();
-  const apply = (): void => {
-    db.prepare("update agent_sessions set archived_at = ? where id = ?").run(
-      archived ? new Date().toISOString() : null,
-      sessionId,
-    );
-    if (archived) detachSessionFromGroupRows(sessionId);
-  };
-  // node:sqlite DatabaseSync has no isTransaction; join an open txn by catching nested BEGIN.
-  let started = false;
-  try {
-    db.exec("begin");
-    started = true;
-  } catch {
-    apply();
-    return getAgentSession(sessionId);
-  }
-  try {
-    apply();
-    db.exec("commit");
-  } catch (error) {
-    if (started) db.exec("rollback");
-    throw error;
-  }
+  getDatabase()
+    .prepare("update agent_sessions set archived_at = ? where id = ?")
+    .run(archived ? new Date().toISOString() : null, sessionId);
   return getAgentSession(sessionId);
 }
 

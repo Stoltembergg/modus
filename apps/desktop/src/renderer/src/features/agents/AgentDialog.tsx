@@ -307,7 +307,6 @@ export function AgentDialog(props: AgentDialogProps) {
     try {
       const roles = target?.roles.map((item) => item.trim()).filter(Boolean) ?? [];
       const generated = await onGenerate({
-        ...(group ? { groupId: group.id } : {}),
         ...(roles.length > 0 ? { roles } : {}),
         modelId,
         name: name.trim(),

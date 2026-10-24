@@ -3,29 +3,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { AgentGroupMember, GroupTask, GroupTaskKind } from "../../shared/contracts";
 
 let userData: string;
 
 vi.mock("electron", () => ({ app: { getPath: () => userData } }));
 
 const { getDatabase, migrateDatabase } = await import("../db/database");
-const { deleteAgentSession, getAgentSession } = await import("../agent/agent-store");
-const {
-  appendGroupMessage,
-  listGroupMessages,
-  createAgentGroupWithMembers,
-  createGroupTask,
-  getAgentGroup,
-  listAgentGroupMembers,
-  listGroupTasks,
-} = await import("../groups/group-store");
 const {
   createAgent,
   createAgentFromTemplate,
-  createGroupWithNewAgents,
   createProfile,
-  deleteAgent,
   getAgent,
   listAgents,
   setAgentArchived,
@@ -35,8 +22,6 @@ const { AGENT_TEMPLATES, agentAvatarForId, getAgentTemplate } = await import(
   "../../shared/agent-templates"
 );
 const { CUSTOM_ROLE_CAPABILITIES, capabilitiesForRole } = await import("../../shared/agent-roles");
-const { groupTaskToolRequirements } = await import("../../shared/group-task-tool-policy");
-const { routeGroupTask } = await import("../groups/group-capability-router");
 
 function uid(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`;
@@ -119,34 +104,6 @@ describe("agents store", () => {
     expect(() =>
       getDatabase().prepare("update agents set avatar_face = 'angry' where id = ?").run(picked.id),
     ).toThrow(/CHECK constraint/);
-  });
-
-  it("rejects duplicate grouped shapes on create and update while allowing ungrouped duplicates", () => {
-    const group = createGroupWithNewAgents({
-      name: uid("Shape enforcement"),
-      workspaceId: insertWorkspace(),
-      members: [
-        { name: "Shape One", modelId: "openai/gpt-5", avatarShape: "triangle" },
-        { name: "Shape Two", modelId: "openai/gpt-5", avatarShape: "pentagon" },
-      ],
-    });
-    const [first, second] = group.members;
-    if (!first || !second) throw new Error("expected two shape enforcement agents");
-
-    expectAgentError(
-      () =>
-        createAgent({ name: uid("Duplicate shape"), groupId: group.id, avatarShape: "triangle" }),
-      "agent-avatar-shape-taken",
-    );
-    expectAgentError(
-      () => updateAgent(second.agentId, { avatarShape: first.avatarShape ?? "triangle" }),
-      "agent-avatar-shape-taken",
-    );
-
-    const looseOne = createAgent({ name: uid("Loose shape one"), avatarShape: "circle" });
-    const looseTwo = createAgent({ name: uid("Loose shape two"), avatarShape: "circle" });
-    expect(looseOne.avatarShape).toBe("circle");
-    expect(looseTwo.avatarShape).toBe("circle");
   });
 
   it("picking a template creates an editable copy with template_id", () => {
@@ -253,60 +210,6 @@ describe("agents store", () => {
     expect(getAgent(agent.id)).toBeDefined();
     expect(getAgent(agent.id)?.defaultWorkspaceId).toBeUndefined();
   });
-
-  it("deleting an agent IS removing the member: lead cleared, tasks released, room session gone", () => {
-    const workspaceId = insertWorkspace();
-    const jennie = insertSession(workspaceId, "Jennie");
-    const bob = insertSession(workspaceId, "Bob");
-    const cara = insertSession(workspaceId, "Cara");
-    const group = createAgentGroupWithMembers({
-      name: "Room",
-      workspaceId,
-      members: [{ sessionId: jennie }, { sessionId: bob }, { sessionId: cara }],
-      leadSessionId: jennie,
-    });
-    const agent = createAgent({ name: uid("Jennie") });
-    getDatabase()
-      .prepare("update agent_group_members set agent_id = ? where session_id = ?")
-      .run(agent.id, jennie);
-    const task = createGroupTask({
-      groupId: group.id,
-      title: "T",
-      status: "in_progress",
-      ownerSessionId: jennie,
-    });
-    appendGroupMessage({
-      groupId: group.id,
-      authorKind: "agent",
-      authorSessionId: jennie,
-      body: "hi",
-    });
-
-    expect(deleteAgent(agent.id)).toEqual([jennie]);
-
-    expect(getAgent(agent.id)).toBeUndefined();
-    expect(listAgentGroupMembers(group.id).map((member) => member.sessionId)).toEqual([bob, cara]);
-    expect(getAgentGroup(group.id)?.leadSessionId).toBeUndefined();
-    expect(listGroupTasks(group.id).find((item) => item.id === task.id)).toMatchObject({
-      status: "open",
-    });
-    expect(listGroupTasks(group.id)[0]?.ownerSessionId).toBeUndefined();
-    // One group per agent: its hidden room session is detached (returned above)
-    // and goes in the caller's teardown after the commit (agents/agent-teardown).
-    expect(getAgentSession(jennie)?.kind).toBe("group_member");
-    deleteAgentSession(jennie);
-    expect(getAgentSession(jennie)).toBeUndefined();
-    expect(listGroupMessages(group.id, { limit: 10 }).at(-1)).toMatchObject({
-      authorKind: "system",
-      kind: "status",
-      body: `${agent.name} left the group`,
-    });
-    expectAgentError(() => deleteAgent(agent.id), "agent-not-found");
-    // Two left: deleting another agent is refused (same rule as removing a member).
-    const bobAgent = listAgentGroupMembers(group.id)[0]?.agentId ?? "";
-    expectAgentError(() => deleteAgent(bobAgent), "group-min-members");
-    expect(getAgent(bobAgent)).toBeDefined();
-  });
 });
 
 describe("migration: group members become agents", () => {
@@ -407,99 +310,9 @@ describe("migration: group members become agents", () => {
       await rm(dir, { recursive: true, force: true }).catch(() => undefined);
     }
   });
-
-  it("an existing session joining a group gets an agent named after it and turns group_member", () => {
-    const workspaceId = insertWorkspace();
-    const title = uid("Linked");
-    const session = insertSession(workspaceId, title);
-    const group = createAgentGroupWithMembers({
-      name: "Linked room",
-      workspaceId,
-      members: [{ sessionId: session }, { sessionId: insertSession(workspaceId, uid("Other")) }],
-    });
-    const member = listAgentGroupMembers(group.id)[0];
-    expect(member).toMatchObject({ sessionId: session, name: title, agentRole: "" });
-    expect(getAgent(member?.agentId ?? "")?.name).toBe(title);
-    expect(getAgentSession(session)?.kind).toBe("group_member");
-  });
 });
 
 describe("agent work lists follow the role", () => {
-  const KINDS = ["legacy", "code", "docs", "design", "review", "research", "question"] as const;
-  const STAGES = ["plan", "implement", "verify", "review", "deliver"] as const;
-  // Every tool capability any typed task can require, so only the work lists decide.
-  const ALL_TOOL_CAPABILITIES = [
-    ...new Set(
-      KINDS.flatMap((kind) =>
-        STAGES.flatMap((stage) =>
-          (["owner", "reviewer"] as const).flatMap((role) =>
-            [true, false].flatMap(
-              (coordinator) =>
-                groupTaskToolRequirements({
-                  kind,
-                  stage,
-                  requiredCheckKinds: [],
-                  role,
-                  coordinator,
-                }).requiredCapabilities,
-            ),
-          ),
-        ),
-      ),
-    ),
-  ];
-  const receivable = (lists: { capabilityIds?: string[]; supportedTaskKinds?: string[] }) => {
-    const member: AgentGroupMember = {
-      sessionId: "s",
-      groupId: "g",
-      agentId: "a",
-      name: "A",
-      agentRole: "",
-      joinedAt: "now",
-      capabilityIds: lists.capabilityIds ?? [],
-      supportedTaskKinds: (lists.supportedTaskKinds ?? []) as GroupTaskKind[],
-    };
-    const pairs: string[] = [];
-    for (const kind of KINDS) {
-      for (const stage of STAGES) {
-        const task: GroupTask = {
-          id: "t",
-          groupId: "g",
-          title: "t",
-          kind,
-          stage,
-          status: "open",
-          priority: "normal",
-          createdAt: "now",
-          updatedAt: "now",
-        };
-        const result = routeGroupTask({
-          task,
-          workState: {
-            groupId: "g",
-            tasks: [task],
-            members: [member],
-            gates: {},
-            omitted: { tasks: 0, members: 0, criteria: 0 },
-            budgets: {
-              remainingAgentMessages: 9,
-              remainingMemberWakes: 9,
-              remainingInputTokens: 9,
-            },
-          },
-          memberAvailability: { s: "available" },
-          currentLoad: {},
-          toolConfigurations: { s: { profile: "chat", activeToolNames: ["all"] } },
-          toolRegistry: {
-            resolveActiveTools: () => ["all"],
-            capabilitiesFor: () => ALL_TOOL_CAPABILITIES,
-          } as never,
-        });
-        if (result.candidateSessionIds.includes("s")) pairs.push(`${kind}/${stage}`);
-      }
-    }
-    return pairs;
-  };
   const savedRow = (id: string) => {
     const row = getDatabase()
       .prepare("select capability_ids_json, supported_task_kinds_json from agents where id = ?")
@@ -515,7 +328,7 @@ describe("agent work lists follow the role", () => {
       .prepare("select capability_ids_json, supported_task_kinds_json from agents where id = ?")
       .get(id) as { capability_ids_json: string; supported_task_kinds_json: string };
 
-  it("agents saved before keep every task kind they could receive (empty ones may only gain)", () => {
+  it("agents saved before keep their hand-picked lists; empty ones read as the derived role", () => {
     const empty = createAgent({ name: uid("Empty"), role: "Builder", modelId: "m-1" });
     const legacyTemplate = createAgent({
       name: uid("Old oracle"),
@@ -532,7 +345,7 @@ describe("agent work lists follow the role", () => {
     });
     const freeText = createAgent({ name: uid("Notes"), role: "Release notes", modelId: "m-1" });
     const seeded = [empty, legacyTemplate, fromTemplate, handPicked, freeText];
-    // What routing saw before this change: the saved lists, unread.
+    // The saved lists, unread.
     const before = new Map(seeded.map((agent) => [agent.id, savedRow(agent.id)]));
     const beforeRaw = new Map(seeded.map((agent) => [agent.id, { ...rawRow(agent.id) }]));
     expect(before.get(empty.id)).toEqual({ capabilityIds: [], supportedTaskKinds: [] });
@@ -549,16 +362,10 @@ describe("agent work lists follow the role", () => {
 
     for (const agent of seeded) {
       const saved = before.get(agent.id) as ReturnType<typeof savedRow>;
-      const after = getAgent(agent.id) ?? {};
-      const was = receivable(saved);
-      const now = receivable(after);
-      expect(now, agent.name).toEqual(expect.arrayContaining(was));
+      // Hand-picked (non-empty) lists survive the migration untouched.
       if (saved.capabilityIds.length && saved.supportedTaskKinds.length) {
-        expect(after, agent.name).toMatchObject(saved);
-        expect(now, agent.name).toEqual(was);
+        expect(getAgent(agent.id), agent.name).toMatchObject(saved);
       }
-      // Legacy tasks keep passing for everyone.
-      for (const stage of STAGES) expect(now).toContain(`legacy/${stage}`);
     }
     // Empty lists read as the derived role: template first, then the label, else Custom.
     expect(getAgent(empty.id)).toMatchObject(capabilitiesForRole("builder"));
@@ -567,19 +374,15 @@ describe("agent work lists follow the role", () => {
   });
 
   it("new agents get their template's or their role's lists; Custom otherwise", () => {
-    const group = createGroupWithNewAgents({
-      name: uid("Roles"),
-      workspaceId: insertWorkspace(),
-      members: [
-        { name: "Build", templateId: "builder" },
-        { name: "Build as reviewer", templateId: "builder", role: "Reviewer" },
-        { name: "Custom Builder", role: "builder", modelId: "m-1" },
-        { name: "Planner by name", role: "Planner", modelId: "m-1" },
-        { name: "Notes", role: "Release notes", modelId: "m-1" },
-      ],
-    });
+    const members = [
+      { name: uid("Build"), templateId: "builder" },
+      { name: uid("Build as reviewer"), templateId: "builder", role: "Reviewer" },
+      { name: uid("Custom Builder"), role: "builder", modelId: "m-1" },
+      { name: uid("Planner by name"), role: "Planner", modelId: "m-1" },
+      { name: uid("Notes"), role: "Release notes", modelId: "m-1" },
+    ].map((input) => createProfile(input));
     expect(
-      group.members.map(({ capabilityIds, supportedTaskKinds }) => ({
+      members.map(({ capabilityIds, supportedTaskKinds }) => ({
         capabilityIds,
         supportedTaskKinds,
       })),
@@ -590,8 +393,8 @@ describe("agent work lists follow the role", () => {
       capabilitiesForRole("lead"),
       CUSTOM_ROLE_CAPABILITIES,
     ]);
-    for (const member of group.members) {
-      expect(savedRow(member.agentId)).toMatchObject({
+    for (const member of members) {
+      expect(savedRow(member.id)).toMatchObject({
         capabilityIds: member.capabilityIds,
         supportedTaskKinds: member.supportedTaskKinds,
       });
@@ -654,15 +457,13 @@ describe("agent work lists follow the role", () => {
       capabilityIds: ["implement", "review"],
       supportedTaskKinds: ["code", "review"],
     });
-    const group = createGroupWithNewAgents({
-      name: uid("Copies"),
-      workspaceId: insertWorkspace(),
-      members: [
-        { name: "Copy", role: "Builder", modelId: "m-1", copiedFromAgentId: source.id },
-        { name: "Other", templateId: "planner" },
-      ],
+    const copy = createProfile({
+      name: uid("Copy"),
+      role: "Builder",
+      modelId: "m-1",
+      copiedFromAgentId: source.id,
     });
-    expect(group.members[0]).toMatchObject({
+    expect(copy).toMatchObject({
       capabilityIds: ["implement", "review"],
       supportedTaskKinds: ["code", "review"],
     });
@@ -678,25 +479,20 @@ describe("agent work lists follow the role", () => {
       supported_task_kinds_json: "[]",
     });
     expect(getAgent(legacy.id)).toMatchObject(capabilitiesForRole("builder"));
-    const copies = createGroupWithNewAgents({
-      name: uid("Legacy copies"),
-      workspaceId: insertWorkspace(),
-      members: [
-        { name: "Helper copy", role: "Old helper", modelId: "m-1", copiedFromAgentId: legacy.id },
-        { name: "Other", templateId: "planner" },
-      ],
+    const helperCopy = createProfile({
+      name: uid("Helper copy"),
+      role: "Old helper",
+      modelId: "m-1",
+      copiedFromAgentId: legacy.id,
     });
-    expect(copies.members[0]).toMatchObject(capabilitiesForRole("builder"));
-    expect(savedRow(copies.members[0]?.agentId ?? "")).toEqual(capabilitiesForRole("builder"));
+    expect(helperCopy).toMatchObject(capabilitiesForRole("builder"));
+    expect(savedRow(helperCopy.id)).toEqual(capabilitiesForRole("builder"));
     expectAgentError(
       () =>
-        createGroupWithNewAgents({
+        createProfile({
           name: uid("Missing"),
-          workspaceId: insertWorkspace(),
-          members: [
-            { name: "Copy", modelId: "m-1", copiedFromAgentId: "missing-agent" },
-            { name: "Other", templateId: "planner" },
-          ],
+          modelId: "m-1",
+          copiedFromAgentId: "missing-agent",
         }),
       "agent-not-found",
     );
@@ -710,16 +506,17 @@ describe("agent work lists follow the role", () => {
       capabilityIds: ["verify"],
       supportedTaskKinds: ["code"],
     });
-    const group = createGroupWithNewAgents({
-      name: uid("Recalc"),
-      workspaceId: insertWorkspace(),
-      members: [
-        { name: "Same", role: " reviewer ", modelId: "m-1", copiedFromAgentId: source.id },
-        { name: "Moved", role: "Builder", modelId: "m-1", copiedFromAgentId: source.id },
-        { name: "Unset", modelId: "m-1", copiedFromAgentId: source.id },
-      ],
-    });
-    const byName = (name: string) => group.members.find((member) => member.name === name);
+    const copies = new Map(
+      [
+        { key: "Same", role: " reviewer " },
+        { key: "Moved", role: "Builder" },
+        { key: "Unset" },
+      ].map(({ key, ...rest }) => [
+        key,
+        createProfile({ name: uid(key), modelId: "m-1", copiedFromAgentId: source.id, ...rest }),
+      ]),
+    );
+    const byName = (name: string) => copies.get(name);
     expect(byName("Same")).toMatchObject({
       capabilityIds: ["verify"],
       supportedTaskKinds: ["code"],
@@ -729,7 +526,7 @@ describe("agent work lists follow the role", () => {
       supportedTaskKinds: ["code"],
     });
     expect(byName("Moved")).toMatchObject(capabilitiesForRole("builder"));
-    expect(savedRow(byName("Moved")?.agentId ?? "")).toEqual(capabilitiesForRole("builder"));
+    expect(savedRow(byName("Moved")?.id ?? "")).toEqual(capabilitiesForRole("builder"));
   });
 
   it("migrates missing columns to empty and preserves all profile fields idempotently", () => {

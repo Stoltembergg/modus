@@ -1,6 +1,5 @@
 import { join } from "node:path";
 import { app } from "electron";
-import { listWorkspaceGroupMemberSessionIds } from "../groups/group-store";
 import { denyPendingQuestionRequestsForSession } from "../interaction/question-broker";
 import { finalizeProjectMemoryRun } from "../memory/project-memory-service";
 import { denyPendingPermissionRequestsForSession } from "../permissions/permission-broker";
@@ -98,25 +97,15 @@ export async function archiveWorkspaceSessions(workspaceId: string): Promise<num
 }
 
 /**
- * Permanently delete a workspace's root chats (live and archived). Hidden
- * group room sessions are only torn down with `includeGroupMembers`, which
- * only "Remove project" sets (its groups are deleted with it; agents stay).
+ * Permanently delete a workspace's root chats (live and archived).
  * Returns the count of chats removed.
  */
-export async function deleteWorkspaceSessions(
-  workspaceId: string,
-  options: { includeGroupMembers?: boolean } = {},
-): Promise<number> {
+export async function deleteWorkspaceSessions(workspaceId: string): Promise<number> {
   const sessions = [...listAgentSessions(), ...listArchivedAgentSessions(workspaceId)].filter(
     (session) => session.workspaceId === workspaceId && !session.parentSessionId,
   );
   for (const session of sessions) {
     await deleteAgentSessionTree(session.id);
-  }
-  if (options.includeGroupMembers) {
-    for (const sessionId of listWorkspaceGroupMemberSessionIds(workspaceId)) {
-      await deleteAgentSessionTree(sessionId);
-    }
   }
   return sessions.length;
 }
