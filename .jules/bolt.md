@@ -1,3 +1,0 @@
-## 2024-10-24 - Async File Service
-**Learning:** Using `fs.readSync` instead of `fs.readFileSync` does not prevent blocking the Node.js event loop on large file reads; it simply avoids loading the entire file into a single Buffer/string payload. Real non-blocking requires `node:fs/promises`. A 100MB file read via `readSync` blocked the main process event loop for ~98ms.
-**Action:** When performing file system operations in the Electron main process, strongly prefer asynchronous methods (`node:fs/promises`) for operations that can be arbitrarily large to keep the UI smooth and event loop unblocked.

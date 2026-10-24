@@ -15,3 +15,7 @@
 ## 2025-02-12 - [Bolt: Optimize group mailbox ackMany batching]
 **Learning:** When fixing N+1 SQLite update/insert queries in Node.js with node:sqlite, instead of iterating over array items and running `.get()`, `.run()` individually inside a loop, it's significantly faster to fetch the validation rows via a single `SELECT ... WHERE id IN (SELECT value FROM json_each(?))` using a JSON-stringified array. Subsequent `INSERT` or `UPDATE` logic should also leverage `... FROM json_each(?)` with the parsed valid IDs to apply updates in bulk, yielding over 15x performance improvements.
 **Action:** Use `json_each` for batch fetching and batched writing of dynamic arrays when interacting with SQLite.
+
+## 2024-10-24 - Async File Service
+**Learning:** Using `fs.readSync` instead of `fs.readFileSync` does not prevent blocking the Node.js event loop on large file reads; it simply avoids loading the entire file into a single Buffer/string payload. Real non-blocking requires `node:fs/promises`. A 100MB file read via `readSync` blocked the main process event loop for ~98ms.
+**Action:** When performing file system operations in the Electron main process, strongly prefer asynchronous methods (`node:fs/promises`) for operations that can be arbitrarily large to keep the UI smooth and event loop unblocked.
