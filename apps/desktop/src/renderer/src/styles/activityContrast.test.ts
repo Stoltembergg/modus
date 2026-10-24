@@ -42,17 +42,11 @@ describe("Activity contrast", () => {
     for (const bg of DARK_DEL_GUTTERS) expect(ratio(fg, bg)).toBeGreaterThanOrEqual(4.5);
   });
 
-  it("thought glyph and chevron never fade below 0.85", () => {
+  it("idle thought glyph and chevron never fade below 0.85", () => {
     const opacity = (sel: string) => Number(block(sel).match(/opacity:\s*([\d.]+)/)?.[1]);
     expect(opacity(".work-status-line__glyph")).toBeGreaterThanOrEqual(0.85);
     expect(opacity(".work-status-line__chevron")).toBeGreaterThanOrEqual(0.85);
-    const breathe = css.slice(css.indexOf("@keyframes work-status-breathe"));
-    const min = Math.min(
-      ...[...breathe.slice(0, breathe.indexOf("}\n  }")).matchAll(/opacity:\s*([\d.]+)/g)].map(
-        (m) => Number(m[1]),
-      ),
-    );
-    expect(min).toBeGreaterThanOrEqual(0.85);
+    // The working pulse dips to 0.7 on --color-fg instead; see activityMotion.test.ts.
   });
 
   it("diff line numbers and removed code are not dimmed", () => {
