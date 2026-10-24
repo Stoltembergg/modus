@@ -913,6 +913,64 @@ select option:disabled {
 .activity-panel [data-activity-divider] {
   border-width: 0;
 }
+/* Keyboard focus on any Activity control: the accent ring, never the browser
+   default outline. Inset so overflow-hidden cards don't clip it. */
+.activity-panel
+:is(button, a[href], [role="button"], [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+  box-shadow: none;
+}
+/* First-page loading skeleton: borderless bars on the glass with a soft sweep.
+   It fades in after a beat so fast loads don't flash; under reduced motion it
+   is a 120 ms fade with no sweep. */
+.activity-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 10px 24px;
+  animation: activity-skeleton-in var(--motion-duration-base) var(--motion-ease-standard)
+    var(--motion-duration-base) both;
+}
+.activity-skeleton__bar {
+  height: 10px;
+  border-radius: 999px;
+  background-color: color-mix(in srgb, var(--color-fg) 7%, transparent);
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--color-fg) 8%, transparent) 50%,
+    transparent 100%
+  );
+  background-size: 300% 100%;
+  background-repeat: no-repeat;
+  animation: activity-skeleton-sweep 1.6s var(--motion-ease-in-out) infinite;
+}
+@keyframes activity-skeleton-sweep {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0% 0;
+  }
+}
+@keyframes activity-skeleton-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .activity-skeleton {
+    animation: activity-skeleton-in var(--motion-duration-reduced) var(--motion-ease-linear) both;
+  }
+  .activity-skeleton__bar {
+    animation: activity-skeleton-in var(--motion-duration-reduced) var(--motion-ease-linear) both;
+    background-image: none;
+  }
+}
 
 /* 全局默认行高与字重，避免某些控件回退到浏览器默认（16px / bold） */
 html,
