@@ -474,3 +474,33 @@ export function motionCssValue(kind: "duration" | "ease", name: string): string 
   const curve = MOTION_EASE[name as MotionEaseName];
   return name === "linear" ? "linear" : `cubic-bezier(${curve.join(", ")})`;
 }
+
+/* Conversation timeline hover preview (ConversationTimeline.tsx). */
+
+export type TimelinePreviewMotion = {
+  initial: { opacity: number; scale?: number };
+  animate: { opacity: number; scale?: number };
+  exit: { opacity: number; scale?: number };
+  transition: Transition;
+};
+
+/**
+ * The preview pops in with a slight scale. Reduced motion: a 120 ms opacity
+ * fade only, with no scale, and position changes snap instead of gliding.
+ */
+export function timelinePreviewMotion(reduced: boolean | null | undefined): TimelinePreviewMotion {
+  if (reduced) {
+    return {
+      initial: { opacity: 0 },
+      animate: { opacity: 1 },
+      exit: { opacity: 0 },
+      transition: { ...reducedFade, x: layoutSnap, y: layoutSnap },
+    };
+  }
+  return {
+    initial: { opacity: 0, scale: 0.985 },
+    animate: { opacity: 1, scale: 1 },
+    exit: { opacity: 0, scale: 0.99 },
+    transition: tween("fast"),
+  };
+}
