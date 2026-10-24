@@ -31,7 +31,9 @@ describe("SessionStatusDot needs-input", () => {
     expect(container.innerHTML).not.toContain("animate-ping");
     expect(container.querySelectorAll(".status-ping")).toHaveLength(1);
     expect(
-      css.indexOf("@media (prefers-reduced-motion: no-preference) { .status-ping { animation: status-ping"),
+      css.indexOf(
+        "@media (prefers-reduced-motion: no-preference) { .status-ping { animation: status-ping",
+      ),
     ).toBeGreaterThan(-1);
     expect(css.match(/\.status-ping \{[^}]*animation/g)).toHaveLength(1);
   });
