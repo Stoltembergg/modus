@@ -1,7 +1,6 @@
 import type {
   AgentInfo,
   AgentSessionInfo,
-  CreateGroupAgentInput,
   GenerateAgentProfileInput,
   GeneratedAgentProfile,
   NewGroupAgentInput,
@@ -23,8 +22,6 @@ import type { TrustedSenderEvent } from "./trusted-sender";
 /** The agents-store operations (injected so the IPC layer is testable). */
 export type AgentsIpcService = {
   listAgents(): AgentInfo[];
-  /** A new agent in its (only) group: membership and room session included. */
-  createAgentInGroup(input: CreateGroupAgentInput): AgentInfo;
   /** A standalone profile (no group): name unique among the active groupless profiles. */
   createProfile(input: NewGroupAgentInput): AgentInfo;
   getAgent(agentId: string): AgentInfo | undefined;
@@ -32,10 +29,9 @@ export type AgentsIpcService = {
   isModelAvailable(modelId: string): boolean;
   updateAgent(agentId: string, input: UpdateAgentInput): unknown;
   setAgentArchived(agentId: string, archived: boolean): unknown;
-  /** Same operation as removing the member: `group-min-members` when 2 are left. */
   /** Resolves once the agent's sessions are torn down (after the store commit). */
   deleteAgent(agentId: string): void | Promise<void>;
-  /** The agent's 1:1 chat, made on first open (`group-project-required` without a Project). */
+  /** The agent's 1:1 chat, made on first open. */
   openAgentChat(agentId: string): AgentSessionInfo;
   /** Role + instructions from the chosen model; never rejects (falls back instead). */
   generateAgentProfile(input: GenerateAgentProfileInput): Promise<GeneratedAgentProfile>;
@@ -55,8 +51,8 @@ function definedFields(input: ParsedAgentFields): UpdateAgentInput {
 }
 
 /**
- * `agents:*` handlers, same shape as `group:*`: every mutation except create
- * returns the refreshed agent list; store error codes cross IPC in the
+ * `agents:*` handlers: every mutation except create returns the refreshed
+ * agent list; store error codes cross IPC in the
  * `[group-error:<code>]` message format.
  */
 export function registerAgentsIpcHandlers(
@@ -89,15 +85,13 @@ export function registerAgentsIpcHandlers(
     assertTrustedSender(event);
     const parsed = parseIpcInput(agentsCreateSchema, input, IPC_CHANNELS.agentsCreate);
     requireAgentModel(service.isModelAvailable, parsed);
-    const { groupId, templateId, ...fields } = parsed;
+    const { templateId, ...fields } = parsed;
     const agent = {
       ...definedFields(fields),
       name: parsed.name,
       ...(templateId !== undefined ? { templateId } : {}),
     };
-    return groupId === undefined
-      ? service.createProfile(agent)
-      : service.createAgentInGroup({ ...agent, groupId });
+    return service.createProfile(agent);
   });
 
   ipc.handle(IPC_CHANNELS.agentsUpdate, (event, input) => {
@@ -141,7 +135,6 @@ export function registerAgentsIpcHandlers(
     requireAgentModel(service.isModelAvailable, { modelId: parsed.modelId });
     const roles = parsed.roles?.map((role) => role.trim()).filter(Boolean);
     return service.generateAgentProfile({
-      ...(parsed.groupId ? { groupId: parsed.groupId } : {}),
       ...(roles?.length ? { roles } : {}),
       modelId: parsed.modelId,
       name: parsed.name,

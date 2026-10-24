@@ -14,12 +14,6 @@ const variants = {
     live.agentsCreateSchema.safeParse({ name: "Ana", avatarSeed }),
   "live agents:update": (avatarSeed: unknown) =>
     live.agentsUpdateSchema.safeParse({ id: "a-1", avatarSeed }),
-  "live group:create member": (avatarSeed: unknown) =>
-    live.groupCreateSchema.safeParse({
-      name: "G",
-      workspaceId: "ws",
-      members: [{ name: "Ana", avatarSeed }],
-    }),
   "part-04 agents:create": (avatarSeed: unknown) =>
     part04.agentsCreateSchema.safeParse({ name: "Ana", avatarSeed }),
   "part-04 agents:update": (avatarSeed: unknown) =>

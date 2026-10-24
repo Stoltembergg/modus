@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, writeFileSync } from "node:fs";
-import { chmod, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -21,7 +21,6 @@ import {
   getChangeStatsSince,
   getChangeStatsSinceStrict,
   getGitMemoryContext,
-  getGroupSourceFingerprint,
   getStatusSummary,
   getWorkingChangeStats,
   hasUncommittedChanges,
@@ -116,39 +115,6 @@ afterEach(async () => {
 });
 
 describe("git-service", () => {
-  it("keeps a source fingerprint stable across touch and index stat refresh", async () => {
-    const before = await getGroupSourceFingerprint(repo);
-    const stamp = new Date(Date.now() + 5_000);
-    await utimes(join(repo, "tracked.txt"), stamp, stamp);
-    expect(await getGroupSourceFingerprint(repo)).toBe(before);
-    await git(["update-index", "--refresh"]);
-    expect(await getGroupSourceFingerprint(repo)).toBe(before);
-  });
-  it.skipIf(process.platform === "win32")(
-    "invalidates a source fingerprint after an unstaged executable-bit change",
-    async () => {
-      await git(["config", "core.filemode", "true"]);
-      await writeFile(join(repo, "check.sh"), "#!/bin/sh\nexit 0\n");
-      await chmod(join(repo, "check.sh"), 0o755);
-      await git(["add", "check.sh"]);
-      await git(["commit", "-m", "script"]);
-      const before = await getGroupSourceFingerprint(repo);
-      await chmod(join(repo, "check.sh"), 0o644);
-      expect(await getGroupSourceFingerprint(repo)).not.toBe(before);
-      expect(await git(["rev-parse", "HEAD"])).toBeTruthy();
-    },
-  );
-  it("fingerprints tracked and non-ignored untracked content without changing HEAD", async () => {
-    const base = await getGroupSourceFingerprint(repo);
-    await writeFile(join(repo, "tracked.txt"), "edited\n");
-    const edited = await getGroupSourceFingerprint(repo);
-    expect(edited).not.toBe(base);
-    await writeFile(join(repo, "new.ts"), "one\n");
-    const untracked = await getGroupSourceFingerprint(repo);
-    await writeFile(join(repo, "new.ts"), "two\n");
-    expect(await getGroupSourceFingerprint(repo)).not.toBe(untracked);
-    expect(await git(["rev-parse", "HEAD"])).toBeTruthy();
-  });
   it("collects branch, full HEAD, and all porcelain-v2 path forms in one Git invocation", async () => {
     const fullHead = "0123456789abcdef0123456789abcdef01234567";
     const output = `${[

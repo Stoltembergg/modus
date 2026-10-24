@@ -13,7 +13,7 @@ import type { PlanBuildStart } from "../agent/runtime";
 import { getAgentRuntime } from "../agent/runtime-registry";
 import { plansRoot } from "../agent/tools/plan-tools";
 import { resolveAgentTurnModel } from "../agent/user-turn-model";
-import { getAgent, requireAgentChatWritable } from "../agents/agents-store";
+import { getAgent, requireSessionWritable } from "../agents/agents-store";
 import { fingerprintPlanSource, readPlanById } from "../plan/plan-store";
 import { IPC_CHANNELS } from "./channels";
 import { agentStartPlanBuildSchema, parseIpcInput } from "./schemas";
@@ -32,7 +32,7 @@ export function registerPlanBuildIpcHandlers(ipcMain: Pick<IpcMain, "handle">): 
       input,
       IPC_CHANNELS.agentStartPlanBuild,
     );
-    requireAgentChatWritable(parsed.sessionId);
+    requireSessionWritable(parsed.sessionId);
     const ownerId = event.sender.id;
     const ownerEpoch = getPlanBuildOwnerEpoch(ownerId);
     if (!ownerEpoch) throw new Error("PlanBuild build owner incarnation is no longer active.");

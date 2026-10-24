@@ -323,20 +323,3 @@ describe("Browser tool permissions", () => {
     });
   });
 });
-
-it("registers bounded group context as read-only and progress as a write", async () => {
-  const { registerGroupTools } = await import("./group-tools");
-  registerGroupTools();
-  expect(toolRegistry.resolveActiveTools("plan")).toContain("group_get_work_state");
-  expect(toolRegistry.resolveActiveTools("plan")).not.toContain("group_report_progress");
-  expect(toolRegistry.resolveActiveTools("chat")).toContain("group_report_progress");
-  expect(toolRegistry.getEntry("group_get_work_state")).toMatchObject({
-    readOnly: true,
-    capabilities: ["read"],
-  });
-  expect(
-    getToolTarget(
-      toolEvent("group_report_progress", { taskId: "selected-task", expectedVersion: 2 }),
-    ),
-  ).toBe("selected-task");
-});

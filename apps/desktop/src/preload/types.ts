@@ -226,7 +226,7 @@ export type ModusApi = {
      * `group-max-members`, and without a template `agent-model-required` /
      * `agent-model-unavailable`.
      */
-    create(input: NewGroupAgentInput & { groupId?: string }): Promise<AgentInfo>;
+    create(input: NewGroupAgentInput): Promise<AgentInfo>;
     /** Change the given fields (null clears model / default Project); returns the refreshed list. */
     update(input: UpdateAgentInput & { id: string }): Promise<AgentInfo[]>;
     /** Archive / restore (group membership is kept); returns the refreshed list. */

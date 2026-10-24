@@ -58,8 +58,6 @@ export type PromptAgentInput = {
   thinkingVariant?: string;
   /** Set when this prompt is a "Build this plan" action; binds the turn to the plan. */
   planId?: string;
-  /** Exact group task association selected before this wake starts. */
-  groupTask?: { taskId: string; groupId: string; executionId: string; role: "owner" | "reviewer" };
 };
 
 export type PlanBuildStart = {

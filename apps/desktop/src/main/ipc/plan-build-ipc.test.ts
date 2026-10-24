@@ -33,7 +33,7 @@ vi.mock("../agent/runtime-registry", () => ({
   }),
 }));
 vi.mock("../agents/agents-store", () => ({
-  requireAgentChatWritable: state.writable,
+  requireSessionWritable: state.writable,
   getAgent: state.getAgent,
 }));
 vi.mock("../agent/model-service", () => ({

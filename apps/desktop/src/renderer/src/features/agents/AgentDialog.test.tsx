@@ -399,7 +399,6 @@ describe("AgentDialog", () => {
     await user.type(field(dialog, /What should it help with/), "release notes");
     await user.click(within(dialog).getByRole("button", { name: "Generate" }));
     expect(generate).toHaveBeenCalledWith({
-      groupId: "g-1",
       modelId: "m-2",
       name: "Cy",
       description: "release notes",

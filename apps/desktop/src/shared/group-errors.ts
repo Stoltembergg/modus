@@ -56,7 +56,7 @@ export const GROUP_ERROR_CODES = [
   "group-project-required",
   // group_assign_task: the assignee's agent is archived (it stays a member, never woken).
   "member-archived",
-  // A group has 2..10 member agents (shared/group-blocked.ts): fewer than 2 on create
+  // Legacy group rule (2..10 member agents): fewer than 2 on create
   // or removal, and while blocked with one member; more than 10 on create or add.
   "group-min-members",
   "group-max-members",
