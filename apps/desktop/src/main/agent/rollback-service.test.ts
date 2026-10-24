@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { AgentRuntime } from "./runtime";
 
 let userData: string;
 let sessionDir: string;
@@ -29,7 +30,7 @@ const { PI_ROOT_LEAF, ROLLBACK_MARKER_TYPE, rollbackToUserMessage } = await impo
 
 function fakeRuntime() {
   return {
-    abort: vi.fn<(sessionId: string) => Promise<void>>().mockResolvedValue(undefined),
+    abort: vi.fn<AgentRuntime["abort"]>().mockResolvedValue({ restored: [] }),
     dispose: vi.fn<(sessionId: string) => Promise<void>>().mockResolvedValue(undefined),
   };
 }

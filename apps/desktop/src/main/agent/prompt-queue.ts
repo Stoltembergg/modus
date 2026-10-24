@@ -256,6 +256,17 @@ export class PromptQueue<P> {
     if (this.entries.length !== before) this.notify();
   }
 
+  /**
+   * Stop: hand back every prompt still waiting, in arrival order, and forget
+   * them. The caller clears pi's own queues; entries not yet handed to pi
+   * never reach it (deliver() sees them gone).
+   */
+  drain(): P[] {
+    const payloads = this.entries.map((entry) => entry.payload);
+    this.clear();
+    return payloads;
+  }
+
   /** Forget everything (session disposed); returns whether anything was shown. */
   clear(): boolean {
     const had = this.entries.length > 0;
