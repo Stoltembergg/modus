@@ -244,7 +244,7 @@ function LiveToolCard({
     <div className="timeline-wire min-w-0 overflow-hidden text-sm">
       <button
         aria-expanded={bodyOpen}
-        className="flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-hover"
+        className="flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left transition-colors duration-(--motion-duration-fast) ease-standard hover:bg-hover"
         onClick={() => setOpen((value) => !value)}
         type="button"
       >
@@ -345,7 +345,7 @@ function FlatToolRow({
       {expandable ? (
         <button
           aria-expanded={open}
-          className="flex w-full min-w-0 items-center gap-2 rounded-md py-0.5 text-left text-fg-subtle transition-colors hover:text-fg-muted"
+          className="flex w-full min-w-0 items-center gap-2 rounded-md py-0.5 text-left text-fg-subtle transition-colors duration-(--motion-duration-fast) ease-standard hover:text-fg-muted"
           onClick={() => setOpen((value) => !value)}
           type="button"
         >

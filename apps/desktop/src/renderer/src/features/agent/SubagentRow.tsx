@@ -42,7 +42,7 @@ export function SubagentRow({
   return (
     <button
       className={cn(
-        "flex min-w-0 w-full items-start gap-2.5 py-2.5 text-left transition-colors",
+        "flex min-w-0 w-full items-start gap-2.5 py-2.5 text-left transition-colors duration-(--motion-duration-fast) ease-standard",
         className,
       )}
       onClick={onClick}
@@ -83,8 +83,8 @@ export function SubagentSettledDot({ status }: { status: AgentSessionInfo["statu
   if (status === "blocked") {
     return (
       <span className="relative flex size-2 shrink-0" title="Needs input">
-        <span className="absolute inset-0 animate-ping rounded-full bg-danger/50" />
-        <span className="relative size-2 rounded-full bg-danger" />
+        <span className="absolute inset-0 hidden rounded-full bg-fg-muted/50 motion-safe:block motion-safe:animate-ping" />
+        <span className="relative size-2 rounded-full bg-fg-muted" />
       </span>
     );
   }
