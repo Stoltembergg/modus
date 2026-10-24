@@ -121,6 +121,8 @@ export function ModelPicker({
   const selected = byValue.get(value) ?? null;
   // Only drives the empty-state copy; never touches the chosen model.
   const [query, setQuery] = useState("");
+  // Last input on the popup: the accent ring shows on the highlighted row only for keyboard nav.
+  const [nav, setNav] = useState<"keyboard" | "pointer">("pointer");
 
   return (
     <Combobox.Root<PickerItem>
@@ -195,7 +197,10 @@ export function ModelPicker({
               "transition-[transform,opacity,scale] duration-(--motion-duration-base) ease-standard motion-reduce:transition-reduced-fade",
               "data-ending-style:scale-[0.97] data-ending-style:opacity-0 data-starting-style:scale-[0.97] data-starting-style:opacity-0",
             )}
+            data-nav={nav}
             data-testid="model-picker-popup"
+            onKeyDownCapture={() => setNav("keyboard")}
+            onPointerMoveCapture={() => setNav("pointer")}
           >
             <div className="flex shrink-0 items-center gap-2 px-3">
               <IconSearch aria-hidden className="shrink-0 text-fg-faint" size={14} />
@@ -238,7 +243,7 @@ export function ModelPicker({
                     {(item: PickerItem) => (
                       <Combobox.Item
                         className={cn(
-                          "flex h-8 cursor-default items-center gap-2 rounded-md px-2 text-sm text-fg outline-none select-none",
+                          "model-picker-item flex h-8 cursor-default items-center gap-2 rounded-md px-2 text-sm text-fg outline-none select-none",
                           "transition-colors duration-(--motion-duration-fast) data-highlighted:bg-(--color-picker-highlight) motion-reduce:transition-reduced-fade",
                           item.providerId ? "pl-9" : undefined,
                           item.unavailable ? "text-fg-faint" : undefined,

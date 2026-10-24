@@ -946,6 +946,13 @@ select option:disabled {
   outline-offset: 3px;
   box-shadow: none;
 }
+/* Model picker (ModelPicker.tsx): the keyboard-highlighted row gets the same 2px
+   accent ring, inset because the list's 4px padding would clip a 3px outside offset.
+   Pointer hover keeps only the fill. */
+[data-nav="keyboard"] .model-picker-item[data-highlighted] {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
 :root:not([data-theme="dark"]) .model-chip-warning {
   --color-danger: #b42f2f;
 }
