@@ -288,7 +288,6 @@ const CHEVRON_SITES = [
   "features/agent/TodosCard.tsx",
   "features/settings/form-controls.tsx",
   "components/question/QuestionCard.tsx",
-  "features/groups/GroupDecisions.tsx",
   "features/settings/settings-provider-ui.tsx",
   "features/agent/ActivityGroup.tsx",
   "features/agent/ToolGroup.tsx",

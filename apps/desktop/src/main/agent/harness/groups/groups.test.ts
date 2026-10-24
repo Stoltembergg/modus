@@ -13,15 +13,6 @@ import {
 } from "../../tools/group-mailbox-tools";
 import { setAgentToolContext } from "../../tools/tool-context";
 import { resetFeatureFlagOverrides, setFeatureFlagOverrides } from "../feature-flags";
-import {
-  canProceed,
-  detectDependencyCycles,
-  detectWriteConflict,
-  findEligibleTasks,
-  type GroupTaskDependencies,
-  normalizeScope,
-  scopesOverlap,
-} from "./group-dependencies";
 import { GroupMailbox } from "./group-mailbox";
 import {
   advanceRevision,
@@ -520,80 +511,6 @@ describe("Phase 6: Groups Mailbox & Optimistic Revision", () => {
       if (!commitStale.success) {
         expect(commitStale.conflicts).toEqual(["config.json"]);
       }
-    });
-  });
-
-  describe("6.3 Group Task Dependencies & WriteScopes", () => {
-    it("evaluates canProceed correctly with dependency sets", () => {
-      const task: GroupTaskDependencies = {
-        taskId: "task-deploy",
-        blockedBy: ["task-build", "task-test"],
-        writeScopes: ["dist/"],
-      };
-
-      expect(canProceed(task, new Set(["task-build"]))).toBe(false);
-      expect(canProceed(task, new Set(["task-build", "task-test"]))).toBe(true);
-      expect(canProceed(task, new Set(["task-build", "task-test", "task-lint"]))).toBe(true);
-    });
-
-    it("normalizes scopes and detects subpath overlaps", () => {
-      expect(normalizeScope("apps/desktop//src/")).toBe("apps/desktop/src");
-      expect(scopesOverlap("src/main", "src/main/agent/tools.ts")).toBe(true);
-      expect(scopesOverlap("src/main/agent/tools.ts", "src/main")).toBe(true);
-      expect(scopesOverlap("src/a", "src/b")).toBe(false);
-      expect(scopesOverlap("*", "apps/desktop")).toBe(true);
-    });
-
-    it("detects write conflicts between overlapping tasks", () => {
-      const t1: GroupTaskDependencies = {
-        taskId: "t1",
-        blockedBy: [],
-        writeScopes: ["apps/desktop/src/main/agent"],
-      };
-      const t2: GroupTaskDependencies = {
-        taskId: "t2",
-        blockedBy: [],
-        writeScopes: ["apps/desktop/src/main/agent/tools/group-tools.ts"],
-      };
-      const t3: GroupTaskDependencies = {
-        taskId: "t3",
-        blockedBy: [],
-        writeScopes: ["apps/desktop/src/renderer"],
-      };
-
-      expect(detectWriteConflict(t1, t2)).toBe(true);
-      expect(detectWriteConflict(t1, t3)).toBe(false);
-      expect(detectWriteConflict(t1, t1)).toBe(false); // same task
-    });
-
-    it("finds eligible tasks while avoiding dependency and writeScope conflicts", () => {
-      const tasks: GroupTaskDependencies[] = [
-        { taskId: "t1", blockedBy: [], writeScopes: ["src/featureA"] },
-        { taskId: "t2", blockedBy: ["t1"], writeScopes: ["src/featureB"] },
-        { taskId: "t3", blockedBy: [], writeScopes: ["src/featureA/sub"] }, // conflicts with t1
-        { taskId: "t4", blockedBy: [], writeScopes: ["src/featureC"] },
-      ];
-
-      const completed = new Set<string>();
-      const eligible = findEligibleTasks(tasks, completed);
-
-      // t1 and t4 are eligible. t2 is blocked by t1. t3 write conflicts with t1.
-      expect(eligible.map((t) => t.taskId)).toEqual(["t1", "t4"]);
-    });
-
-    it("detects dependency cycles in task definitions", () => {
-      const cycleTasks: GroupTaskDependencies[] = [
-        { taskId: "A", blockedBy: ["B"], writeScopes: [] },
-        { taskId: "B", blockedBy: ["C"], writeScopes: [] },
-        { taskId: "C", blockedBy: ["A"], writeScopes: [] },
-        { taskId: "D", blockedBy: [], writeScopes: [] },
-      ];
-
-      const cycles = detectDependencyCycles(cycleTasks);
-      expect(cycles.length).toBeGreaterThan(0);
-      expect(cycles[0]).toContain("A");
-      expect(cycles[0]).toContain("B");
-      expect(cycles[0]).toContain("C");
     });
   });
 
