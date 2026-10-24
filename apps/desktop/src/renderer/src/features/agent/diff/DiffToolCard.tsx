@@ -150,7 +150,7 @@ export const DiffToolCard = memo(
               <Tooltip content={copied ? "Copied" : "Copy diff"} side="bottom" sideOffset={6}>
                 <button
                   aria-label="Copy diff"
-                  className="flex size-6 shrink-0 items-center justify-center rounded text-fg-faint opacity-0 transition-all hover:bg-hover hover:text-fg-subtle group-hover/diff:opacity-100"
+                  className="flex size-6 shrink-0 items-center justify-center rounded text-fg-faint opacity-0 transition-all hover:bg-hover hover:text-fg-subtle group-hover/diff:opacity-100 group-focus-within/diff:opacity-100 focus-visible:opacity-100"
                   onClick={(event) => {
                     event.stopPropagation();
                     void copyDiff();
@@ -164,7 +164,7 @@ export const DiffToolCard = memo(
               <button
                 aria-expanded={bodyOpen}
                 aria-label={bodyOpen ? "Collapse diff" : "Expand diff"}
-                className="flex size-6 shrink-0 items-center justify-center rounded text-fg-faint opacity-0 transition-all hover:bg-hover hover:text-fg-subtle group-hover/diff:opacity-100"
+                className="flex size-6 shrink-0 items-center justify-center rounded text-fg-faint opacity-0 transition-all hover:bg-hover hover:text-fg-subtle group-hover/diff:opacity-100 group-focus-within/diff:opacity-100 focus-visible:opacity-100"
                 onClick={(event) => {
                   event.stopPropagation();
                   setOpen((value) => !value);
