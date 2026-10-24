@@ -10189,6 +10189,71 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
     }
   });
 
+  it("Stop clears pi's queue and returns the queued prompts, in order, instead of sending them", async () => {
+    const sessionId = `queue-stop-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    let announceStreamStarted!: () => void;
+    let resolveResponse!: () => void;
+    const streamStarted = new Promise<void>((resolve) => {
+      announceStreamStarted = resolve;
+    });
+    const responseGate = new Promise<void>((resolve) => {
+      resolveResponse = resolve;
+    });
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    const { sessionAt, messagesFor } = await createOfflinePiToolSessions({
+      assistantText: "Done.",
+      responseGate,
+      onStream: () => announceStreamStarted(),
+    });
+    const image = { type: "image" as const, data: "aW1n", mimeType: "image/png", name: "shot.png" };
+    try {
+      const promptTask = runtime.prompt(window, {
+        context: [],
+        delivery: "normal",
+        message: "Start the long task.",
+        sessionId,
+      });
+      await streamStarted;
+      await runtime.prompt(window, {
+        context: [],
+        delivery: "follow-up",
+        message: "First queued.",
+        sessionId,
+      });
+      await runtime.prompt(window, {
+        context: [],
+        delivery: "steer",
+        message: "Second queued.",
+        attachments: [image],
+        sessionId,
+      });
+      expect(runtime.listQueuedPrompts(sessionId)).toHaveLength(2);
+
+      const aborting = runtime.abort(sessionId);
+      resolveResponse();
+      const result = await aborting;
+      await promptTask.catch(() => undefined);
+      await sessionAt().agent.waitForIdle();
+
+      expect(result).toEqual({
+        restored: [
+          { text: "First queued.", attachments: [] },
+          { text: "Second queued.", attachments: [image] },
+        ],
+      });
+      expect(runtime.listQueuedPrompts(sessionId)).toEqual([]);
+      expect(sessionAt().agent.hasQueuedMessages()).toBe(false);
+      const sent = JSON.stringify(messagesFor(sessionAt()));
+      expect(sent).not.toContain("First queued.");
+      expect(sent).not.toContain("Second queued.");
+    } finally {
+      resolveResponse();
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
   it("counts a no-output Pi SDK turn as failed without a policy pass", async () => {
     setFeatureFlagOverrides({
       MODUS_USE_KERNEL: true,

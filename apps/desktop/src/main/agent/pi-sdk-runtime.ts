@@ -13,6 +13,7 @@ import {
 import { app, type BrowserWindow as BrowserWindowType } from "electron";
 import { buildContextChips } from "../../shared/context-chips";
 import type {
+  AbortAgentResult,
   AdaptiveDecision,
   AdaptiveDecisionMode,
   AdaptiveFailureAttempt,
@@ -6254,32 +6255,41 @@ export class PiSdkRuntime implements AgentRuntime {
     return false;
   }
 
-  async abort(sessionId: string): Promise<void> {
+  async abort(sessionId: string): Promise<AbortAgentResult> {
     this.cancelPendingIntentGate(sessionId);
     clearTodoSessionCache(sessionId);
     const activeRunId = getActiveAgentRun(sessionId)?.id;
+    let restored: AbortAgentResult["restored"] = [];
     try {
       await this.closeSubagentTree(sessionId, "Parent session aborted");
       const currentRunId = getActiveAgentRun(sessionId)?.id;
       if (currentRunId === undefined || currentRunId === activeRunId) {
         this.clearBackgroundTasksForParent(sessionId);
         this.backgroundChildTasks.delete(sessionId);
-        await this.abortSessionOnly(sessionId);
+        restored = await this.abortSessionOnly(sessionId);
       }
     } finally {
       if (activeRunId) await this.cleanupRunProcesses(sessionId, activeRunId);
     }
+    return { restored };
   }
 
-  private async abortSessionOnly(sessionId: string): Promise<void> {
+  private async abortSessionOnly(sessionId: string): Promise<AbortAgentResult["restored"]> {
     this.cancelPendingIntentGate(sessionId);
     clearTodoSessionCache(sessionId);
     const activeRun = getActiveAgentRun(sessionId);
     if (activeRun) clearMcpCitationRun(sessionId, activeRun.id);
     const runtimeSession = this.sessions.get(sessionId);
     if (!runtimeSession) {
-      return;
+      return [];
     }
+    // pi keeps its steer/follow-up queues through abort() and would send them
+    // right after Stop. Take them back for the composer instead.
+    const restored = (runtimeSession.promptQueue?.drain() ?? []).map(({ input }) => ({
+      text: input.message,
+      attachments: input.attachments ?? [],
+    }));
+    runtimeSession.session.clearQueue?.();
     const outputTracker = this.runOutputTrackers.get(sessionId);
     const runId = outputTracker?.runId ?? activeRun?.id;
     if (runId) {
@@ -6305,6 +6315,7 @@ export class PiSdkRuntime implements AgentRuntime {
         updateAgentSessionStatus(sessionId, "idle");
       }
     }
+    return restored;
   }
 
   async listRuns(sessionId: string): Promise<AgentRunInfo[]> {

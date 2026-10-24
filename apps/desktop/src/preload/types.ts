@@ -10,6 +10,7 @@ import type {
 } from "../shared/automations";
 import type { BillingBuyCreditsInput, BillingCheckoutInput, BillingState } from "../shared/billing";
 import type {
+  AbortAgentResult,
   AddDocInput,
   AgentEvent,
   AgentInfo,
@@ -298,7 +299,7 @@ export type ModusApi = {
       sourceSnapshot: PlanSourceSnapshot;
     }): Promise<PlanBuildStart>;
     compact(sessionId: string): Promise<void>;
-    abort(sessionId: string): Promise<void>;
+    abort(sessionId: string): Promise<AbortAgentResult>;
     /** Prompts waiting for the running turn, in arrival order. */
     listQueue(sessionId: string): Promise<QueuedPromptItem[]>;
     /**
