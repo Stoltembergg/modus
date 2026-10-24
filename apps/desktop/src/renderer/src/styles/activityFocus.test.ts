@@ -20,6 +20,10 @@ describe("Activity focus ring", () => {
       '.activity-panel :is(button, a[href], [role="button"], [tabindex]:not([tabindex="-1"])):focus-visible',
     );
     expect(rule).toMatch(/outline:\s*2px solid var\(--color-accent\)/);
+    // Breathing room: the ring sits outside the box, never on the text.
+    const offset = Number(rule.match(/outline-offset:\s*(-?\d+)px/)?.[1]);
+    expect(offset).toBeGreaterThanOrEqual(2);
+    expect(offset).toBeLessThanOrEqual(4);
     expect(css).not.toMatch(/\.activity-panel[^{]*:focus\s*\{/);
   });
 
