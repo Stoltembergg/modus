@@ -803,7 +803,18 @@ export const DESIGN_OVERLAY_BOOTSTRAP = `
     };
     var text = plainInputText(contentParts || []);
     if (text) { p.seedText = text; }
-    if (contentParts && contentParts.length > 0) { p.contentParts = contentParts; }
+    if (contentParts && contentParts.length > 0) {
+      // Map old DOM token indices to their new positions in the 'live' array
+      // so the serialized prompt correctly reflects the user's DOM order.
+      var oldToNew = {};
+      for (var j = 0; j < indices.length; j++) { oldToNew[indices[j]] = j; }
+      for (var k = 0; k < contentParts.length; k++) {
+        if (contentParts[k].type === "element") {
+          contentParts[k].index = oldToNew[contentParts[k].index];
+        }
+      }
+      p.contentParts = contentParts;
+    }
     events.push(p);
   }
 
