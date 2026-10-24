@@ -60,7 +60,7 @@ export const TerminalToolCard = memo(
         <button
           aria-expanded={open}
           className={cn(
-            "flex w-full min-w-0 items-center gap-1.5 py-0.5 text-left transition-colors hover:text-fg-muted",
+            "flex w-full min-w-0 items-center gap-1.5 py-0.5 text-left transition-colors duration-(--motion-duration-fast) ease-standard hover:text-fg-muted",
             isError ? "text-danger" : "text-fg-subtle",
           )}
           onClick={() => setOpen((value) => !value)}

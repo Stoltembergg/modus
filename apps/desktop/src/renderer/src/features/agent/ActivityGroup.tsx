@@ -366,7 +366,7 @@ export const WorkFold = memo(function WorkFold({
           aria-controls={contentId}
           aria-expanded={open}
           aria-label={open ? "Collapse work" : "Expand work"}
-          className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-md text-fg-faint transition-colors hover:text-fg-muted"
+          className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-md text-fg-faint transition-colors duration-(--motion-duration-fast) ease-standard hover:text-fg-muted"
           onClick={() => setDisclosure({ active, open: !open })}
           type="button"
         >

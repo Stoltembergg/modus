@@ -63,7 +63,7 @@ export function ToolGroup({
         <button
           aria-controls={contentId}
           aria-expanded={open}
-          className="group/activity flex min-w-0 max-w-full items-center gap-1.5 rounded-md py-0.5 text-left text-sm text-fg-subtle transition-colors hover:text-fg-muted"
+          className="group/activity flex min-w-0 max-w-full items-center gap-1.5 rounded-md py-0.5 text-left text-sm text-fg-subtle transition-colors duration-(--motion-duration-fast) ease-standard hover:text-fg-muted"
           onClick={onToggle}
           type="button"
         >

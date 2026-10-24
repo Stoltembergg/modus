@@ -1810,7 +1810,7 @@ body {
     opacity: 0.85; /* >= 4.5:1 on the light panel; pinned by activityContrast.test.ts */
   }
   .work-status-line__glyph[data-working] {
-    animation: work-status-breathe 1.5s ease-in-out infinite;
+    color: var(--color-fg);
   }
   @keyframes work-status-breathe {
     0%,
@@ -1818,7 +1818,7 @@ body {
       opacity: 1;
     }
     50% {
-      opacity: 0.85;
+      opacity: 0.7; /* --color-fg at 0.7 stays >= 4.5:1; pinned by activityMotion.test.ts */
     }
   }
   /* Both labels share one grid cell: the line keeps the wider one's width. */
@@ -1855,6 +1855,12 @@ body {
 
   /* Movement-only parts of these indicators run only without reduced motion. */
   @media (prefers-reduced-motion: no-preference) {
+    .status-ping {
+      animation: status-ping 1s var(--motion-ease-exit) infinite;
+    }
+    .work-status-line__glyph[data-working] {
+      animation: work-status-breathe 1.5s var(--motion-ease-in-out) infinite;
+    }
     .task-check[data-pop] {
       animation: task-check-pop var(--motion-duration-emphasized) var(--motion-ease-standard);
     }
@@ -2941,6 +2947,14 @@ body
  * never removed. Shared keyframes for CSS-driven sites, plus a Tailwind
  * utility for `motion-reduce:transition-reduced-fade` on transitioned controls.
  */
+@keyframes status-ping {
+  75%,
+  100% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
 @keyframes motion-reduced-fade-in {
   from {
     opacity: 0;

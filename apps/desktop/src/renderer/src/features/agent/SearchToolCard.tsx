@@ -259,7 +259,7 @@ function FileRow({
               { path: result.path },
             )}
             className={cn(
-              "flex size-6 shrink-0 items-center justify-center rounded-md text-fg-faint transition-colors hover:text-fg-muted",
+              "flex size-6 shrink-0 items-center justify-center rounded-md text-fg-faint transition-colors duration-(--motion-duration-fast) ease-standard hover:text-fg-muted",
               NAV_FOCUS,
             )}
             data-search-expand=""
@@ -438,7 +438,7 @@ export const SearchToolCard = memo(function SearchToolCard({
       {expandable ? (
         <button
           aria-expanded={bodyOpen}
-          className="flex min-w-0 max-w-full items-center gap-1.5 rounded-md py-0.5 text-left text-fg-subtle transition-colors hover:text-fg-muted"
+          className="flex min-w-0 max-w-full items-center gap-1.5 rounded-md py-0.5 text-left text-fg-subtle transition-colors duration-(--motion-duration-fast) ease-standard hover:text-fg-muted"
           onClick={() => setOpen((value) => !value)}
           type="button"
         >

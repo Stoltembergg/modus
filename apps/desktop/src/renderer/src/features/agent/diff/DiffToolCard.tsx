@@ -112,7 +112,7 @@ export const DiffToolCard = memo(
       <div className="group/diff min-w-0 text-sm">
         <div className="flex min-w-0 items-center gap-1">
           <button
-            className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-0.5 text-left transition-colors hover:text-fg disabled:cursor-default"
+            className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-0.5 text-left transition-colors duration-(--motion-duration-fast) ease-standard hover:text-fg disabled:cursor-default"
             disabled={!path || !onOpenFile}
             onClick={openInFiles}
             title={fileTitle}
@@ -150,7 +150,7 @@ export const DiffToolCard = memo(
               <Tooltip content={copied ? "Copied" : "Copy diff"} side="bottom" sideOffset={6}>
                 <button
                   aria-label="Copy diff"
-                  className="flex size-6 shrink-0 items-center justify-center rounded text-fg-faint opacity-0 transition-all hover:bg-hover hover:text-fg-subtle group-hover/diff:opacity-100 group-focus-within/diff:opacity-100 focus-visible:opacity-100"
+                  className="flex size-6 shrink-0 items-center justify-center rounded text-fg-faint opacity-0 transition-[color,background-color,opacity] duration-(--motion-duration-fast) ease-standard hover:bg-hover hover:text-fg-subtle group-hover/diff:opacity-100 group-focus-within/diff:opacity-100 focus-visible:opacity-100"
                   onClick={(event) => {
                     event.stopPropagation();
                     void copyDiff();
@@ -164,7 +164,7 @@ export const DiffToolCard = memo(
               <button
                 aria-expanded={bodyOpen}
                 aria-label={bodyOpen ? "Collapse diff" : "Expand diff"}
-                className="flex size-6 shrink-0 items-center justify-center rounded text-fg-faint opacity-0 transition-all hover:bg-hover hover:text-fg-subtle group-hover/diff:opacity-100 group-focus-within/diff:opacity-100 focus-visible:opacity-100"
+                className="flex size-6 shrink-0 items-center justify-center rounded text-fg-faint opacity-0 transition-[color,background-color,opacity] duration-(--motion-duration-fast) ease-standard hover:bg-hover hover:text-fg-subtle group-hover/diff:opacity-100 group-focus-within/diff:opacity-100 focus-visible:opacity-100"
                 onClick={(event) => {
                   event.stopPropagation();
                   setOpen((value) => !value);
