@@ -1,6 +1,6 @@
 import { Combobox } from "@base-ui/react/combobox";
 import { IconCheck, IconChevronDown, IconSearch, IconSelector } from "@tabler/icons-react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { cn } from "../../lib/cn";
 import { buildModelPickerGroups, type PickableModel } from "../../lib/modusModels";
 import {
@@ -119,6 +119,8 @@ export function ModelPicker({
     [groups],
   );
   const selected = byValue.get(value) ?? null;
+  // Only drives the empty-state copy; never touches the chosen model.
+  const [query, setQuery] = useState("");
 
   return (
     <Combobox.Root<PickerItem>
@@ -126,6 +128,7 @@ export function ModelPicker({
       filter={matches}
       isItemEqualToValue={(item, current) => item.value === current.value}
       items={groups}
+      onInputValueChange={setQuery}
       onValueChange={(item) => {
         if (item) onValueChange(item.value);
       }}
@@ -198,12 +201,14 @@ export function ModelPicker({
               <IconSearch aria-hidden className="shrink-0 text-fg-faint" size={14} />
               <Combobox.Input
                 aria-label="Search models"
-                className="h-9 w-full bg-transparent text-sm text-fg outline-none placeholder:text-fg-faint"
+                className="h-9 w-full bg-transparent text-sm text-fg outline-none placeholder:text-fg-muted"
                 placeholder="Search models…"
               />
             </div>
             <Combobox.Empty>
-              <p className="px-3 py-6 text-center text-xs text-fg-muted">No models match</p>
+              <p className="px-3 py-6 text-center text-xs text-fg-muted">
+                {query.trim() ? "No models match" : "No models"}
+              </p>
             </Combobox.Empty>
             <Combobox.List className="scroll-thin max-h-[min(22rem,calc(var(--available-height)-3rem))] min-h-0 scroll-pt-8 overflow-y-auto overscroll-contain p-1 outline-none empty:p-0">
               {(group: PickerGroup) => (
@@ -234,7 +239,7 @@ export function ModelPicker({
                       <Combobox.Item
                         className={cn(
                           "flex h-8 cursor-default items-center gap-2 rounded-md px-2 text-sm text-fg outline-none select-none",
-                          "transition-colors duration-(--motion-duration-fast) data-highlighted:bg-hover motion-reduce:transition-reduced-fade",
+                          "transition-colors duration-(--motion-duration-fast) data-highlighted:bg-(--color-picker-highlight) motion-reduce:transition-reduced-fade",
                           item.providerId ? "pl-9" : undefined,
                           item.unavailable ? "text-fg-faint" : undefined,
                         )}
@@ -242,7 +247,7 @@ export function ModelPicker({
                         value={item}
                       >
                         <span className="min-w-0 flex-1 truncate">{item.label}</span>
-                        <Combobox.ItemIndicator className="shrink-0 text-accent">
+                        <Combobox.ItemIndicator className="shrink-0 text-(--color-accent-check)">
                           <IconCheck aria-hidden size={14} stroke={2} />
                         </Combobox.ItemIndicator>
                       </Combobox.Item>
