@@ -21,9 +21,8 @@ import {
 } from "../../../../shared/contracts";
 import { shellText } from "../../../../shared/shell-text";
 import { cn } from "../../lib/cn";
-import { selectableModels } from "../../lib/modusModels";
+import { type PickableModel, selectableModels } from "../../lib/modusModels";
 import { MOTION_SPRING, reducedFade, tween } from "../../lib/motion";
-import type { GroupDialogModel } from "../groups/CreateGroupDialog";
 import { describeGroupError } from "../groups/groupErrors";
 import { AgentAvatar } from "./AgentAvatar";
 import { AvatarOptionGroup, humanizeOption } from "./AvatarOptionGroup";
@@ -77,8 +76,6 @@ export type AgentDialogDraftTarget = {
   onAdd(member: NewGroupAgentInput): void;
   /** `add` (default): "Add to group". `edit`: an added member, "Save changes". */
   mode?: "add" | "edit";
-  /** Edit mode: "Remove from group" in the footer. */
-  onRemove?(): void;
   /** A copy's source agent (the copy keeps its role, so it handles what the source handles). */
   sourceAgent?: AgentInfo | undefined;
   /** Name restored by "Use {template}'s defaults" (the next free one in the modal). */
@@ -90,7 +87,7 @@ export type AgentDialogDraftTarget = {
 type AgentDialogCommonProps = {
   open: boolean;
   onOpenChange(open: boolean): void;
-  models: readonly GroupDialogModel[];
+  models: readonly PickableModel[];
   defaultModelId?: string | undefined;
   /** `agents:generate-profile`: resolves the Generalist fallback on a model failure. */
   onGenerate(input: GenerateAgentProfileInput): Promise<GeneratedAgentProfile>;
@@ -646,22 +643,6 @@ export function AgentDialog(props: AgentDialogProps) {
       ) : null}
 
       <div className="mt-2 flex items-center justify-end gap-2 px-5 pt-3 pb-5">
-        {target?.onRemove ? (
-          <button
-            className={cn(
-              "mr-auto h-8 rounded-lg px-2.5 text-danger text-xs hover:bg-danger/8",
-              PRESS,
-            )}
-            onClick={() => {
-              if (inactive()) return;
-              closingRef.current = true;
-              target.onRemove?.();
-            }}
-            type="button"
-          >
-            Remove from group
-          </button>
-        ) : null}
         {target?.footerNote ? (
           <span
             className="text-fg-faint text-xs tabular-nums"

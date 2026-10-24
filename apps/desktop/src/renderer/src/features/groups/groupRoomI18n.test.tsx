@@ -1,78 +1,40 @@
 // @vitest-environment happy-dom
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { GroupMessage } from "../../../../shared/contracts";
-import { groupText } from "../../../../shared/group-room-locale";
-import { GroupMessageList } from "./GroupMessageList";
-import { GroupMessageRow } from "./GroupMessageRow";
-import { GroupRoomLocaleProvider, useGroupRoomLocale } from "./groupRoomI18n";
+import { groupPluralText, groupRoomIntlLocale } from "../../../../shared/group-room-locale";
+import { formatClock } from "../../lib/formatClock";
+import {
+  GroupRoomLocaleProvider,
+  groupTextFor,
+  useGroupRoomLocale,
+  useGroupText,
+} from "./groupRoomI18n";
 
 afterEach(cleanup);
 
-const members = [{ sessionId: "s-a", title: "Alpha" }];
-const labels = new Map([["s-a", { title: "Alpha" }]]);
-
-function userMessage(patch: Partial<GroupMessage> = {}): GroupMessage {
-  return {
-    id: "u-1",
-    groupId: "g-1",
-    authorKind: "user",
-    kind: "message",
-    body: "Oi",
-    mentions: [],
-    createdAt: "2026-06-08T17:17:00.000Z",
-    ...patch,
-  };
-}
-
-function EmptyList({ locale }: { locale: string }) {
-  return (
-    <GroupRoomLocaleProvider locale={locale}>
-      <GroupMessageList
-        avatars={new Map()}
-        cwd={undefined}
-        error={undefined}
-        groupId="g-1"
-        hasOlder={false}
-        loadOlder={async () => undefined}
-        loaded
-        loadingOlder={false}
-        memberStates={new Map()}
-        members={members}
-        messages={[]}
-        onOpenFile={undefined}
-        workingRows={[]}
-      />
-    </GroupRoomLocaleProvider>
-  );
+function PluralProbe({ override }: { override?: string }) {
+  const t = useGroupText(override);
+  return <span data-testid="plural">{t.plural("list.newMessages", 3)}</span>;
 }
 
 describe("room locale provider (C6)", () => {
-  it("renders the empty transcript in pt and zh", () => {
-    const { unmount } = render(<EmptyList locale="pt-BR" />);
-    expect(screen.getByTestId("group-room-empty").textContent).toBe(groupText("list.empty", "pt"));
-    unmount();
-    render(<EmptyList locale="zh-CN" />);
-    expect(screen.getByTestId("group-room-empty").textContent).toBe(groupText("list.empty", "zh"));
-  });
-
-  it("renders the user's own message chrome in the room locale", () => {
-    render(
+  it("useGroupText follows the provider locale in pt and zh", () => {
+    const { unmount } = render(
       <GroupRoomLocaleProvider locale="pt-BR">
-        <GroupMessageRow labels={labels} members={members} message={userMessage()} />
+        <PluralProbe />
       </GroupRoomLocaleProvider>,
     );
-    const header = screen.getByTestId("group-message-header");
-    expect(header.textContent).toContain("Você");
-    expect(header.textContent).toContain("Humano");
-    expect(screen.getByTestId("group-user-avatar").textContent).toBe("V");
-    // The clock follows the room locale too (Intl pt-BR: "8 de jun. 14:17").
-    const created = new Date("2026-06-08T17:17:00.000Z");
-    const time = header.querySelector("time");
-    expect(time?.textContent).toBe(
-      `${created.toLocaleDateString("pt-BR", { month: "short", day: "numeric" })} ${created.toLocaleTimeString("pt-BR", { hour: "numeric", minute: "2-digit" })}`,
+    expect(screen.getByTestId("plural").textContent).toBe(
+      groupPluralText("list.newMessages", 3, "pt"),
     );
-    expect(time?.textContent).toContain("de jun.");
+    expect(screen.getByTestId("plural").textContent).toBe("3 novas mensagens");
+    unmount();
+    render(
+      <GroupRoomLocaleProvider locale="zh-CN">
+        <PluralProbe />
+      </GroupRoomLocaleProvider>,
+    );
+    expect(screen.getByTestId("plural").textContent).toBe("3 条新消息");
   });
 
   it("a component's own locale prop wins over the provider", () => {
@@ -88,7 +50,41 @@ describe("room locale provider (C6)", () => {
   });
 
   it("without a provider the renderer locale applies (en under tests)", () => {
-    render(<GroupMessageRow labels={labels} members={members} message={userMessage()} />);
-    expect(screen.getByTestId("group-message-header").textContent).toContain("You");
+    render(<PluralProbe />);
+    expect(screen.getByTestId("plural").textContent).toBe("3 new messages");
+  });
+
+  it("groupTextFor binds the locale outside React", () => {
+    const t = groupTextFor("pt-BR");
+    expect(t.locale).toBe("pt-BR");
+    expect(t.plural("list.newMessages", 1)).toBe("1 nova mensagem");
+    expect(groupTextFor(undefined)("common.lead")).toBe("Lead");
+  });
+
+  it('the message clock follows the room locale (pt-BR: "8 de jun. 14:17")', () => {
+    function ClockProbe() {
+      const locale = useGroupRoomLocale();
+      const created = new Date("2026-06-08T17:17:00.000Z");
+      return (
+        <time data-testid="clock">
+          {formatClock(
+            created.getTime(),
+            new Date("2026-07-01T12:00:00.000Z"),
+            groupRoomIntlLocale(locale),
+          )}
+        </time>
+      );
+    }
+    render(
+      <GroupRoomLocaleProvider locale="pt-BR">
+        <ClockProbe />
+      </GroupRoomLocaleProvider>,
+    );
+    const created = new Date("2026-06-08T17:17:00.000Z");
+    const text = screen.getByTestId("clock").textContent;
+    expect(text).toBe(
+      `${created.toLocaleDateString("pt-BR", { month: "short", day: "numeric" })} ${created.toLocaleTimeString("pt-BR", { hour: "numeric", minute: "2-digit" })}`,
+    );
+    expect(text).toContain("de jun.");
   });
 });
