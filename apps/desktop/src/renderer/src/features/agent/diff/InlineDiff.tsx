@@ -103,7 +103,7 @@ function DiffRow({ line, tokens }: { line: InlineDiffLine; tokens?: ThemedToken[
     <div className={cn("flex items-stretch", isAdd && "bg-diff-add-bg", isDel && "bg-diff-del-bg")}>
       <span
         className={cn(
-          "w-10 shrink-0 select-none px-2 text-right text-fg-faint tabular-nums",
+          "w-10 shrink-0 select-none px-2 text-right text-fg-muted tabular-nums",
           isAdd && "bg-diff-add-gutter",
           isDel && "bg-diff-del-gutter",
         )}
@@ -119,7 +119,7 @@ function DiffRow({ line, tokens }: { line: InlineDiffLine; tokens?: ThemedToken[
       >
         {SIGN[line.kind]}
       </span>
-      <span className={cn("whitespace-pre px-2 py-0.5", isDel && "opacity-70")}>
+      <span className="whitespace-pre px-2 py-0.5">
         <DiffLineText line={line} tokens={tokens} />
       </span>
     </div>

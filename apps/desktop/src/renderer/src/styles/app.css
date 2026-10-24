@@ -886,9 +886,13 @@ select option:disabled {
   --activity-inset-bg: color-mix(in srgb, var(--color-fg) 4%, transparent);
   --activity-inset-error-bg: color-mix(in srgb, var(--color-danger) 7%, transparent);
   --tool-group-mask-from: var(--surface-sidebar);
+  /* Text-safe diff/status hues on the panel and diff gutters (>= 4.5:1). */
+  --color-danger: #f58787;
 }
 /* Light glass: a lighter (not darker) inset keeps faint/danger text >= 4.5:1. */
 :root:not([data-theme="dark"]) .activity-panel {
+  --color-success: #0e7049;
+  --color-danger: #b42f2f;
   --activity-inset-bg: color-mix(in srgb, #fff 60%, transparent);
   --activity-inset-error-bg: color-mix(
     in srgb,
@@ -1803,7 +1807,7 @@ body {
   }
   .work-status-line__glyph {
     flex-shrink: 0;
-    opacity: 0.55;
+    opacity: 0.85; /* >= 4.5:1 on the light panel; pinned by activityContrast.test.ts */
   }
   .work-status-line__glyph[data-working] {
     animation: work-status-breathe 1.5s ease-in-out infinite;
@@ -1814,7 +1818,7 @@ body {
       opacity: 1;
     }
     50% {
-      opacity: 0.4;
+      opacity: 0.85;
     }
   }
   /* Both labels share one grid cell: the line keeps the wider one's width. */
@@ -1836,7 +1840,7 @@ body {
   }
   .work-status-line__chevron {
     flex-shrink: 0;
-    opacity: 0.7;
+    opacity: 0.85;
   }
   .work-status-line__chevron[data-open] {
     transform: rotate(90deg);
