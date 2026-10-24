@@ -1739,6 +1739,7 @@ body {
     text-align: left;
   }
   .work-status-line__toggle {
+    @apply outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/35;
     border-radius: 6px;
     cursor: pointer;
   }
