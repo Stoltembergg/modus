@@ -7,6 +7,7 @@ import {
   MODEL_CHIP_BASE,
   MODEL_CHIP_INTERACTIVE,
   MODEL_CHIP_TONE,
+  MODEL_CHIP_WARNING,
 } from "../composer/modelChipStyle";
 import { ProviderLogo } from "../settings/ProviderLogo";
 
@@ -139,7 +140,7 @@ export function ModelPicker({
           variant === "chip"
             ? cn(
                 MODEL_CHIP_BASE,
-                tone === "warning" ? "border-danger/40 text-danger" : MODEL_CHIP_TONE,
+                tone === "warning" ? MODEL_CHIP_WARNING : MODEL_CHIP_TONE,
                 MODEL_CHIP_INTERACTIVE,
               )
             : cn(

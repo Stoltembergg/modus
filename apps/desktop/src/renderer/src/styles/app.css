@@ -938,6 +938,17 @@ select option:disabled {
   outline-offset: 3px;
   box-shadow: none;
 }
+/* Composer chips (model, branch; modelChipStyle.ts): keyboard focus gets the
+   accent ring (#322) instead of nothing. The warning tone ("Pick a model") uses
+   a text-safe danger on the light chip fill (>= 4.5:1). */
+.model-chip:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+:root:not([data-theme="dark"]) .model-chip-warning {
+  --color-danger: #b42f2f;
+}
 .copy-button-icon {
   position: absolute;
   transition:
