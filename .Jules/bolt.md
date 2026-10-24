@@ -19,3 +19,7 @@
 ## 2024-10-24 - Async File Service
 **Learning:** Using `fs.readSync` instead of `fs.readFileSync` does not prevent blocking the Node.js event loop on large file reads; it simply avoids loading the entire file into a single Buffer/string payload. Real non-blocking requires `node:fs/promises`. A 100MB file read via `readSync` blocked the main process event loop for ~98ms.
 **Action:** When performing file system operations in the Electron main process, strongly prefer asynchronous methods (`node:fs/promises`) for operations that can be arbitrarily large to keep the UI smooth and event loop unblocked.
+
+## 2024-10-24 - Modus PTY Host Flake
+**Learning:** `modus-pty-host` test `shutdown_keeps_group_ownership_after_the_pty_leader_exits` can flake with "shutdown lost the descendant after its PTY leader exited". This seems to be an existing race condition where the process group can sometimes be prematurely killed before the `Shutdown` command explicitly targets it. It only flakes under high concurrency or particular CI timing.
+**Action:** Unrelated CI failures in native modules outside the target scope should be recorded as pre-existing flakes when they cannot be cleanly addressed.
