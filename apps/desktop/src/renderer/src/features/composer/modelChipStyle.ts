@@ -13,5 +13,5 @@ export const MODEL_CHIP_TONE = "border-hairline-soft text-fg-muted";
 export const MODEL_CHIP_INTERACTIVE =
   "model-chip app-no-drag cursor-pointer touch-manipulation outline-none transition-colors hover:bg-hover hover:text-fg data-popup-open:bg-hover data-popup-open:text-fg data-disabled:pointer-events-none data-disabled:opacity-45";
 
-/** Warning tone ("Pick a model", missing branch): `.model-chip-warning` keeps the text >= 4.5:1 on the light chip. */
-export const MODEL_CHIP_WARNING = "model-chip-warning border-danger/40 text-danger";
+/** Warning tone ("Pick a model", missing branch): text only, no border; `.model-chip-warning` keeps the text >= 4.5:1 on the light chip. */
+export const MODEL_CHIP_WARNING = "model-chip-warning border-transparent text-danger";

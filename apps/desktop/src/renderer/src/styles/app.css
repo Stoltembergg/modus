@@ -943,7 +943,7 @@ select option:disabled {
    a text-safe danger on the light chip fill (>= 4.5:1). */
 .model-chip:focus-visible {
   outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
+  outline-offset: 3px;
   box-shadow: none;
 }
 :root:not([data-theme="dark"]) .model-chip-warning {
