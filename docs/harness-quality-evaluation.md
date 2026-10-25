@@ -8,6 +8,15 @@ that must start and collect a real child session, plus a real repository code re
 Independent code checks file contents and preserves inputs; the model does not
 grade itself. The coding task also executes independent behavioral checks.
 
+The original seven-task set is corpus `v1` and remains unchanged. A separate
+two-task extension `v2` covers an iterative repair with a host-owned feedback
+tool and English recall from the real local project-memory store/context planner.
+The recall case seeds a current-workspace decision and a same-topic decoy in a
+different workspace, passes only the planner's digest to the model, and checks
+that the selected IDs exclude the decoy. The extension has its own fixture hash
+and report; do not combine its scores with `v1` or call either set a quality
+gain without a comparable live run.
+
 ## Run
 
 Choose the exact provider/model with the user before invoking this suite. Calls
@@ -26,6 +35,7 @@ From the repository root, after dependencies are already installed:
 
 ```sh
 MODUS_HARNESS_QUALITY_LIVE=1 \
+MODUS_HARNESS_QUALITY_CORPUS=v1 \
 MODUS_HARNESS_QUALITY_MODEL='USER_CHOSEN_PROVIDER/USER_CHOSEN_MODEL' \
 MODUS_HARNESS_QUALITY_THINKING=off \
 MODUS_HARNESS_QUALITY_REVISION='REVISION_BEING_EVALUATED' \
@@ -43,6 +53,16 @@ with the evaluated patch. Keep all model, thinking, fixture, and flag settings
 fixed when comparing runs. Inference remains stochastic; these seven examples do
 not support broad statistical quality claims.
 
+Run only the extension corpus by setting `MODUS_HARNESS_QUALITY_CORPUS=v2`. It
+sends two normal inference requests and incurs the selected provider's usual
+cost. The repair verifier accepts no arguments, reads only the approved
+`command-line.ts`, returns a boolean and fixed failure IDs, and is capped at four
+calls. The candidate is evaluated by the same independent behavioral verifier
+as `v1`. The memory fixture uses the production SQLite retrieval and context
+planner against the isolated evaluation database; the model never receives the
+cross-workspace decoy. Both corpora remain opt-in and use the exact
+user-selected provider/model.
+
 Without `MODUS_HARNESS_QUALITY_LIVE=1`, all live cases are skipped before model
 lookup or temporary app setup. An enabled run with a missing/unavailable model
 or missing credentials fails configuration and writes `configuration_error`;
@@ -52,6 +72,16 @@ Local verifier, scope, and reporter checks make no inference requests:
 
 ```sh
 node_modules/.bin/vitest run apps/desktop/scripts/harness-quality/quality.test.ts apps/desktop/scripts/harness-quality/code-repair.test.ts
+```
+
+The extension's local verifier and workspace-scope checks also run without
+provider access:
+
+```sh
+node_modules/.bin/vitest run \
+  apps/desktop/scripts/harness-quality/iterative-repair.test.ts \
+  apps/desktop/scripts/harness-quality/scoped-recall.test.ts \
+  apps/desktop/scripts/harness-quality/scope.test.ts
 ```
 
 ## First repository coding task and baseline

@@ -4,7 +4,7 @@
   "inferenceExecuted": false,
   "selectedModel": null,
   "liveBaselineStatus": "not_run_requires_explicit_provider_model_choice",
-  "sourceRevision": "ba6ca5e56d4393316653b6542a9311be08008295",
+  "sourceRevision": "7b133e1b958d3a19b0623c9f546e31845fb5e763",
   "nodeVersion": "v24.19.0",
   "fixtureId": "repair-command-line-pt",
   "fixtureHash": "8d8964d3ecd410334b418b9b3449fab875e71bd2242e8e2713d4de6de5836c88",
@@ -21,11 +21,11 @@
     "apps/desktop/scripts/harness-quality/code-repair.test.ts": "3061c0059c5cf4bb79cebc12dc9acecabd51e1786125e5157c588f8d23189fe0",
     "apps/desktop/scripts/harness-quality/quality.test.ts": "2e929bf385c715b91dc10dede056649c004e6095b4bfa4849e067a6e4a813c9f",
     "apps/desktop/scripts/harness-quality/report.ts": "9cd97654661410025b4bb8c20740bc4ff96388629cb6587a5d97374bf9271f01",
-    "apps/desktop/scripts/harness-quality/scope.ts": "a225e4e480a380fcd9b17b7c58833f50731a55e673514a3cbb29dd05beaed252",
+    "apps/desktop/scripts/harness-quality/scope.ts": "8e6b364bd31a4db8143716be4c68a507a016082a608562446251cc5785bbbb00",
     "apps/desktop/scripts/harness-quality/code-repair/command-line.ts.txt": "99157e8a187b73579088d3f5af1a001eaa6ab1cc8780eed4b974a9a94edf3945",
     "apps/desktop/scripts/harness-quality/code-repair/command-line.test.ts.txt": "02454b1261988ba1b7a7603ff3f215a431e249b7f5f7ca6558d60d770d9a203b",
     "apps/desktop/scripts/harness-quality/code-repair/reference.ts.txt": "0b3f818c5d507f1283bc706b8f3a0bddc588b349a6d9da1a3c262e30a5a9bbc1",
-    "apps/desktop/src/main/agent/harness/harness-quality.live.test.ts": "30d023c3a321c72cab3d1b091fff5cf6af94b37ee4244abc519a79b9a46c30ee"
+    "apps/desktop/src/main/agent/harness/harness-quality.live.test.ts": "b869365189e9f37f85d0072715472e498403e296de206422222b65031aaecab5"
   },
   "command": "MODUS_HARNESS_QUALITY_LIVE=0 MODUS_HARNESS_QUALITY_BASELINE=docs/evaluations/harness-quality-code-repair-baseline.json node_modules/.bin/vitest run apps/desktop/scripts/harness-quality/code-repair.test.ts apps/desktop/scripts/harness-quality/quality.test.ts apps/desktop/src/shared/command-line.test.ts apps/desktop/src/main/agent/harness/harness-quality.live.test.ts",
   "controls": [
