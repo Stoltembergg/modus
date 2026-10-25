@@ -482,7 +482,25 @@ describe("IPC schemas", () => {
 it("rejects work lists on every agent and group creation path; copies name their source", async () => {
   const schemas = await import("./schemas");
   const split = await import("./schemas-part-04");
+  // The live schemas have no group:create any more; the split copy still carries it.
+  expect("groupCreateSchema" in schemas).toBe(false);
+  expect(schemas.agentsCreateSchema.safeParse({ groupId: "g-1", name: "Custom" }).success).toBe(
+    false,
+  );
   for (const source of [schemas, split]) {
+    for (const invalid of [
+      { capabilityIds: ["review"] },
+      { supportedTaskKinds: ["code"] },
+      { tools: ["shell"] },
+    ]) {
+      expect(source.agentsCreateSchema.safeParse({ name: "Custom", ...invalid }).success).toBe(
+        false,
+      );
+      expect(source.agentsUpdateSchema.safeParse({ id: "a-1", ...invalid }).success).toBe(false);
+    }
+  }
+  {
+    const source = split;
     const member = { name: "Custom", modelId: "m-1", role: "Builder" };
     expect(
       source.groupCreateSchema.parse({
@@ -496,10 +514,6 @@ it("rejects work lists on every agent and group creation path; copies name their
       { supportedTaskKinds: ["code"] },
       { tools: ["shell"] },
     ]) {
-      expect(
-        source.agentsCreateSchema.safeParse({ groupId: "g-1", name: "Custom", ...invalid }).success,
-      ).toBe(false);
-      expect(source.agentsUpdateSchema.safeParse({ id: "a-1", ...invalid }).success).toBe(false);
       expect(
         source.groupCreateSchema.safeParse({
           name: "Group",

@@ -13,12 +13,12 @@
  * upstream "pending update" diff; under reduced motion the glyph only fades.
  */
 import {
-  IconAlertCircle,
   IconChevronRight,
   IconCircleArrowRight,
   IconCircleCheck,
   IconCircleDashed,
   IconCircleX,
+  IconHandStop,
   IconListCheck,
 } from "@tabler/icons-react";
 import { m, useReducedMotion } from "motion/react";
@@ -110,7 +110,7 @@ export function TodosCard({
     >
       <button
         aria-expanded={open}
-        className="flex h-9 w-full items-center gap-2 px-3 text-left transition-colors hover:bg-hover"
+        className="flex h-9 w-full items-center gap-2 px-3 text-left transition-colors duration-(--motion-duration-fast) ease-standard hover:bg-hover"
         onClick={() => setOpen((value) => !value)}
         type="button"
       >
@@ -196,8 +196,8 @@ const TODO_ROW_STYLES: Record<
     textClass: "text-fg-faint line-through decoration-fg-faint",
   },
   blocked: {
-    Glyph: IconAlertCircle,
-    iconClass: "text-warning",
+    Glyph: IconHandStop,
+    iconClass: "text-fg-muted",
     iconStroke: 1.7,
     textClass: "text-fg-subtle",
   },
@@ -218,7 +218,7 @@ function TodoRow({
   return (
     <li
       className={cn(
-        "-mx-1.5 flex items-start gap-2.5 rounded-md px-1.5 py-1.5 transition-colors duration-500",
+        "-mx-1.5 flex items-start gap-2.5 rounded-md px-1.5 py-1.5 transition-colors duration-(--motion-duration-emphasized) ease-standard",
         changed && "bg-build/12",
       )}
       data-changed={changed || undefined}
@@ -236,7 +236,7 @@ function TodoRow({
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
           <span className={cn("text-sm leading-snug", textClass)}>{todo.content}</span>
-          {blocked ? <span className="text-xs font-medium text-warning">Blocked</span> : null}
+          {blocked ? <span className="text-xs font-medium text-fg-muted">Blocked</span> : null}
         </div>
         {blocked && todo.blockedReason ? (
           <p className="mt-0.5 break-words text-xs leading-snug text-fg-muted">

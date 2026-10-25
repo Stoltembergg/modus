@@ -229,7 +229,7 @@ export const MessageBlock = memo(function MessageBlock({
 
   return (
     <div
-      className="message-role-row message-assistant-row flex w-1/2 min-w-0 items-start gap-2"
+      className="group/msg message-role-row message-assistant-row flex w-1/2 min-w-0 items-start gap-2"
       data-message-row="assistant"
     >
       <AssistantAvatar agent={assistantAgent} agentId={assistantAgentId} streaming={streaming} />
@@ -259,6 +259,12 @@ export const MessageBlock = memo(function MessageBlock({
           </div>
         ) : null}
       </div>
+      {/* Copy the raw markdown: revealed on hover or keyboard focus, always on touch. */}
+      {content && !streaming ? (
+        <span className="copy-reveal pointer-events-none shrink-0 self-end opacity-0 group-focus-within/msg:pointer-events-auto group-focus-within/msg:opacity-100 group-hover/msg:pointer-events-auto group-hover/msg:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100">
+          <CopyButton label="Copy message" text={content} />
+        </span>
+      ) : null}
     </div>
   );
 });

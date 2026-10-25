@@ -51,7 +51,6 @@ import {
   findDeepLinkInArgv,
   registerModusProtocol,
 } from "./deep-link/deep-link";
-import { disposeGroupRuntime } from "./groups/group-runtime-service";
 import { IPC_CHANNELS } from "./ipc/channels";
 import { registerAppIpc } from "./ipc/register-app-ipc";
 import { installLocalModelsLogFile } from "./local-models/local-models-log-file";
@@ -324,8 +323,6 @@ if (!app.requestSingleInstanceLock()) {
     stopRemoteModelCatalog();
     stopModusProvider();
     shutdownTerminals();
-    // Stop the group queue's retry timer and its agent-runtime subscriptions.
-    disposeGroupRuntime();
     shutdownBillingService();
     void drainShutdown([
       (async () => {

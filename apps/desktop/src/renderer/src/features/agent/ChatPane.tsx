@@ -46,6 +46,7 @@ import { ComposerDock } from "../composer/ComposerDock";
 import { contextItemKey } from "../composer/composerTokens";
 import type { MentionEditorPart } from "../composer/MentionEditor";
 import { QueuedPromptStrip } from "../composer/QueuedPromptStrip";
+import { restoreQueuedToDraft } from "../composer/restoreQueued";
 import { SessionModelPicker } from "../composer/SessionModelPicker";
 import { SessionBranchPicker } from "../git/SessionBranchPicker";
 import { effectiveBuildStatus, normalizePlan } from "../plan/planState";
@@ -1264,7 +1265,11 @@ export function ChatPane({
     setPendingPrompt(false);
     setAborting(true);
     try {
-      await window.modus.agent.abort(sessionId);
+      const result = await window.modus.agent.abort(sessionId);
+      if (result?.restored?.length) {
+        // Stop takes queued prompts back instead of sending them; hand them to the composer.
+        setComposerDraft((draft) => restoreQueuedToDraft(draft, result.restored));
+      }
       onSessionsChanged();
     } catch (error) {
       setAborting(false);

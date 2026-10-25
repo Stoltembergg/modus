@@ -30,6 +30,9 @@ import {
 import { PluginSafeModeManager } from "./safe-mode";
 import { PluginVersionManager } from "./version-manager";
 
+/** Former built-in plugins whose rows are dropped from plugins.db at startup. */
+const RETIRED_BUILT_IN_PLUGIN_IDS: readonly string[] = ["@modus/groups"];
+
 export interface PluginStatusReport {
   id: string;
   version: string;
@@ -976,6 +979,11 @@ export class PluginLifecycleService {
   }
 
   async #syncOnStartupUnlocked(): Promise<string[]> {
+    // Built-ins removed from the host catalog leave their row behind in an
+    // existing plugins.db; drop it so startup does not flag it as an error.
+    for (const pluginId of RETIRED_BUILT_IN_PLUGIN_IDS) {
+      if (this.#store.getPlugin(pluginId)) this.#store.deletePlugin(pluginId);
+    }
     const tombstones = this.#store.listPluginUninstallTombstones();
     const tombstonedPluginIds = new Set(tombstones.map((item) => item.pluginId));
     for (const tombstone of tombstones) {

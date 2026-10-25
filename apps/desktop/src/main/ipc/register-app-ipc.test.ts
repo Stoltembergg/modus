@@ -357,7 +357,7 @@ describe("groups retired (PR 4)", () => {
       String(channel).startsWith("group:"),
     );
     expect(groupChannels).toEqual([]);
-    expect(mocks.handlers.has(IPC_CHANNELS.groupIntegrationPreview)).toBe(false);
+    expect(Object.values(IPC_CHANNELS).some((channel) => channel.startsWith("group:"))).toBe(false);
     expect(mocks.handlers.has(IPC_CHANNELS.groupsMigrationNotice)).toBe(true);
     expect(mocks.handlers.has(IPC_CHANNELS.groupsMigrationNoticeDismiss)).toBe(true);
     expect(mocks.handlers.has(IPC_CHANNELS.migratedGroupTranscript)).toBe(true);

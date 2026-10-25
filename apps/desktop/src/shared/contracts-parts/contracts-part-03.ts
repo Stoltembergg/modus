@@ -40,6 +40,11 @@ export type QueuedPromptItem = {
   imageCount: number;
 };
 
+/** What Stop hands back: prompts that were still queued, in arrival order, for the composer. */
+export type AbortAgentResult = {
+  restored: Array<{ text: string; attachments: PromptImageAttachment[] }>;
+};
+
 /** Durable SQLite event position, used to merge history with live IPC safely. */
 export type AgentEvent = AgentEventPayload & { eventCursor?: number };
 

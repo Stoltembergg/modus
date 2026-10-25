@@ -324,8 +324,6 @@
   --glass-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   --glass-scrim-blur: 2px;
   --glass-scrim-filter: blur(var(--glass-scrim-blur));
-  --group-icon-saturation: 66%;
-  --group-icon-lightness: 72%;
   --overlay-shadow: var(--shadow-popup);
   --menu-shadow: var(--shadow-popup);
   --shadow-composer: var(--shadow-composer-edge);
@@ -389,56 +387,6 @@
   color: var(--text-primary);
   font-size: var(--type-body);
   font-weight: 600;
-}
-.group-room-header-row-chrome {
-  display: grid;
-  width: 100%;
-  min-width: 0;
-  grid-template-columns: minmax(0, 1fr) minmax(0, min(220px, 28vw)) minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-}
-.group-room-header-identity-chrome {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 8px;
-}
-.group-room-header-search-centered {
-  width: 100%;
-  min-width: 0;
-  grid-column: 2;
-  grid-row: 1;
-}
-.group-room-header-controls-chrome {
-  display: flex;
-  min-width: 0;
-  grid-column: 3;
-  grid-row: 1;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-}
-/* L3c: narrower headers (see GROUP_HEADER_BREAKPOINTS). The controls column sizes to its
-   content so it is never clipped; the title column truncates instead. */
-.group-room-header-row-chrome[data-width-tier="md"] {
-  grid-template-columns: minmax(0, 1fr) minmax(96px, 180px) auto;
-}
-.group-room-header-row-chrome[data-width-tier="sm"] {
-  grid-template-columns: minmax(0, 1fr) auto auto;
-}
-.group-room-header-search-toggle {
-  grid-column: 2;
-  grid-row: 1;
-}
-/* sm with the search open: the field takes the title's place. */
-.group-room-header-row-chrome[data-search-over-title] .group-room-header-search-centered {
-  grid-column: 1 / span 2;
-}
-.group-identity-icon {
-  color: hsl(
-    var(--group-icon-hue, 260deg) var(--group-icon-saturation) var(--group-icon-lightness)
-  );
 }
 .app-rail-item {
   display: flex;
@@ -593,16 +541,6 @@
 .composer-dock-shell[data-dragging] {
   background-color: var(--state-drop-surface);
 }
-.group-prompt-bar {
-  transition:
-    border-color var(--motion-ui),
-    box-shadow var(--motion-ui),
-    background-color var(--motion-ui);
-}
-.group-prompt-bar:focus-within {
-  border-color: var(--border-strong);
-  box-shadow: var(--shadow-composer);
-}
 /* C2.1: "open at line" flash in the code editor; re-created per flash so the fade restarts. */
 .modus-line-flash {
   background-color: color-mix(in srgb, var(--color-focus-ring) 22%, transparent);
@@ -630,133 +568,6 @@
   }
 }
 /* No reduced-motion override: the flash is a background-colour fade, nothing moves. */
-.group-composer-toolbar {
-  background-color: color-mix(in srgb, var(--surface-raised) 76%, transparent);
-}
-.group-activity-checklist-enter {
-  display: grid;
-  grid-template-rows: 1fr;
-  margin-bottom: 0.75rem;
-  animation: group-activity-checklist-reveal var(--motion-duration-emphasized)
-    var(--motion-ease-standard) both;
-  transform-origin: top;
-}
-@keyframes group-activity-checklist-reveal {
-  from {
-    grid-template-rows: 0fr;
-    margin-bottom: 0;
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    grid-template-rows: 1fr;
-    margin-bottom: 0.75rem;
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  /* Rows and offset snap; the checklist still fades in. */
-  .group-activity-checklist-enter {
-    animation: motion-reduced-fade-in var(--motion-duration-reduced) var(--motion-ease-linear) both;
-  }
-}
-.group-message-card-enter {
-  animation: group-message-card-enter var(--motion-duration-slow) var(--motion-ease-standard) both;
-}
-@keyframes group-message-card-enter {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .group-message-card-enter {
-    animation: motion-reduced-fade-in var(--motion-duration-reduced) var(--motion-ease-linear) both;
-  }
-}
-.group-empty-beams {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  pointer-events: none;
-  mask-image: radial-gradient(ellipse at center, #000 0%, #000 38%, transparent 84%);
-}
-.group-empty-beams::before {
-  position: absolute;
-  inset: -20%;
-  background: radial-gradient(
-    ellipse at 50% 54%,
-    color-mix(in srgb, var(--color-focus-ring) 8%, transparent),
-    transparent 62%
-  );
-  content: "";
-}
-.group-empty-beam {
-  position: absolute;
-  top: -48%;
-  bottom: -48%;
-  left: 20%;
-  width: 18%;
-  background:
-    linear-gradient(
-      90deg,
-      transparent 30%,
-      color-mix(in srgb, var(--color-link) 12%, transparent) 48%,
-      transparent 60%
-    ),
-    linear-gradient(
-      90deg,
-      transparent 22%,
-      color-mix(in srgb, var(--color-focus-ring) 8%, transparent) 35%,
-      color-mix(in srgb, var(--color-focus-ring) 28%, transparent) 50%,
-      color-mix(in srgb, var(--color-focus-ring-soft) 20%, transparent) 57%,
-      transparent 78%
-    );
-  filter: blur(18px);
-  opacity: 0.32;
-  animation: group-empty-beam-sweep 22s ease-in-out infinite alternate;
-}
-.group-empty-beam:nth-child(2) {
-  left: 48%;
-  width: 12%;
-  opacity: 0.26;
-  animation-delay: -9s;
-  animation-duration: 29s;
-}
-.group-empty-beam:nth-child(3) {
-  left: 76%;
-  width: 16%;
-  opacity: 0.22;
-  animation-delay: -17s;
-  animation-duration: 25s;
-}
-@keyframes group-empty-beam-sweep {
-  from {
-    transform: translate3d(-22vw, 0, 0) rotate(19deg);
-  }
-  to {
-    transform: translate3d(24vw, 0, 0) rotate(19deg);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  /* The beams stay in place and breathe in opacity on the same slow cycle. */
-  .group-empty-beam {
-    animation-name: group-empty-beam-breathe;
-  }
-}
-@keyframes group-empty-beam-breathe {
-  from {
-    opacity: 0.18;
-  }
-  to {
-    opacity: 0.34;
-  }
-}
 .surface-glass {
   border: 1px solid var(--border-overlay);
   border-radius: var(--radius-overlay);
@@ -782,7 +593,6 @@
   color-scheme: light;
   --overlay-scrim-color: rgba(18, 24, 38, 0.18);
   --dialog-shadow: 0 1px 2px rgba(18, 24, 38, 0.06), 0 24px 64px -24px rgba(18, 24, 38, 0.3);
-  --group-icon-lightness: 42%;
 
   /* Surfaces — clean editor white + neutral panel chrome */
   --color-canvas: #ffffff; /* app base (chat / main / inspector) */
@@ -1076,9 +886,13 @@ select option:disabled {
   --activity-inset-bg: color-mix(in srgb, var(--color-fg) 4%, transparent);
   --activity-inset-error-bg: color-mix(in srgb, var(--color-danger) 7%, transparent);
   --tool-group-mask-from: var(--surface-sidebar);
+  /* Text-safe diff/status hues on the panel and diff gutters (>= 4.5:1). */
+  --color-danger: #f58787;
 }
 /* Light glass: a lighter (not darker) inset keeps faint/danger text >= 4.5:1. */
 :root:not([data-theme="dark"]) .activity-panel {
+  --color-success: #0e7049;
+  --color-danger: #b42f2f;
   --activity-inset-bg: color-mix(in srgb, #fff 60%, transparent);
   --activity-inset-error-bg: color-mix(
     in srgb,
@@ -1102,6 +916,128 @@ select option:disabled {
 }
 .activity-panel [data-activity-divider] {
   border-width: 0;
+}
+/* Keyboard focus on any Activity control: the accent ring, never the browser
+   default outline. Offset 3px outside the box so it never touches row text. */
+.activity-panel
+:is(button, a[href], [role="button"], [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+  box-shadow: none;
+}
+/* Message copy (components/ui/CopyButton.tsx): icon only, the check is the
+   confirmation. Keyboard focus gets the same accent ring as Activity (#322). */
+.copy-button {
+  outline: none;
+  transition:
+    background-color var(--motion-ui) var(--ease-ui),
+    color var(--motion-ui) var(--ease-ui);
+}
+.copy-button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+  box-shadow: none;
+}
+/* Composer chips (model, branch; modelChipStyle.ts): keyboard focus gets the
+   accent ring (#322) instead of nothing. The warning tone ("Pick a model") uses
+   a text-safe danger on the light chip fill (>= 4.5:1). */
+.model-chip:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+  box-shadow: none;
+}
+/* Model picker (ModelPicker.tsx): the keyboard-highlighted row gets the same 2px
+   accent ring, inset because the list's 4px padding would clip a 3px outside offset.
+   Pointer hover keeps only the fill. */
+[data-nav="keyboard"] .model-picker-item[data-highlighted] {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+:root:not([data-theme="dark"]) .model-chip-warning {
+  --color-danger: #b42f2f;
+}
+.copy-button-icon {
+  position: absolute;
+  transition:
+    opacity var(--motion-duration-base) var(--motion-ease-standard),
+    scale var(--motion-duration-base) var(--motion-ease-standard);
+}
+.copy-button-done {
+  opacity: 0;
+  scale: 0.6;
+  color: var(--color-accent);
+}
+.copy-button[data-copied="true"] .copy-button-idle {
+  opacity: 0;
+  scale: 0.6;
+}
+.copy-button[data-copied="true"] .copy-button-done {
+  opacity: 1;
+  scale: 1;
+}
+/* Turn footer: copy appears on hover or keyboard focus. */
+.copy-reveal {
+  transition: opacity var(--motion-duration-base) var(--motion-ease-standard);
+}
+@media (prefers-reduced-motion: reduce) {
+  .copy-button-icon,
+  .copy-reveal {
+    transition: opacity var(--motion-duration-reduced) var(--motion-ease-linear);
+  }
+  .copy-button-done,
+  .copy-button[data-copied="true"] .copy-button-idle {
+    scale: 1;
+  }
+}
+/* First-page loading skeleton: borderless bars on the glass with a soft sweep.
+   It fades in after a beat so fast loads don't flash; under reduced motion it
+   is a 120 ms fade with no sweep. */
+.activity-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 10px 24px;
+  animation: activity-skeleton-in var(--motion-duration-base) var(--motion-ease-standard)
+    var(--motion-duration-base) both;
+}
+.activity-skeleton__bar {
+  height: 10px;
+  border-radius: 999px;
+  background-color: color-mix(in srgb, var(--color-fg) 7%, transparent);
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--color-fg) 8%, transparent) 50%,
+    transparent 100%
+  );
+  background-size: 300% 100%;
+  background-repeat: no-repeat;
+  animation: activity-skeleton-sweep 1.6s var(--motion-ease-in-out) infinite;
+}
+@keyframes activity-skeleton-sweep {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0% 0;
+  }
+}
+@keyframes activity-skeleton-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .activity-skeleton {
+    animation: activity-skeleton-in var(--motion-duration-reduced) var(--motion-ease-linear) both;
+  }
+  .activity-skeleton__bar {
+    animation: activity-skeleton-in var(--motion-duration-reduced) var(--motion-ease-linear) both;
+    background-image: none;
+  }
 }
 
 /* 全局默认行高与字重，避免某些控件回退到浏览器默认（16px / bold） */
@@ -1929,15 +1865,16 @@ body {
     text-align: left;
   }
   .work-status-line__toggle {
+    @apply outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/35;
     border-radius: 6px;
     cursor: pointer;
   }
   .work-status-line__glyph {
     flex-shrink: 0;
-    opacity: 0.55;
+    opacity: 0.85; /* >= 4.5:1 on the light panel; pinned by activityContrast.test.ts */
   }
   .work-status-line__glyph[data-working] {
-    animation: work-status-breathe 1.5s ease-in-out infinite;
+    color: var(--color-fg);
   }
   @keyframes work-status-breathe {
     0%,
@@ -1945,7 +1882,7 @@ body {
       opacity: 1;
     }
     50% {
-      opacity: 0.4;
+      opacity: 0.7; /* --color-fg at 0.7 stays >= 4.5:1; pinned by activityMotion.test.ts */
     }
   }
   /* Both labels share one grid cell: the line keeps the wider one's width. */
@@ -1967,7 +1904,7 @@ body {
   }
   .work-status-line__chevron {
     flex-shrink: 0;
-    opacity: 0.7;
+    opacity: 0.85;
   }
   .work-status-line__chevron[data-open] {
     transform: rotate(90deg);
@@ -1982,6 +1919,12 @@ body {
 
   /* Movement-only parts of these indicators run only without reduced motion. */
   @media (prefers-reduced-motion: no-preference) {
+    .status-ping {
+      animation: status-ping 1s var(--motion-ease-exit) infinite;
+    }
+    .work-status-line__glyph[data-working] {
+      animation: work-status-breathe 1.5s var(--motion-ease-in-out) infinite;
+    }
     .task-check[data-pop] {
       animation: task-check-pop var(--motion-duration-emphasized) var(--motion-ease-standard);
     }
@@ -3068,6 +3011,14 @@ body
  * never removed. Shared keyframes for CSS-driven sites, plus a Tailwind
  * utility for `motion-reduce:transition-reduced-fade` on transitioned controls.
  */
+@keyframes status-ping {
+  75%,
+  100% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
 @keyframes motion-reduced-fade-in {
   from {
     opacity: 0;

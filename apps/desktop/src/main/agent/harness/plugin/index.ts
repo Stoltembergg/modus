@@ -24,7 +24,6 @@ export * from "./plugin-types";
 // Export pilot plugins
 export * from "./plugins/context-engine-plugin";
 export * from "./plugins/failure-intel-plugin";
-export * from "./plugins/groups-plugin";
 export * from "./plugins/memory-plugin";
 export * from "./plugins/model-router-plugin";
 export * from "./plugins/verifier-plugin";

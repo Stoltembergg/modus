@@ -1,5 +1,5 @@
 import { cn } from "../../lib/cn";
-import type { GroupActivityState } from "../groups/useWorkingGroups";
+import type { GroupActivityState } from "./agentAvatarModel";
 
 export type AgentPresenceState = GroupActivityState | "archived";
 

@@ -18,10 +18,6 @@ const SITES: Record<string, { anchors: string[]; count?: [string, number] }> = {
       ">{hint}</p>",
     ],
   },
-  "../features/groups/GroupMessageList.tsx": {
-    anchors: ['data-testid="group-room-empty"', 'data-testid="group-conversation-search-empty"'],
-  },
-  "../features/groups/GroupComposer.tsx": { anchors: ['{t("composer.kickoffHint")}'] },
   "../features/composer/Composer.tsx": {
     anchors: [
       "No context usage yet.",
@@ -46,7 +42,7 @@ function occurrences(source: string, needle: string): number[] {
 }
 
 describe("readable helper text (#254)", () => {
-  it("uses fg-muted, never fg-faint or fg-subtle, at the 14 call sites", () => {
+  it("uses fg-muted, never fg-faint or fg-subtle, at the 8 call sites", () => {
     let checked = 0;
     for (const [path, { anchors, count }] of Object.entries(SITES)) {
       const source = readFileSync(new URL(path, import.meta.url), "utf8");
@@ -69,7 +65,7 @@ describe("readable helper text (#254)", () => {
     }
     // Settings rows no longer carry descriptions (minimal layout); only Field keeps
     // its helper line. Row/section notices are checked below.
-    expect(checked).toBe(11);
+    expect(checked).toBe(8);
   });
 
   it("Settings notices (the only extra line a row may carry) default to fg-muted", () => {

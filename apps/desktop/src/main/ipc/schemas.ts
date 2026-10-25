@@ -1052,8 +1052,6 @@ const agentFields = {
 
 export const agentsCreateSchema = z
   .object({
-    /** The agent's only group (A2); omitted for a standalone profile. */
-    groupId: agentIdString.optional(),
     name: agentFields.name,
     /** From a template: exempt from the model rule (the app default model applies). */
     templateId: z.string().min(1).max(128).optional(),
@@ -1092,151 +1090,10 @@ const MAX_PROFILE_ROLES = 32;
 
 export const agentsGenerateProfileSchema = z
   .object({
-    // Absent in the create-group modal (A4): no group yet, `roles` carries the chosen ones.
-    groupId: agentIdString.optional(),
     roles: z.array(agentFields.role).max(MAX_PROFILE_ROLES).optional(),
     modelId: z.string().min(1).max(256),
     name: agentFields.name,
     description: z.string().trim().max(500).optional(),
     agentId: agentIdString.optional(),
-  })
-  .strict();
-
-/* ── Agent Groups (group:*) ─────────────────────────────────────────────── */
-
-const groupIdString = nonEmptyString.max(128);
-const groupSessionIdString = nonEmptyString.max(128);
-const groupNameString = z.string().trim().min(1).max(120);
-export const MAX_GROUP_MEMBERS = 32;
-
-/** A NEW agent created in a group (group:create members, group:update-members adds). */
-const newGroupAgentSchema = z
-  .object({
-    name: agentFields.name,
-    role: agentFields.role.optional(),
-    instructions: agentFields.instructions.optional(),
-    modelId: agentFields.modelId.optional(),
-    defaultWorkspaceId: agentFields.defaultWorkspaceId.optional(),
-    avatarFace: agentFields.avatarFace.optional(),
-    avatarColor: agentFields.avatarColor.optional(),
-    avatarShape: agentFields.avatarShape.optional(),
-    avatarSeed: agentFields.avatarSeed.optional(),
-    templateId: z.string().min(1).max(128).optional(),
-    /** "Copy from another group": main copies this agent's saved work lists. */
-    copiedFromAgentId: z.string().min(1).max(128).optional(),
-  })
-  .strict();
-
-export const groupCreateSchema = z
-  .object({
-    name: groupNameString,
-    // Required, but null / the Chats inbox parse so they fail as group-project-required.
-    workspaceId: groupIdString.nullable(),
-    mode: z.enum(["free", "coordinator"]).optional(),
-    // NEW agents, created in the group (one group per agent). The 2..10 rule is
-    // groupCreateCountError; this bound only caps the payload.
-    members: z.array(newGroupAgentSchema).max(MAX_GROUP_MEMBERS),
-    leadName: agentFields.name.nullable().optional(),
-  })
-  .strict();
-
-export const groupRenameSchema = z.object({ id: groupIdString, name: groupNameString }).strict();
-
-export const groupIdInputSchema = z.object({ id: groupIdString }).strict();
-
-export const groupListTasksSchema = z.object({ groupId: groupIdString }).strict();
-
-export const groupCancelTaskSchema = z.object({ taskId: nonEmptyString.max(128) }).strict();
-
-export const groupListDecisionsSchema = z.object({ groupId: groupIdString }).strict();
-
-/** Strict: the user deletes; a payload naming a session (a member acting) is refused. */
-export const groupDeleteDecisionSchema = z.object({ decisionId: nonEmptyString.max(128) }).strict();
-
-export const groupMemberSchema = z
-  .object({
-    groupId: groupIdString,
-    agentId: groupIdString,
-    role: z.string().trim().max(40).optional(),
-  })
-  .strict();
-
-export const groupSetWorkspaceSchema = z
-  .object({ groupId: groupIdString, workspaceId: groupIdString.nullable() })
-  .strict();
-
-export const groupRemoveMemberSchema = z
-  .object({ groupId: groupIdString, sessionId: groupSessionIdString })
-  .strict();
-
-/** "Manage members" in one payload: adds, removes and the final lead (one transaction). */
-export const groupUpdateMembersSchema = z
-  .object({
-    groupId: groupIdString,
-    add: z.array(newGroupAgentSchema).max(MAX_GROUP_MEMBERS),
-    removeAgentIds: z.array(groupIdString).max(MAX_GROUP_MEMBERS),
-    lead: z
-      .union([
-        z.object({ agentId: groupIdString }).strict(),
-        z.object({ name: agentFields.name }).strict(),
-      ])
-      .nullable(),
-  })
-  .strict();
-
-export const groupSetLeadSchema = z
-  .object({ groupId: groupIdString, sessionId: groupSessionIdString.nullable() })
-  .strict();
-
-export const groupSetModeSchema = z
-  .object({ groupId: groupIdString, mode: z.enum(["free", "coordinator"]) })
-  .strict();
-
-/** A room message body; long enough for pasted logs, bounded for the prompt budget. */
-export const MAX_GROUP_MESSAGE_BODY = 20_000;
-
-export const groupPostMessageSchema = z
-  .object({
-    groupId: groupIdString,
-    body: z.string().max(MAX_GROUP_MESSAGE_BODY),
-    mentions: z.array(groupSessionIdString).max(MAX_GROUP_MEMBERS).optional(),
-    replyToMessageId: groupIdString.optional(),
-    attachments: z.array(promptImageAttachmentSchema).max(6).optional(),
-    contextItems: z
-      .array(z.unknown())
-      .max(20)
-      .transform((items) => items as ContextItem[])
-      .optional(),
-    /** `new` opens a fresh execution; `complement` joins an existing one. */
-    executionMode: z.enum(["new", "complement"]).optional(),
-    /** Explicit execution id to complement (chain root message id). */
-    executionId: groupIdString.optional(),
-  })
-  .strict()
-  .transform((value) => ({ ...value, body: value.body.trim() }))
-  .refine(
-    (value) =>
-      value.body.length > 0 ||
-      (value.attachments?.length ?? 0) > 0 ||
-      (value.contextItems?.length ?? 0) > 0,
-    { message: "Group message needs text or attachments." },
-  );
-
-const groupMessageCursorSchema = z
-  .object({ createdAt: nonEmptyString.max(64), id: groupIdString })
-  .strict();
-
-export const groupStopSchema = z.object({ groupId: groupIdString }).strict();
-
-export const groupResumeExecutionSchema = z
-  .object({ groupId: groupIdString, executionId: groupIdString })
-  .strict();
-
-export const groupListMessagesSchema = z
-  .object({
-    groupId: groupIdString,
-    before: groupMessageCursorSchema.optional(),
-    after: groupMessageCursorSchema.optional(),
-    limit: z.number().int().min(1).max(500).optional(),
   })
   .strict();

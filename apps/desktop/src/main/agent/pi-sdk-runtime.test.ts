@@ -220,9 +220,6 @@ const { setFeatureFlagOverrides, resetFeatureFlagOverrides } = await import(
 );
 const { ResponsePolicyRegistry } = await import("./harness/response");
 const { HarnessObserver } = await import("./harness/observability");
-const groupStore = await import("../groups/group-store");
-const groupTaskStore = await import("../groups/group-task-store");
-const { resolveGroupTaskEvidence } = await import("../groups/group-task-evidence");
 
 async function createRuntimeWithHarnessKernel(): Promise<{
   runtime: InstanceType<typeof PiSdkRuntime>;
@@ -978,309 +975,6 @@ describe("PiSdkRuntime", () => {
       await runtime.releaseRuntime(sessionId);
       await runtime.closePluginLifecycleStore();
       unregisterExternalPluginTool();
-    }
-  });
-
-  it("registers group mailbox tools into the Pi tool registry when enabled", async () => {
-    setFeatureFlagOverrides({
-      MODUS_USE_KERNEL: true,
-      MODUS_GROUPS_MAILBOX: true,
-      MODUS_RESPONSE_POLICY: false,
-      MODUS_OBSERVABILITY: false,
-    });
-
-    const { kernel } = await createRuntimeWithHarnessKernel();
-
-    const registeredNames = toolRegistry
-      .getCustomToolDefinitions("chat")
-      .map((definition) => definition.name);
-    expect(registeredNames).toContain("group_mailbox_send");
-    expect(registeredNames).toContain("group_mailbox_receive");
-    expect(registeredNames).toContain("group_mailbox_ack");
-    expect(kernel.getHooksForPhase("turn_settle").map((hook) => hook.name)).toContain(
-      "harness_group_mailbox_turn_settle",
-    );
-    const runId = `mailbox-settle-${crypto.randomUUID()}`;
-    const settled = await kernel.executePhase<TurnSettleInput, TurnSettleOutput>(
-      "turn_settle",
-      {
-        runId,
-        completed: true,
-        hasActiveTodos: false,
-        turnTokens: 0,
-      },
-      {
-        sessionId: "mailbox-settle-session",
-        runId,
-        mode: "build",
-        state: new Map(),
-      } as HarnessContext,
-    );
-    expect(settled).toMatchObject({ settled: true, triggerContinuation: false });
-
-    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: false });
-    new PiSdkRuntime();
-    expect(
-      toolRegistry.getCustomToolDefinitions("chat").map((definition) => definition.name),
-    ).not.toContain("group_mailbox_send");
-  });
-
-  it("passes enabled mailbox definitions through Pi session assembly", async () => {
-    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: true });
-    const workspaceId = `workspace-${crypto.randomUUID()}`;
-    insertWorkspace(workspaceId);
-    const runtime = new PiSdkRuntime();
-    const window = createWindowStub();
-    const info = await runtime.create(window, {
-      workspaceId,
-      cwd,
-      title: "Mailbox registration",
-    });
-    await runtime.ensure(window, info.id);
-
-    const options = mocks.createAgentSession.mock.calls.at(-1)?.[0] as {
-      tools: string[];
-      customTools: Array<{ name: string }>;
-    };
-    expect(options.tools).toContain("group_mailbox_receive");
-    expect(options.customTools.map(({ name }) => name)).toContain("group_mailbox_receive");
-
-    await runtime.releaseRuntime(info.id);
-    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: false });
-    new PiSdkRuntime();
-  });
-
-  it("sends, receives, and acknowledges mail through the productive Pi tool path", async () => {
-    const { requestTool, sessionAt, messagesFor } = await useOfflinePiToolSessions();
-    const { GroupMailbox } = await import("./harness/groups/group-mailbox");
-    GroupMailbox.resetInstance();
-    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: true });
-    const workspaceId = `workspace-${crypto.randomUUID()}`;
-    const senderId = `mailbox-sender-${crypto.randomUUID()}`;
-    const recipientId = `mailbox-recipient-${crypto.randomUUID()}`;
-    insertSession(senderId, workspaceId, join(userData, "sender.jsonl"));
-    const now = new Date().toISOString();
-    getDatabase()
-      .prepare(
-        `insert into agent_sessions (
-          id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
-          created_at, updated_at
-        ) values (?, ?, 'Mailbox recipient', ?, 'idle', 'pi-sdk', 'mock/model', ?, ?, ?, ?)`,
-      )
-      .run(
-        recipientId,
-        workspaceId,
-        cwd,
-        `pi-${recipientId}`,
-        join(userData, "recipient.jsonl"),
-        now,
-        now,
-      );
-    const group = groupStore.createAgentGroupWithMembers({
-      name: "Mailbox runtime fixture",
-      workspaceId,
-      members: [{ sessionId: senderId }, { sessionId: recipientId }],
-    });
-    const runtime = new PiSdkRuntime();
-
-    try {
-      requestTool("group_mailbox_send", { to: recipientId, content: "runtime mailbox payload" });
-      await runtime.prompt(createWindowStub(), {
-        context: [],
-        message: "Send the group message.",
-        sessionId: senderId,
-      });
-      const sent = messagesFor(sessionAt(0)).find(
-        (message) => message.role === "toolResult" && message.toolName === "group_mailbox_send",
-      );
-      expect(JSON.stringify(sent?.content)).toContain("Message sent successfully");
-      const messageId = JSON.stringify(sent?.content).match(/[0-9a-f]{8}-(?:[0-9a-f-]{27})/i)?.[0];
-      expect(messageId).toBeDefined();
-      if (!messageId) throw new Error("The productive mailbox send did not return a message ID.");
-
-      requestTool("group_mailbox_receive");
-      await runtime.prompt(createWindowStub(), {
-        context: [],
-        message: "Receive the group message.",
-        sessionId: recipientId,
-      });
-      const received = messagesFor(sessionAt()).find(
-        (message) => message.role === "toolResult" && message.toolName === "group_mailbox_receive",
-      );
-      expect(JSON.stringify(received?.content)).toContain("runtime mailbox payload");
-
-      requestTool("group_mailbox_ack", { message_ids: [messageId] });
-      await runtime.prompt(createWindowStub(), {
-        context: [],
-        message: "Acknowledge the group message.",
-        sessionId: recipientId,
-      });
-      const acknowledged = messagesFor(sessionAt()).find(
-        (message) => message.role === "toolResult" && message.toolName === "group_mailbox_ack",
-      );
-      expect(JSON.stringify(acknowledged?.content)).toContain("Acknowledged 1 message");
-
-      const mailbox = GroupMailbox.getInstance();
-      expect(mailbox.receive(recipientId, 50, group.id)).toHaveLength(0);
-    } finally {
-      await runtime.releaseRuntime(senderId);
-      await runtime.releaseRuntime(recipientId);
-      GroupMailbox.resetInstance();
-      setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: false });
-      new PiSdkRuntime();
-    }
-  });
-
-  it("rejects direct mailbox recipients outside the current group through Pi", async () => {
-    const { requestTool, sessionAt, messagesFor } = await useOfflinePiToolSessions();
-    const { GroupMailbox } = await import("./harness/groups/group-mailbox");
-    GroupMailbox.resetInstance();
-    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: true });
-    const workspaceId = `workspace-${crypto.randomUUID()}`;
-    const senderId = `mailbox-quota-sender-${crypto.randomUUID()}`;
-    const recipientId = `mailbox-quota-member-${crypto.randomUUID()}`;
-    const strangerId = `mailbox-quota-stranger-${crypto.randomUUID()}`;
-    insertSession(senderId, workspaceId, join(userData, "quota-sender.jsonl"));
-    const now = new Date().toISOString();
-    getDatabase()
-      .prepare(
-        `insert into agent_sessions (
-          id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
-          created_at, updated_at
-        ) values (?, ?, 'Mailbox quota member', ?, 'idle', 'pi-sdk', 'mock/model', ?, ?, ?, ?)`,
-      )
-      .run(
-        recipientId,
-        workspaceId,
-        cwd,
-        `pi-${recipientId}`,
-        join(userData, "quota-member.jsonl"),
-        now,
-        now,
-      );
-    const group = groupStore.createAgentGroupWithMembers({
-      name: "Mailbox quota fixture",
-      workspaceId,
-      members: [{ sessionId: senderId }, { sessionId: recipientId }],
-    });
-    const runtime = new PiSdkRuntime();
-
-    try {
-      requestTool("group_mailbox_send", { to: strangerId, content: "must not be stored" });
-      await runtime.prompt(createWindowStub(), {
-        context: [],
-        message: "Send to an unknown recipient.",
-        sessionId: senderId,
-      });
-
-      const result = messagesFor(sessionAt()).findLast(
-        (message) => message.role === "toolResult" && message.toolName === "group_mailbox_send",
-      );
-      expect(JSON.stringify(result?.content)).toMatch(/recipient.*member|not a member/i);
-      const rows = getDatabase()
-        .prepare("select count(*) as count from harness_group_messages where group_id = ?")
-        .get(group.id) as { count: number };
-      expect(rows.count).toBe(0);
-    } finally {
-      await runtime.releaseRuntime(senderId);
-      GroupMailbox.resetInstance();
-      setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: false });
-      new PiSdkRuntime();
-    }
-  });
-
-  it("rechecks Agent Group membership before mailbox reads during an active turn", async () => {
-    const { requestToolSequence, sessionAt, messagesFor } = await useOfflinePiToolSessions();
-    const { GroupMailbox } = await import("./harness/groups/group-mailbox");
-    GroupMailbox.resetInstance();
-    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: true });
-    const workspaceId = `workspace-${crypto.randomUUID()}`;
-    const memberId = `mailbox-revoked-member-${crypto.randomUUID()}`;
-    const secondMemberId = `mailbox-revoked-peer-${crypto.randomUUID()}`;
-    insertSession(memberId, workspaceId, join(userData, "revoked-member.jsonl"));
-    const now = new Date().toISOString();
-    getDatabase()
-      .prepare(
-        `insert into agent_sessions (
-          id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
-          created_at, updated_at
-        ) values (?, ?, 'Mailbox peer', ?, 'idle', 'pi-sdk', 'mock/model', ?, ?, ?, ?)`,
-      )
-      .run(
-        secondMemberId,
-        workspaceId,
-        cwd,
-        `pi-${secondMemberId}`,
-        join(userData, "revoked-peer.jsonl"),
-        now,
-        now,
-      );
-    const group = groupStore.createAgentGroupWithMembers({
-      name: "Mailbox revoke fixture",
-      workspaceId,
-      members: [{ sessionId: memberId }, { sessionId: secondMemberId }],
-    });
-    const privateMessageId = GroupMailbox.getInstance().send({
-      groupId: group.id,
-      from: "other-session",
-      to: "*",
-      content: "private after removal",
-      revision: 1,
-    });
-
-    const revokeToolName = `revoke_mailbox_member_${crypto.randomUUID().replaceAll("-", "")}`;
-    toolRegistry.registerTool({
-      entry: {
-        name: revokeToolName,
-        profiles: ["chat"],
-        permission: { danger: "safe" },
-        capabilities: ["write"],
-        ui: { verb: "Remove group member" },
-      },
-      definition: {
-        name: revokeToolName,
-        label: "Remove group member fixture",
-        description: "Removes the current session from its fixture group.",
-        parameters: Type.Object({}),
-        execute: async () => {
-          groupStore.removeAgentGroupMember(group.id, memberId);
-          return { content: [{ type: "text", text: "Member removed." }], details: {} };
-        },
-      },
-    });
-    const runtime = new PiSdkRuntime();
-
-    try {
-      requestToolSequence([
-        { name: revokeToolName, input: {} },
-        { name: "group_mailbox_send", input: { to: secondMemberId, content: "must not send" } },
-        { name: "group_mailbox_receive", input: {} },
-        { name: "group_mailbox_ack", input: { message_ids: [privateMessageId] } },
-      ]);
-      await runtime.prompt(createWindowStub(), {
-        context: [],
-        message: "Remove membership, then try to read the mailbox.",
-        sessionId: memberId,
-      });
-
-      const results = messagesFor(sessionAt()).filter((message) => message.role === "toolResult");
-      for (const toolName of ["group_mailbox_send", "group_mailbox_receive", "group_mailbox_ack"]) {
-        const result = results.findLast((message) => message.toolName === toolName);
-        expect(JSON.stringify(result?.content)).toContain(
-          "current host-assigned Agent Group membership",
-        );
-      }
-      expect(JSON.stringify(results)).not.toContain("private after removal");
-      const ackCount = getDatabase()
-        .prepare("select count(*) as count from harness_group_message_acks where message_id = ?")
-        .get(privateMessageId) as { count: number };
-      expect(ackCount.count).toBe(0);
-    } finally {
-      toolRegistry.unregisterTool(revokeToolName);
-      await runtime.releaseRuntime(memberId);
-      GroupMailbox.resetInstance();
-      setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: false });
-      new PiSdkRuntime();
     }
   });
 
@@ -2884,96 +2578,6 @@ describe("PiSdkRuntime", () => {
     updateAgentRunStatus(run.id, "failed");
   });
 
-  it("activates the group member tools only for group members; the tool context carries groupId", async () => {
-    const { createAgentGroupWithMembers } = await import("../groups/group-store");
-    const { GROUP_TOOL_NAMES } = await import("./tools/group-tools");
-    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: true });
-    const member = `group-member-${crypto.randomUUID()}`;
-    const loner = `group-loner-${crypto.randomUUID()}`;
-    const workspaceId = `workspace-${crypto.randomUUID()}`;
-    insertSession(member, workspaceId, join(userData, "missing.jsonl"));
-    const now = new Date().toISOString();
-    getDatabase()
-      .prepare(
-        `insert into agent_sessions (id, workspace_id, title, cwd, status, created_at, updated_at)
-         values (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(loner, workspaceId, "loner", cwd, "idle", now, now);
-    const partner = `group-partner-${crypto.randomUUID()}`;
-    getDatabase()
-      .prepare(
-        `insert into agent_sessions (id, workspace_id, title, cwd, status, created_at, updated_at)
-         values (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(partner, workspaceId, "partner", cwd, "idle", now, now);
-    const group = createAgentGroupWithMembers({
-      name: "Squad",
-      workspaceId,
-      members: [{ sessionId: member }, { sessionId: partner }],
-    });
-    const runtime = new PiSdkRuntime(); // registers the process-wide tools
-    const info = (id: string) => ({
-      id,
-      workspaceId,
-      title: "chat",
-      cwd,
-      status: "idle" as const,
-      createdAt: "",
-      updatedAt: "",
-    });
-
-    expect(activeToolNamesForSession(info(member), "chat")).toEqual(
-      expect.arrayContaining([
-        ...GROUP_TOOL_NAMES,
-        "group_mailbox_send",
-        "group_mailbox_receive",
-        "group_mailbox_ack",
-      ]),
-    );
-    const getActiveToolNames = (
-      runtime as unknown as {
-        getActiveToolNames?: (sessionId: string, profile: "chat" | "plan") => readonly string[];
-      }
-    ).getActiveToolNames;
-    expect(getActiveToolNames?.call(runtime, member, "chat")).toEqual(
-      activeToolNamesForSession(info(member), "chat"),
-    );
-    // Plan mode keeps only the read-only ones.
-    expect(
-      activeToolNamesForSession(info(member), "plan").filter((name) => name.startsWith("group_")),
-    ).toEqual([
-      "group_read_messages",
-      "group_list_tasks",
-      "group_get_work_state",
-      "group_mailbox_receive",
-      "group_revision_check",
-    ]);
-    for (const profile of ["chat", "plan"] as const) {
-      expect(
-        activeToolNamesForSession(info(loner), profile).filter((name) =>
-          (GROUP_TOOL_NAMES as readonly string[]).includes(name),
-        ),
-      ).toEqual([]);
-    }
-    expect(activeToolNamesForSession(info(loner), "chat")).not.toContain("group_mailbox_send");
-
-    const toolContextFor = (
-      runtime as unknown as {
-        toolContextFor(session: unknown, window: unknown, profile: string, mode?: string): unknown;
-      }
-    ).toolContextFor.bind(runtime);
-    const window = createWindowStub();
-    expect(toolContextFor({ info: info(member), emit: vi.fn() }, window, "chat")).toMatchObject({
-      sessionId: member,
-      groupId: group.id,
-    });
-    expect(toolContextFor({ info: info(loner), emit: vi.fn() }, window, "chat")).not.toHaveProperty(
-      "groupId",
-    );
-    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: false });
-    new PiSdkRuntime();
-  });
-
   it("adds allowlisted MCP tools only to librarian sessions selecting the sentinel", async () => {
     const registeredName = "mcp_docs_search";
     mocks.allowlistedMcpToolNames = [registeredName];
@@ -3279,52 +2883,6 @@ describe("PiSdkRuntime", () => {
     });
   });
 
-  it("records the tool-call count of each assistant message_end (group_start_worktree must be alone)", async () => {
-    const { lastAssistantToolCallCount } = await import("./tools/tool-batch");
-    const sessionId = `session-${crypto.randomUUID()}`;
-    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
-    const seen: Array<number | undefined> = [];
-    const toolCall = (id: string) => ({ type: "toolCall", id, name: "bash", arguments: {} });
-    const session = createMockPiSession({
-      prompt: vi.fn(async () => {
-        mocks.emitPiEvent({
-          type: "message_end",
-          message: { role: "assistant", content: [toolCall("a"), toolCall("b")] },
-        });
-        // What a tool of that batch would read while it executes.
-        seen.push(lastAssistantToolCallCount(sessionId));
-        mocks.emitPiEvent({
-          type: "message_end",
-          message: { role: "toolResult", content: [{ type: "text", text: "ok" }] },
-        });
-        mocks.emitPiEvent({
-          type: "message_end",
-          message: { role: "assistant", content: [toolCall("c")] },
-        });
-        seen.push(lastAssistantToolCallCount(sessionId));
-        mocks.emitPiEvent({
-          type: "message_update",
-          message: { role: "assistant" },
-          assistantMessageEvent: { type: "text_delta", delta: "done" },
-        });
-      }),
-    });
-    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
-    const runtime = new PiSdkRuntime();
-
-    await runtime.prompt(createWindowStub(), {
-      context: [],
-      delivery: "normal",
-      message: "go",
-      sessionId,
-      userMessageId: "tool-batch-user",
-    });
-
-    expect(seen).toEqual([2, 1]);
-    await runtime.releaseRuntime(sessionId);
-    expect(lastAssistantToolCallCount(sessionId)).toBeUndefined();
-  });
-
   it("does not auto-continue a turn whose stored cwd moved (member worktree); the turn is ok", async () => {
     const sessionId = `session-${crypto.randomUUID()}`;
     insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
@@ -3338,7 +2896,7 @@ describe("PiSdkRuntime", () => {
           sessionId,
           todos: [{ id: "todo-1", content: "Finish implementation", status: "pending" }],
         });
-        // What group_start_worktree does mid-turn.
+        // Something moves the session's cwd mid-turn.
         getDatabase()
           .prepare("update agent_sessions set cwd = ? where id = ?")
           .run(moved, sessionId);
@@ -4481,122 +4039,6 @@ describe("PiSdkRuntime", () => {
     ).toBe(true);
     expect(qa.result).toMatchObject({
       required: true,
-      status: "unavailable",
-      evidence: [expect.objectContaining({ checkName: "tests", status: "unavailable" })],
-    });
-  });
-
-  it("does not bind Agent Group QA to a source edit made during final fingerprint collection", async () => {
-    const sessionId = `session-${crypto.randomUUID()}`;
-    const workspaceId = `workspace-${crypto.randomUUID()}`;
-    const reviewerSessionId = `reviewer-${crypto.randomUUID()}`;
-    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
-    const now = new Date().toISOString();
-    getDatabase()
-      .prepare(
-        `insert into agent_sessions (
-          id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
-          created_at, updated_at
-        ) values (?, ?, ?, ?, 'idle', 'pi-sdk', 'mock/model', 'old-pi-session', ?, ?, ?)`,
-      )
-      .run(
-        reviewerSessionId,
-        workspaceId,
-        "Reviewer",
-        cwd,
-        join(userData, "reviewer.jsonl"),
-        now,
-        now,
-      );
-    await initGitRepoWithKnownEmptyScope();
-    const group = groupStore.createAgentGroupWithMembers({
-      name: "Verifier First QA race",
-      workspaceId,
-      members: [{ sessionId }, { sessionId: reviewerSessionId }],
-    });
-    const execution = groupStore.appendGroupMessage({
-      groupId: group.id,
-      authorKind: "user",
-      body: "Run the task checks.",
-    });
-    const task = groupStore.createGroupTask({
-      groupId: group.id,
-      title: "Keep QA tied to checked source",
-      status: "in_progress",
-      ownerSessionId: sessionId,
-      executionId: execution.id,
-      kind: "code",
-      priority: "normal",
-      dependencyIds: [],
-      criteria: [{ id: "tests", description: "Tests pass", requiredCheckKinds: ["tests"] }],
-      verificationPolicy: { mode: "required", requireReview: false },
-    });
-    const getFingerprint = gitMemoryContext.getGroupSourceFingerprint;
-    let fingerprintCalls = 0;
-    vi.spyOn(gitMemoryContext, "getGroupSourceFingerprint").mockImplementation(async (source) => {
-      fingerprintCalls += 1;
-      if (fingerprintCalls === 2) {
-        await writeFile(
-          join(cwd, "changed-during-fingerprint.ts"),
-          "export const changed = true;\n",
-        );
-      }
-      return getFingerprint(source);
-    });
-    const session = createMockPiSession({
-      prompt: vi.fn(async () => {
-        mocks.emitPiEvent({
-          type: "tool_execution_start",
-          toolCallId: "group-tests",
-          toolName: "terminal_run",
-          args: { command: "npm test" },
-        });
-        mocks.emitPiEvent({
-          type: "tool_execution_end",
-          toolCallId: "group-tests",
-          toolName: "terminal_run",
-          isError: false,
-          result: { details: { exitCode: 0 } },
-        });
-        mocks.emitPiEvent({
-          type: "message_update",
-          message: { role: "assistant" },
-          assistantMessageEvent: { type: "text_delta", delta: "The requested test check passed." },
-        });
-      }),
-    });
-    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
-
-    await new PiSdkRuntime().prompt(createWindowStub(), {
-      context: [],
-      delivery: "normal",
-      message: "Run tests and report the result.",
-      sessionId,
-      groupTask: {
-        taskId: task.id,
-        groupId: group.id,
-        executionId: execution.id,
-        role: "owner",
-      },
-    });
-
-    const qaRow = getDatabase()
-      .prepare(
-        "select payload_json from agent_events where session_id = ? and type = 'harness.qa' order by rowid desc limit 1",
-      )
-      .get(sessionId) as { payload_json: string };
-    const qa = JSON.parse(qaRow.payload_json) as {
-      result: { status: string; evidence: Array<{ checkName?: string; status: string }> };
-    };
-    const qaFingerprintCalls = fingerprintCalls;
-    const currentFingerprint = await getFingerprint(cwd);
-    const gate = resolveGroupTaskEvidence(groupTaskStore.getGroupTask(task.id), currentFingerprint);
-
-    expect(qaFingerprintCalls).toBe(2);
-    expect(gate.criterionOutcomes).toEqual([
-      expect.objectContaining({ criterionId: "tests", status: "missing" }),
-    ]);
-    expect(qa.result).toMatchObject({
       status: "unavailable",
       evidence: [expect.objectContaining({ checkName: "tests", status: "unavailable" })],
     });
@@ -7250,25 +6692,24 @@ describe("PiSdkRuntime", () => {
     await rm(moved, { recursive: true, force: true });
   });
 
-  /** A 1:1 agent chat (A3): the test session linked to an agent of a group in its Project. */
+  /** A 1:1 agent chat (A3): the test session linked to a profile whose default Project is its own. */
   async function agentChatSession(instructions: string) {
-    const { createGroupWithNewAgents } = await import("../agents/agents-store");
+    const { createProfile } = await import("../agents/agents-store");
     const sessionId = `session-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"), "Ana");
-    const group = createGroupWithNewAgents({
-      name: `Crew ${crypto.randomUUID()}`,
-      workspaceId,
-      members: [
-        { name: "Ana", role: "Reviewer", instructions, modelId: "mock/model" },
-        { name: "Bo", modelId: "mock/model" },
-      ],
+    const agent = createProfile({
+      name: `Ana ${crypto.randomUUID()}`,
+      role: "Reviewer",
+      instructions,
+      modelId: "mock/model",
+      defaultWorkspaceId: workspaceId,
     });
-    const agentId = group.members[0]?.agentId ?? "";
+    const agentId = agent.id;
     getDatabase()
       .prepare("update agent_sessions set agent_id = ?, kind = 'chat' where id = ?")
       .run(agentId, sessionId);
-    return { sessionId, agentId, group };
+    return { sessionId, agentId };
   }
 
   const lastSystemPrompt = () =>
@@ -7415,23 +6856,6 @@ describe("PiSdkRuntime", () => {
     expect(findModel).not.toHaveBeenCalledWith("removed-provider/retired-model");
     expect(session.setModel).toHaveBeenCalledWith(defaultModel);
     expect(session.prompt).toHaveBeenCalledTimes(1);
-  });
-
-  it("refuses a turn in a 1:1 chat whose group is blocked (no Project), before any session work (A3)", async () => {
-    const { sessionId, group } = await agentChatSession("Be terse.");
-    getDatabase().prepare("update agent_groups set workspace_id = null where id = ?").run(group.id);
-    const runtime = new PiSdkRuntime();
-    const creates = mocks.createAgentSession.mock.calls.length;
-    await expect(
-      runtime.prompt(createWindowStub(), {
-        context: [],
-        delivery: "normal",
-        message: "hello",
-        sessionId,
-      }),
-    ).rejects.toMatchObject({ code: "group-project-required" });
-    expect(mocks.createAgentSession.mock.calls.length).toBe(creates);
-    expect(getAgentSession(sessionId)?.status).toBe("idle");
   });
 
   it("releaseRuntime drops the SDK session without cancelling descendant DB rows", async () => {
@@ -10857,6 +10281,71 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
     }
   });
 
+  it("Stop clears pi's queue and returns the queued prompts, in order, instead of sending them", async () => {
+    const sessionId = `queue-stop-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    let announceStreamStarted!: () => void;
+    let resolveResponse!: () => void;
+    const streamStarted = new Promise<void>((resolve) => {
+      announceStreamStarted = resolve;
+    });
+    const responseGate = new Promise<void>((resolve) => {
+      resolveResponse = resolve;
+    });
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    const { sessionAt, messagesFor } = await createOfflinePiToolSessions({
+      assistantText: "Done.",
+      responseGate,
+      onStream: () => announceStreamStarted(),
+    });
+    const image = { type: "image" as const, data: "aW1n", mimeType: "image/png", name: "shot.png" };
+    try {
+      const promptTask = runtime.prompt(window, {
+        context: [],
+        delivery: "normal",
+        message: "Start the long task.",
+        sessionId,
+      });
+      await streamStarted;
+      await runtime.prompt(window, {
+        context: [],
+        delivery: "follow-up",
+        message: "First queued.",
+        sessionId,
+      });
+      await runtime.prompt(window, {
+        context: [],
+        delivery: "steer",
+        message: "Second queued.",
+        attachments: [image],
+        sessionId,
+      });
+      expect(runtime.listQueuedPrompts(sessionId)).toHaveLength(2);
+
+      const aborting = runtime.abort(sessionId);
+      resolveResponse();
+      const result = await aborting;
+      await promptTask.catch(() => undefined);
+      await sessionAt().agent.waitForIdle();
+
+      expect(result).toEqual({
+        restored: [
+          { text: "First queued.", attachments: [] },
+          { text: "Second queued.", attachments: [image] },
+        ],
+      });
+      expect(runtime.listQueuedPrompts(sessionId)).toEqual([]);
+      expect(sessionAt().agent.hasQueuedMessages()).toBe(false);
+      const sent = JSON.stringify(messagesFor(sessionAt()));
+      expect(sent).not.toContain("First queued.");
+      expect(sent).not.toContain("Second queued.");
+    } finally {
+      resolveResponse();
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
   it("counts a no-output Pi SDK turn as failed without a policy pass", async () => {
     setFeatureFlagOverrides({
       MODUS_USE_KERNEL: true,
@@ -10956,118 +10445,6 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
     expect(result.systemPrompt).not.toContain("<response_policy");
     expect(metrics.turns.total).toBe(0);
     expect(metrics.response.evaluatedCount).toBe(0);
-  });
-
-  it("releases only one Agent Group member's temporary metrics and retains global totals", async () => {
-    setFeatureFlagOverrides({
-      MODUS_USE_KERNEL: true,
-      MODUS_RESPONSE_POLICY: true,
-      MODUS_OBSERVABILITY: true,
-    });
-    const workspaceId = `workspace-${crypto.randomUUID()}`;
-    const memberA = `observer-group-a-${crypto.randomUUID()}`;
-    const memberB = `observer-group-b-${crypto.randomUUID()}`;
-    const child = `observer-subagent-${crypto.randomUUID()}`;
-    insertWorkspace(workspaceId);
-    const { createAgentSessionRecord } = await import("./agent-store");
-    const sessions: Array<[string, string]> = [
-      [memberA, "Member A"],
-      [memberB, "Member B"],
-      [child, "Member A child"],
-    ];
-    for (const [id, title] of sessions) {
-      createAgentSessionRecord({
-        id,
-        workspaceId,
-        title,
-        cwd,
-        piSessionFile: join(userData, `${id}.jsonl`),
-        ...(id === child ? { parentSessionId: memberA } : {}),
-      });
-    }
-    groupStore.createAgentGroupWithMembers({
-      name: "Observer lifecycle group",
-      workspaceId,
-      members: [{ sessionId: memberA }, { sessionId: memberB }],
-      leadSessionId: memberA,
-    });
-    const runtime = new PiSdkRuntime();
-    const observer = HarnessObserver.getInstance();
-    const response = "Group response complete.\n\nThe second paragraph remains intact.";
-
-    try {
-      await createOfflinePiToolSessions({ assistantText: response });
-      const window = createWindowStub();
-      // Construct the real Pi SDK sessions one at a time; run their streams
-      // concurrently below to exercise attribution under simultaneous turns.
-      for (const sessionId of [memberA, memberB, child]) {
-        await runtime.ensure(window, sessionId);
-      }
-      ResponsePolicyRegistry.getInstance().setSessionPolicy(memberA, { maxParagraphs: 1 });
-      ResponsePolicyRegistry.getInstance().setSessionPolicy(memberB, { maxParagraphs: 10 });
-
-      await Promise.all(
-        [memberA, memberB, child].map((sessionId) =>
-          runtime.prompt(window, {
-            context: [],
-            delivery: "normal",
-            message: "Return the full group response.",
-            sessionId,
-          }),
-        ),
-      );
-      const globalTurnCount = observer.snapshot().turns.total;
-
-      expect(globalTurnCount).toBe(3);
-      expect(observer.snapshot().response.evaluatedCount).toBe(3);
-      expect(observer.snapshot().response.violationsDetected).toBe(1);
-      expect(observer.getSessionMetrics(memberA)?.policyViolations).toBe(1);
-      expect(observer.getSessionMetrics(memberB)?.policyViolations).toBe(0);
-      expect(observer.getSessionMetrics(child)?.policyViolations).toBe(0);
-      expect(observer.getSessionMetrics(memberA)?.policyEvaluations).toBe(1);
-      expect(observer.getSessionMetrics(memberB)?.policyEvaluations).toBe(1);
-      expect(observer.getSessionMetrics(child)?.policyEvaluations).toBe(1);
-      for (const sessionId of [memberA, memberB, child]) {
-        const events = listAgentEvents(sessionId).map(({ event }) => event);
-        const assistantMessageIds = new Set(
-          events
-            .filter((event) => event.type === "message.started" && event.role === "assistant")
-            .map((event) => (event.type === "message.started" ? event.messageId : "")),
-        );
-        const responseDeltas = events
-          .filter(
-            (event) => event.type === "message.delta" && assistantMessageIds.has(event.messageId),
-          )
-          .map((event) => (event.type === "message.delta" ? event.delta : ""))
-          .join("");
-        expect(responseDeltas).toBe(response);
-      }
-      const responseEvents = observer
-        .getRecentEvents(50)
-        .filter((event) => event.type === "harness.response.evaluated");
-      expect(responseEvents).toHaveLength(3);
-      expect(responseEvents.map((event) => event.sessionId).sort()).toEqual(
-        [memberA, memberB, child].sort(),
-      );
-      expect(responseEvents.every((event) => Boolean(event.runId))).toBe(true);
-      expect(observer.getSessionMetrics(memberA)).toBeDefined();
-      expect(observer.getSessionMetrics(memberB)).toBeDefined();
-      expect(observer.getSessionMetrics(child)).toBeDefined();
-
-      await runtime.releaseRuntime(memberA);
-
-      expect(observer.getSessionMetrics(memberA)).toBeUndefined();
-      expect(observer.getSessionMetrics(memberB)).toBeDefined();
-      expect(observer.getSessionMetrics(child)).toBeDefined();
-      expect(observer.snapshot().turns.total).toBe(globalTurnCount);
-      expect(observer.getRecentEvents(20).some((event) => event.sessionId === memberA)).toBe(false);
-      expect(observer.getRecentEvents(20).some((event) => event.sessionId === memberB)).toBe(true);
-      expect(observer.getRecentEvents(20).some((event) => event.sessionId === child)).toBe(true);
-    } finally {
-      await runtime.releaseRuntime(memberA);
-      await runtime.releaseRuntime(memberB);
-      await runtime.releaseRuntime(child);
-    }
   });
 
   it("starts a fresh observer lifetime when the same session is recreated", async () => {
@@ -12096,110 +11473,6 @@ describe("PiSdkRuntime PromptRegistry production wiring", () => {
     await runtime.releaseRuntime(sessionId);
   });
 
-  it("isolates Agent Group member registries and clears one when that session is recreated", async () => {
-    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_PROMPT_REGISTRY: true });
-    const { createGroupWithNewAgents, updateAgent } = await import("../agents/agents-store");
-    const workspaceId = `prompt-registry-group-${crypto.randomUUID()}`;
-    insertWorkspace(workspaceId);
-    const group = createGroupWithNewAgents({
-      name: `Prompt Registry Group ${crypto.randomUUID()}`,
-      workspaceId,
-      members: [
-        {
-          name: "Registry A",
-          role: "Builder",
-          instructions: "Member A persona marker.",
-          modelId: "mock/model",
-        },
-        {
-          name: "Registry B",
-          role: "Reviewer",
-          instructions: "Member B persona marker.",
-          modelId: "mock/model",
-        },
-      ],
-    });
-    const firstSessionId = `prompt-registry-member-a-${crypto.randomUUID()}`;
-    const secondSessionId = `prompt-registry-member-b-${crypto.randomUUID()}`;
-    const insertGroupMemberSession = (sessionId: string, agentId: string, title: string) => {
-      const now = new Date().toISOString();
-      getDatabase()
-        .prepare(
-          `insert into agent_sessions (
-            id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
-            agent_id, kind, created_at, updated_at
-          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          sessionId,
-          workspaceId,
-          title,
-          cwd,
-          "idle",
-          "pi-sdk",
-          "mock/model",
-          null,
-          join(userData, `${sessionId}.jsonl`),
-          agentId,
-          "chat",
-          now,
-          now,
-        );
-    };
-    insertGroupMemberSession(firstSessionId, group.members[0]?.agentId ?? "", "Registry A");
-    insertGroupMemberSession(secondSessionId, group.members[1]?.agentId ?? "", "Registry B");
-
-    const { sessionAt, systemPromptsFor } = await useOfflinePiToolSessions();
-    const runtime = new PiSdkRuntime();
-    const window = createWindowStub();
-    const promptMember = (sessionId: string) =>
-      runtime.prompt(window, {
-        context: [],
-        delivery: "normal",
-        message: "Use this member's instructions.",
-        sessionId,
-      });
-    await promptMember(firstSessionId);
-    const firstPiSession = sessionAt();
-    const firstPrompt = systemPromptsFor(firstPiSession).at(-1) ?? "";
-    await promptMember(secondSessionId);
-    const secondPiSession = sessionAt();
-    const secondPrompt = systemPromptsFor(secondPiSession).at(-1) ?? "";
-    const runtimeSessions = (
-      runtime as unknown as {
-        sessions: Map<string, { promptRegistry?: object }>;
-      }
-    ).sessions;
-    const firstRegistry = runtimeSessions.get(firstSessionId)?.promptRegistry;
-    const secondRegistry = runtimeSessions.get(secondSessionId)?.promptRegistry;
-
-    expect(firstRegistry).toBeDefined();
-    expect(secondRegistry).toBeDefined();
-    expect(firstRegistry).not.toBe(secondRegistry);
-    expect(firstPrompt).toContain("Member A persona marker.");
-    expect(firstPrompt).not.toContain("Member B persona marker.");
-    expect(secondPrompt).toContain("Member B persona marker.");
-    expect(secondPrompt).not.toContain("Member A persona marker.");
-
-    const firstAgentId = group.members[0]?.agentId ?? "";
-    updateAgent(firstAgentId, { instructions: "Member A persona updated during the session." });
-    await promptMember(firstSessionId);
-    const updatedPrompt = systemPromptsFor(sessionAt()).at(-1) ?? "";
-    const updatedRegistry = runtimeSessions.get(firstSessionId)?.promptRegistry;
-    expect(updatedPrompt).toContain("Member A persona updated during the session.");
-    expect(updatedPrompt).not.toContain("Member A persona marker.");
-    expect(updatedRegistry).toBeDefined();
-    expect(updatedRegistry).not.toBe(firstRegistry);
-
-    await runtime.releaseRuntime(firstSessionId);
-    await promptMember(firstSessionId);
-    const recreatedRegistry = runtimeSessions.get(firstSessionId)?.promptRegistry;
-    expect(recreatedRegistry).toBeDefined();
-    expect(recreatedRegistry).not.toBe(updatedRegistry);
-    await runtime.releaseRuntime(firstSessionId);
-    await runtime.releaseRuntime(secondSessionId);
-  });
-
   it("discards a pending registry callback when its session is released", async () => {
     setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_PROMPT_REGISTRY: true });
     const runtime = new PiSdkRuntime();
@@ -12592,79 +11865,6 @@ describe("PiSdkRuntime compaction pruning production wiring", () => {
       ).toBe(duplicateText);
     } finally {
       await runtime.releaseRuntime(sessionId);
-    }
-  });
-
-  it("isolates repeat pruning between Agent Group member sessions", async () => {
-    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_COMPACTION_PRUNING: true });
-    const { sessionAt, contextsFor, requestTool, requestToolSequence } =
-      await useOfflinePiToolSessions({ contextWindow: 20_000 });
-    const runtime = new PiSdkRuntime();
-    const workspaceId = `workspace-${crypto.randomUUID()}`;
-    const firstSessionId = `group-member-a-${crypto.randomUUID()}`;
-    const secondSessionId = `group-member-b-${crypto.randomUUID()}`;
-    const now = new Date().toISOString();
-    insertWorkspace(workspaceId);
-    for (const [sessionId, title] of [
-      [firstSessionId, "Member A"],
-      [secondSessionId, "Member B"],
-    ] as const) {
-      getDatabase()
-        .prepare(
-          `insert into agent_sessions (
-            id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
-            created_at, updated_at
-          ) values (?, ?, ?, ?, 'idle', 'pi-sdk', 'mock/model', null, ?, ?, ?)`,
-        )
-        .run(sessionId, workspaceId, title, cwd, join(userData, `${sessionId}.jsonl`), now, now);
-    }
-    groupStore.createAgentGroupWithMembers({
-      name: "Compaction isolation",
-      workspaceId,
-      members: [{ sessionId: firstSessionId }, { sessionId: secondSessionId }],
-      leadSessionId: firstSessionId,
-    });
-    const fixturePath = join(cwd, "group-member-result.txt");
-    await writeFile(
-      fixturePath,
-      "export interface GroupItem { readonly key: string; }\n".repeat(1200),
-      "utf8",
-    );
-
-    try {
-      requestToolSequence([
-        { name: "read", input: { path: fixturePath } },
-        { name: "read", input: { path: fixturePath } },
-      ]);
-      await runtime.prompt(createWindowStub(), {
-        context: [],
-        message: "Read this file twice.",
-        sessionId: firstSessionId,
-      });
-      const firstResults = (contextsFor(sessionAt(0)).at(-1) ?? []).filter(
-        (message) => message.role === "toolResult",
-      );
-
-      requestTool("read", { path: fixturePath });
-      await runtime.prompt(createWindowStub(), {
-        context: [],
-        message: "Read this file once in the other group member session.",
-        sessionId: secondSessionId,
-      });
-      const secondResults = (contextsFor(sessionAt(1)).at(-1) ?? []).filter(
-        (message) => message.role === "toolResult",
-      );
-      const firstText = firstResults[0]?.content.find((block) => block.type === "text");
-      const secondText = secondResults[0]?.content.find((block) => block.type === "text");
-
-      expect(firstText?.type === "text" && /identical later result/i.test(firstText.text)).toBe(
-        true,
-      );
-      expect(secondResults).toHaveLength(1);
-      expect(secondText?.type === "text" && secondText.text.includes("GroupItem")).toBe(true);
-    } finally {
-      await runtime.releaseRuntime(firstSessionId);
-      await runtime.releaseRuntime(secondSessionId);
     }
   });
 
@@ -13236,177 +12436,6 @@ describe("PiSdkRuntime Repeat Guard tool-call integration", () => {
 
       expect(executions).toBe(2);
     } finally {
-      toolRegistry.unregisterTool(toolName);
-      await runtime.releaseRuntime(sessionId);
-    }
-  });
-
-  it("keeps histories isolated between runs and Agent Group members", async () => {
-    const { requestToolSequence } = await useOfflinePiToolSessions();
-    const { createAgentGroupWithMembers } = await import("../groups/group-store");
-    const { resetRepeatGuardConfig, setRepeatGuardConfig } = await import(
-      "./harness/guards/repeat-guard-config"
-    );
-    const workspaceId = `workspace-${crypto.randomUUID()}`;
-    const memberA = `repeat-group-a-${crypto.randomUUID()}`;
-    const memberB = `repeat-group-b-${crypto.randomUUID()}`;
-    insertSession(memberA, workspaceId, join(userData, "missing-a.jsonl"));
-    const now = new Date().toISOString();
-    getDatabase()
-      .prepare(
-        `insert into agent_sessions (
-          id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
-          created_at, updated_at
-        ) values (?, ?, 'Member B', ?, 'idle', 'pi-sdk', 'mock/model', 'old-pi-session', ?, ?, ?)`,
-      )
-      .run(memberB, workspaceId, cwd, join(userData, "missing-b.jsonl"), now, now);
-    createAgentGroupWithMembers({
-      name: "Repeat Guard isolation",
-      workspaceId,
-      members: [{ sessionId: memberA }, { sessionId: memberB }],
-    });
-    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_REPEAT_GUARDS: true });
-    setRepeatGuardConfig({ toolRepeatThreshold: 3 });
-    const toolName = `mcp_repeat_group_${crypto.randomUUID().replaceAll("-", "")}`;
-    let executions = 0;
-    registerOfflineRepeatGuardTool(toolName, async () => {
-      executions += 1;
-      return { content: [{ type: "text", text: "same result" }], details: {} };
-    });
-    const runtime = new PiSdkRuntime();
-    const window = createWindowStub();
-
-    try {
-      requestToolSequence(
-        Array.from({ length: 3 }, () => ({ name: toolName, input: { target: "same" } })),
-      );
-      await runtime.prompt(window, { context: [], message: "Repeat lookup.", sessionId: memberA });
-
-      requestToolSequence([{ name: toolName, input: { target: "same" } }]);
-      await runtime.prompt(window, {
-        context: [],
-        message: "Repeat lookup again.",
-        sessionId: memberA,
-      });
-
-      requestToolSequence([{ name: toolName, input: { target: "same" } }]);
-      await runtime.prompt(window, {
-        context: [],
-        message: "Repeat lookup as member B.",
-        sessionId: memberB,
-      });
-
-      expect(executions).toBe(5);
-    } finally {
-      resetRepeatGuardConfig();
-      toolRegistry.unregisterTool(toolName);
-      await runtime.releaseRuntime(memberA);
-      await runtime.releaseRuntime(memberB);
-    }
-  });
-
-  it("enforces repeat guards when Agent Groups dispatch a member turn", async () => {
-    const { requestToolSequence } = await useOfflinePiToolSessions();
-    const { createAgentGroupWithMembers } = await import("../groups/group-store");
-    const { GroupRuntime } = await import("../groups/group-runtime");
-    const { resetRepeatGuardConfig, setRepeatGuardConfig } = await import(
-      "./harness/guards/repeat-guard-config"
-    );
-    const sessionId = `repeat-group-dispatch-${crypto.randomUUID()}`;
-    const secondMemberId = `repeat-group-dispatch-b-${crypto.randomUUID()}`;
-    const workspaceId = `workspace-${crypto.randomUUID()}`;
-    insertSession(
-      sessionId,
-      workspaceId,
-      join(userData, "missing-group-dispatch.jsonl"),
-      "Member A",
-    );
-    const createdAt = new Date().toISOString();
-    getDatabase()
-      .prepare(
-        `insert into agent_sessions (
-          id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
-          created_at, updated_at
-        ) values (?, ?, 'Member B', ?, 'idle', 'pi-sdk', 'mock/model', 'old-pi-session', ?, ?, ?)`,
-      )
-      .run(
-        secondMemberId,
-        workspaceId,
-        cwd,
-        join(userData, "missing-group-dispatch-b.jsonl"),
-        createdAt,
-        createdAt,
-      );
-    const group = createAgentGroupWithMembers({
-      name: "Repeat Guard dispatch",
-      mode: "free",
-      workspaceId,
-      members: [{ sessionId }, { sessionId: secondMemberId }],
-      leadSessionId: sessionId,
-    });
-    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_REPEAT_GUARDS: true });
-    setRepeatGuardConfig({ toolRepeatThreshold: 3 });
-
-    const toolName = `mcp_repeat_group_dispatch_${crypto.randomUUID().replaceAll("-", "")}`;
-    let executions = 0;
-    registerOfflineRepeatGuardTool(toolName, async () => {
-      executions += 1;
-      return { content: [{ type: "text", text: "same result" }], details: {} };
-    });
-
-    const runtime = new PiSdkRuntime();
-    const window = createWindowStub();
-    const observedEvents: AgentEvent[] = [];
-    const removeEventListener = runtime.onEvent((event) => observedEvents.push(event));
-    let dispatchedTurn: ReturnType<typeof runtime.prompt> | undefined;
-    const groupAgentRuntime: import("../groups/group-runtime-lib").GroupAgentRuntime = {
-      prompt: (targetWindow, input) => {
-        dispatchedTurn = runtime.prompt(targetWindow, input);
-        return dispatchedTurn;
-      },
-      abort: (targetSessionId) => runtime.abort(targetSessionId),
-      isSessionStreaming: (targetSessionId) => runtime.isSessionStreaming(targetSessionId),
-      onTurnSettled: (listener) => runtime.onTurnSettled(listener),
-      onQuestionPending: (listener) => runtime.onQuestionPending(listener),
-      onEvent: (listener) => runtime.onEvent(listener),
-    };
-    const groups = new GroupRuntime({
-      runtime: groupAgentRuntime,
-      host: {
-        getWindow: () => window as never,
-        isUpdatePending: () => false,
-        emit: vi.fn(),
-      },
-    });
-
-    try {
-      requestToolSequence(
-        Array.from({ length: 4 }, () => ({ name: toolName, input: { target: "same" } })),
-      );
-      groups.postUserMessage({ groupId: group.id, body: "@Member A repeat lookup." });
-      await vi.waitFor(() => expect(dispatchedTurn).toBeDefined());
-      const turn = dispatchedTurn;
-      if (!turn) throw new Error("Agent Group did not dispatch a member turn.");
-      const result = await turn;
-
-      expect(result.outcome).toBe("ok");
-      expect(executions).toBe(3);
-      expect(observedEvents).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "harness.decision",
-            boundary: "tool_guard",
-            decision: expect.objectContaining({
-              action: "avoid_retry",
-              reasonCodes: expect.arrayContaining(["repeat_guard_tool_loop"]),
-            }),
-          }),
-        ]),
-      );
-    } finally {
-      groups.dispose();
-      removeEventListener();
-      resetRepeatGuardConfig();
       toolRegistry.unregisterTool(toolName);
       await runtime.releaseRuntime(sessionId);
     }
@@ -14220,19 +13249,6 @@ describe("PiSdkRuntime per-request token stability", () => {
       expect(reason).toBe(
         "Blocked edit: Plan Mode is read-only. Use read, grep, find, ls, web_search, web_fetch, fast_codebase, plan_write, ask_user to research and write the plan, or ask the user to switch to Build mode.",
       );
-    });
-
-    it("keeps the generic message for a group limit, in Build and in Plan turns", async () => {
-      const { GROUP_TOOL_NAMES } = await import("./tools/group-tools");
-      new PiSdkRuntime();
-      const notAMember = sessionInfo();
-      const groupTool = GROUP_TOOL_NAMES[0] as string;
-      expect(activeToolNamesForSession(notAMember, "chat")).not.toContain(groupTool);
-      for (const profile of ["chat", "plan"] as const) {
-        const reason = disallowedToolReason(groupTool, limitsFor(notAMember, profile));
-        expect(reason).toBe(`${groupTool} ${GENERIC}`);
-        expect(reason).not.toContain("Plan Mode");
-      }
     });
 
     it("keeps the generic message for a subagent limit, even in a Plan turn", () => {

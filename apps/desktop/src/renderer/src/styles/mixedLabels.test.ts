@@ -21,8 +21,6 @@ import { describe, expect, it } from "vitest";
 const ANCHORS: Record<string, string[]> = {
   "../app/App.tsx": [">{workspace.rootPath}</span>"],
   "../components/Sidebar.tsx": [">Drop here to pin</div>"],
-  "../components/sidebar-groups/member-row.tsx": ['title="Lead">', ">{role}</span>"],
-  "../components/sidebar-groups/menu.tsx": [">Needs a Lead</span>"],
   "../features/agent/RetryStatusBar.tsx": [">{`retrying"],
   "../features/agent/SearchToolCard.tsx": [">{result.source}</span>"],
   "../features/agent/Timeline.tsx": [
@@ -41,30 +39,6 @@ const ANCHORS: Record<string, string[]> = {
   ],
   "../features/files/FilesPanel.tsx": [">{viewerNote}</span> : null}"],
   "../features/git/BranchSwitcher.tsx": [">{item.meta}</span>"],
-  "../features/groups/CreateGroupDialog.tsx": ["> · {member.agentRole}</span>"],
-  "../features/groups/GroupActivityPanel.tsx": [
-    ">{row.live.phase}</span>",
-    ">{row.live.presence.activity}</div>",
-    ">{field.key}</dt>",
-  ],
-  "../features/groups/GroupComposer.tsx": [
-    ">{replyTo.preview}</span>",
-    'data-testid="group-composer-active-execution">',
-  ],
-  "../features/groups/GroupDecisions.tsx": ['>{t("decisions.formerMember")}</span>'],
-  "../features/groups/GroupMessageHeader.tsx": [">{memberRole.trim()}</span> : null}"],
-  "../features/groups/GroupMessageList.tsx": [">{label}</span>"],
-  "../features/groups/GroupMessageRow.tsx": ['data-testid="group-message-to">'],
-  "../features/groups/GroupTaskDetails.tsx": [
-    'onClick={onClose} type="button">',
-    '>{t("taskDetails.owner")}</span>',
-    '>{t("taskDetails.reviewer")}</span>',
-  ],
-  "../features/groups/MemberName.tsx": ['data-testid="member-id-suffix">'],
-  "../features/groups/prompt-kit/PromptKit.tsx": [
-    ">{role.trim()}</span> : null}",
-    ">{badge}</span>",
-  ],
   "../features/plan/PlanAcceptanceCriteria.tsx": [
     ">({item.kind})</span>",
     ">+{evidence.length - 4} more references</li>",
@@ -99,7 +73,7 @@ const HELP_EMPTY_ANCHORS: Record<string, string[]> = {
   "../features/agent/TodosCard.tsx": ["data-todos-empty>"],
   // The New Agent dialog has no visible subtitle any more; its picker labels are readable.
   "../features/agents/AvatarOptionGroup.tsx": ["id={labelId}>"],
-  "../features/agents/ModelPicker.tsx": [">No models match</p>"],
+  "../features/agents/ModelPicker.tsx": [`{query.trim() ? "No models match" : "No models"}`],
   "../features/composer/SlashMenu.tsx": [
     '{item.kind === "skill" ? "Skills" : "Commands"}',
     ">{item.description}</span>",
@@ -110,29 +84,6 @@ const HELP_EMPTY_ANCHORS: Record<string, string[]> = {
     '>{t("files.noMatches")}</div>',
   ],
   "../features/git/BranchSwitcher.tsx": [">No branches</div>"],
-  "../features/groups/CreateGroupDialog.tsx": ["editGroup.name} · ", ">{hint}</p> : null}"],
-  "../features/groups/GroupActivityPanel.tsx": [
-    '{t.plural("activity.tokensSummary", executionCount, { total: formatTokenCount(grand) })}',
-    "{row.live.thoughtPreview}",
-    '>{t("activity.noHandoff")}</span>',
-  ],
-  "../features/groups/GroupDecisions.tsx": ['>{t("decisions.empty")}</div>'],
-  "../features/groups/GroupMessageList.tsx": ['>{t("list.loadingOlder")}</div>'],
-  "../features/groups/GroupProactivityControls.tsx": [
-    '>{t("proactivity.defaultDescription")}</p>',
-    '>{t("proactivity.loading")}</p>',
-    '>{t("proactivity.noPending")}</p>',
-    'data-testid="group-suggestion-origin">',
-    'data-testid="group-suggestion-destination">',
-  ],
-  "../features/groups/NewGroupModal.tsx": [
-    '{t("newGroup.description")}',
-    ">{desc}</p>",
-    '>{t("newGroup.copyHint")}</p>',
-    '>{t("newGroup.loadingAgents")}</p>',
-    '>{t("newGroup.noCopyable")}</p>',
-    '{t("newGroup.customSource")}',
-  ],
   "../features/inspector/SubagentsPanel.tsx": [">{description}</span>"],
   "../features/plan/PlanAcceptanceCriteria.tsx": [
     ">Run {group.runId}</p>",
@@ -200,8 +151,6 @@ const FAINT_BUDGET: Record<string, number> = {
   "../components/Sidebar.tsx": 9,
   "../components/code/CodeViewer.tsx": 0,
   "../components/question/QuestionCard.tsx": 11,
-  "../components/sidebar-groups/member-row.tsx": 0,
-  "../components/sidebar-groups/menu.tsx": 1,
   "../components/ui/Panel.tsx": 1,
   "../features/agent/ActivityGroup.tsx": 1,
   "../features/agent/ActivityTimeline.tsx": 0,
@@ -226,21 +175,6 @@ const FAINT_BUDGET: Record<string, number> = {
   "../features/files/FilesPanel.tsx": 6,
   "../features/git/BranchSwitcher.tsx": 1,
   "../features/git/SessionBranchPicker.tsx": 0,
-  "../features/groups/CreateGroupDialog.tsx": 4,
-  "../features/groups/GroupActivityPanel.tsx": 4,
-  "../features/groups/GroupAgentsPopover.tsx": 0,
-  "../features/groups/GroupComposer.tsx": 4,
-  "../features/groups/GroupDecisions.tsx": 2,
-  "../features/groups/GroupMemberQuestions.tsx": 0,
-  "../features/groups/GroupMessageHeader.tsx": 2,
-  "../features/groups/GroupMessageList.tsx": 1,
-  "../features/groups/GroupMessageRow.tsx": 2,
-  "../features/groups/GroupProactivityControls.tsx": 1,
-  "../features/groups/GroupTaskDetails.tsx": 2,
-  "../features/groups/GroupTaskPanel.tsx": 4,
-  "../features/groups/MemberName.tsx": 0,
-  "../features/groups/NewGroupModal.tsx": 10,
-  "../features/groups/prompt-kit/PromptKit.tsx": 6,
   "../features/inspector/SubagentsPanel.tsx": 5,
   "../features/plan/PlanAcceptanceCriteria.tsx": 1,
   "../features/plan/PlanTool.tsx": 12,
@@ -301,7 +235,7 @@ describe("fg-faint mixed labels", () => {
         checked += 1;
       }
     }
-    expect(checked).toBe(116);
+    expect(checked).toBe(79);
   });
 
   it("touched files do not gain fg-faint uses", () => {

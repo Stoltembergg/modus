@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import {
   type AgentSession,
@@ -13,6 +13,7 @@ import {
 import { app, type BrowserWindow as BrowserWindowType } from "electron";
 import { buildContextChips } from "../../shared/context-chips";
 import type {
+  AbortAgentResult,
   AdaptiveDecision,
   AdaptiveDecisionMode,
   AdaptiveFailureAttempt,
@@ -46,12 +47,7 @@ import {
   type ToolProfileName,
   WAIT_TOOL_NAME,
 } from "../../shared/tools";
-import {
-  agentChatPersonaPrompt,
-  getAgent,
-  requireAgentChatWritable,
-  requireSessionWritable,
-} from "../agents/agents-store";
+import { agentChatPersonaPrompt, getAgent, requireSessionWritable } from "../agents/agents-store";
 import { releaseAgentBrowserControl } from "../browser/browser-service";
 import { planTurnContext } from "../context/context-planner";
 import { formatResolvedContext, resolveContext } from "../context/context-service";
@@ -62,16 +58,7 @@ import {
   finishSubagentWorktree,
   getChangeStatsSinceStrict,
   getGitMemoryContext,
-  getGroupSourceFingerprint,
 } from "../git/git-service";
-import { getAgentGroupForSession } from "../groups/group-store";
-import { collectGroupTaskRunEvidence, getGroupTaskSourcePath } from "../groups/group-task-evidence";
-import {
-  bindGroupTaskRun,
-  getGroupTask,
-  getGroupTaskRunBinding,
-  recordGroupTaskEvidence,
-} from "../groups/group-task-store";
 import { resolveGlobalGuidancePrompt } from "../guidance/guidance-service";
 import {
   denyPendingQuestionRequestsForSession,
@@ -177,7 +164,6 @@ import {
   isDuplicateFailedAttempt,
 } from "./harness/failure-intelligence";
 import { isFeatureFlagEnabled } from "./harness/feature-flags";
-import { defaultTurnSettleGroupMailboxHook } from "./harness/groups/group-hooks";
 import {
   defaultToolCallRepeatGuardHook,
   defaultToolResultRepeatGuardHook,
@@ -314,14 +300,6 @@ import {
 } from "./tools/external-plugin-tools";
 import { registerFastCodebaseTools } from "./tools/fast-codebase-tools";
 import { registerGoalTools } from "./tools/goal-tools";
-import {
-  GROUP_MAILBOX_ACK_TOOL,
-  GROUP_MAILBOX_RECEIVE_TOOL,
-  GROUP_MAILBOX_SEND_TOOL,
-  GROUP_REVISION_CHECK_TOOL,
-  registerGroupMailboxTools,
-} from "./tools/group-mailbox-tools";
-import { isGroupToolName, registerGroupTools } from "./tools/group-tools";
 import { plansRoot, registerPlanTools } from "./tools/plan-tools";
 import { registerProjectMemoryTools } from "./tools/project-memory-tools";
 import { answeredQuestionContext, registerQuestionTools } from "./tools/question-tools";
@@ -336,7 +314,6 @@ import { registerSpillTools } from "./tools/spill-tools";
 import { registerSubagentTools } from "./tools/subagent-tools";
 import { registerTerminalTools } from "./tools/terminal-tools";
 import { clearTodoSessionCache, registerTodoTools } from "./tools/todo-tools";
-import { clearAssistantToolCallCount, noteAssistantMessageToolCalls } from "./tools/tool-batch";
 import {
   type AgentToolContext,
   runWithAgentToolContext,
@@ -569,21 +546,6 @@ function requiredChecksForRun(input: PromptAgentInput, plan?: PlanRef): HarnessT
       if (isPlanCriterionLinkedToTodos(criterion, plan.todos)) {
         checks.push(...(criterion.requiredCheckKinds ?? []));
       }
-    }
-  }
-  if (input.groupTask) {
-    try {
-      const task = getGroupTask(input.groupTask.taskId);
-      if (
-        task.groupId === input.groupTask.groupId &&
-        task.executionId === input.groupTask.executionId &&
-        task[input.groupTask.role === "owner" ? "ownerSessionId" : "reviewerSessionId"] ===
-          input.sessionId
-      ) {
-        for (const criterion of task.criteria ?? []) checks.push(...criterion.requiredCheckKinds);
-      }
-    } catch {
-      /* A stale task seed must not remove the existing harness checks. */
     }
   }
   const prohibited = requestedCheckKinds(input.message, true);
@@ -840,12 +802,6 @@ function dedupeToolsByName<T extends { name: string }>(tools: T[]): T[] {
   return [...byName.values()];
 }
 
-/** `{ groupId }` when the session is a member of an agent group (else `{}`). */
-function groupIdFor(sessionId: string): { groupId?: string } {
-  const groupId = getAgentGroupForSession(sessionId)?.id;
-  return groupId ? { groupId } : {};
-}
-
 export function activeToolNamesForSession(
   info: AgentSessionInfo,
   profile: ToolProfileName,
@@ -875,17 +831,6 @@ export function activeToolNamesForSession(
     });
   }
   const disabled = new Set<string>();
-  // Agent Groups member tools exist only for sessions that are group members.
-  if (!groupIdFor(info.id).groupId) {
-    for (const name of active) {
-      if (isGroupToolName(name) || isGroupMailboxToolName(name)) disabled.add(name);
-    }
-  }
-  if (!isFeatureFlagEnabled("MODUS_GROUPS_MAILBOX")) {
-    for (const name of active) {
-      if (isGroupMailboxToolName(name)) disabled.add(name);
-    }
-  }
   // RERANK-03: the meta-tool exists only while the local tool filter is on, and
   // only for top-level sessions (subagents are not filtered).
   if (info.parentSessionId || !turnToolFilterEnabled()) disabled.add(TOOLS_EXPAND_TOOL_NAME);
@@ -977,15 +922,6 @@ export function disallowedToolReason(toolName: string, limits: TurnToolLimits): 
     return `Blocked ${toolName}: Plan Mode is read-only. Use ${[...limits.allowed].join(", ")} to research and write the plan, or ask the user to switch to Build mode.`;
   }
   return `${toolName} is not available in this turn. Use the tools this turn allows.`;
-}
-
-function isGroupMailboxToolName(name: string): boolean {
-  return (
-    name === GROUP_MAILBOX_SEND_TOOL ||
-    name === GROUP_MAILBOX_RECEIVE_TOOL ||
-    name === GROUP_MAILBOX_ACK_TOOL ||
-    name === GROUP_REVISION_CHECK_TOOL
-  );
 }
 
 function composeSubagentPrompt(input: {
@@ -1102,7 +1038,6 @@ export class PiSdkRuntime implements AgentRuntime {
     this.#harnessKernel.registerHook(defaultPromptBuildResponsePolicyHook);
     this.#harnessKernel.registerHook(defaultTurnSettleResponsePolicyHook);
     this.#harnessKernel.registerHook(defaultObservabilityTurnSettleHook);
-    this.#harnessKernel.registerHook(defaultTurnSettleGroupMailboxHook);
 
     // Make the agent terminal tools (run/read/list/write/kill), the built-in
     // web tools (search/fetch), and the live to-do tool available to the chat
@@ -1126,8 +1061,6 @@ export class PiSdkRuntime implements AgentRuntime {
       expandSessionTools: (sessionId) => this.expandSessionTools(sessionId),
     });
     registerGoalTools();
-    registerGroupTools();
-    registerGroupMailboxTools();
 
     if (
       process.platform === "linux" &&
@@ -2013,7 +1946,6 @@ export class PiSdkRuntime implements AgentRuntime {
       },
       workspaceId: runtimeSession.info.workspaceId,
       cwd: runtimeSession.info.cwd,
-      ...groupIdFor(runtimeSession.info.id),
       mode: tracker.mode ?? "build",
       state: new Map([["harness.failure_attempts", tracker.failureAttempts]]),
       startedAt: tracker.startedAt,
@@ -2481,20 +2413,6 @@ export class PiSdkRuntime implements AgentRuntime {
   ): Promise<void> {
     const runId = tracker.runId;
     const plan = tracker.taskPlan;
-    let groupSourceFingerprint: string | undefined;
-    let groupSourceUnavailable = false;
-    if (input.groupTask) {
-      const binding = getGroupTaskRunBinding(input.sessionId, runId);
-      const task = binding ? getGroupTask(binding.taskId) : undefined;
-      const source = task ? getGroupTaskSourcePath(task) : undefined;
-      try {
-        if (!source || !binding || realpathSync(source) !== realpathSync(runtimeSession.info.cwd))
-          throw new Error("Task checks did not run against the task owner's source.");
-        groupSourceFingerprint = await getGroupSourceFingerprint(source);
-      } catch {
-        groupSourceUnavailable = true;
-      }
-    }
     const summary = summarizeHarnessQA({
       sessionId: input.sessionId,
       runId,
@@ -2509,18 +2427,6 @@ export class PiSdkRuntime implements AgentRuntime {
     if (summary.restoreRowId === undefined) delete tracker.lastQaRestoreRowId;
     else tracker.lastQaRestoreRowId = summary.restoreRowId;
     const result = summary.result;
-    if (input.groupTask) {
-      if (groupSourceFingerprint) result.sourceFingerprint = groupSourceFingerprint;
-      if (groupSourceUnavailable) {
-        result.status = "unavailable";
-        result.reasonCode = "task_source_unavailable";
-        result.evidence = result.evidence.map((item) =>
-          item.status === "passed" || item.status === "user_confirmed"
-            ? { ...item, status: "unavailable" }
-            : item,
-        );
-      }
-    }
     if (
       result.required &&
       (aborted || this.cancellingRuns.has(runId) || getAgentRun(runId)?.status === "cancelled")
@@ -2591,32 +2497,6 @@ export class PiSdkRuntime implements AgentRuntime {
   ): (event: AgentEvent, options?: { idempotencyKey?: string }) => void {
     return (event, options) => {
       const rowId = recordAgentEvent(event, options);
-      if (event.type === "harness.qa") {
-        const binding = getGroupTaskRunBinding(event.sessionId, event.runId);
-        if (binding && event.result.sourceFingerprint) {
-          try {
-            const refs = collectGroupTaskRunEvidence(binding, rowId);
-            if (refs.length > 0) {
-              const task = getGroupTask(binding.taskId);
-              recordGroupTaskEvidence({
-                groupId: binding.groupId,
-                taskId: binding.taskId,
-                actorSessionId: binding.sessionId,
-                expectedVersion: task.stateVersion ?? 0,
-                operationId: `qa:${rowId}`,
-                evidenceRefs: [
-                  ...(task.evidenceRefs ?? []).filter(
-                    (ref) => ref.sessionId !== binding.sessionId || ref.runId !== binding.runId,
-                  ),
-                  ...refs,
-                ].slice(-256),
-              });
-            }
-          } catch (error) {
-            console.warn("[modus] group task QA evidence unavailable:", error);
-          }
-        }
-      }
       const observable = { ...event, eventCursor: rowId };
       for (const listener of this.eventListeners) {
         try {
@@ -2826,7 +2706,6 @@ export class PiSdkRuntime implements AgentRuntime {
       ...(runtimeSession.info.parentSessionId
         ? { parentSessionId: runtimeSession.info.parentSessionId }
         : {}),
-      ...groupIdFor(sessionId),
       window,
       emit,
     };
@@ -3167,7 +3046,6 @@ export class PiSdkRuntime implements AgentRuntime {
         sessionId,
         runId: sessionId,
         workspaceId: getAgentSession(sessionId)?.workspaceId,
-        ...groupIdFor(sessionId),
         cwd,
         mode: "build",
         state: new Map(),
@@ -3362,7 +3240,6 @@ export class PiSdkRuntime implements AgentRuntime {
       sessionId,
       runId: runId ?? sessionId,
       ...(runtimeSession.info.workspaceId ? { workspaceId: runtimeSession.info.workspaceId } : {}),
-      ...groupIdFor(sessionId),
       cwd: runtimeSession.info.cwd,
       mode: "build",
       sessionToken: runtimeSession.observerSessionToken,
@@ -3521,7 +3398,6 @@ export class PiSdkRuntime implements AgentRuntime {
         );
       },
       workspaceId: runtimeSession.info.workspaceId,
-      ...groupIdFor(input.sessionId),
       cwd: runtimeSession.info.cwd,
       mode: input.mode ?? "build",
       state,
@@ -3648,9 +3524,6 @@ export class PiSdkRuntime implements AgentRuntime {
         runtimeSession?.promptQueue?.reconcile();
       }
       this.noteAssistantResponseUsage(params.info.id, event);
-      // Before PI runs this message's tool calls: group_start_worktree must be alone.
-      if (event.type === "message_end")
-        noteAssistantMessageToolCalls(params.info.id, event.message);
       for (const normalized of normalizePiEvent(event)) {
         if (
           normalized.type === "tool.started" &&
@@ -4242,8 +4115,8 @@ export class PiSdkRuntime implements AgentRuntime {
     exclusiveStart?: ExclusiveStartHooks,
     probe?: PromptProbe,
   ): Promise<void> {
-    // A 1:1 chat of a blocked group (e.g. no Project) is read-only (A3).
-    requireAgentChatWritable(input.sessionId);
+    // Migrated history (read_only) refuses new turns.
+    requireSessionWritable(input.sessionId);
     const startInput = exclusiveStart?.input;
     if (
       isPlanBuildSessionReserved(input.sessionId) &&
@@ -4581,36 +4454,6 @@ export class PiSdkRuntime implements AgentRuntime {
     let startedEmitThrew = false;
     try {
       if (startInput && !startInput.existingRunId) startInput.onRunCreated(run.id);
-      if (input.groupTask) {
-        try {
-          const task = getGroupTask(input.groupTask.taskId);
-          const source = getGroupTaskSourcePath(task);
-          if (
-            !source ||
-            task.groupId !== input.groupTask.groupId ||
-            task.executionId !== input.groupTask.executionId ||
-            task[input.groupTask.role === "owner" ? "ownerSessionId" : "reviewerSessionId"] !==
-              input.sessionId
-          )
-            throw new Error("Group task run seed is stale.");
-          const sourceFingerprint = await getGroupSourceFingerprint(source);
-          bindGroupTaskRun({
-            groupId: task.groupId,
-            taskId: task.id,
-            taskVersion: task.stateVersion ?? 0,
-            criteriaVersion: task.criteriaVersion ?? 0,
-            sessionId: input.sessionId,
-            runId: run.id,
-            executionId: input.groupTask.executionId,
-            role: input.groupTask.role,
-            sourceFingerprint,
-            expectedVersion: task.stateVersion ?? 0,
-            operationId: `run:${run.id}`,
-          });
-        } catch (error) {
-          console.warn("[modus] group task run evidence unavailable:", error);
-        }
-      }
       outputTracker = {
         runId: run.id,
         mode: input.mode ?? "build",
@@ -5066,7 +4909,7 @@ export class PiSdkRuntime implements AgentRuntime {
         const compact = runtimeSession.lastCompactionEnd;
         runtimeSession.lastCompactionEnd = undefined;
         const stillRunning = getAgentRun(run.id)?.status === "running";
-        // group_start_worktree moved the cwd this turn: never auto-continue in the old one.
+        // The cwd moved this turn: never auto-continue in the old one.
         const cwdMoved = getAgentSession(input.sessionId)?.cwd !== runtimeSession.info.cwd;
         if (
           stillRunning &&
@@ -6419,27 +6262,32 @@ export class PiSdkRuntime implements AgentRuntime {
     return false;
   }
 
-  async abort(sessionId: string, window?: BrowserWindowType): Promise<void> {
+  async abort(sessionId: string, window?: BrowserWindowType): Promise<AbortAgentResult> {
     this.cancelPendingIntentGate(sessionId);
     clearTodoSessionCache(sessionId);
     const activeRunId = getActiveAgentRun(sessionId)?.id;
     const runtimeWasLoaded = this.sessions.has(sessionId);
+    let restored: AbortAgentResult["restored"] = [];
     try {
       await this.closeSubagentTree(sessionId, "Parent session aborted");
       const currentRunId = getActiveAgentRun(sessionId)?.id;
       if (currentRunId === undefined || currentRunId === activeRunId) {
         this.clearBackgroundTasksForParent(sessionId);
         this.backgroundChildTasks.delete(sessionId);
-        await this.abortSessionOnly(sessionId, window);
+        restored = await this.abortSessionOnly(sessionId, window);
       }
     } finally {
       if (activeRunId && (runtimeWasLoaded || getAgentRun(activeRunId)?.status === "cancelled")) {
         await this.cleanupRunProcesses(sessionId, activeRunId);
       }
     }
+    return { restored };
   }
 
-  private async abortSessionOnly(sessionId: string, window?: BrowserWindowType): Promise<void> {
+  private async abortSessionOnly(
+    sessionId: string,
+    window?: BrowserWindowType,
+  ): Promise<AbortAgentResult["restored"]> {
     this.cancelPendingIntentGate(sessionId);
     clearTodoSessionCache(sessionId);
     const activeRun = getActiveAgentRun(sessionId);
@@ -6450,8 +6298,15 @@ export class PiSdkRuntime implements AgentRuntime {
         sessionId,
         window ? this.emitToWindow(window) : (event) => this.emitDetachedEvent(event),
       );
-      return;
+      return [];
     }
+    // pi keeps its steer/follow-up queues through abort() and would send them
+    // right after Stop. Take them back for the composer instead.
+    const restored = (runtimeSession.promptQueue?.drain() ?? []).map(({ input }) => ({
+      text: input.message,
+      attachments: input.attachments ?? [],
+    }));
+    runtimeSession.session.clearQueue?.();
     const outputTracker = this.runOutputTrackers.get(sessionId);
     const runId = outputTracker?.runId ?? activeRun?.id;
     if (runId) {
@@ -6477,6 +6332,7 @@ export class PiSdkRuntime implements AgentRuntime {
         updateAgentSessionStatus(sessionId, "idle");
       }
     }
+    return restored;
   }
 
   async listRuns(sessionId: string): Promise<AgentRunInfo[]> {
@@ -6532,7 +6388,6 @@ export class PiSdkRuntime implements AgentRuntime {
     // publishes its rebuild promise immediately after calling this method.
     void this.#externalPluginSupervisor.releaseSession(sessionId);
     if (!options.keepTodos) clearTodoSessionCache(sessionId);
-    clearAssistantToolCallCount(sessionId);
     const activeRun = getActiveAgentRun(sessionId);
     if (activeRun) clearMcpCitationRun(sessionId, activeRun.id);
     // Settle any in-flight resume first: it would otherwise re-cache a live

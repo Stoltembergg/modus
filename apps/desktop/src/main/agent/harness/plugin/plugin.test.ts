@@ -22,7 +22,6 @@ import type { PluginManifest } from "./plugin-types";
 import { PluginDependencyError, PluginLifecycleError, PluginValidationError } from "./plugin-types";
 import { type ContextItem, contextEnginePluginManifest } from "./plugins/context-engine-plugin";
 import { failureIntelPluginManifest } from "./plugins/failure-intel-plugin";
-import { groupsPluginManifest } from "./plugins/groups-plugin";
 import { memoryPluginManifest, memoryStore } from "./plugins/memory-plugin";
 import { modelRouterPluginManifest } from "./plugins/model-router-plugin";
 import { verifierPluginManifest } from "./plugins/verifier-plugin";
@@ -46,7 +45,6 @@ describe("Fase 10 — Modus Internal Plugins", () => {
       contextEnginePluginManifest,
       verifierPluginManifest,
       failureIntelPluginManifest,
-      groupsPluginManifest,
     ]) {
       catalog.add(manifest, "core");
     }
@@ -165,7 +163,6 @@ describe("Fase 10 — Modus Internal Plugins", () => {
       for (const manifest of [
         contextEnginePluginManifest,
         failureIntelPluginManifest,
-        groupsPluginManifest,
         verifierPluginManifest,
       ]) {
         expect(manifest.requires.capabilities ?? [], manifest.id).toEqual([]);
@@ -378,7 +375,7 @@ describe("Fase 10 — Modus Internal Plugins", () => {
     });
   });
 
-  describe("10.6 — Phase 10B: Additional Internal Plugins (@modus/context-engine, @modus/failure-intel, @modus/groups)", () => {
+  describe("10.6 — Phase 10B: Additional Internal Plugins (@modus/context-engine, @modus/failure-intel)", () => {
     it("loads and executes @modus/context-engine", async () => {
       await loader.load(contextEnginePluginManifest);
 
@@ -419,25 +416,6 @@ describe("Fase 10 — Modus Internal Plugins", () => {
         registry.execute("failure.recover", {
           error: "SyntaxError",
           attempts: 1,
-        }),
-      ).rejects.toThrow(CapabilityUnavailableError);
-    });
-
-    it("does not return success from the in-memory group mailbox or coordinator", async () => {
-      await loader.load(groupsPluginManifest);
-
-      await expect(
-        registry.execute("groups.mailbox", {
-          action: "post",
-          sender: "architect",
-          recipient: "coder",
-          body: "Implement auth module",
-        }),
-      ).rejects.toThrow(CapabilityUnavailableError);
-      await expect(
-        registry.execute("groups.coordinate", {
-          groupId: "fixture",
-          members: ["agent-a", "agent-b"],
         }),
       ).rejects.toThrow(CapabilityUnavailableError);
     });
@@ -501,7 +479,7 @@ describe("Fase 10 — Modus Internal Plugins", () => {
   });
 
   describe("10.8 — Built-in Bootstrap Sequence", () => {
-    it("loads all 6 Modus internal plugins in catalog order", async () => {
+    it("loads all 5 Modus internal plugins in catalog order", async () => {
       const freshRegistry = new CapabilityRegistry();
       const result = await bootstrapModusPlugins(freshRegistry);
 
@@ -511,10 +489,9 @@ describe("Fase 10 — Modus Internal Plugins", () => {
         "@modus/context-engine",
         "@modus/verifier",
         "@modus/failure-intelligence",
-        "@modus/groups",
       ]);
 
-      expect(result.loader.listPlugins().length).toBe(6);
+      expect(result.loader.listPlugins().length).toBe(5);
 
       // Verify all active providers point to our loaded internal plugins
       expect(freshRegistry.getActiveProvider("memory.retrieve")?.providerId).toBe("@modus/memory");
@@ -530,7 +507,6 @@ describe("Fase 10 — Modus Internal Plugins", () => {
       expect(freshRegistry.getActiveProvider("failure.classify")?.providerId).toBe(
         "@modus/failure-intelligence",
       );
-      expect(freshRegistry.getActiveProvider("groups.mailbox")?.providerId).toBe("@modus/groups");
     });
   });
 
@@ -558,7 +534,7 @@ describe("Fase 10 — Modus Internal Plugins", () => {
         // deliberately exposes no mutable loader, registry, or store accessor.
         store = new PluginStateStore(join(userData, "plugins.db"));
         const plugins = store.listPlugins();
-        expect(plugins).toHaveLength(6);
+        expect(plugins).toHaveLength(5);
         expect(plugins.every((plugin) => plugin.state === "enabled")).toBe(true);
       } finally {
         loadPlugin.mockRestore();

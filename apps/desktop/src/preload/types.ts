@@ -10,10 +10,9 @@ import type {
 } from "../shared/automations";
 import type { BillingBuyCreditsInput, BillingCheckoutInput, BillingState } from "../shared/billing";
 import type {
+  AbortAgentResult,
   AddDocInput,
   AgentEvent,
-  AgentGroupMode,
-  AgentGroupWithMembers,
   AgentInfo,
   AgentMode,
   AgentReviewDepth,
@@ -38,7 +37,6 @@ import type {
   ContextItem,
   ContextKind,
   ContextSuggestion,
-  CreateAgentGroupInput,
   CustomProviderConfig,
   DiffFilePatch,
   DiffReview,
@@ -59,24 +57,7 @@ import type {
   GitCommit,
   GitCommitResult,
   GitStatusSummary,
-  GroupDecision,
-  GroupIntegrationPreview,
-  GroupIntegrationRecord,
-  GroupIntegrationState,
-  GroupMemberStates,
-  GroupMessage,
-  GroupMessageCursor,
-  GroupProactivityMode,
-  GroupProjectContextSnapshot,
-  GroupRuntimeEvent,
-  GroupSuggestion,
-  GroupSuggestionResolution,
   GroupsMigrationNotice,
-  GroupTask,
-  GroupTaskDetails,
-  GroupTaskTransitionEvent,
-  GroupTaskUserDraft,
-  GroupWorkState,
   HarnessInsight,
   HarnessInsightsQuery,
   HarnessInsightsResult,
@@ -93,7 +74,6 @@ import type {
   PermissionDecision,
   PersonalizationState,
   PlanSourceSnapshot,
-  PostGroupMessageInput,
   PreviewReadResult,
   ProjectMemoryScope,
   ProjectMemorySnapshot,
@@ -108,7 +88,6 @@ import type {
   RawMcpEntry,
   ReaIntegrationStatus,
   ResolvedContext,
-  ResumeGroupExecutionInput,
   RuleFileInfo,
   SessionBranchState,
   SkillDetail,
@@ -121,7 +100,6 @@ import type {
   TestCustomProviderInput,
   TestCustomProviderResult,
   ThinkingLevel,
-  UpdateAgentGroupMembersInput,
   UpdateAgentInput,
   UpdateModelConfigInput,
   UpdateRestoreUiState,
@@ -236,118 +214,6 @@ export type ModusApi = {
     stop(executionId: string): Promise<void>;
     onEvent(handler: (event: AutomationServiceEvent) => void): () => void;
   };
-  group: {
-    /** Every Agent Group with its members (sidebar Groups section). */
-    list(): Promise<AgentGroupWithMembers[]>;
-    /**
-     * Create a group in a Project with 2..10 NEW agents (one group per agent)
-     * and its lead, in one all-or-nothing step.
-     */
-    create(input: CreateAgentGroupInput): Promise<AgentGroupWithMembers>;
-    /** Rename a group; returns the refreshed group list. */
-    rename(input: { id: string; name: string }): Promise<AgentGroupWithMembers[]>;
-    /** Delete a group with its agents, their chats and all group messages; returns the list. */
-    remove(id: string): Promise<AgentGroupWithMembers[]>;
-    /** Add an ungrouped (legacy) agent; new agents join with `agents.create({ groupId })`. */
-    addMember(input: {
-      groupId: string;
-      agentId: string;
-      role?: string;
-    }): Promise<AgentGroupWithMembers[]>;
-    /** Move the group (and its room sessions) to another Project; never to none. */
-    setWorkspace(input: {
-      groupId: string;
-      workspaceId: string | null;
-    }): Promise<AgentGroupWithMembers[]>;
-    /** Remove a member = delete its agent (refused at 2: `group-min-members`); returns the list. */
-    removeMember(input: { groupId: string; sessionId: string }): Promise<AgentGroupWithMembers[]>;
-    /** Set or clear (null) the lead; the lead must be a member. */
-    setLead(input: { groupId: string; sessionId: string | null }): Promise<AgentGroupWithMembers[]>;
-    /** Coordinator mode on/off (kept but ignored while the group has no Lead). */
-    setMode(input: { groupId: string; mode: AgentGroupMode }): Promise<AgentGroupWithMembers[]>;
-    /**
-     * "Manage members" in ONE all-or-nothing step: create the `add` agents,
-     * remove `removeAgentIds` (deleting their agents) and set the final lead.
-     * The 2..10 rule and the lead are checked on the final state; returns the
-     * refreshed list.
-     */
-    updateMembers(input: UpdateAgentGroupMembersInput): Promise<AgentGroupWithMembers[]>;
-    /**
-     * Post a user message to the room; it opens a new chain and wakes the
-     * mentioned members (or the lead when nobody is mentioned).
-     */
-    postMessage(input: PostGroupMessageInput): Promise<GroupMessage>;
-    /**
-     * Resume an interrupted/failed turn by durable execution id (job/turn id).
-     * Requeues the existing job — does not post a new user message.
-     */
-    resumeExecution(input: ResumeGroupExecutionInput): Promise<void>;
-    /** A page of room messages in (created_at, id) order. */
-    listMessages(input: {
-      groupId: string;
-      before?: GroupMessageCursor;
-      after?: GroupMessageCursor;
-      limit?: number;
-    }): Promise<GroupMessage[]>;
-    /** Groups with a member turn running or queued right now. */
-    workingGroupIds(): Promise<string[]>;
-    /** Running / queued / waiting-for-you members of every active group. */
-    memberStates(): Promise<GroupMemberStates[]>;
-    /** Stop the room: end its chains and abort running member turns ("Turn stopped"). */
-    stop(groupId: string): Promise<void>;
-    /** The group's tasks (created order) for the room's task panel. */
-    listTasks(groupId: string): Promise<GroupTask[]>;
-    /** Bounded task state for agent context; renderer details use getTaskDetails. */
-    getWorkState(groupId: string, executionId?: string): Promise<GroupWorkState>;
-    /** Bounded user-facing criteria, current evidence outcomes and dependency details. */
-    getTaskDetails(groupId: string, taskId: string): Promise<GroupTaskDetails>;
-    /** Chronological task history (the main process caps the result). */
-    listTaskTransitions(taskId: string): Promise<GroupTaskTransitionEvent[]>;
-    /** User edits only the task draft; state and evidence remain main-owned. */
-    updateTask(
-      taskId: string,
-      draft: GroupTaskUserDraft,
-      expectedVersion: number,
-    ): Promise<GroupTask>;
-    /** Persisted, per-group proactivity preference (`suggest` by default). */
-    getProactivityMode(groupId: string): Promise<GroupProactivityMode>;
-    setProactivityMode(groupId: string, mode: GroupProactivityMode): Promise<GroupProactivityMode>;
-    /** Current safe user-facing suggestions; no conversation or QA output is included. */
-    listSuggestions(groupId: string): Promise<GroupSuggestion[]>;
-    /** Accept or discard exactly one suggestion using its displayed version. */
-    resolveSuggestion(
-      actionId: string,
-      decision: "accept" | "discard",
-      expectedVersion: number,
-      targetSessionId?: string,
-    ): Promise<GroupSuggestionResolution>;
-    /** "Cancel task": the only path to `cancelled` (a done task is refused). */
-    cancelTask(taskId: string): Promise<GroupTask>;
-    /** Create a read-only, main-process integration preview for one task. */
-    previewTaskIntegration(taskId: string): Promise<GroupIntegrationPreview>;
-    /** Apply exactly the persisted preview after the user explicitly confirms it. */
-    applyTaskIntegration(input: {
-      taskId: string;
-      previewId: string;
-      confirmedByUser: true;
-    }): Promise<GroupIntegrationRecord>;
-    /** Abort a stored applied/conflicted no-commit merge after a fresh git.write decision. */
-    abortTaskIntegration(taskId: string): Promise<GroupIntegrationRecord>;
-    /** Read the latest persisted integration DTOs; no Git state is recomputed. */
-    getIntegrationState(taskId: string): Promise<GroupIntegrationState>;
-    /** Reconcile an interrupted apply record, or return the latest persisted DTOs. */
-    refreshTaskIntegrationState(taskId: string): Promise<GroupIntegrationState>;
-    /** The group's decisions (newest first) for the side panel's "Decisions". */
-    listDecisions(groupId: string): Promise<GroupDecision[]>;
-    /** "Delete" a decision (physical; posts nothing in the room). */
-    deleteDecision(decisionId: string): Promise<GroupDecision>;
-    /**
-     * Workspace-scoped Project Setup status (shared Project Model map).
-     * Also schedules reopen Setup (no-op when fingerprint still matches).
-     */
-    projectContext(workspaceId: string): Promise<GroupProjectContextSnapshot | null>;
-    onEvent(callback: (event: GroupRuntimeEvent) => void): () => void;
-  };
   /** Agents (agents model): each belongs to one group, names unique in it. */
   groupsMigration: {
     notice(): Promise<GroupsMigrationNotice>;
@@ -361,7 +227,7 @@ export type ModusApi = {
      * `group-max-members`, and without a template `agent-model-required` /
      * `agent-model-unavailable`.
      */
-    create(input: NewGroupAgentInput & { groupId?: string }): Promise<AgentInfo>;
+    create(input: NewGroupAgentInput): Promise<AgentInfo>;
     /** Change the given fields (null clears model / default Project); returns the refreshed list. */
     update(input: UpdateAgentInput & { id: string }): Promise<AgentInfo[]>;
     /** Archive / restore (group membership is kept); returns the refreshed list. */
@@ -433,7 +299,7 @@ export type ModusApi = {
       sourceSnapshot: PlanSourceSnapshot;
     }): Promise<PlanBuildStart>;
     compact(sessionId: string): Promise<void>;
-    abort(sessionId: string): Promise<void>;
+    abort(sessionId: string): Promise<AbortAgentResult>;
     /** Prompts waiting for the running turn, in arrival order. */
     listQueue(sessionId: string): Promise<QueuedPromptItem[]>;
     /**

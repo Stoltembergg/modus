@@ -5,7 +5,6 @@ import {
 import type { PluginManifest, PluginManifestDescriptor, PluginManifestInput } from "./plugin-types";
 import { contextEnginePluginManifest } from "./plugins/context-engine-plugin";
 import { failureIntelPluginManifest } from "./plugins/failure-intel-plugin";
-import { groupsPluginManifest } from "./plugins/groups-plugin";
 import { memoryPluginManifest } from "./plugins/memory-plugin";
 import { modelRouterPluginManifest } from "./plugins/model-router-plugin";
 import { verifierPluginManifest } from "./plugins/verifier-plugin";
@@ -138,7 +137,6 @@ const builtInPluginSources: readonly HostPluginEntry[] = Object.freeze([
   Object.freeze({ manifest: contextEnginePluginManifest, trustLevel: "core" as const }),
   Object.freeze({ manifest: verifierPluginManifest, trustLevel: "core" as const }),
   Object.freeze({ manifest: failureIntelPluginManifest, trustLevel: "core" as const }),
-  Object.freeze({ manifest: groupsPluginManifest, trustLevel: "core" as const }),
 ]);
 
 export const BUILT_IN_PLUGIN_CATALOG = new HostPluginCatalog(builtInPluginSources);

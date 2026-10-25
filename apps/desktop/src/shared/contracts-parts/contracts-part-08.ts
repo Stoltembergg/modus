@@ -158,9 +158,9 @@ export type CreateAgentInput = {
 };
 
 /**
- * An agent created inside a group (`agents:create`, and each entry of
- * `group:create`). Without `templateId` a `modelId` of a configured provider is
- * required (`agent-model-required` / `agent-model-unavailable`).
+ * An `agents:create` payload (a groupless profile). Without `templateId` a
+ * `modelId` of a configured provider is required (`agent-model-required` /
+ * `agent-model-unavailable`).
  */
 export type NewGroupAgentInput = CreateAgentInput & {
   templateId?: string;
@@ -173,14 +173,11 @@ export type CreateGroupAgentInput = NewGroupAgentInput & { groupId: string };
 
 /**
  * `agents:generate-profile` (A3): one LLM call to `modelId` for a custom
- * agent's `{ role, instructions }`. The other members' roles of `groupId`
- * (minus `agentId`, when regenerating an existing agent) are sent so the new
- * role complements them. The create-group modal (A4) has no group yet: it
- * omits `groupId` and sends the roles already chosen in the modal as `roles`.
+ * agent's `{ role, instructions }`. `roles` lists other roles the new one
+ * should differ from; `agentId` is set when regenerating an existing agent.
  */
 export type GenerateAgentProfileInput = {
-  groupId?: string;
-  /** Roles already chosen for the group being created (A4), added to the group's. */
+  /** Other roles to differ from (e.g. the ones already chosen in a modal). */
   roles?: string[];
   modelId: string;
   name: string;
