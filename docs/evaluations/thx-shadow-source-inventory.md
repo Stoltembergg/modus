@@ -1,10 +1,10 @@
 # THX-01 shadow source inventory
 
-Inspection date: 2026-10-25  
-Current checkout: `feat/modus-maturity-remediation`  
-Inspected source ref: `origin/feat/thx-local-decision-model` at
-`1fab3d6628fb7db80929ce22d3d4be5054d9a23a`  
-Current `origin/main` at inspection: `fd74a37b74f121f5cf6fb59c15aa009d3b6c4f66`
+- Inspection date: 2026-10-25
+- Current checkout: `feat/modus-maturity-remediation`
+- Inspected source ref: `origin/feat/thx-local-decision-model` at
+  `1fab3d6628fb7db80929ce22d3d4be5054d9a23a`
+- Current `origin/main` at inspection: `fd74a37b74f121f5cf6fb59c15aa009d3b6c4f66`
 
 ## Source located
 

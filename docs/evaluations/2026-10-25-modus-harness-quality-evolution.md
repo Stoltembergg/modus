@@ -1,9 +1,9 @@
 # Modus Harness quality evolution — qualification report
 
-Date: 2026-10-25  
-Branch: `feat/modus-maturity-remediation`  
-Starting revision: `c7ed5df020e33b4a97bcf70109ab444029cef6d6`  
-Upstream merged: `fd74a37b74f121f5cf6fb59c15aa009d3b6c4f66`  
+- Date: 2026-10-25
+- Branch: `feat/modus-maturity-remediation`
+- Starting revision: `c7ed5df020e33b4a97bcf70109ab444029cef6d6`
+- Upstream merged: `fd74a37b74f121f5cf6fb59c15aa009d3b6c4f66`
 Implementation commits: `7b133e1b`, `4ad07b84`, `598dec9c`
 
 This report records functional evidence from the VPS. It does not claim live

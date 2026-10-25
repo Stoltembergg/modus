@@ -77,7 +77,6 @@ export function buildScopedRecallContext(
     contextSymbols: [],
     git: { changedPaths: [] },
     sessionId,
-    runId: "quality-evaluation",
   });
 }
 
@@ -104,5 +103,3 @@ export const SCOPED_RECALL_FIXTURE: QualityFixture = {
     },
   ],
 };
-
-export const SCOPED_RECALL_PROMPT_QUERY = QUERY;
