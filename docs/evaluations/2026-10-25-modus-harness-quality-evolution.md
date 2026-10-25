@@ -5,11 +5,11 @@
 - Starting revision: `c7ed5df020e33b4a97bcf70109ab444029cef6d6`
 - Upstream merged: `fd74a37b74f121f5cf6fb59c15aa009d3b6c4f66`
 Implementation/evidence commits: `7b133e1b`, `4ad07b84`, `598dec9c`,
-`feca2f65`, `8bd992a4`, `0bb83a22`, `8659481c`, `6ea947b0`
+`feca2f65`, `8bd992a4`, `0bb83a22`, `8659481c`, `6ea947b0`, `e6400719`
 
-This report records functional evidence from the VPS. It does not claim live
-model quality, macOS package validation, THX integration, or resolution of the
-separate payment-period ownership finding.
+This report records functional evidence from the VPS and CI. It does not claim
+live model quality, Developer ID signing/notarization, THX integration, or
+resolution of the separate payment-period ownership finding.
 
 ## Changes in this execution
 
@@ -47,7 +47,10 @@ Commands and observed results:
 | `vitest run apps/desktop/src/main/agent/harness/guards/guards.test.ts` using a temporary test-only `electron` alias | 27 passed |
 | Task 6 local v2/v1 verifier run plus stored calibration and `command-line.test.ts` | 51 passed, 7 skipped; six files passed, live suite skipped |
 | `NODE_OPTIONS=--max-old-space-size=4096 npm run check` | exit 0; Biome and desktop TypeScript passed; 238 existing warnings and 31 infos |
+| PR CI run `40169864604` | passed, including TypeScript, tests, Biome, Pi/REA, containment, and safe-fixture jobs |
+| PR Linux release/package run `40169864639` | Linux x64 AppImage/deb packaging passed; publication/tag jobs skipped |
 | PR macOS package workflow, run `40169864603` | arm64 and x64 package builds, file verification, and ad-hoc signature checks passed |
+| PR Windows package workflow, run `40169864596` | x64 package and D2 verification passed on isolated retry; first D2 attempt timed out waiting for the fixture, cause not reproduced |
 
 The initial guards suite failed before collecting tests because the shared
 Electron package had no installed binary and attempted a network download
@@ -62,7 +65,11 @@ made. The checked-in offline calibration records `inferenceExecuted: false`.
 
 The PR macOS dry-run completed on GitHub macOS runners for arm64 and x64, including
 packaged-file verification and ad-hoc code-signature checks. Developer ID signing,
-notarization, and a publishable signed release remain unqualified.
+notarization, and a publishable signed release remain unqualified. PR #336 is open;
+this work has not been merged or released. Windows x64 packaging also completed.
+Its first D2 attempt timed out while waiting for the fixture to load; an isolated
+retry passed without test or timeout changes, so the initial cause remains
+inconclusive rather than proven fixed.
 
 ## Plan status
 
@@ -86,5 +93,3 @@ decisions: that requires live, comparable inference with a user-selected
 provider/model and review of the nine-case v2 corpus separately from the original
 seven. THX remains unavailable to the Harness, and real macOS signing remains a
 platform-specific gate.
-
-No PR, push, release, or remote CI run was performed.
