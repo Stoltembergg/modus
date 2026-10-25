@@ -87,7 +87,8 @@ Before a port, the supplemental plan must first resolve the development-only
 loader needed for a real local inference without changing the secure loader or
 the official build. It must then identify exactly which verified source paths
 are ported and how 24-fixture equivalence remains separate from contextual
-decision-quality measurements.
+decision-quality measurements. The reviewable, gated proposal is in
+[THX shadow observation follow-up plan](../superpowers/plans/2026-10-25-thx-shadow-observation-followup.md).
 
 ## Decision
 

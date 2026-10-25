@@ -74,7 +74,7 @@ tests, but real macOS packaging/signing remains unqualified.
 | 4. Context precision | **GO for tested contracts** | Memory and Context Planner tests passed. V2 additionally demonstrated scoped retrieval in the real planner and SQLite adapter. |
 | 5. Continuity/compaction | **GO for exercised scenarios** | Pi runtime, compaction, pruning, and question-tool tests passed; Stop now reconciles queued prompts with the local orphan-run path after the upstream merge. |
 | 6. Real quality comparison | **HOLD** | V2 repair/recall runners and offline checks are implemented. No provider/model was selected; actual repair, recall, latency, and usage are unknown. |
-| 7. THX source inventory | **GO inventory / HOLD integration and utility** | Source ref and pins/evidence are attributable. Secure bootstrap denies launch; no Pi/Meta Controller observer exists on that ref. See [THX inventory](thx-shadow-source-inventory.md). |
+| 7. THX source inventory | **GO inventory / HOLD integration and utility** | Source ref and pins/evidence are attributable. Secure bootstrap denies launch; no Pi/Meta Controller observer exists on that ref. The gated follow-up proposal is documented; no runtime was ported. See [THX inventory](thx-shadow-source-inventory.md). |
 | Payment → billing period association (A15) | **HOLD** | No authoritative link was established by this work; no billing changes were made. |
 
 ## Overall assessment
