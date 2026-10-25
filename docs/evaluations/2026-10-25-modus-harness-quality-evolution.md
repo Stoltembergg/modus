@@ -5,7 +5,7 @@
 - Starting revision: `c7ed5df020e33b4a97bcf70109ab444029cef6d6`
 - Upstream merged: `fd74a37b74f121f5cf6fb59c15aa009d3b6c4f66`
 Implementation/evidence commits: `7b133e1b`, `4ad07b84`, `598dec9c`,
-`feca2f65`, `8bd992a4`
+`feca2f65`, `8bd992a4`, `0bb83a22`, `8659481c`, `6ea947b0`
 
 This report records functional evidence from the VPS. It does not claim live
 model quality, macOS package validation, THX integration, or resolution of the
@@ -47,6 +47,7 @@ Commands and observed results:
 | `vitest run apps/desktop/src/main/agent/harness/guards/guards.test.ts` using a temporary test-only `electron` alias | 27 passed |
 | Task 6 local v2/v1 verifier run plus stored calibration and `command-line.test.ts` | 51 passed, 7 skipped; six files passed, live suite skipped |
 | `NODE_OPTIONS=--max-old-space-size=4096 npm run check` | exit 0; Biome and desktop TypeScript passed; 238 existing warnings and 31 infos |
+| PR macOS package workflow, run `40169864603` | arm64 and x64 package builds, file verification, and ad-hoc signature checks passed |
 
 The initial guards suite failed before collecting tests because the shared
 Electron package had no installed binary and attempted a network download
@@ -59,15 +60,15 @@ The live-inference cases were skipped. No provider/model or inference budget was
 specified, so the runner was not enabled and no external inference request was
 made. The checked-in offline calibration records `inferenceExecuted: false`.
 
-The macOS package and signature workflow cannot be executed on this Linux VPS.
-Workflow-input/filter and merge-script behavior is covered by the passing local
-tests, but real macOS packaging/signing remains unqualified.
+The PR macOS dry-run completed on GitHub macOS runners for arm64 and x64, including
+packaged-file verification and ad-hoc code-signature checks. Developer ID signing,
+notarization, and a publishable signed release remain unqualified.
 
 ## Plan status
 
 | Plan area | Status | Evidence / remaining limitation |
 | --- | --- | --- |
-| 0. Upstream and packaging-validation reference | **HOLD for macOS; GO for local checks** | Upstream merge and local release/workflow tests passed. Real macOS artifact/signature execution needs a macOS runner. |
+| 0. Upstream and packaging-validation reference | **GO for local and CI dry runs; HOLD for public macOS signing** | Upstream merge, local release/workflow tests, and PR arm64/x64 macOS package/ad-hoc signature checks passed. Developer ID signing and notarization remain unvalidated. |
 | 1. Frozen baseline | **GO offline / HOLD live** | Seven original fixture identities and hash are unchanged; offline verifier calibration reproduced. No live model baseline. |
 | 2. Recovery after failures | **GO for tested contracts** | Meta Controller, failure intelligence, repeat guard, TODO continuation and Pi runtime tests passed. No new product gap was reproduced, so no retry behavior was changed. |
 | 3. Delivery evidence | **GO for tested contracts** | Task state, QA evidence and acceptance tests passed, including stale/contradictory evidence cases already in the suite. |

@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript, Pi SDK, existing Rust `decision-runtime`, ONNX Runtime, existing Harness observer and Vitest.
 
-**Spec:** [Harness quality evolution design](../specs/2026-10-25-modus-harness-quality-evolution-design.md) and [THX source inventory](../../evaluations/thx-shadow-source-inventory.md).
+**Spec:** [THX source inventory](../../evaluations/thx-shadow-source-inventory.md) and [Harness quality evaluation report](../../evaluations/2026-10-25-modus-harness-quality-evolution.md).
 
 ## Global Constraints
 
