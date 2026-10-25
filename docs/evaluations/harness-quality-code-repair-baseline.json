@@ -4,7 +4,7 @@
   "inferenceExecuted": false,
   "selectedModel": null,
   "liveBaselineStatus": "not_run_requires_explicit_provider_model_choice",
-  "sourceRevision": "7b133e1b958d3a19b0623c9f546e31845fb5e763",
+  "sourceRevision": "4ad07b84de928becd59651b8f48974fa92d8d042",
   "nodeVersion": "v24.19.0",
   "fixtureId": "repair-command-line-pt",
   "fixtureHash": "8d8964d3ecd410334b418b9b3449fab875e71bd2242e8e2713d4de6de5836c88",
