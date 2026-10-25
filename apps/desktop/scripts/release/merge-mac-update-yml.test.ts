@@ -78,9 +78,20 @@ describe("mergeMacUpdateInfo", () => {
     );
   });
 
+  it("refuses duplicate paths even when their hashes and sizes match", () => {
+    const arm = load(archYml("1.0.0", "arm64", "2026-09-27T10:00:00.000Z"));
+    const x64 = load(archYml("1.0.0", "x64", "2026-09-27T10:05:00.000Z"));
+    x64.files[0] = { ...x64.files[0], ...arm.files[0] };
+    expect(() => mergeMacUpdateInfo([arm, x64])).toThrow(
+      /Duplicate entry for Modus-1\.0\.0-mac-arm64\.zip/,
+    );
+  });
+
   it("requires one arm64 and one x64 zip", () => {
     const arm = load(archYml("1.0.0", "arm64", "2026-09-27T10:00:00.000Z"));
-    expect(() => mergeMacUpdateInfo([arm, arm])).toThrow(/arm64 zip and an x64 zip/);
+    const anotherArm = load(archYml("1.0.0", "arm64", "2026-09-27T10:05:00.000Z"));
+    anotherArm.files = anotherArm.files.map((file) => ({ ...file, url: `copy-${file.url}` }));
+    expect(() => mergeMacUpdateInfo([arm, anotherArm])).toThrow(/arm64 zip and an x64 zip/);
     expect(() => mergeMacUpdateInfo([arm])).toThrow(/arm64 and the x64/);
   });
 });

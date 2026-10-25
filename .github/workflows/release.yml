@@ -21,16 +21,13 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/release.yml"
-      - "apps/desktop/scripts/release/**"
-      - "apps/desktop/electron-builder.config.ts"
-      - "apps/desktop/src/main/agent/harness/plugin/linux-plugin-worker-supervisor.ts"
-      - "apps/desktop/src/main/agent/pi-sdk-runtime.ts"
-      - "apps/desktop/src/main/agent/runtime-registry.ts"
-      - "apps/desktop/src/main/index.ts"
-      - "apps/desktop/scripts/build-plugin-supervisor.mjs"
-      - "crates/plugin-execution-protocol/**"
-      - "crates/plugin-execution-supervisor/**"
-      - "crates/plugin-execution-worker/**"
+      - ".github/workflows/package-mac.yml"
+      - ".github/workflows/package-win.yml"
+      - "apps/desktop/**"
+      - "crates/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".npmrc"
       - "Cargo.toml"
       - "Cargo.lock"
 

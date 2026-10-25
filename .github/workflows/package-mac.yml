@@ -9,6 +9,10 @@ on:
       - "crates/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "package.json"
+      - "package-lock.json"
+      - ".npmrc"
+      - ".github/workflows/release.yml"
       - ".github/workflows/package-mac.yml"
 
 permissions:
@@ -26,9 +30,11 @@ jobs:
           - electron_arch: arm64
             rust_target: aarch64-apple-darwin
             codegraph_arch: arm64
+            app_dir: mac-arm64
           - electron_arch: x64
             rust_target: x86_64-apple-darwin
             codegraph_arch: x64
+            app_dir: mac
     steps:
       - uses: actions/checkout@v7
 
@@ -118,10 +124,51 @@ jobs:
           MODUS_REA_RUST_TARGET: ${{ matrix.rust_target }}
           MODUS_CODEGRAPH_PLATFORM: darwin
           MODUS_CODEGRAPH_ARCH: ${{ matrix.codegraph_arch }}
+          # Keep the PR dry run ad-hoc signed so it exercises the integrity check.
+          # This workflow has no Developer ID or release credentials.
+          CSC_FOR_PULL_REQUEST: "true"
         run: |
           npm --workspace @modus/desktop run package:mac -- \
             --${{ matrix.electron_arch }} \
             --publish never
+
+      - name: Verify packaged files (${{ matrix.electron_arch }})
+        env:
+          ARCH: ${{ matrix.electron_arch }}
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./apps/desktop/package.json').version")"
+          METADATA=latest-mac.yml
+          if [[ "$VERSION" == *-beta.* ]]; then METADATA=beta-mac.yml; fi
+          cd apps/desktop/dist
+          for file in "Modus-$VERSION-mac-$ARCH.zip" "Modus-$VERSION-mac-$ARCH.zip.blockmap" \
+                      "Modus-$VERSION-mac-$ARCH.dmg" "Modus-$VERSION-mac-$ARCH.dmg.blockmap" \
+                      "$METADATA"; do
+            if [[ ! -s "$file" ]]; then
+              echo "::error::missing or empty packaged output: $file"
+              exit 1
+            fi
+            echo "verified output: $file"
+          done
+
+      - name: Verify ad-hoc code signature (${{ matrix.electron_arch }})
+        env:
+          APP_DIR: ${{ matrix.app_dir }}
+          ARCH: ${{ matrix.electron_arch }}
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./apps/desktop/package.json').version")"
+          verify() {
+            echo "::group::codesign $1"
+            codesign -dv --verbose=4 "$1" 2>&1 || true
+            codesign --verify --deep --strict --verbose=2 "$1"
+            echo "::endgroup::"
+          }
+          verify "apps/desktop/dist/$APP_DIR/Modus.app"
+          unzipped="$RUNNER_TEMP/unzipped-$ARCH"
+          rm -rf "$unzipped"
+          ditto -x -k "apps/desktop/dist/Modus-$VERSION-mac-$ARCH.zip" "$unzipped"
+          verify "$unzipped/Modus.app"
 
       - name: List dist
         run: ls -lah apps/desktop/dist
