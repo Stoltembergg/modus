@@ -1138,7 +1138,7 @@ export function registerAppIpc({
   ipcMain.handle(IPC_CHANNELS.filesWrite, async (event, input) => {
     assertTrustedSender(event);
     const parsed = parseIpcInput(filesWriteSchema, input, IPC_CHANNELS.filesWrite);
-    const result = writeWorkspaceFile(parsed.cwd, parsed.path, parsed.content);
+    const result = await writeWorkspaceFile(parsed.cwd, parsed.path, parsed.content);
     emitGitEvent({ cwd: parsed.cwd, kind: "working" });
     emitFilesEvent({ cwd: resolve(parsed.cwd), paths: [result.path] });
     return result;
