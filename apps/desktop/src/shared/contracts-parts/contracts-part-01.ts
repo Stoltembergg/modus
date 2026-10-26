@@ -19,6 +19,13 @@ export type WorkspaceInfo = {
 /** Stable workspace id for folderless chats (sidebar → Chats). */
 export const CHATS_WORKSPACE_ID = "modus-inbox-chats";
 
+export type AgentSessionActivitySnapshot = {
+  /** Highest durable event row included in this snapshot. */
+  eventCursor: number;
+  /** Permission/question request IDs still awaiting the user, namespaced by kind. */
+  pendingInputRequestIds: string[];
+};
+
 export type ProjectMemoryScope = { kind: "global" } | { kind: "project"; workspaceId: string };
 export type ProjectMemoryCategory =
   | "decision"
@@ -98,6 +105,8 @@ export type AgentSessionInfo = {
   title: string;
   cwd: string;
   status: "starting" | AgentRunStatus | "idle" | "exited" | "error";
+  /** Ephemeral activity snapshot populated by the session list API. */
+  activitySnapshot?: AgentSessionActivitySnapshot;
   runtime?: "pi-sdk" | "pi-rpc";
   model?: string;
   piSessionId?: string;

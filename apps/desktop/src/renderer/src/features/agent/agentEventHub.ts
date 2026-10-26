@@ -39,6 +39,17 @@ export type SessionActivity = {
   unread: boolean;
   /** The most recent run ended in failure. */
   failed: boolean;
+  /** Durable permission and question IDs still awaiting the user. */
+  pendingInputRequestIds?: string[];
+  /** Recently resolved IDs suppress stale request replays. */
+  resolvedInputRequestIds?: string[];
+  /** Durable event cursor applied to this activity state. */
+  eventCursor?: number;
+};
+
+export type SessionActivitySnapshot = {
+  eventCursor: number;
+  pendingInputRequestIds: string[];
 };
 
 export const IDLE_ACTIVITY: SessionActivity = {
@@ -60,33 +71,139 @@ export function reduceActivity(
   watched: boolean,
 ): SessionActivity {
   const activity = current ?? IDLE_ACTIVITY;
+  const eventCursor = (event as AgentEvent & { eventCursor?: number }).eventCursor;
+  if (
+    eventCursor !== undefined &&
+    activity.eventCursor !== undefined &&
+    eventCursor <= activity.eventCursor
+  ) {
+    return activity;
+  }
+  const withCursor = (next: SessionActivity): SessionActivity =>
+    eventCursor === undefined ? next : { ...next, eventCursor };
+  const requestKey =
+    event.type === "permission.requested"
+      ? `permission:${event.request.id}`
+      : event.type === "question.requested"
+        ? `question:${event.request.id}`
+        : event.type === "permission.resolved"
+          ? `permission:${event.requestId}`
+          : event.type === "question.resolved"
+            ? `question:${event.requestId}`
+            : undefined;
   switch (event.type) {
     case "run.started":
-      return { running: true, needsInput: false, unread: false, failed: false };
+      return withCursor({
+        running: true,
+        needsInput: false,
+        unread: false,
+        failed: false,
+        pendingInputRequestIds: [],
+        resolvedInputRequestIds: [],
+      });
     case "permission.requested":
-      return { ...activity, needsInput: true, unread: watched ? activity.unread : true };
+    case "question.requested": {
+      const pending = activity.pendingInputRequestIds ?? [];
+      const resolved = activity.resolvedInputRequestIds ?? [];
+      if (!requestKey || resolved.includes(requestKey)) return withCursor(activity);
+      if (pending.includes(requestKey)) return withCursor(activity);
+      const pendingInputRequestIds = [...pending, requestKey];
+      return withCursor({
+        ...activity,
+        pendingInputRequestIds,
+        needsInput: true,
+        unread: watched ? activity.unread : true,
+      });
+    }
     case "permission.resolved":
-      return activity.needsInput ? { ...activity, needsInput: false } : activity;
+    case "question.resolved": {
+      if (!requestKey) return withCursor(activity);
+      const pendingInputRequestIds = (activity.pendingInputRequestIds ?? []).filter(
+        (id) => id !== requestKey,
+      );
+      const resolvedInputRequestIds = [
+        ...(activity.resolvedInputRequestIds ?? []).filter((id) => id !== requestKey),
+        requestKey,
+      ].slice(-64);
+      return withCursor({
+        ...activity,
+        pendingInputRequestIds,
+        resolvedInputRequestIds,
+        needsInput: pendingInputRequestIds.length > 0,
+      });
+    }
     case "run.completed":
-      return {
+      return withCursor({
         running: false,
         needsInput: false,
         unread: !watched,
         failed: false,
-      };
+        pendingInputRequestIds: [],
+        resolvedInputRequestIds: [],
+      });
     case "run.failed":
-      return {
+      return withCursor({
         running: false,
         needsInput: false,
         unread: !watched,
         failed: true,
-      };
+        pendingInputRequestIds: [],
+        resolvedInputRequestIds: [],
+      });
     case "run.cancelled":
     case "run.blocked":
-      return { ...activity, running: false, needsInput: false };
+      return withCursor({
+        ...activity,
+        running: false,
+        needsInput: false,
+        pendingInputRequestIds: [],
+        resolvedInputRequestIds: [],
+      });
     default:
-      return activity;
+      return withCursor(activity);
   }
+}
+
+export function activityFromSnapshot(
+  current: SessionActivity | undefined,
+  snapshot: SessionActivitySnapshot,
+  sessionStatus: string,
+): SessionActivity {
+  if (
+    current &&
+    (current.eventCursor === undefined || current.eventCursor > snapshot.eventCursor)
+  ) {
+    return current;
+  }
+  return {
+    running: sessionStatus === "running" || sessionStatus === "starting",
+    needsInput: snapshot.pendingInputRequestIds.length > 0,
+    unread: current?.unread ?? false,
+    failed: sessionStatus === "failed" || sessionStatus === "error",
+    pendingInputRequestIds: [...snapshot.pendingInputRequestIds],
+    resolvedInputRequestIds: [],
+    eventCursor: snapshot.eventCursor,
+  };
+}
+
+export function mergeActivitySnapshots(
+  current: Record<string, SessionActivity>,
+  sessions: Array<{
+    id: string;
+    status: string;
+    activitySnapshot?: SessionActivitySnapshot | undefined;
+  }>,
+): Record<string, SessionActivity> {
+  let next = current;
+  for (const session of sessions) {
+    const snapshot = session.activitySnapshot;
+    if (!snapshot) continue;
+    const activity = activityFromSnapshot(next[session.id], snapshot, session.status);
+    if (activity === next[session.id]) continue;
+    if (next === current) next = { ...current };
+    next[session.id] = activity;
+  }
+  return next;
 }
 
 /** True when the event should trigger an activity re-render at all. */
@@ -99,6 +216,8 @@ export function affectsActivity(event: AgentEvent): boolean {
     case "run.blocked":
     case "permission.requested":
     case "permission.resolved":
+    case "question.requested":
+    case "question.resolved":
       return true;
     default:
       return false;

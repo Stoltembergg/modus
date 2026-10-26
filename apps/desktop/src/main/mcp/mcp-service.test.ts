@@ -1,3 +1,4 @@
+import { writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as citationRegistry from "../agent/harness/mcp-citation-registry";
 import { toolRegistry } from "../agent/tools/registry";
 import { runWithAgentToolContext } from "../agent/tools/tool-context";
+import * as mcpConfig from "./mcp-config";
 import { defaultMcpConfigPath } from "./mcp-config";
 
 type MockCloseable = { close: ReturnType<typeof vi.fn> };
@@ -34,6 +36,32 @@ const mcpMock = vi.hoisted(() => ({
         nextCursor?: string;
       }>)
     | undefined,
+}));
+
+const trustMock = vi.hoisted(() => ({
+  overrides: new Map<string, { trusted: boolean; readOnlyToolAllowlist: string[] }>(),
+  readMcpTrust: vi.fn(
+    (config: { name: string; readOnlyToolAllowlist: string[] }) =>
+      trustMock.overrides.get(config.name) ?? {
+        trusted: true,
+        readOnlyToolAllowlist: config.readOnlyToolAllowlist,
+      },
+  ),
+  getMcpConfigFingerprint: vi.fn((config: unknown, cwd: string) => JSON.stringify({ config, cwd })),
+  approveMcpTrust: vi.fn(
+    (
+      _config: { name: string; readOnlyToolAllowlist: string[] },
+      _cwd: string,
+      _fingerprint: string,
+      _allowlist: string[],
+    ) => undefined,
+  ),
+}));
+
+vi.mock("./mcp-trust-store", () => ({
+  readMcpTrust: trustMock.readMcpTrust,
+  getMcpConfigFingerprint: trustMock.getMcpConfigFingerprint,
+  approveMcpTrust: trustMock.approveMcpTrust,
 }));
 
 vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
@@ -113,6 +141,7 @@ vi.mock("../agent/agent-run-store", () => ({
 }));
 
 import {
+  approveMcpServer,
   disposeAllMcp,
   inspectComposioMcpSession,
   listAllMcpTools,
@@ -123,6 +152,7 @@ import {
   setMcpServerEnabled,
   syncWorkspaceMcp,
   unregisterComposioMcpSession,
+  upsertMcpServer,
 } from "./mcp-service";
 
 let cwd: string;
@@ -171,6 +201,15 @@ async function executeTool(
   );
 }
 
+function workspaceMcpToolName(
+  server: string,
+  tool: string,
+  permissionMode: "allowlisted" | "dangerous" = "dangerous",
+): string {
+  const configIdentity = listMcpServers().find((entry) => entry.name === server)?.configFingerprint;
+  return mcpToolName(server, tool, permissionMode, configIdentity);
+}
+
 beforeEach(async () => {
   await disposeAllMcp();
   cwd = await mkdtemp(join(tmpdir(), "modus-mcp-service-test-"));
@@ -186,6 +225,106 @@ beforeEach(async () => {
   mcpMock.sseCalls = [];
   mcpMock.connect = undefined;
   mcpMock.listTools = undefined;
+  trustMock.overrides.clear();
+  trustMock.readMcpTrust.mockClear();
+  trustMock.getMcpConfigFingerprint.mockClear();
+  trustMock.approveMcpTrust.mockReset();
+});
+
+describe("project MCP trust boundary", () => {
+  it("does not spawn or connect a project config before host approval", async () => {
+    await mkdir(join(cwd, ".modus"), { recursive: true });
+    await writeFile(
+      defaultMcpConfigPath(cwd),
+      JSON.stringify({
+        mcpServers: {
+          docs: {
+            command: "mock-mcp",
+            args: [],
+            readOnlyToolAllowlist: ["repo-claimed-read-only"],
+          },
+        },
+      }),
+    );
+    trustMock.overrides.set("docs", { trusted: false, readOnlyToolAllowlist: [] });
+
+    const servers = await syncWorkspaceMcp(cwd);
+
+    expect(servers).toMatchObject([
+      { name: "docs", status: "untrusted", tools: [], configFingerprint: expect.any(String) },
+    ]);
+    expect(mcpMock.clients).toHaveLength(0);
+    expect(mcpMock.transports).toHaveLength(0);
+    expect(listAllowlistedMcpToolNames()).toEqual([]);
+  });
+
+  it("re-resolves the approved project config and connects only its matching snapshot", async () => {
+    await mkdir(join(cwd, ".modus"), { recursive: true });
+    await writeFile(
+      defaultMcpConfigPath(cwd),
+      JSON.stringify({ mcpServers: { docs: { command: "mock-mcp", args: [] } } }),
+    );
+    trustMock.overrides.set("docs", { trusted: false, readOnlyToolAllowlist: [] });
+    const [pending] = await syncWorkspaceMcp(cwd);
+    const fingerprint = pending?.configFingerprint;
+    if (!fingerprint) throw new Error("Untrusted server did not expose its config fingerprint.");
+    trustMock.approveMcpTrust.mockImplementation((config, workspaceRoot, expected, allowlist) => {
+      expect(expected).toBe(trustMock.getMcpConfigFingerprint(config, workspaceRoot));
+      trustMock.overrides.set(config.name, {
+        trusted: true,
+        readOnlyToolAllowlist: allowlist,
+      });
+    });
+
+    const connected = await approveMcpServer(cwd, "docs", fingerprint);
+
+    expect(trustMock.approveMcpTrust).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "docs" }),
+      cwd,
+      fingerprint,
+      [],
+    );
+    expect(mcpMock.transports).toHaveLength(1);
+    expect(connected).toMatchObject([{ name: "docs", status: "connected" }]);
+  });
+
+  it("does not trust a project file replaced during an explicit form save", async () => {
+    trustMock.overrides.set("docs", { trusted: false, readOnlyToolAllowlist: [] });
+    trustMock.approveMcpTrust.mockImplementation(
+      (config, _workspaceRoot, _fingerprint, allowlist) => {
+        trustMock.overrides.set(config.name, { trusted: true, readOnlyToolAllowlist: allowlist });
+      },
+    );
+    const originalUpsert = mcpConfig.upsertMcpServerEntry;
+    const upsertSpy = vi
+      .spyOn(mcpConfig, "upsertMcpServerEntry")
+      .mockImplementation((root, input) => {
+        const source = originalUpsert(root, input);
+        writeFileSync(
+          source,
+          JSON.stringify({ mcpServers: { docs: { command: "attacker-command", args: [] } } }),
+        );
+        return source;
+      });
+
+    try {
+      const result = await upsertMcpServer(cwd, {
+        name: "docs",
+        scope: "project",
+        transport: "stdio",
+        command: "user-reviewed-command",
+        args: [],
+        enabled: true,
+        readOnlyToolAllowlist: [],
+      });
+
+      expect(trustMock.approveMcpTrust).not.toHaveBeenCalled();
+      expect(mcpMock.transports).toHaveLength(0);
+      expect(result).toMatchObject([{ name: "docs", status: "untrusted" }]);
+    } finally {
+      upsertSpy.mockRestore();
+    }
+  });
 });
 
 afterEach(async () => {
@@ -287,7 +426,7 @@ describe("MCP server lifecycle", () => {
     listing.resolve({ tools: [{ name: "stale-tool", inputSchema: { type: "object" } }] });
     await syncing;
 
-    expect(toolRegistry.getEntry(mcpToolName("lifecycle", "stale-tool"))).toBeUndefined();
+    expect(toolRegistry.getEntry(workspaceMcpToolName("lifecycle", "stale-tool"))).toBeUndefined();
   });
 
   it("closes both client and transport on timeout, including late completion", async () => {
@@ -407,8 +546,8 @@ describe("MCP registered tool identity", () => {
       "docs.v1": { command: "mock-mcp", args: [], readOnlyToolAllowlist: ["search"] },
       docs_v1: { command: "mock-mcp", args: [], readOnlyToolAllowlist: ["search"] },
     });
-    const dottedName = mcpToolName("docs.v1", "search", "allowlisted");
-    const underscoredName = mcpToolName("docs_v1", "search", "allowlisted");
+    const dottedName = workspaceMcpToolName("docs.v1", "search", "allowlisted");
+    const underscoredName = workspaceMcpToolName("docs_v1", "search", "allowlisted");
     expect(new Set(listAllowlistedMcpToolNames())).toEqual(new Set([dottedName, underscoredName]));
     expect(toolRegistry.getEntry(dottedName)).toBeDefined();
     expect(toolRegistry.getEntry(underscoredName)).toBeDefined();
@@ -440,17 +579,18 @@ describe("MCP registered tool identity", () => {
   it("changes registration identity when a captured tool becomes dangerous", async () => {
     mcpMock.tools = [{ name: "search", inputSchema: { type: "object" } }];
     await configureServer(["search"]);
+    const originalSafeName = workspaceMcpToolName("docs", "search", "allowlisted");
     const capturedSafe = toolRegistry
       .getCustomToolDefinitions("chat")
-      .find((tool) => tool.name === mcpToolName("docs", "search", "allowlisted"));
+      .find((tool) => tool.name === originalSafeName);
     expect(capturedSafe).toBeDefined();
 
     await configureServer([]);
-    const safeName = mcpToolName("docs", "search", "allowlisted");
-    const dangerousName = mcpToolName("docs", "search", "dangerous");
-    expect(capturedSafe?.name).toBe(safeName);
-    expect(safeName).not.toBe(dangerousName);
-    expect(toolRegistry.getEntry(safeName)).toBeUndefined();
+    const safeName = originalSafeName;
+    const dangerousName = workspaceMcpToolName("docs", "search", "dangerous");
+    expect(capturedSafe?.name).toBe(originalSafeName);
+    expect(originalSafeName).not.toBe(dangerousName);
+    expect(toolRegistry.getEntry(originalSafeName)).toBeUndefined();
     expect(toolRegistry.getEntry(dangerousName)).toMatchObject({
       permission: { danger: "dangerous", action: "mcp.call" },
     });
@@ -476,8 +616,8 @@ describe("MCP read-only allowlist", () => {
     ];
     await configureServer(["read.search"]);
 
-    const safeName = mcpToolName("docs", "read.search", "allowlisted");
-    const similarName = mcpToolName("docs", "read.search.extra", "dangerous");
+    const safeName = workspaceMcpToolName("docs", "read.search", "allowlisted");
+    const similarName = workspaceMcpToolName("docs", "read.search.extra", "dangerous");
     expect(listAllowlistedMcpToolNames()).toEqual([safeName]);
     expect(toolRegistry.getEntry(safeName)).toMatchObject({
       profiles: ["chat", "plan"],
@@ -504,12 +644,16 @@ describe("MCP read-only allowlist", () => {
     await configureServer(["read.search"]);
 
     expect(listAllowlistedMcpToolNames()).toEqual([
-      mcpToolName("docs", "read.search", "allowlisted"),
+      workspaceMcpToolName("docs", "read.search", "allowlisted"),
     ]);
-    expect(toolRegistry.getEntry(mcpToolName("docs", "read.search", "allowlisted"))).toMatchObject({
+    expect(
+      toolRegistry.getEntry(workspaceMcpToolName("docs", "read.search", "allowlisted")),
+    ).toMatchObject({
       permission: { danger: "safe" },
     });
-    expect(toolRegistry.getEntry(mcpToolName("docs", "read_search", "dangerous"))).toMatchObject({
+    expect(
+      toolRegistry.getEntry(workspaceMcpToolName("docs", "read_search", "dangerous")),
+    ).toMatchObject({
       profiles: ["chat"],
       permission: { danger: "dangerous", action: "mcp.call" },
     });
@@ -533,8 +677,8 @@ describe("MCP read-only allowlist", () => {
     await configureServer(["search"]);
 
     const registerSpy = vi.spyOn(citationRegistry, "registerMcpCitations");
-    const allowedName = mcpToolName("docs", "search", "allowlisted");
-    const dangerousName = mcpToolName("docs", "mutate", "dangerous");
+    const allowedName = workspaceMcpToolName("docs", "search", "allowlisted");
+    const dangerousName = workspaceMcpToolName("docs", "mutate", "dangerous");
     const allowedOutput = await executeTool(allowedName);
     const citation = registerCitationFromOutput(allowedOutput);
     expect(citation).toBeDefined();
@@ -591,7 +735,7 @@ describe("MCP read-only allowlist", () => {
     };
     await configureServer(["search"]);
 
-    const output = await executeTool(mcpToolName("docs", "search", "allowlisted"));
+    const output = await executeTool(workspaceMcpToolName("docs", "search", "allowlisted"));
     const content = output.content ?? [];
     const utf8Bytes = content.reduce((sum, item) => {
       if (item.type === "text") return sum + Buffer.byteLength(item.text ?? "", "utf8");
@@ -621,7 +765,7 @@ describe("MCP read-only allowlist", () => {
     mcpMock.tools = [{ name: "search", inputSchema: { type: "object" } }];
     mcpMock.neverResolveCall = true;
     await configureServer(["search"]);
-    const toolName = mcpToolName("docs", "search", "allowlisted");
+    const toolName = workspaceMcpToolName("docs", "search", "allowlisted");
 
     vi.useFakeTimers();
     try {
@@ -965,44 +1109,41 @@ describe("Composio MCP bridge", () => {
     expect(toolRegistry.getEntry(toolName)).toBeUndefined();
   });
 
-  it("does not overwrite a generic MCP tool with a colliding generated name", async () => {
+  it("keeps generic project tools distinct from the hosted Composio identity", async () => {
     const rawName = "GITHUB_LIST_REPOSITORIES";
-    const generatedName = mcpToolName("__modus_composio", rawName, "dangerous");
+    const composioName = mcpToolName("__modus_composio", rawName, "dangerous");
     mcpMock.tools = [{ name: rawName, inputSchema: { type: "object" } }];
     await configureServers({
       __modus_composio: { command: "mock-mcp", args: [], readOnlyToolAllowlist: [] },
     });
-    const genericDefinition = toolRegistry
-      .getCustomToolDefinitions("chat")
-      .find((tool) => tool.name === generatedName);
+    const genericName = workspaceMcpToolName("__modus_composio", rawName);
 
-    await expect(registerComposioMcpSession(sessionInput([rawName]))).rejects.toThrow(/collision/i);
+    await registerComposioMcpSession(sessionInput([rawName]));
 
-    expect(toolRegistry.getEntry(generatedName)).toBeDefined();
-    expect(
-      toolRegistry.getCustomToolDefinitions("chat").find((tool) => tool.name === generatedName),
-    ).toBe(genericDefinition);
+    expect(genericName).not.toBe(composioName);
+    expect(toolRegistry.getEntry(genericName)).toBeDefined();
+    expect(toolRegistry.getEntry(composioName)).toBeDefined();
   });
 
-  it("does not let a later generic server claim an active Composio tool name", async () => {
+  it("keeps an active Composio tool when a same-named project server is added", async () => {
     const rawName = "GITHUB_LIST_REPOSITORIES";
-    const generatedName = mcpToolName("__modus_composio", rawName, "dangerous");
+    const composioName = mcpToolName("__modus_composio", rawName, "dangerous");
     mcpMock.tools = [{ name: rawName, inputSchema: { type: "object" } }];
     await registerComposioMcpSession(sessionInput([rawName]));
     const composioDefinition = toolRegistry
       .getCustomToolDefinitions("chat")
-      .find((tool) => tool.name === generatedName);
+      .find((tool) => tool.name === composioName);
 
     await configureServers({
       __modus_composio: { command: "mock-mcp", args: [], readOnlyToolAllowlist: [] },
     });
 
     expect(listMcpServers()).toMatchObject([
-      { name: "__modus_composio", status: "failed", tools: [] },
+      { name: "__modus_composio", status: "connected", tools: [{ name: rawName }] },
     ]);
-    expect(toolRegistry.getEntry(generatedName)?.ui.verb).toBe("Composio");
+    expect(toolRegistry.getEntry(composioName)?.ui.verb).toBe("Composio");
     expect(
-      toolRegistry.getCustomToolDefinitions("chat").find((tool) => tool.name === generatedName),
+      toolRegistry.getCustomToolDefinitions("chat").find((tool) => tool.name === composioName),
     ).toBe(composioDefinition);
   });
 

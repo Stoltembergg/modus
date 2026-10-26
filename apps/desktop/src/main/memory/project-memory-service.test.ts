@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -182,6 +183,8 @@ describe("project memory migration", () => {
         "project_memory_evidence",
         "project_memory_events",
         "project_memory_settings",
+        "project_memory_search",
+        "project_memory_search_state",
       ]),
     );
     const indexes = db
@@ -262,7 +265,8 @@ describe("project memory migration", () => {
       expect(
         isolated
           .prepare(
-            "select count(*) as count from sqlite_master where type = 'table' and name like 'project_memory_%'",
+            `select count(*) as count from sqlite_master where type = 'table'
+              and name in ('project_memory_records','project_memory_evidence','project_memory_events','project_memory_settings')`,
           )
           .get(),
       ).toEqual({ count: 4 });
@@ -687,6 +691,140 @@ describe("project memory service", () => {
     });
     expect(inboxIdentity.text).toContain("Shared preference");
     expect(inboxIdentity.text).not.toContain("Project A fact");
+  });
+
+  it("retrieves older active memories by text before completing the recency window", () => {
+    const insert = db.prepare(`insert into project_memory_records
+      (id, scope, workspace_id, category, title, claim, status, verification, created_at, updated_at, dedupe_key)
+      values (?, 'project', ?, 'solution', ?, ?, ?, 'agent_observed', ?, ?, ?)`);
+    const prefix = `h3-search-${randomUUID()}`;
+    try {
+      insert.run(
+        `${prefix}-old`,
+        "ws-legacy",
+        "Decisão de conexão Unicode",
+        "O diagnóstico do cache recupera consultas antigas relevantes, inclusive o literal OR.",
+        "active",
+        "2020-01-01T00:00:00.000Z",
+        "2020-01-01T00:00:00.000Z",
+        `${prefix}-old`,
+      );
+      for (let index = 0; index < 161; index += 1) {
+        const timestamp = `2025-01-${String(Math.floor(index / 24) + 1).padStart(2, "0")}T${String(index % 24).padStart(2, "0")}:00:00.000Z`;
+        insert.run(
+          `${prefix}-${index}`,
+          "ws-legacy",
+          `Current unrelated note ${index}`,
+          `Recent memory with no reference to this search topic ${index}.`,
+          "active",
+          timestamp,
+          timestamp,
+          `${prefix}-${index}`,
+        );
+      }
+
+      const records = service.getProjectMemoriesForPlanning({
+        workspaceId: "ws-legacy",
+        inbox: false,
+        query: 'diagnostico cache "Unicode" OR conexao',
+      });
+
+      expect(records.some((record) => record.id === `${prefix}-old`)).toBe(true);
+      expect(records.length).toBeLessThanOrEqual(service.PROJECT_MEMORY_PLANNING_RESULT_LIMIT);
+    } finally {
+      db.prepare("delete from project_memory_records where id like ?").run(`${prefix}%`);
+    }
+  });
+
+  it("keeps text search scoped, honors settings and active state, and tracks record updates", () => {
+    const insert = db.prepare(`insert into project_memory_records
+      (id, scope, workspace_id, category, title, claim, status, verification, created_at, updated_at, dedupe_key)
+      values (?, 'project', ?, 'solution', ?, ?, ?, 'agent_observed', ?, ?, ?)`);
+    const prefix = `h3-scope-${randomUUID()}`;
+    const query = "resume cafe contexto";
+    const search = (workspaceId: string, text: string) =>
+      service.getProjectMemoriesForPlanning({ workspaceId, inbox: false, query: text });
+    try {
+      insert.run(
+        `${prefix}-a`,
+        "ws-legacy",
+        "Revisão do résumé café",
+        "A anotação Unicode recomenda recuperar contexto antigo.",
+        "active",
+        "2020-01-01T00:00:00.000Z",
+        "2020-01-01T00:00:00.000Z",
+        `${prefix}-a`,
+      );
+      insert.run(
+        `${prefix}-b`,
+        "ws-b",
+        "Revisão do résumé café",
+        "A anotação Unicode recomenda recuperar contexto antigo.",
+        "active",
+        "2025-01-01T00:00:00.000Z",
+        "2025-01-01T00:00:00.000Z",
+        `${prefix}-b`,
+      );
+      insert.run(
+        `${prefix}-inactive`,
+        "ws-legacy",
+        "Revisão do résumé café",
+        "A anotação Unicode recomenda recuperar contexto antigo.",
+        "obsolete",
+        "2025-01-01T00:00:00.000Z",
+        "2025-01-01T00:00:00.000Z",
+        `${prefix}-inactive`,
+      );
+      for (let index = 0; index < 161; index += 1) {
+        const timestamp = `2025-02-${String(Math.floor(index / 24) + 1).padStart(2, "0")}T${String(index % 24).padStart(2, "0")}:00:00.000Z`;
+        insert.run(
+          `${prefix}-recent-${index}`,
+          "ws-legacy",
+          `Unrelated note ${index}`,
+          `No matching terms appear in this note ${index}.`,
+          "active",
+          timestamp,
+          timestamp,
+          `${prefix}-recent-${index}`,
+        );
+      }
+
+      expect(search("ws-legacy", query).map((record) => record.id)).toContain(`${prefix}-a`);
+      expect(search("ws-legacy", query).map((record) => record.id)).not.toContain(`${prefix}-b`);
+      expect(search("ws-legacy", query).map((record) => record.id)).not.toContain(
+        `${prefix}-inactive`,
+      );
+
+      service.setProjectMemoryEnabled({
+        scope: { kind: "project", workspaceId: "ws-legacy" },
+        enabled: false,
+      });
+      expect(search("ws-legacy", query).map((record) => record.id)).not.toContain(`${prefix}-a`);
+      service.setProjectMemoryEnabled({
+        scope: { kind: "project", workspaceId: "ws-legacy" },
+        enabled: true,
+      });
+
+      db.prepare("update project_memory_records set title = ?, claim = ? where id = ?").run(
+        "Harness token notes",
+        "Cache tokens support local retrieval.",
+        `${prefix}-a`,
+      );
+      expect(search("ws-legacy", query).map((record) => record.id)).not.toContain(`${prefix}-a`);
+      expect(search("ws-legacy", "cache tokens retrieval").map((record) => record.id)).toContain(
+        `${prefix}-a`,
+      );
+      db.prepare("delete from project_memory_records where id = ?").run(`${prefix}-a`);
+      expect(
+        search("ws-legacy", "cache tokens retrieval").map((record) => record.id),
+      ).not.toContain(`${prefix}-a`);
+    } finally {
+      service.setProjectMemoryEnabled({
+        scope: { kind: "project", workspaceId: "ws-legacy" },
+        enabled: true,
+      });
+      db.prepare("delete from project_memory_records where id like ?").run(`${prefix}%`);
+    }
   });
 
   it("defaults settings on and persists a disabled scope", () => {

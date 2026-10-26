@@ -414,6 +414,85 @@ Deno.test({
 });
 
 Deno.test({
+  name: "A14 first partial refund against real Postgres: webhook applies only the net pack balance",
+  ignore: !dbUrl,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const admin = postgres(dbUrl ?? "", { max: 1, prepare: false, onnotice: () => {} });
+    const billing = createPostgresBillingDb(dbUrl ?? "");
+    const payments = new Map<string, MpPayment>();
+    const api: Pick<MpApi, "getPreapproval" | "getAuthorizedPayment" | "getPayment"> = {
+      getPreapproval: () => Promise.reject(new Error("not used here")),
+      getAuthorizedPayment: () => Promise.reject(new Error("not used here")),
+      getPayment: (id) => {
+        const payment = payments.get(id);
+        if (!payment) throw new Error(`fake MP: unknown payment ${id}`);
+        return Promise.resolve(structuredClone(payment));
+      },
+    };
+    const webhook = createMpWebhookHandler({
+      api,
+      db: billing,
+      secret: SECRET,
+      expect: EXPECT,
+    });
+    const notify = async (paymentId: string, requestId: string) => {
+      const ts = String(Date.now());
+      const signature = await hmacSha256Hex(SECRET, mpManifest(paymentId, requestId, ts));
+      const response = await webhook(
+        new Request(`http://localhost/mp-webhook?data.id=${paymentId}&type=payment`, {
+          method: "POST",
+          headers: { "x-request-id": requestId, "x-signature": `ts=${ts},v1=${signature}` },
+          body: JSON.stringify({ type: "payment", data: { id: paymentId } }),
+        }),
+      );
+      return { status: response.status, body: await response.json() };
+    };
+
+    try {
+      const [{ id: userId }] =
+        await admin`select tests.create_user('first-refund-webhook@example.com', true) as id`;
+      const [{ r: purchase }] =
+        await admin`select private.mp_create_purchase(${userId}, 'credits_5k') as r`;
+      payments.set("810101", {
+        id: "810101",
+        status: "approved",
+        status_detail: "accredited",
+        amount_minor: 3690,
+        refunded_minor: 1845,
+        live_mode: false,
+        collector_id: "777",
+        currency: "BRL",
+        external_reference: purchase.purchase_id,
+      });
+
+      assertEquals(await notify("810101", "first-refund-1"), {
+        status: 200,
+        body: { received: true, code: "reversed" },
+      });
+      assertEquals(await notify("810101", "first-refund-2"), {
+        status: 200,
+        body: { received: true, code: "already_credited" },
+      });
+
+      const [wallet] =
+        await admin`select balance from public.credit_wallets where user_id = ${userId}`;
+      const [lot] =
+        await admin`select credits_granted, reversed_credits, remaining from public.credit_lots
+                     where payment_id = 810101`;
+      assertEquals(Number(wallet.balance), 3500);
+      assertEquals(
+        [Number(lot.credits_granted), Number(lot.reversed_credits), Number(lot.remaining)],
+        [5000, 2500, 2500],
+      );
+    } finally {
+      await admin.end();
+    }
+  },
+});
+
+Deno.test({
   name: "MP_LIVE_MODE against a real Postgres: db.ts credits live payments only with live expectations",
   ignore: !dbUrl,
   sanitizeOps: false,
