@@ -32,49 +32,57 @@ describe("listDirectory", () => {
 });
 
 describe("readWorkspaceFile", () => {
-  it("reads a text file", () => {
-    const result = readWorkspaceFile(root, join(root, "src", "app.ts"));
+  it("reads a text file", async () => {
+    const result = await readWorkspaceFile(root, join(root, "src", "app.ts"));
     expect(result.binary).toBe(false);
     expect(result.content).toContain("export const x");
     expect(result.relativePath).toBe("src/app.ts");
   });
 
-  it("flags a binary file with no content", () => {
-    const result = readWorkspaceFile(root, join(root, "bin.dat"));
+  it("flags a binary file with no content", async () => {
+    const result = await readWorkspaceFile(root, join(root, "bin.dat"));
     expect(result.binary).toBe(true);
     expect(result.content).toBe("");
   });
 });
 
 describe("writeWorkspaceFile", () => {
-  it("writes text and returns the new size", () => {
+  it("writes text and returns the new size", async () => {
     const next = "export const x = 2;\n";
-    const result = writeWorkspaceFile(root, join(root, "src", "app.ts"), next);
+    const result = await writeWorkspaceFile(root, join(root, "src", "app.ts"), next);
     expect(result.relativePath).toBe("src/app.ts");
     expect(result.size).toBe(Buffer.byteLength(next, "utf8"));
     expect(readFileSync(join(root, "src", "app.ts"), "utf8")).toBe(next);
   });
 
-  it("creates a new text file inside the workspace", () => {
+  it("creates a new text file inside the workspace", async () => {
     const next = "hello\n";
-    const result = writeWorkspaceFile(root, join(root, "src", "new.ts"), next);
+    const result = await writeWorkspaceFile(root, join(root, "src", "new.ts"), next);
     expect(result.relativePath).toBe("src/new.ts");
     expect(readFileSync(join(root, "src", "new.ts"), "utf8")).toBe(next);
   });
 
-  it("rejects writing a directory path", () => {
-    expect(() => writeWorkspaceFile(root, join(root, "src"), "nope")).toThrow(/directory/);
+  it("rejects writing a directory path", async () => {
+    await expect(() => writeWorkspaceFile(root, join(root, "src"), "nope")).rejects.toThrow(
+      /directory/,
+    );
   });
 
-  it("rejects overwriting a binary file", () => {
-    expect(() => writeWorkspaceFile(root, join(root, "bin.dat"), "text")).toThrow(/binary/);
+  it("rejects overwriting a binary file", async () => {
+    await expect(() => writeWorkspaceFile(root, join(root, "bin.dat"), "text")).rejects.toThrow(
+      /binary/,
+    );
   });
 });
 
 describe("workspace containment (authoritative safety check)", () => {
-  it("rejects paths that escape the workspace root", () => {
-    expect(() => readWorkspaceFile(root, join(root, "..", "secret.txt"))).toThrow(/outside/);
+  it("rejects paths that escape the workspace root", async () => {
+    await expect(() => readWorkspaceFile(root, join(root, "..", "secret.txt"))).rejects.toThrow(
+      /outside/,
+    );
     expect(() => listDirectory(root, join(root, "..", ".."))).toThrow(/outside/);
-    expect(() => writeWorkspaceFile(root, join(root, "..", "secret.txt"), "x")).toThrow(/outside/);
+    await expect(() =>
+      writeWorkspaceFile(root, join(root, "..", "secret.txt"), "x"),
+    ).rejects.toThrow(/outside/);
   });
 });
