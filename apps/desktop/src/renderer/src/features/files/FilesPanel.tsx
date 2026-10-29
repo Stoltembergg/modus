@@ -894,7 +894,7 @@ function FileActions({
         </Menu.Portal>
       </Menu.Root>
       <button
-        className="flex h-8 items-center gap-1.5 rounded-lg border border-hairline bg-surface px-2.5 text-fg text-xs outline-none transition-colors hover:bg-hover disabled:opacity-35"
+        className="flex h-8 items-center gap-1.5 rounded-lg border border-hairline bg-surface px-2.5 text-fg text-xs outline-none transition-colors hover:bg-hover disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-focus-ring"
         disabled={disabled}
         onClick={openFile}
         type="button"
