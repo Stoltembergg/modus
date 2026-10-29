@@ -203,6 +203,12 @@
   inset: -8px;
 }
 
+.swipe-toast__action:focus-visible,
+.swipe-toast__close:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
 .swipe-toast__action:active,
 .swipe-toast__close:active {
   transform: scale(0.97);
