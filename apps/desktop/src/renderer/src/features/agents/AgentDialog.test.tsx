@@ -399,7 +399,6 @@ describe("AgentDialog", () => {
     await user.type(field(dialog, /What should it help with/), "release notes");
     await user.click(within(dialog).getByRole("button", { name: "Generate" }));
     expect(generate).toHaveBeenCalledWith({
-      groupId: "g-1",
       modelId: "m-2",
       name: "Cy",
       description: "release notes",
@@ -985,12 +984,10 @@ describe("AgentDialog group drafts (New group panel)", () => {
     );
   });
 
-  it("plain edit panel: Back, Save changes, Remove from group and the footer note", async () => {
+  it("plain edit panel: Back, Save changes and the footer note, no Remove button", async () => {
     const user = userEvent.setup();
-    const onRemove = vi.fn();
     const { dialog, onAdd } = draftDialog({
       mode: "edit",
-      onRemove,
       footerNote: "4 of 10",
       initial: { name: "Ana", role: "Reviewer", modelId: "m-1", templateId: "reviewer" },
     });
@@ -1008,14 +1005,7 @@ describe("AgentDialog group drafts (New group panel)", () => {
       within(back.dialog).getAllByRole("button", { name: "Back" })[0] as HTMLElement,
     );
     expect(back.onOpenChange).toHaveBeenCalledWith(false);
-    cleanup();
-    const again = draftDialog({
-      mode: "edit",
-      onRemove,
-      initial: { name: "Ana", role: "Reviewer", templateId: "reviewer" },
-    });
-    await user.click(within(again.dialog).getByRole("button", { name: "Remove from group" }));
-    expect(onRemove).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Remove from group" })).toBeNull();
   });
 
   it("defaults link only in the New group panel; the standalone Edit agent dialog has none", () => {

@@ -1,7 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { HarnessTaskCheckKind, PlanEvidenceRef, PlanRef } from "../../shared/contracts";
-import { getGroupTask } from "../groups/group-task-store";
 import { hashContent, isPlanCriterionLinkedToTodos } from "../plan/plan-store";
 import {
   getLatestCheckpointRestoreRowId,
@@ -86,21 +85,6 @@ export function requiredChecksForRun(
       if (isPlanCriterionLinkedToTodos(criterion, plan.todos)) {
         checks.push(...(criterion.requiredCheckKinds ?? []));
       }
-    }
-  }
-  if (input.groupTask) {
-    try {
-      const task = getGroupTask(input.groupTask.taskId);
-      if (
-        task.groupId === input.groupTask.groupId &&
-        task.executionId === input.groupTask.executionId &&
-        task[input.groupTask.role === "owner" ? "ownerSessionId" : "reviewerSessionId"] ===
-          input.sessionId
-      ) {
-        for (const criterion of task.criteria ?? []) checks.push(...criterion.requiredCheckKinds);
-      }
-    } catch {
-      /* A stale task seed must not remove the existing harness checks. */
     }
   }
   return [...new Set(checks)];

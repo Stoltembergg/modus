@@ -3,6 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+/*
+ * After the groups → projects migration, agent_group_members rows remain and
+ * still link the converted read-only "(room work)" chats to their group.
+ * "Remove project" must tear those sessions down too, even when a session
+ * lives in another workspace than its group.
+ */
+
 let userData: string;
 
 vi.mock("electron", () => ({
@@ -22,61 +29,61 @@ vi.mock("../git/git-service", () => ({ isGitRepository: vi.fn(async () => true) 
 
 const { getDatabase } = await import("../db/database");
 const { getAgentSession } = await import("../agent/agent-store");
+const { createProfile } = await import("../agents/agents-store");
 const { ensureChatsWorkspace, getWorkspace } = await import("./workspace-store");
-const { createAgentGroupWithMembers, getAgentGroup, listAgentGroupMembers } = await import(
-  "../groups/group-store"
-);
-const { archiveProjectChats, deleteProjectChats, removeProject } = await import(
-  "./workspace-service"
-);
+const { deleteProjectChats, removeProject } = await import("./workspace-service");
 
 function uid(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`;
 }
 
+const now = () => new Date().toISOString();
+
 function insertWorkspace(): string {
   const id = uid("workspace");
-  const now = new Date().toISOString();
   getDatabase()
     .prepare(
       `insert into workspaces (id, root_path, display_name, is_git_repository, last_opened_at, created_at)
        values (?, ?, ?, ?, ?, ?)`,
     )
-    .run(id, `root-${id}`, "repo", 1, now, now);
+    .run(id, `root-${id}`, "repo", 1, now(), now());
   return id;
 }
 
-function insertSession(workspaceId: string): string {
+function insertSession(workspaceId: string, readOnly = false): string {
   const id = uid("session");
-  const now = new Date().toISOString();
   getDatabase()
     .prepare(
-      `insert into agent_sessions (id, workspace_id, title, cwd, status, created_at, updated_at)
-       values (?, ?, ?, ?, ?, ?, ?)`,
+      `insert into agent_sessions (id, workspace_id, title, cwd, status, read_only, created_at, updated_at)
+       values (?, ?, ?, ?, 'idle', ?, ?, ?)`,
     )
-    .run(id, workspaceId, `Chat ${id}`, `root-${workspaceId}`, "idle", now, now);
+    .run(id, workspaceId, `Chat ${id}`, `root-${workspaceId}`, readOnly ? 1 : 0, now(), now());
   return id;
 }
 
-/** A Project with a two-member group plus two ungrouped chats. */
-function fixture() {
+/** The post-migration shape: a legacy group whose membership rows point at read-only chats. */
+function migratedFixture() {
   const workspaceId = insertWorkspace();
-  const memberA = insertSession(workspaceId);
-  const memberB = insertSession(workspaceId);
-  const loose1 = insertSession(workspaceId);
-  const loose2 = insertSession(workspaceId);
-  const group = createAgentGroupWithMembers({
-    name: "Squad",
-    workspaceId,
-    members: [{ sessionId: memberA }, { sessionId: memberB }],
-    leadSessionId: memberA,
-  });
-  return { workspaceId, memberA, memberB, loose1, loose2, group };
-}
-
-function expectGroupIntact(groupId: string, memberIds: string[], leadId: string): void {
-  expect(getAgentGroup(groupId)?.leadSessionId).toBe(leadId);
-  expect(listAgentGroupMembers(groupId).map((m) => m.sessionId)).toEqual(memberIds);
+  const otherWorkspaceId = insertWorkspace();
+  const groupId = uid("group");
+  getDatabase()
+    .prepare(
+      "insert into agent_groups (id, name, workspace_id, mode, created_at, updated_at) values (?, 'Squad', ?, 'free', ?, ?)",
+    )
+    .run(groupId, workspaceId, now(), now());
+  const roomHere = insertSession(workspaceId, true);
+  const roomElsewhere = insertSession(otherWorkspaceId, true);
+  const loose = insertSession(workspaceId);
+  const untouched = insertSession(otherWorkspaceId);
+  for (const sessionId of [roomHere, roomElsewhere]) {
+    const agent = createProfile({ name: uid("Member"), modelId: "m-1" });
+    getDatabase()
+      .prepare(
+        "insert into agent_group_members (group_id, session_id, joined_at, agent_id) values (?, ?, ?, ?)",
+      )
+      .run(groupId, sessionId, now(), agent.id);
+  }
+  return { workspaceId, otherWorkspaceId, groupId, roomHere, roomElsewhere, loose, untouched };
 }
 
 beforeAll(async () => {
@@ -88,44 +95,31 @@ afterAll(async () => {
   await rm(userData, { recursive: true, force: true }).catch(() => undefined);
 });
 
-describe("Project chat actions and groups", () => {
-  it("Archive chats skips group members and counts only the others", async () => {
-    const { workspaceId, memberA, memberB, loose1, loose2, group } = fixture();
+describe("Project removal with legacy group memberships", () => {
+  it("Remove project deletes every session linked to its legacy groups, wherever it lives", async () => {
+    const f = migratedFixture();
 
-    expect(await archiveProjectChats(workspaceId)).toBe(2);
+    await removeProject(f.workspaceId);
 
-    expect(getAgentSession(loose1)?.archivedAt).toBeTruthy();
-    expect(getAgentSession(loose2)?.archivedAt).toBeTruthy();
-    expect(getAgentSession(memberA)?.archivedAt).toBeUndefined();
-    expect(getAgentSession(memberB)?.archivedAt).toBeUndefined();
-    expectGroupIntact(group.id, [memberA, memberB], memberA);
-  });
-
-  it("Delete chats skips group members (live and archived non-members go) and counts only the others", async () => {
-    const { workspaceId, memberA, memberB, loose1, loose2, group } = fixture();
-    // One non-member already archived: still deleted, still counted.
-    getDatabase()
-      .prepare("update agent_sessions set archived_at = ? where id = ?")
-      .run(new Date().toISOString(), loose2);
-
-    expect(await deleteProjectChats(workspaceId)).toBe(2);
-
-    expect(getAgentSession(loose1)).toBeUndefined();
-    expect(getAgentSession(loose2)).toBeUndefined();
-    expect(getAgentSession(memberA)).toBeDefined();
-    expect(getAgentSession(memberB)).toBeDefined();
-    expectGroupIntact(group.id, [memberA, memberB], memberA);
-  });
-
-  it("Remove project still deletes everything, group members and the group included", async () => {
-    const { workspaceId, memberA, memberB, loose1, loose2, group } = fixture();
-
-    await removeProject(workspaceId);
-
-    for (const id of [memberA, memberB, loose1, loose2]) {
+    for (const id of [f.roomHere, f.roomElsewhere, f.loose]) {
       expect(getAgentSession(id)).toBeUndefined();
     }
-    expect(getAgentGroup(group.id)).toBeUndefined();
-    expect(getWorkspace(workspaceId)).toBeUndefined();
+    expect(getAgentSession(f.untouched)).toBeDefined();
+    expect(getWorkspace(f.workspaceId)).toBeUndefined();
+    const left = getDatabase()
+      .prepare("select count(*) as n from agent_group_members where group_id = ?")
+      .get(f.groupId) as { n: number };
+    expect(left.n).toBe(0);
+  });
+
+  it("Delete chats keeps another workspace's linked session (only Remove project reaches it)", async () => {
+    const f = migratedFixture();
+
+    await deleteProjectChats(f.workspaceId);
+
+    expect(getAgentSession(f.roomHere)).toBeUndefined();
+    expect(getAgentSession(f.loose)).toBeUndefined();
+    expect(getAgentSession(f.roomElsewhere)).toBeDefined();
+    expect(getAgentSession(f.untouched)).toBeDefined();
   });
 });

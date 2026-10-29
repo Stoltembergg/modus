@@ -19,7 +19,8 @@ describe("TodosCard", () => {
     expect(markup).toContain("Deploy the release");
     expect(markup).toContain("Blocked");
     expect(markup).toContain("Waiting for approval from the release owner.");
-    expect(markup).toContain("text-warning");
+    expect(markup).toContain("tabler-icon-hand-stop");
+    expect(markup).not.toContain("text-warning");
   });
 
   it("shows the blocked label without an empty reason when none is provided", () => {

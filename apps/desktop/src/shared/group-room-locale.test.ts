@@ -5,12 +5,6 @@ import {
   resolveGroupRoomLocale,
   thinkingStateKeyFromLive,
 } from "./group-room-locale";
-import {
-  extractUsefulSources,
-  inlineLiveStatusLabel,
-  shouldPersistCollabStatusInTranscript,
-  stripAgentSelfIntro,
-} from "./group-room-transcript";
 
 describe("group-room-locale", () => {
   it("resolves pt / zh / en catalogs", () => {
@@ -37,33 +31,7 @@ describe("group-room-locale", () => {
   });
 });
 
-describe("stripAgentSelfIntro / sources / ready persistence", () => {
-  it("strips redundant self-intros", () => {
-    expect(stripAgentSelfIntro("Aqui é o @Planner, vamos começar.")).toBe("vamos começar.");
-    expect(stripAgentSelfIntro("Here is @Builder — shipping next.")).toBe("shipping next.");
-    expect(stripAgentSelfIntro("I'll take the review.")).toBe("I'll take the review.");
-  });
-
-  it("extracts useful http sources and skips localhost", () => {
-    expect(
-      extractUsefulSources("See https://example.com/docs and http://localhost:3000/x"),
-    ).toEqual([{ href: "https://example.com/docs", label: "example.com" }]);
-  });
-
-  it("does not persist Ready or orchestration handoffs in the transcript", () => {
-    expect(shouldPersistCollabStatusInTranscript({ kind: "ready" })).toBe(false);
-    expect(
-      shouldPersistCollabStatusInTranscript({
-        kind: "handoff",
-        targetName: "Builder",
-        objective: "fix symlink escapes",
-      }),
-    ).toBe(false);
-    expect(shouldPersistCollabStatusInTranscript({ kind: "blocked", reason: "need key" })).toBe(
-      true,
-    );
-  });
-
+describe("groupAgentWorkingLabel", () => {
   it("localizes working shimmer agent names", () => {
     expect(groupAgentWorkingLabel(["Planner"], "en")).toBe("Planner is working…");
     expect(groupAgentWorkingLabel(["Planner"], "pt-BR")).toBe("Planner está a trabalhar…");
@@ -74,23 +42,5 @@ describe("stripAgentSelfIntro / sources / ready persistence", () => {
       "Planner e Builder estão a trabalhar…",
     );
     expect(groupAgentWorkingLabel([], "en")).toBe("Working…");
-  });
-
-  it("localizes inline live status", () => {
-    expect(
-      inlineLiveStatusLabel({ phase: "Thinking", presenceState: "thinking", locale: "pt-BR" }),
-    ).toBe("Aguardando o modelo…");
-    expect(inlineLiveStatusLabel({ phase: "Queued", presenceState: "queued", locale: "pt" })).toBe(
-      "Na fila…",
-    );
-    expect(
-      inlineLiveStatusLabel({
-        phase: "Queued",
-        presenceState: "queued",
-        startedAt: 0,
-        nowMs: 5_000,
-        locale: "en",
-      }),
-    ).toBe("Queued · 5s");
   });
 });

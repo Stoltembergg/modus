@@ -30,6 +30,7 @@ const {
   updateAgentSessionStatus,
   updateAgentSessionTitle,
 } = await import("./agent-store");
+const { recordAgentEvent } = await import("./agent-event-store");
 
 function insertWorkspace(workspaceId: string): void {
   const now = new Date().toISOString();
@@ -64,6 +65,25 @@ afterAll(async () => {
 });
 
 describe("agent-store", () => {
+  it("includes pending input IDs and the event cursor in the session list snapshot", () => {
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertWorkspace(workspaceId);
+    insertSession(workspaceId, sessionId, "Waiting session");
+    recordAgentEvent({
+      type: "question.requested",
+      sessionId,
+      request: { id: "question-1", questions: [] },
+    });
+
+    const listed = listAgentSessions().find((session) => session.id === sessionId);
+
+    expect(listed?.activitySnapshot).toMatchObject({
+      pendingInputRequestIds: ["question:question-1"],
+      eventCursor: expect.any(Number),
+    });
+  });
+
   it("lists all other Pi file references, including archived and group-member sessions", () => {
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertWorkspace(workspaceId);

@@ -1,5 +1,6 @@
 import type { BrowserWindow as BrowserWindowType } from "electron";
 import type {
+  AbortAgentResult,
   AgentEvent,
   AgentMode,
   AgentRunInfo,
@@ -58,8 +59,6 @@ export type PromptAgentInput = {
   thinkingVariant?: string;
   /** Set when this prompt is a "Build this plan" action; binds the turn to the plan. */
   planId?: string;
-  /** Exact group task association selected before this wake starts. */
-  groupTask?: { taskId: string; groupId: string; executionId: string; role: "owner" | "reviewer" };
 };
 
 export type PlanBuildStart = {
@@ -157,7 +156,8 @@ export type AgentRuntime = {
     signal?: AbortSignal;
     onProgress?: (text: string) => void;
   }): Promise<BackgroundWaitResult>;
-  abort(sessionId: string): Promise<void>;
+  /** Stop the turn; prompts still queued come back (not sent) for the composer. */
+  abort(sessionId: string, window?: BrowserWindowType): Promise<AbortAgentResult>;
   /** The chat's visible prompt queue (prompts waiting for the running turn). */
   listQueuedPrompts(sessionId: string): QueuedPromptItem[];
   /** Remove one queued prompt by id; `removed: false` when pi already took it to send. */

@@ -42,6 +42,28 @@ const AGENT: AgentInfo = {
 const SOURCE = { id: "src", kind: "file" as const, label: "app.ts", path: "/repo/app.ts" };
 
 describe("message cards", () => {
+  it("settled assistant messages get a copy button that copies the raw markdown", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    const markdown = "Done.\n\n- **Yearly** shows a `2 months free` badge";
+    const props = { content: markdown, messageId: "a", messageRole: "assistant" as const };
+    const view = render(<MessageBlock {...props} streaming />);
+    expect(screen.queryByRole("button", { name: "Copy message" })).toBeNull();
+    view.rerender(<MessageBlock {...props} streaming={false} />);
+    const button = screen.getByRole("button", { name: "Copy message" });
+    const reveal = button.parentElement?.className ?? "";
+    expect(reveal).toContain("group-hover/msg:opacity-100");
+    expect(reveal).toContain("group-focus-within/msg:opacity-100");
+    // Hidden = not clickable (matches the turn footer); revealed = clickable.
+    expect(reveal).toContain("pointer-events-none");
+    for (const state of ["group-hover/msg", "group-focus-within/msg", "pointer-coarse"]) {
+      expect(reveal).toContain(`${state}:pointer-events-auto`);
+    }
+    fireEvent.click(button);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(markdown));
+    await waitFor(() => expect(button.dataset.copied).toBe("true"));
+  });
+
   it("shows the stored Agent avatar beside the response and keeps its animation while streaming", async () => {
     const props = {
       assistantAgent: AGENT,

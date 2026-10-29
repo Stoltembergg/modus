@@ -3,6 +3,7 @@ import {
   type MotionValue,
   m,
   useMotionValue,
+  useReducedMotion,
   useSpring,
   useTransform,
 } from "motion/react";
@@ -10,7 +11,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { createPortal } from "react-dom";
 import { cn } from "../../lib/cn";
 import { formatClock } from "../../lib/formatClock";
-import { MOTION_EASE, tween } from "../../lib/motion";
+import { MOTION_EASE, timelinePreviewMotion, tween } from "../../lib/motion";
 import { blockRenderKeys, type TimelineBlock } from "./Timeline";
 
 const DEFAULT_BASE_WIDTH = 8;
@@ -168,6 +169,7 @@ export function ConversationTimeline({
   const previewRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
   const [previewTarget, setPreviewTarget] = useState<PreviewTarget | null>(null);
+  const previewMotion = timelinePreviewMotion(useReducedMotion());
   const [previewTop, setPreviewTop] = useState(0);
   const { hideNow, setMouseInside, visible } = useRailVisibility(scrollContainer);
 
@@ -237,13 +239,13 @@ export function ConversationTimeline({
     <AnimatePresence initial={false}>
       {previewTarget ? (
         <m.div
-          animate={{ opacity: 1, scale: 1, x: previewTarget.left, y: previewTop }}
+          animate={{ ...previewMotion.animate, x: previewTarget.left, y: previewTop }}
           className="pointer-events-none fixed top-0 left-0 z-50 max-h-[calc(100vh-24px)] max-w-[calc(100vw-24px)] origin-left overflow-hidden popup-chrome px-3 py-2.5 text-left outline-none"
-          exit={{ opacity: 0, scale: 0.99 }}
-          initial={{ opacity: 0, scale: 0.985, x: previewTarget.left, y: previewTop }}
+          exit={previewMotion.exit}
+          initial={{ ...previewMotion.initial, x: previewTarget.left, y: previewTop }}
           ref={previewRef}
           style={{ width: PREVIEW_WIDTH }}
-          transition={tween("fast")}
+          transition={previewMotion.transition}
         >
           <TimelinePreviewCard entry={previewTarget.entry} />
         </m.div>

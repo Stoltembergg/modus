@@ -86,7 +86,6 @@ import {
   listSubagents,
   updateSubagent,
 } from "../agent/subagents-config";
-import { setGroupTaskWakeSink, setGroupWorktreeReadySink } from "../agent/tools/group-tools";
 import { getReaSessionManager } from "../agent/tools/rea-tools";
 import {
   resolveAgentTurnModel,
@@ -95,20 +94,12 @@ import {
   userTurnPromptInput,
 } from "../agent/user-turn-model";
 import { AGENT_PROFILE_TIMEOUT_MS, generateAgentProfile } from "../agents/agent-profile-generator";
+import { deleteAgentWithSessions } from "../agents/agent-teardown";
 import {
-  deleteAgentWithSessions,
-  deleteGroupWithSessions,
-  removeMemberWithSessions,
-  updateMembersWithSessions,
-} from "../agents/agent-teardown";
-import {
-  createAgentInGroup,
-  createGroupWithNewAgents,
   createProfile,
   getAgent,
   listAgents,
   openAgentChat,
-  requireAgentChatWritable,
   requireSessionWritable,
   setAgentArchived,
   updateAgent,
@@ -176,30 +167,6 @@ import {
   unstageFile,
 } from "../git/git-service";
 import { emitGitEvent, unwatchRepo, watchRepo } from "../git/git-watcher";
-import { createGroupIntegrationService } from "../groups/group-integration-service";
-import { setGroupTurnModelResolver } from "../groups/group-runtime-lib";
-import { emitGroupRuntimeEvent, getGroupRuntime } from "../groups/group-runtime-service";
-import {
-  addAgentToGroup,
-  cancelGroupTask,
-  deleteGroupDecision,
-  getGroupTask,
-  listAgentGroupMembers,
-  listAgentGroupsWithMembers,
-  listGroupDecisions,
-  listGroupMessages,
-  listGroupTasks,
-  listGroupTaskTransitions,
-  renameAgentGroup,
-  setAgentGroupLead,
-  setAgentGroupMode,
-  setAgentGroupWorkspace,
-  setGroupMembershipMessageSink,
-  setGroupTaskChangedSink,
-  updateGroupTaskDraft,
-} from "../groups/group-store";
-import { getGroupTaskDetails } from "../groups/group-task-details";
-import { getGroupWorkState } from "../groups/group-work-state";
 import {
   ensurePersonalizationFile,
   getPersonalization,
@@ -211,6 +178,7 @@ import {
 } from "../interaction/question-broker";
 import { currentUiLocale, type UiLanguageController } from "../locale/ui-language-controller";
 import {
+  approveMcpServer,
   deleteMcpServer,
   ensureMcpConfigFile,
   getMcpServerEntry,
@@ -322,6 +290,7 @@ import {
   filesWriteSchema,
   gitCheckoutSchema,
   gitLogSchema,
+  mcpApproveSchema,
   mcpServerNameSchema,
   mcpSetEnabledSchema,
   mcpUpsertSchema,
@@ -445,22 +414,12 @@ export function registerAppIpc({
     service: getAutomationService,
   });
 
-  // Validate explicit 1:1/group choices here. Agent App-default selection is sent as `null` so
+  // Validate explicit 1:1 choices here. Agent App-default selection is sent as `null` so
   // the runtime can bypass stale hot/PI branch models; unlinked legacy rows stay unset to restore.
   const turnModelDeps: TurnModelDeps = {
     defaultModelId: () => getDefaultModelId(),
     isUsable: (modelId) => isUsableModelId(modelId),
   };
-  setGroupTurnModelResolver((agentModelId, sessionId) => {
-    const session = getAgentSession(sessionId);
-    return resolveAgentTurnModel(
-      agentModelId,
-      session?.model,
-      session?.agentId !== undefined,
-      turnModelDeps,
-    );
-  });
-
   ipcMain.handle(IPC_CHANNELS.appVersion, (event) => {
     assertTrustedSender(event);
     return app.getVersion();
@@ -633,9 +592,9 @@ export function registerAppIpc({
   ipcMain.handle(IPC_CHANNELS.agentPrompt, async (event, input) => {
     assertTrustedSender(event);
     const parsed = parseIpcInput(agentPromptSchema, input, IPC_CHANNELS.agentPrompt);
-    // A 1:1 chat of a blocked group (e.g. no Project) is read-only (A3).
+    // Migrated history (read_only) refuses new turns.
     try {
-      requireAgentChatWritable(parsed.sessionId);
+      requireSessionWritable(parsed.sessionId);
     } catch (error) {
       throw toGroupIpcError(error);
     }
@@ -685,7 +644,7 @@ export function registerAppIpc({
     assertTrustedSender(event);
     const parsed = parseIpcInput(agentSetBranchSchema, input, IPC_CHANNELS.agentSetBranch);
     try {
-      requireAgentChatWritable(parsed.sessionId);
+      requireSessionWritable(parsed.sessionId);
     } catch (error) {
       throw toGroupIpcError(error);
     }
@@ -707,8 +666,9 @@ export function registerAppIpc({
 
   ipcMain.handle(IPC_CHANNELS.agentAbort, async (event, sessionId: string) => {
     assertTrustedSender(event);
-    await getAgentRuntime().abort(
+    return getAgentRuntime().abort(
       parseIpcInput(sessionIdSchema, sessionId, IPC_CHANNELS.agentAbort),
+      getSenderWindow(event),
     );
   });
 
@@ -1181,7 +1141,7 @@ export function registerAppIpc({
   ipcMain.handle(IPC_CHANNELS.filesWrite, async (event, input) => {
     assertTrustedSender(event);
     const parsed = parseIpcInput(filesWriteSchema, input, IPC_CHANNELS.filesWrite);
-    const result = writeWorkspaceFile(parsed.cwd, parsed.path, parsed.content);
+    const result = await writeWorkspaceFile(parsed.cwd, parsed.path, parsed.content);
     emitGitEvent({ cwd: parsed.cwd, kind: "working" });
     emitFilesEvent({ cwd: resolve(parsed.cwd), paths: [result.path] });
     return result;
@@ -1458,6 +1418,12 @@ export function registerAppIpc({
     return await syncWorkspaceMcp(parseIpcInput(cwdSchema, cwd, IPC_CHANNELS.mcpSync));
   });
 
+  ipcMain.handle(IPC_CHANNELS.mcpApprove, async (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(mcpApproveSchema, input, IPC_CHANNELS.mcpApprove);
+    return await approveMcpServer(parsed.cwd, parsed.name, parsed.expectedFingerprint);
+  });
+
   ipcMain.handle(IPC_CHANNELS.mcpOpenConfig, async (event, cwd: string) => {
     assertTrustedSender(event);
     const path = ensureMcpConfigFile(parseIpcInput(cwdSchema, cwd, IPC_CHANNELS.mcpOpenConfig));
@@ -1644,9 +1610,8 @@ export function registerAppIpc({
   registerAuthIpcHandlers(ipcMain, assertTrustedSender, authIpcService);
   registerBillingIpcHandlers(ipcMain, assertTrustedSender, billingIpcService);
 
-  // A member leaving (remove, update, group or agent delete) takes its hidden
-  // room session and its 1:1 chat with it: the store transaction detaches them,
-  // then each tree is torn down (subagents, runtime, checkpoints) after the
+  // Deleting an agent takes its 1:1 chats with it: the store transaction
+  // detaches them, then each tree is torn down (subagents, runtime, checkpoints) after the
   // commit, before the IPC answers (agents/agent-teardown).
   // The agent model rule: a model of a configured provider (listModels).
   // B4b: a locked (not in plan) Modus model is listed for the picker but is not usable.
@@ -1654,7 +1619,6 @@ export function registerAppIpc({
     listModels().some((model) => model.id === modelId && !model.locked);
   registerAgentsIpcHandlers(ipcMain, assertTrustedSender, {
     listAgents,
-    createAgentInGroup,
     createProfile,
     getAgent,
     isModelAvailable,
@@ -1668,20 +1632,14 @@ export function registerAppIpc({
           modelId: input.modelId,
           name: input.name,
           description: input.description,
-          otherRoles: [
-            ...(input.groupId ? listAgentGroupMembers(input.groupId) : [])
-              .filter((member) => member.agentId !== input.agentId)
-              .map((member) => member.role?.trim() || member.agentRole.trim())
-              .filter(Boolean),
-            ...(input.roles ?? []),
-          ],
+          otherRoles: [...(input.roles ?? [])],
         },
         (request) => completeWithModel({ ...request, timeoutMs: AGENT_PROFILE_TIMEOUT_MS }),
       ),
   });
   registerComposioIpcHandlers(ipcMain, assertTrustedSender, getComposioService);
-  // Groups were retired in PR 4: no group:* handler is registered, so the group
-  // runtime, proactivity and wake loops (all lazily started by them) never run.
+  // Groups were retired in PR 4 and their runtime removed: only the migration
+  // notice and the migrated transcripts remain.
   ipcMain.handle(IPC_CHANNELS.groupsMigrationNotice, (event) => {
     assertTrustedSender(event);
     return readGroupsMigrationNotice(getDatabase());

@@ -93,7 +93,20 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
   const complex =
     snapshot.classification.complexity === "complex" || snapshot.classification.risk === "high";
   const oracleConsulted = snapshot.oracleConsulted === true;
-  const qaFailed = qa === "failed" || verification === "failed";
+  const failureReasonCode =
+    verification === "blocked"
+      ? "verification_blocked"
+      : qa === "timed_out"
+        ? "qa_timed_out"
+        : qa === "cancelled"
+          ? "qa_cancelled"
+          : "verification_failed";
+  const qaFailed =
+    qa === "failed" ||
+    qa === "timed_out" ||
+    qa === "cancelled" ||
+    verification === "failed" ||
+    verification === "blocked";
   // Phase 5: verdict from the failure-loop guard (repeat guards + circuit breaker).
   const toolLoopTriggered = snapshot.failureLoopAction?.reasonCodes.includes("tool_loop_detected");
   const loopAction =
@@ -153,12 +166,13 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
   }
 
   if (
-    verification === "verified" ||
-    verification === "user_confirmed" ||
-    verification === "not_required" ||
-    qa === "passed" ||
-    qa === "not_required" ||
-    qa === "user_confirmed"
+    !qaFailed &&
+    (verification === "verified" ||
+      verification === "user_confirmed" ||
+      verification === "not_required" ||
+      qa === "passed" ||
+      qa === "not_required" ||
+      qa === "user_confirmed")
   ) {
     if (unresolved === 0) {
       return {
@@ -180,7 +194,7 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
           ...base,
           action: "replan",
           reasonCodes: [
-            "verification_failed",
+            failureReasonCode,
             "repeat_guard_circuit_break",
             ...loopAction.reasonCodes,
           ].slice(0, 8),
@@ -232,7 +246,7 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
           reasonCodes: [
             "change_strategy_replan_scope",
             "oracle_findings_present",
-            "verification_failed",
+            failureReasonCode,
             ...changeStrategy.reasonCodes,
           ].slice(0, 8),
           confidence: "medium",
@@ -263,7 +277,7 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
             action: "spawn_readonly_specialist",
             specialistRole: policy.suggestedRole === "debugger" ? "debugger" : "oracle",
             reasonCodes: [
-              "verification_failed",
+              failureReasonCode,
               "high_risk_or_blast",
               "safe_readonly_spawn",
               "change_strategy_await_oracle",
@@ -278,11 +292,7 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
         {
           ...base,
           action: "suggest_oracle",
-          reasonCodes: [
-            "verification_failed",
-            "high_risk_or_blast",
-            "change_strategy_await_oracle",
-          ],
+          reasonCodes: [failureReasonCode, "high_risk_or_blast", "change_strategy_await_oracle"],
           confidence: "medium",
           expectedUncertaintyReduction: 12,
         },
@@ -321,7 +331,7 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
           ...base,
           action: "replan",
           reasonCodes: [
-            "verification_failed",
+            failureReasonCode,
             "replan_after_failure",
             "promoted_policy_prefer_replan_on_qa_fail",
             ...changeStrategy.reasonCodes,
@@ -340,7 +350,7 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
             ...base,
             action: "spawn_readonly_specialist",
             specialistRole: policy.suggestedRole === "debugger" ? "debugger" : "oracle",
-            reasonCodes: ["verification_failed", "high_risk_or_blast", "safe_readonly_spawn"],
+            reasonCodes: [failureReasonCode, "high_risk_or_blast", "safe_readonly_spawn"],
             confidence: "medium",
             expectedUncertaintyReduction: 12,
           },
@@ -351,7 +361,7 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
         {
           ...base,
           action: "suggest_oracle",
-          reasonCodes: ["verification_failed", "high_risk_or_blast"],
+          reasonCodes: [failureReasonCode, "high_risk_or_blast"],
           confidence: "medium",
           expectedUncertaintyReduction: 12,
         },
@@ -362,7 +372,7 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
       {
         ...base,
         action: "replan",
-        reasonCodes: ["verification_failed", "replan_after_failure"],
+        reasonCodes: [failureReasonCode, "replan_after_failure"],
         confidence: "medium",
         expectedUncertaintyReduction: 10,
       },

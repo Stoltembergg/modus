@@ -183,6 +183,13 @@ describe("groups → projects migration", () => {
       liveRuns: 1,
     });
     expect(result.post).toEqual({ transcripts: 2, roomWorkChats: 4, renamedProfiles: 2 });
+    // No hidden room session survives, but the membership rows do (the group
+    // tables stay until they are dropped), still pointing at the converted chats.
+    const left = (sql: string) => (db.prepare(sql).get() as { n: number }).n;
+    expect(left("select count(*) as n from agent_sessions where kind = 'group_member'")).toBe(0);
+    expect(
+      db.prepare("select session_id from agent_group_members order by session_id").all(),
+    ).toEqual([{ session_id: "m1" }, { session_id: "m2" }, { session_id: "m3" }]);
 
     const agents = db
       .prepare("select id, name, group_id, archived_at from agents order by id")

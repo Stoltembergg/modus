@@ -9,7 +9,6 @@ import type {
   BrowserEvent,
   FilesChangeEvent,
   GitChangeEvent,
-  GroupRuntimeEvent,
   HarnessInsightsQuery,
   TerminalEvent,
   UpdateRestoreUiState,
@@ -148,68 +147,6 @@ const api: ModusApi = {
       const listener = (_event: IpcRendererEvent, event: AutomationServiceEvent) => handler(event);
       ipcRenderer.on("automation:event", listener);
       return () => ipcRenderer.removeListener("automation:event", listener);
-    },
-  },
-  group: {
-    list: () => ipcRenderer.invoke("group:list"),
-    create: (input) => ipcRenderer.invoke("group:create", input),
-    rename: (input) => ipcRenderer.invoke("group:rename", input),
-    remove: (id) => ipcRenderer.invoke("group:delete", { id }),
-    addMember: (input) => ipcRenderer.invoke("group:add-member", input),
-    removeMember: (input) => ipcRenderer.invoke("group:remove-member", input),
-    setWorkspace: (input) => ipcRenderer.invoke("group:set-workspace", input),
-    setLead: (input) => ipcRenderer.invoke("group:set-lead", input),
-    setMode: (input) => ipcRenderer.invoke("group:set-mode", input),
-    updateMembers: (input) => ipcRenderer.invoke("group:update-members", input),
-    postMessage: (input) => ipcRenderer.invoke("group:post-message", input),
-    resumeExecution: (input) => ipcRenderer.invoke("group:resume-execution", input),
-    listMessages: (input) => ipcRenderer.invoke("group:list-messages", input),
-    workingGroupIds: () => ipcRenderer.invoke("group:working"),
-    memberStates: () => ipcRenderer.invoke("group:member-states"),
-    listTasks: (groupId) => ipcRenderer.invoke("group:list-tasks", { groupId }),
-    cancelTask: (taskId) => ipcRenderer.invoke("group:cancel-task", { taskId }),
-    previewTaskIntegration: (taskId) => ipcRenderer.invoke("group:integration-preview", { taskId }),
-    applyTaskIntegration: (input) => ipcRenderer.invoke("group:integration-apply", input),
-    abortTaskIntegration: (taskId) => ipcRenderer.invoke("group:integration-abort", { taskId }),
-    getIntegrationState: (taskId) => ipcRenderer.invoke("group:integration-state", { taskId }),
-    refreshTaskIntegrationState: (taskId) =>
-      ipcRenderer.invoke("group:integration-refresh", { taskId }),
-    getWorkState: (groupId, executionId) =>
-      ipcRenderer.invoke("group:get-work-state", {
-        groupId,
-        ...(executionId ? { executionId } : {}),
-      }),
-    getTaskDetails: (groupId, taskId) =>
-      ipcRenderer.invoke("group:get-task-details", {
-        groupId,
-        taskId,
-      }),
-    listTaskTransitions: (taskId) => ipcRenderer.invoke("group:list-task-transitions", { taskId }),
-    updateTask: (taskId, draft, expectedVersion) =>
-      ipcRenderer.invoke("group:update-task", {
-        taskId,
-        draft,
-        expectedVersion,
-      }),
-    getProactivityMode: (groupId) => ipcRenderer.invoke("group:get-proactivity-mode", { groupId }),
-    setProactivityMode: (groupId, mode) =>
-      ipcRenderer.invoke("group:set-proactivity-mode", { groupId, mode }),
-    listSuggestions: (groupId) => ipcRenderer.invoke("group:list-suggestions", { groupId }),
-    resolveSuggestion: (actionId, decision, expectedVersion, targetSessionId) =>
-      ipcRenderer.invoke("group:resolve-suggestion", {
-        actionId,
-        decision,
-        expectedVersion,
-        ...(targetSessionId ? { targetSessionId } : {}),
-      }),
-    listDecisions: (groupId) => ipcRenderer.invoke("group:list-decisions", { groupId }),
-    deleteDecision: (decisionId) => ipcRenderer.invoke("group:delete-decision", { decisionId }),
-    stop: (groupId) => ipcRenderer.invoke("group:stop", { groupId }),
-    projectContext: (workspaceId) => ipcRenderer.invoke("group:project-context", { workspaceId }),
-    onEvent: (callback) => {
-      const listener = (_event: IpcRendererEvent, event: GroupRuntimeEvent) => callback(event);
-      ipcRenderer.on("group:event", listener);
-      return () => ipcRenderer.removeListener("group:event", listener);
     },
   },
   groupsMigration: {
@@ -451,6 +388,7 @@ const api: ModusApi = {
   mcp: {
     list: () => ipcRenderer.invoke("mcp:list"),
     sync: (cwd) => ipcRenderer.invoke("mcp:sync", cwd),
+    approve: (input) => ipcRenderer.invoke("mcp:approve", input),
     openConfig: (cwd) => ipcRenderer.invoke("mcp:open-config", cwd),
     upsert: (input) => ipcRenderer.invoke("mcp:upsert", input),
     delete: (input) => ipcRenderer.invoke("mcp:delete", input),

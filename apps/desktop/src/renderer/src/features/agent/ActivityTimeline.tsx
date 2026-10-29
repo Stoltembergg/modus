@@ -37,6 +37,9 @@ function hasOlderPage(page: AgentEventPage, usedCursor?: number): boolean {
   return page.hasMore && page.nextCursor !== undefined && page.nextCursor !== usedCursor;
 }
 
+/** Bar widths of the first-page loading skeleton (tool-row rhythm, no content). */
+const SKELETON_WIDTHS = ["44%", "68%", "56%", "62%", "38%"] as const;
+
 /** Full per-session execution history, kept outside the durable chat transcript. */
 export function ActivityTimeline({
   assistantAgent,
@@ -70,6 +73,8 @@ export function ActivityTimeline({
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   /** Bumped by Retry after the first page failed: re-runs the initial load. */
   const [reloadToken, setReloadToken] = useState(0);
+  /** The first page of persisted history is still on its way. */
+  const [initialLoading, setInitialLoading] = useState(false);
   historyRef.current = events;
   historyPageRef.current = historyPage;
 
@@ -132,6 +137,7 @@ export function ActivityTimeline({
       setEvents([]);
       historyRef.current = [];
       updateHistoryPage({ hasOlder: false, loadingOlder: false, error: false });
+      setInitialLoading(false);
       return;
     }
     updateHistoryPage({ hasOlder: false, loadingOlder: false, error: false });
@@ -151,6 +157,7 @@ export function ActivityTimeline({
       setEvents(merged);
     });
     const listEventPage = window.modus?.agent?.listEventPage;
+    setInitialLoading(Boolean(listEventPage));
     if (listEventPage) {
       void listEventPage(sessionId, { direction: "backward", limit: ACTIVITY_PAGE_SIZE })
         .then((page: AgentEventPage) => {
@@ -163,6 +170,7 @@ export function ActivityTimeline({
           const merged = appendUniqueAgentEvents(page.events, liveItems);
           historyRef.current = merged;
           setEvents(merged);
+          setInitialLoading(false);
           updateHistoryPage({
             snapshotCursor: page.snapshotCursor,
             ...(page.nextCursor === undefined ? {} : { beforeCursor: page.nextCursor }),
@@ -173,6 +181,7 @@ export function ActivityTimeline({
         })
         .catch(() => {
           if (!active()) return;
+          setInitialLoading(false);
           updateHistoryPage({ hasOlder: false, loadingOlder: false, error: true });
         });
     }
@@ -223,10 +232,16 @@ export function ActivityTimeline({
     else setReloadToken((token) => token + 1);
   };
 
+  // The first page used to load into a blank panel: show text-free bars until
+  // it (or a live event) arrives.
+  const showSkeleton =
+    Boolean(sessionId) && initialLoading && !historyPage.error && activityBlocks.length === 0;
+
   // One borderless glass surface: no header, count or empty-state copy. The
   // event count stays machine-readable on the section for tests and tooling.
   return (
     <section
+      aria-busy={showSkeleton || undefined}
       aria-label={t("shell.activity")}
       className="activity-panel surface-sidebar flex min-h-0 min-w-0 flex-1 flex-col"
       data-event-count={events.length}
@@ -263,6 +278,13 @@ export function ActivityTimeline({
               ? t("shell.activity.loadingEarlier")
               : t("shell.activity.loadEarlier")}
           </button>
+        ) : null}
+        {showSkeleton ? (
+          <div aria-hidden className="activity-skeleton" data-activity-skeleton="">
+            {SKELETON_WIDTHS.map((width) => (
+              <span className="activity-skeleton__bar" key={width} style={{ width }} />
+            ))}
+          </div>
         ) : null}
         {sessionId && activityBlocks.length > 0 ? (
           <Timeline

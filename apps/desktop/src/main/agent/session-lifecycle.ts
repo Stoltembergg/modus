@@ -1,6 +1,5 @@
 import { join } from "node:path";
 import { app } from "electron";
-import { listWorkspaceGroupMemberSessionIds } from "../groups/group-store";
 import { denyPendingQuestionRequestsForSession } from "../interaction/question-broker";
 import { finalizeProjectMemoryRun } from "../memory/project-memory-service";
 import { denyPendingPermissionRequestsForSession } from "../permissions/permission-broker";
@@ -12,6 +11,7 @@ import {
   listAgentSessions,
   listArchivedAgentSessions,
   listSubagentSessions,
+  listWorkspaceGroupMemberSessionIds,
   setAgentSessionArchived,
 } from "./agent-store";
 import { deleteSessionCheckpoints } from "./checkpoint-service";
@@ -98,9 +98,9 @@ export async function archiveWorkspaceSessions(workspaceId: string): Promise<num
 }
 
 /**
- * Permanently delete a workspace's root chats (live and archived). Hidden
- * group room sessions are only torn down with `includeGroupMembers`, which
- * only "Remove project" sets (its groups are deleted with it; agents stay).
+ * Permanently delete a workspace's root chats (live and archived). Sessions
+ * still linked to the workspace's legacy groups are only torn down with
+ * `includeGroupMembers`, which only "Remove project" sets.
  * Returns the count of chats removed.
  */
 export async function deleteWorkspaceSessions(

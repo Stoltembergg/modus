@@ -7,7 +7,7 @@ import {
   IconPlus,
   IconTrash,
 } from "@tabler/icons-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ModusApi } from "../../../../preload/types";
 import { localDateTimeToInstant } from "../../../../shared/automation-schedule";
 import type {
@@ -26,9 +26,15 @@ type Screen = { kind: "list" } | { kind: "detail"; id: string } | { kind: "edito
 type AutomationFormInput = Omit<CreateAutomationRequest, "thinkingVariant"> & {
   thinkingVariant?: string | null;
 };
+type AutomationHistoryState = {
+  automationId: string;
+  requestGeneration: number;
+  entries: AutomationExecution[];
+  loading: boolean;
+};
 
 const FIELD_CLASS =
-  "w-full rounded-lg border border-hairline bg-surface/60 px-3 py-2 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted focus:border-accent/60 focus:bg-surface";
+  "w-full rounded-lg bg-hover/60 px-3 py-2 text-sm text-fg outline-none transition-colors placeholder:text-fg-muted hover:bg-hover focus-visible:bg-hover focus-visible:ring-2 focus-visible:ring-focus-ring/35";
 const SELECT_CLASS = cn("flex h-10 items-center justify-between gap-2", FIELD_CLASS);
 const BUTTON_CLASS =
   "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg px-3 text-sm text-fg-subtle outline-none transition-colors hover:bg-hover hover:text-fg focus-visible:ring-2 focus-visible:ring-focus-ring/35 disabled:pointer-events-none disabled:opacity-45";
@@ -57,7 +63,11 @@ export function AutomationsPage({
   const t = useShellText();
   const [screen, setScreen] = useState<Screen>({ kind: "list" });
   const [definitions, setDefinitions] = useState<AutomationDefinition[]>([]);
-  const [history, setHistory] = useState<AutomationExecution[]>([]);
+  const [history, setHistory] = useState<AutomationHistoryState | null>(null);
+  const historyRequestGeneration = useRef(0);
+  const selectedAutomationId = screen.kind === "detail" ? screen.id : undefined;
+  const selectedAutomationIdRef = useRef(selectedAutomationId);
+  selectedAutomationIdRef.current = selectedAutomationId;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const selected =
@@ -78,10 +88,26 @@ export function AutomationsPage({
 
   const refreshHistory = useCallback(
     async (id: string) => {
+      if (selectedAutomationIdRef.current !== id) return;
+      const requestGeneration = ++historyRequestGeneration.current;
+      setHistory({ automationId: id, requestGeneration, entries: [], loading: true });
       try {
-        setHistory(await api.history(id, 50));
+        const entries = await api.history(id, 50);
+        if (
+          historyRequestGeneration.current !== requestGeneration ||
+          selectedAutomationIdRef.current !== id
+        ) {
+          return;
+        }
+        setHistory({ automationId: id, requestGeneration, entries, loading: false });
       } catch (cause) {
-        setError(errorMessage(cause));
+        if (
+          historyRequestGeneration.current === requestGeneration &&
+          selectedAutomationIdRef.current === id
+        ) {
+          setHistory({ automationId: id, requestGeneration, entries: [], loading: false });
+          setError(errorMessage(cause));
+        }
       }
     },
     [api],
@@ -91,14 +117,17 @@ export function AutomationsPage({
     void refreshDefinitions();
     return api.onEvent((event) => {
       void refreshDefinitions();
-      const selectedId = screen.kind === "detail" ? screen.id : undefined;
+      const selectedId = selectedAutomationIdRef.current;
       if (selectedId && event.type === "execution-changed") void refreshHistory(selectedId);
     });
-  }, [api, refreshDefinitions, refreshHistory, screen]);
+  }, [api, refreshDefinitions, refreshHistory]);
 
   useEffect(() => {
     if (screen.kind === "detail") void refreshHistory(screen.id);
-    else setHistory([]);
+    else setHistory(null);
+    return () => {
+      historyRequestGeneration.current += 1;
+    };
   }, [refreshHistory, screen]);
 
   const openEditor = (id?: string) => {
@@ -159,7 +188,8 @@ export function AutomationsPage({
   }
 
   if (screen.kind === "detail" && selected) {
-    const activeExecution = history.find((entry) => isActive(entry.status));
+    const selectedHistory = history?.automationId === selected.id ? history : undefined;
+    const activeExecution = selectedHistory?.entries.find((entry) => isActive(entry.status));
     return (
       <PageFrame
         back={() => setScreen({ kind: "list" })}
@@ -214,10 +244,13 @@ export function AutomationsPage({
             className={cn(BUTTON_CLASS, "text-danger hover:text-danger")}
             onClick={() => {
               if (window.confirm(t("automation.deleteConfirm"))) {
+                const deletingId = selected.id;
                 void api
-                  .delete(selected.id)
+                  .delete(deletingId)
                   .then(() => {
-                    setScreen({ kind: "list" });
+                    if (selectedAutomationIdRef.current === deletingId) {
+                      setScreen({ kind: "list" });
+                    }
                     return refreshDefinitions();
                   })
                   .catch((cause) => setError(errorMessage(cause)));
@@ -230,7 +263,7 @@ export function AutomationsPage({
         </div>
         <section className="mt-5 flex flex-col gap-4">
           <p className="whitespace-pre-wrap text-sm leading-6 text-fg">{selected.instruction}</p>
-          <dl className="grid gap-x-8 gap-y-3 border-y border-hairline py-4 text-sm sm:grid-cols-2">
+          <dl className="grid gap-x-8 gap-y-3 rounded-lg bg-hover/40 px-4 py-4 text-sm sm:grid-cols-2">
             <DetailField
               label={t("automation.schedule")}
               value={describeSchedule(selected.schedule, selected.timeZone)}
@@ -252,12 +285,17 @@ export function AutomationsPage({
         </section>
         <section className="mt-6">
           <h3 className="mb-2 text-sm font-medium text-fg">{t("automation.history")}</h3>
-          {history.length === 0 ? (
+          {!selectedHistory || selectedHistory.loading ? (
+            <p className="py-3 text-sm text-fg-muted">…</p>
+          ) : selectedHistory.entries.length === 0 ? (
             <p className="py-3 text-sm text-fg-muted">{t("automation.noHistory")}</p>
           ) : (
-            <ul className="divide-y divide-hairline">
-              {history.map((execution) => (
-                <li className="flex min-w-0 items-center gap-3 py-3" key={execution.id}>
+            <ul className="-mx-3 flex flex-col gap-1">
+              {selectedHistory.entries.map((execution) => (
+                <li
+                  className="flex min-w-0 items-center gap-3 rounded-lg px-3 py-3 transition-colors hover:bg-hover/40"
+                  key={execution.id}
+                >
                   <span
                     className={cn("size-1.5 shrink-0 rounded-full", statusDot(execution.status))}
                   />
@@ -308,11 +346,11 @@ export function AutomationsPage({
           <p className="text-sm text-fg-muted">{t("automation.empty")}</p>
         </div>
       ) : (
-        <ul className="divide-y divide-hairline">
+        <ul className="-mx-3 flex flex-col gap-1">
           {definitions.map((definition) => (
             <li key={definition.id}>
               <button
-                className="flex w-full min-w-0 items-center gap-3 py-4 text-left transition-colors hover:bg-hover/40"
+                className="flex w-full min-w-0 items-center gap-3 rounded-lg px-3 py-4 text-left outline-none transition-colors hover:bg-hover/40 focus-visible:ring-2 focus-visible:ring-focus-ring/35"
                 onClick={() => setScreen({ kind: "detail", id: definition.id })}
                 type="button"
               >

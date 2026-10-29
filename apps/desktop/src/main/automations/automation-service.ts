@@ -263,7 +263,7 @@ export function createAutomationService(input: {
       // A settlement may have won the race. The runtime event will release the slot.
     }
     if (!run.sessionId) return;
-    let abortPromise: Promise<void>;
+    let abortPromise: Promise<unknown>;
     try {
       abortPromise = input.runtime.abort(run.sessionId);
     } catch (error) {

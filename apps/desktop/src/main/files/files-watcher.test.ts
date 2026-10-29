@@ -16,9 +16,6 @@ vi.mock("electron", () => ({
     getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: mocks.send } }],
   },
 }));
-vi.mock("../groups/group-project-setup", () => ({
-  notifyGroupProjectPathsChanged: vi.fn(),
-}));
 
 import { IPC_CHANNELS } from "../ipc/channels";
 import { isWorkspaceWatched, unwatchWorkspace, watchWorkspace } from "./files-watcher";

@@ -18,38 +18,6 @@ import { describe, expect, it } from "vitest";
  * A new hit fails the test; so does an allowlist entry that no longer exists.
  */
 const ALLOWED: Record<string, Record<string, string>> = {
-  "groupKickoff.ts": {
-    "Outcome: {x}": "kickoff protocol line sent to agents (parsed, stays English)",
-    "First owner: @{x}": "kickoff protocol line sent to agents",
-    "Next: {x}": "kickoff protocol line sent to agents",
-    "Approval: {x}": "kickoff protocol line sent to agents",
-    "@Builder implements · @Reviewer blocking gaps only":
-      "collab pipeline protocol text for agents",
-    "merge / publish — wait for me": "collab pipeline protocol text for agents",
-  },
-  "groupLiveTurn.ts": {
-    Done: "internal live phase code, mapped by thinkingStateKeyFromLive (not rendered)",
-    Failed: "internal live phase code (not rendered)",
-    Stopped: "internal live phase code (not rendered)",
-    "Waiting for you": "internal live phase code, mapped to the waitingForYou label",
-  },
-  "workingShimmer.ts": {
-    Queued: "internal phase code fed to formatGroupProgressLabel",
-    Thinking: "internal phase code fed to formatGroupProgressLabel",
-  },
-  "GroupMemberLiveTurn.tsx": {
-    Writing: "internal phase code fed to inlineLiveStatusLabel",
-  },
-  "newGroupModel.ts": {
-    Agent: "fallback base for a stored agent name (data, not UI copy)",
-  },
-  "GroupMessageRow.tsx": {
-    "→": "arrow glyph before the addressee's name",
-  },
-  "NewGroupModal.tsx": {
-    '[data-testid^="template-card-"], [data-testid^="member-card-"], [data-testid^="copy-card-"]':
-      "CSS selector for returning focus to a card (not rendered)",
-  },
   "../agent/SearchToolCard.tsx": {
     Home: "keyboard event key name (roving focus), not rendered",
     End: "keyboard event key name (roving focus), not rendered",

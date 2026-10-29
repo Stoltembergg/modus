@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -30,9 +30,11 @@ import {
   MCP_CONFIG_TEMPLATE,
   type McpServerConfig,
   removeMcpServerEntry,
+  resolveMcpServerUpsertConfig,
   setMcpServerEnabledEntry,
   upsertMcpServerEntry,
 } from "./mcp-config";
+import { approveMcpTrust, getMcpConfigFingerprint, readMcpTrust } from "./mcp-trust-store";
 
 /**
  * MCP runtime — connects the servers declared in mcp.json, bridges their tools
@@ -56,6 +58,8 @@ const COMPOSIO_TOOL_OWNER = Symbol("Composio MCP bridge");
 
 type ManagedServer = {
   config: McpServerConfig;
+  configFingerprint: string;
+  trusted: boolean;
   /** Identity of the config used for change detection on reload. */
   configKey: string;
   status: McpServerInfo["status"];
@@ -109,9 +113,12 @@ export function mcpToolName(
   server: string,
   tool: string,
   permissionMode: McpToolPermissionMode = "dangerous",
+  configIdentity?: string,
 ): string {
   const prefix = `mcp_v1_${permissionMode}_`;
-  const identity = `${encodeMcpIdentityPart(server)}_${encodeMcpIdentityPart(tool)}`;
+  const identity = `${encodeMcpIdentityPart(server)}_${encodeMcpIdentityPart(tool)}${
+    configIdentity === undefined ? "" : `_${encodeMcpIdentityPart(configIdentity)}`
+  }`;
   const encodedName = `${prefix}${identity}`;
   if (encodedName.length <= 64) return encodedName;
   // The full digest keeps long raw identities distinct within model name limits.
@@ -119,9 +126,9 @@ export function mcpToolName(
   return `${prefix}h_${createHash("sha256").update(identity).digest("base64url")}`;
 }
 
-function configKey(config: McpServerConfig): string {
+function configKey(config: McpServerConfig, fingerprint: string, trusted: boolean): string {
   const { source: _source, ...identity } = config;
-  return JSON.stringify(identity);
+  return JSON.stringify({ identity, fingerprint, trusted });
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -358,11 +365,13 @@ function buildToolDefinition(
   client: Client,
   tool: { name: string; description?: string | undefined; inputSchema?: unknown },
   readOnlyAllowlisted: boolean,
+  configIdentity?: string,
 ): ToolDefinition {
   const registeredName = mcpToolName(
     serverName,
     tool.name,
     readOnlyAllowlisted ? "allowlisted" : "dangerous",
+    configIdentity,
   );
   return defineTool({
     name: registeredName,
@@ -478,6 +487,7 @@ async function refreshServerTools(managed: ManagedServer): Promise<void> {
         managed.config.name,
         tool.name,
         readOnlyAllowlisted ? "allowlisted" : "dangerous",
+        managed.configFingerprint,
       ),
     };
   });
@@ -497,7 +507,13 @@ async function refreshServerTools(managed: ManagedServer): Promise<void> {
 
   const allowlistedNames: string[] = [];
   for (const { tool, readOnlyAllowlisted } of candidates) {
-    const definition = buildToolDefinition(managed.config.name, client, tool, readOnlyAllowlisted);
+    const definition = buildToolDefinition(
+      managed.config.name,
+      client,
+      tool,
+      readOnlyAllowlisted,
+      managed.configFingerprint,
+    );
     toolRegistry.registerTool({
       entry: {
         name: definition.name,
@@ -822,36 +838,59 @@ async function disposeServer(name: string): Promise<void> {
  */
 export async function syncWorkspaceMcp(
   cwd: string,
-  options: { waitForConnections?: boolean } = {},
+  options: {
+    waitForConnections?: boolean;
+    approvedSnapshot?: { config: McpServerConfig; fingerprint: string };
+  } = {},
 ): Promise<McpServerInfo[]> {
-  const configs = loadWorkspaceMcpConfig(cwd).servers.map((config) =>
-    config.transport === "stdio" && config.cwd === undefined ? { ...config, cwd } : config,
-  );
-  const desired = new Map(configs.map((config) => [config.name, config]));
+  const desired = new Map<
+    string,
+    { config: McpServerConfig; configFingerprint: string; trusted: boolean }
+  >();
+  for (const loadedConfig of resolvedWorkspaceMcpConfigs(cwd)) {
+    const configFingerprint = getMcpConfigFingerprint(loadedConfig, cwd);
+    const trust = readMcpTrust(loadedConfig, cwd);
+    const approved = options.approvedSnapshot;
+    const config =
+      approved?.config.name === loadedConfig.name && approved.fingerprint === configFingerprint
+        ? approved.config
+        : loadedConfig;
+    desired.set(config.name, {
+      config: { ...config, readOnlyToolAllowlist: trust.readOnlyToolAllowlist },
+      configFingerprint,
+      trusted: trust.trusted,
+    });
+  }
 
   const removals: Promise<void>[] = [];
   for (const name of servers.keys()) {
     const next = desired.get(name);
     const current = servers.get(name);
-    if (!next || (current && current.configKey !== configKey(next))) {
+    if (
+      !next ||
+      (current &&
+        current.configKey !== configKey(next.config, next.configFingerprint, next.trusted))
+    ) {
       removals.push(disposeServer(name));
     }
   }
   await Promise.all(removals);
 
   const connections: Promise<void>[] = [];
-  for (const config of configs) {
+  for (const { config, configFingerprint, trusted } of desired.values()) {
     if (servers.has(config.name)) {
       continue;
     }
     const managed: ManagedServer = {
       config,
-      configKey: configKey(config),
-      status: config.enabled ? "connecting" : "disabled",
+      configFingerprint,
+      trusted,
+      configKey: configKey(config, configFingerprint, trusted),
+      status: !config.enabled ? "disabled" : trusted ? "connecting" : "untrusted",
       tools: [],
     };
     servers.set(config.name, managed);
-    if (config.enabled) {
+    if (config.enabled && trusted) {
       connections.push(connectServer(managed));
     }
   }
@@ -865,12 +904,37 @@ export async function syncWorkspaceMcp(
   return listMcpServers();
 }
 
+function resolvedWorkspaceMcpConfigs(cwd: string): McpServerConfig[] {
+  return loadWorkspaceMcpConfig(cwd).servers.map((config) =>
+    config.transport === "stdio" && config.cwd === undefined ? { ...config, cwd } : config,
+  );
+}
+
+/** Explicitly approve one project config after the main process re-resolves it. */
+export async function approveMcpServer(
+  cwd: string,
+  name: string,
+  expectedFingerprint: string,
+): Promise<McpServerInfo[]> {
+  const config = resolvedWorkspaceMcpConfigs(cwd).find(
+    (server) =>
+      server.name === name && resolve(server.source) === resolve(defaultMcpConfigPath(cwd)),
+  );
+  if (!config) throw new Error("The project MCP server is no longer available for review.");
+
+  approveMcpTrust(config, cwd, expectedFingerprint, []);
+  return await syncWorkspaceMcp(cwd, {
+    approvedSnapshot: { config, fingerprint: expectedFingerprint },
+  });
+}
+
 export function listMcpServers(): McpServerInfo[] {
   return [...servers.values()]
     .map((managed) => ({
       name: managed.config.name,
       transport: managed.config.transport,
       source: managed.config.source,
+      configFingerprint: managed.configFingerprint,
       status: managed.status,
       error: managed.error,
       tools: managed.tools,
@@ -893,7 +957,22 @@ export async function upsertMcpServer(
   cwd: string,
   input: McpServerUpsertInput,
 ): Promise<McpServerInfo[]> {
-  upsertMcpServerEntry(cwd, input);
+  const source = upsertMcpServerEntry(cwd, input);
+  const submittedConfig = resolveMcpServerUpsertConfig(input, source, cwd);
+  const submittedFingerprint = getMcpConfigFingerprint(submittedConfig, cwd);
+  const currentConfig = resolvedWorkspaceMcpConfigs(cwd).find(
+    (server) => server.name === input.name.trim() && resolve(server.source) === resolve(source),
+  );
+  if (
+    currentConfig &&
+    resolve(source) === resolve(defaultMcpConfigPath(cwd)) &&
+    getMcpConfigFingerprint(currentConfig, cwd) === submittedFingerprint
+  ) {
+    approveMcpTrust(submittedConfig, cwd, submittedFingerprint, input.readOnlyToolAllowlist ?? []);
+    return await syncWorkspaceMcp(cwd, {
+      approvedSnapshot: { config: submittedConfig, fingerprint: submittedFingerprint },
+    });
+  }
   return await syncWorkspaceMcp(cwd, { waitForConnections: false });
 }
 

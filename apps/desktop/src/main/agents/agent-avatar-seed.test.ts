@@ -14,24 +14,12 @@ let userData: string;
 vi.mock("electron", () => ({ app: { getPath: () => userData } }));
 
 const { getDatabase, migrateDatabase, KNOWN_DATABASE_VERSION } = await import("../db/database");
-const { listAgentGroupMembers } = await import("../groups/group-store");
-const { createAgent, createGroupWithNewAgents, createProfile, getAgent, updateAgent } =
-  await import("./agents-store");
+const { createAgent, createProfile, getAgent, updateAgent } = await import("./agents-store");
 const { AGENT_FACE_SEEDS, agentAvatarSeed } = await import("../../shared/agent-avatar-seeds");
 const { agentAvatarForId } = await import("../../shared/agent-templates");
 
 function uid(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`;
-}
-
-function insertWorkspace(db: DatabaseSync = getDatabase()): string {
-  const id = uid("workspace");
-  const now = new Date().toISOString();
-  db.prepare(
-    `insert into workspaces (id, root_path, display_name, is_git_repository, last_opened_at, created_at)
-     values (?, ?, 'repo', 1, ?, ?)`,
-  ).run(id, `root-${id}`, now, now);
-  return id;
 }
 
 function expectStoreError(fn: () => unknown, code: string): void {
@@ -163,64 +151,51 @@ describe("avatar_seed store rules", () => {
     expect(updateAgent(agent.id, { avatarSeed: null }).avatarSeed).toBeNull();
   });
 
-  it("a copy never inherits its source's seed but saves the seed it is given; members read it", () => {
-    const source = createGroupWithNewAgents({
-      name: uid("Source"),
-      workspaceId: insertWorkspace(),
-      members: [
-        { name: "Seeded", modelId: "openai/gpt-5", avatarSeed: AGENT_FACE_SEEDS.bright },
-        { name: "Plain", modelId: "openai/gpt-5" },
-      ],
+  it("a copy never inherits its source's seed but saves the seed it is given", () => {
+    const seeded = createProfile({
+      name: uid("Seeded"),
+      modelId: "openai/gpt-5",
+      avatarSeed: AGENT_FACE_SEEDS.bright,
     });
-    const [seeded, plain] = source.members;
-    if (!seeded || !plain) throw new Error("expected two members");
+    const plain = createProfile({ name: uid("Plain"), modelId: "openai/gpt-5" });
     expect(seeded).toMatchObject({ avatarSeed: AGENT_FACE_SEEDS.bright, avatarFace: "bright" });
     expect(plain.avatarSeed).toBeNull();
-    expect(listAgentGroupMembers(source.id).map((member) => member.avatarSeed)).toEqual([
-      AGENT_FACE_SEEDS.bright,
-      null,
-    ]);
+    expect(getAgent(seeded.id)?.avatarSeed).toBe(AGENT_FACE_SEEDS.bright);
 
-    const copies = createGroupWithNewAgents({
-      name: uid("Copies"),
-      workspaceId: insertWorkspace(),
-      members: [
-        // The modal's picked seed (the previewed one) is saved, with its face.
-        {
-          name: "Copy",
-          modelId: "openai/gpt-5",
-          copiedFromAgentId: seeded.agentId,
-          avatarColor: "teal",
-          avatarSeed: AGENT_FACE_SEEDS.sleepy,
-        },
-        // No seed sent: nothing is inherited from the source, drawn with the new id.
-        { name: "Copy plain", modelId: "openai/gpt-5", copiedFromAgentId: seeded.agentId },
-      ],
+    // The modal's picked seed (the previewed one) is saved, with its face.
+    const copy = createProfile({
+      name: uid("Copy"),
+      modelId: "openai/gpt-5",
+      copiedFromAgentId: seeded.id,
+      avatarColor: "teal",
+      avatarSeed: AGENT_FACE_SEEDS.sleepy,
     });
-    const [copy, copyPlain] = copies.members;
+    // No seed sent: nothing is inherited from the source, drawn with the new id.
+    const copyPlain = createProfile({
+      name: uid("Copy plain"),
+      modelId: "openai/gpt-5",
+      copiedFromAgentId: seeded.id,
+    });
     expect(copy).toMatchObject({
       avatarSeed: AGENT_FACE_SEEDS.sleepy,
       avatarFace: "sleepy",
       avatarColor: "teal",
     });
-    expect(getAgent(copy?.agentId ?? "")?.avatarSeed).toBe(AGENT_FACE_SEEDS.sleepy);
-    expect(copyPlain?.avatarSeed).toBeNull();
-    expect(
-      agentAvatarSeed({ id: copyPlain?.agentId ?? "", avatarSeed: copyPlain?.avatarSeed }),
-    ).toBe(copyPlain?.agentId);
+    expect(getAgent(copy.id)?.avatarSeed).toBe(AGENT_FACE_SEEDS.sleepy);
+    expect(copyPlain.avatarSeed).toBeNull();
+    expect(agentAvatarSeed({ id: copyPlain.id, avatarSeed: copyPlain.avatarSeed })).toBe(
+      copyPlain.id,
+    );
   });
 
   it("a template agent gets no seed unless one is picked", () => {
-    const group = createGroupWithNewAgents({
-      name: uid("Templates"),
-      workspaceId: insertWorkspace(),
-      members: [
-        { name: "", templateId: "planner" },
-        { name: "", templateId: "builder", avatarSeed: AGENT_FACE_SEEDS.curious },
-      ],
+    const planner = createProfile({ name: uid("Planner"), templateId: "planner" });
+    const builder = createProfile({
+      name: uid("Builder"),
+      templateId: "builder",
+      avatarSeed: AGENT_FACE_SEEDS.curious,
     });
-    const [planner, builder] = group.members;
-    expect(planner?.avatarSeed).toBeNull();
+    expect(planner.avatarSeed).toBeNull();
     expect(builder).toMatchObject({ avatarSeed: AGENT_FACE_SEEDS.curious, avatarFace: "curious" });
   });
 });

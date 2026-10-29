@@ -17,15 +17,12 @@ const {
   migrateDatabase,
 } = await import("../db/database");
 const { getAgentSession } = await import("../agent/agent-store");
-const { deleteAgentGroup } = await import("../groups/group-store");
 const {
   createAgentChatRow,
-  createGroupWithNewAgents,
   createProfile,
   deleteAgent,
   getAgent,
   openAgentChatRow,
-  requireAgentChatWritable,
   requireSessionWritable,
   setAgentArchived,
   updateAgent,
@@ -68,19 +65,6 @@ function errorCode(fn: () => unknown): string | undefined {
   return undefined;
 }
 
-function groupOf3() {
-  const group = createGroupWithNewAgents({
-    name: uid("Squad"),
-    workspaceId: insertWorkspace(),
-    members: [
-      { name: "One", modelId: MODEL },
-      { name: "Two", modelId: MODEL },
-      { name: "Three", modelId: MODEL },
-    ],
-  });
-  return group;
-}
-
 beforeAll(async () => {
   userData = await mkdtemp(join(tmpdir(), "modus-agents-profiles-test-"));
 });
@@ -95,10 +79,6 @@ describe("profiles (groupless agents)", () => {
     const profile = createProfile({ name, modelId: MODEL });
     expect(profile.groupId).toBeUndefined();
     expect(errorCode(() => createProfile({ name, modelId: MODEL }))).toBe("agent-name-taken");
-    // A grouped agent may share the name (different scope).
-    const group = groupOf3();
-    expect(group.members).toHaveLength(3);
-    expect(createProfile({ name: "One", modelId: MODEL }).name).toBe("One");
   });
 
   it("restoring a profile whose name was taken meanwhile auto-renames it (A 2, A 3)", () => {
@@ -153,12 +133,6 @@ describe("agent chats (many per agent, read-only aware)", () => {
     expect(inboxChat?.model).toBe(MODEL);
   });
 
-  it("a grouped agent without a default Project keeps using its group's Project", () => {
-    const group = groupOf3();
-    const agentId = group.members[0]?.agentId ?? "";
-    expect(getAgentSession(openAgentChatRow(agentId))?.workspaceId).toBe(group.workspaceId);
-  });
-
   it("two chats per agent: open picks the newest writable one, skipping a newer read-only one", () => {
     const profile = createProfile({ name: uid("Two"), modelId: MODEL });
     const older = createAgentChatRow(profile.id);
@@ -205,29 +179,12 @@ describe("agent chats (many per agent, read-only aware)", () => {
     expect(kept?.agentId).toBeUndefined();
   });
 
-  it("removing a member and deleting a group never return read-only chats for teardown", () => {
-    const group = groupOf3();
-    const [a, b] = group.members;
-    const aChat = openAgentChatRow(a?.agentId ?? "");
-    const aHistory = createAgentChatRow(a?.agentId ?? "");
-    markReadOnly(aHistory);
-    expect(deleteAgent(a?.agentId ?? "")).toContain(aChat);
-    expect(getAgentSession(aHistory)?.readOnly).toBe(true);
-
-    const bHistory = createAgentChatRow(b?.agentId ?? "");
-    markReadOnly(bHistory);
-    const torn = deleteAgentGroup(group.id);
-    expect(torn).not.toContain(bHistory);
-    expect(getAgentSession(bHistory)?.readOnly).toBe(true);
-  });
-
   it("refuses writes to a read-only session with session-read-only", () => {
     const profile = createProfile({ name: uid("RO"), modelId: MODEL });
     const chat = createAgentChatRow(profile.id);
     expect(() => requireSessionWritable(chat)).not.toThrow();
     markReadOnly(chat);
     expect(errorCode(() => requireSessionWritable(chat))).toBe("session-read-only");
-    expect(errorCode(() => requireAgentChatWritable(chat))).toBe("session-read-only");
   });
 
   it("several chats per agent are allowed (the unique index is gone)", () => {
