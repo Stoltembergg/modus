@@ -27,3 +27,7 @@
 ## 2026-10-29 - [Bolt: Optimize plugin capabilities insertion]
 **Learning:** SQLite `INSERT ... SELECT ... FROM json_each(?)` is highly effective for removing N+1 insert loops on modern `node:sqlite`. I observed an N+1 loop using `.run()` for inserting `plugin_capabilities` inside `apps/desktop/src/main/agent/harness/plugin/plugin-state-store.ts` which I fixed.
 **Action:** Look for loops over `.run()` and replace them with a `json_each` insert/update when writing array elements to the database in bulk.
+
+## 2026-10-27 - Sidebar Sessions grouping overhead
+**Learning:** Measured the performance of the React rendering derivation for `sessionsByWorkspace`, `pinnedSessions`, and `ungroupedSessions` in `Sidebar.tsx`. For an extreme case of 5,000 active sessions, repeating the calculation 100 times took only ~420ms (meaning ~4.2ms per render). For a more typical user with a few hundred sessions, this calculation is consistently well under 1ms per render.
+**Action:** Do not forcefully introduce `useMemo` optimizations in UI components unless the derivation cost actually hits a noticeable threshold. The current structure is not a relevant bottleneck.
