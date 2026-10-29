@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listDirectory, readWorkspaceFile, writeWorkspaceFile } from "./files-service";
 
 let root: string;
@@ -60,6 +60,21 @@ describe("writeWorkspaceFile", () => {
     const result = await writeWorkspaceFile(root, join(root, "src", "new.ts"), next);
     expect(result.relativePath).toBe("src/new.ts");
     expect(readFileSync(join(root, "src", "new.ts"), "utf8")).toBe(next);
+  });
+
+  it("keeps concurrent writes to the same file on distinct temporary paths", async () => {
+    const time = vi.spyOn(Date, "now").mockReturnValue(123);
+    try {
+      const values = ["first concurrent write", "second concurrent write"];
+      await expect(
+        Promise.all(
+          values.map((value) => writeWorkspaceFile(root, join(root, "src", "app.ts"), value)),
+        ),
+      ).resolves.toHaveLength(2);
+      expect(values).toContain(readFileSync(join(root, "src", "app.ts"), "utf8"));
+    } finally {
+      time.mockRestore();
+    }
   });
 
   it("rejects writing a directory path", async () => {

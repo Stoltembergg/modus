@@ -7,8 +7,9 @@
  * containment, not a name blacklist).
  */
 
-import { existsSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { open, stat } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { existsSync, readdirSync, statSync } from "node:fs";
+import { open, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import type { FileEntry, FileReadResult, FileWriteResult } from "../../shared/contracts";
 import { resolveWithin } from "./path-within";
@@ -137,12 +138,12 @@ export async function writeWorkspaceFile(
       throw new Error("Refusing to overwrite a binary file.");
     }
   }
-  const temporaryPath = `${abs}.${process.pid}.${Date.now()}.tmp`;
+  const temporaryPath = `${abs}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    writeFileSync(temporaryPath, content, "utf8");
-    renameSync(temporaryPath, abs);
+    await writeFile(temporaryPath, content, { encoding: "utf8", flag: "wx" });
+    await rename(temporaryPath, abs);
   } finally {
-    rmSync(temporaryPath, { force: true });
+    await rm(temporaryPath, { force: true }).catch(() => {});
   }
   const size = Buffer.byteLength(content, "utf8");
   return {
