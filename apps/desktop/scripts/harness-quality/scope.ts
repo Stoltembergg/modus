@@ -2,7 +2,6 @@ import { lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
 export const QUALITY_TOOL_NAMES = ["read", "edit", "write", "task", "wait", "todo_write"] as const;
-export const FIXTURE_VERIFY_REPAIR_TOOL = "fixture_verify_repair";
 
 /** All fixture files are pre-created. No mkdir, shell, glob expansion or symlink traversal. */
 export function fixtureFilePath(
@@ -43,7 +42,6 @@ export function fixtureToolDecision(input: {
   selectedModel: string;
   delegationAllowed: boolean;
   tasksStarted: number;
-  repairVerifierAllowed?: boolean;
 }): { block: true; reason: string } | undefined {
   const deny = () => ({
     block: true as const,
@@ -61,11 +59,6 @@ export function fixtureToolDecision(input: {
     return fixtureFilePath(input.root, args.path, allowed) ? undefined : deny();
   }
   if (input.toolName === "wait" || input.toolName === "todo_write") return undefined;
-  if (input.toolName === FIXTURE_VERIFY_REPAIR_TOOL) {
-    return input.repairVerifierAllowed === true && Object.keys(args).length === 0
-      ? undefined
-      : deny();
-  }
   if (input.toolName === "task") {
     if (!input.delegationAllowed || input.tasksStarted >= 1 || args.subagent !== "explore")
       return deny();

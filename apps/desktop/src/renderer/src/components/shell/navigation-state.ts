@@ -7,14 +7,6 @@ export function normalizePrimaryDestination(value: unknown): PrimaryDestination 
 }
 export type WorkDestination = Exclude<PrimaryDestination, "settings">;
 
-export function isSessionConversationVisible(
-  destination: PrimaryDestination,
-  activeSessionId: string | undefined,
-  sessionId: string,
-): boolean {
-  return destination === "direct-messages" && activeSessionId === sessionId;
-}
-
 export type PrimaryNavigationState = {
   active: PrimaryDestination;
   settingsReturnTo: WorkDestination;

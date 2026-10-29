@@ -198,9 +198,7 @@ const gitMemoryContext = await import("../git/git-service");
 const { getLatestHarnessTaskState, getRunToolEvidence, listAgentEvents, recordAgentEvent } =
   await import("./agent-event-store");
 const { summarizeRunQA } = await import("./harness/qa-evidence");
-const { getAgentSession, updateAgentSessionStatus, updateAgentSessionWorktree } = await import(
-  "./agent-store"
-);
+const { getAgentSession, updateAgentSessionWorktree } = await import("./agent-store");
 const { getActiveAgentRun, getAgentRun, createAgentRun, updateAgentRunStatus } = await import(
   "./agent-run-store"
 );
@@ -5142,7 +5140,6 @@ describe("PiSdkRuntime", () => {
           changedPaths: ["src/renamed-cache.ts", "src/untracked-cache.ts"],
         },
       }),
-      [expect.objectContaining({ sourceId: "project-model-codegraph" })],
     );
   });
 
@@ -5178,9 +5175,7 @@ describe("PiSdkRuntime", () => {
       }),
     ).resolves.toEqual({ outcome: "ok", finalText: "done" });
     expect(git).toHaveBeenCalledOnce();
-    expect(planner).toHaveBeenCalledWith(expect.objectContaining({ git: { changedPaths: [] } }), [
-      expect.objectContaining({ sourceId: "project-model-codegraph" }),
-    ]);
+    expect(planner).toHaveBeenCalledWith(expect.objectContaining({ git: { changedPaths: [] } }));
   });
 
   it("queues an overlapping normal prompt into the active run without losing its metadata", async () => {
@@ -5384,93 +5379,6 @@ describe("PiSdkRuntime", () => {
       expect(getAgentRun(orphan.id)?.status).toBe("cancelled");
       expect(getActiveAgentRun(sessionId)).toBeUndefined();
       expect(maxOpenRuns(sessionId)).toBe(1);
-    });
-
-    it("cold Stop closes orphaned runs and idles the session without loading a model", async () => {
-      const sessionId = `cold-stop-orphan-${crypto.randomUUID()}`;
-      insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
-      updateAgentSessionStatus(sessionId, "running");
-      const orphan = createAgentRun({ sessionId, prompt: "previous task" });
-      updateAgentRunStatus(orphan.id, "blocked");
-      recordAgentEvent({ type: "run.started", sessionId, runId: orphan.id, delivery: "normal" });
-      const runtime = new PiSdkRuntime();
-      const events: unknown[] = [];
-      runtime.onEvent((event) => events.push(event));
-
-      await runtime.abort(sessionId);
-      await runtime.abort(sessionId);
-
-      expect(runLifecycle(sessionId)).toEqual([
-        { type: "run.started", runId: orphan.id },
-        { type: "run.cancelled", runId: orphan.id },
-      ]);
-      expect(getAgentRun(orphan.id)?.status).toBe("cancelled");
-      expect(getAgentSession(sessionId)?.status).toBe("idle");
-      expect(mocks.createAgentSession).not.toHaveBeenCalled();
-      expect(events).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ type: "run.cancelled", runId: orphan.id }),
-          expect.objectContaining({ type: "session.status", status: { type: "idle" } }),
-        ]),
-      );
-    });
-
-    it("reconciles persisted orphan runs before restoring a session", async () => {
-      const sessionId = `restore-orphan-${crypto.randomUUID()}`;
-      insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
-      updateAgentSessionStatus(sessionId, "running");
-      const orphan = createAgentRun({ sessionId, prompt: "interrupted task" });
-      recordAgentEvent({ type: "run.started", sessionId, runId: orphan.id, delivery: "normal" });
-      const runtime = new PiSdkRuntime();
-
-      await runtime.ensure(createWindowStub(), sessionId);
-
-      expect(runLifecycle(sessionId)).toEqual([
-        { type: "run.started", runId: orphan.id },
-        { type: "run.cancelled", runId: orphan.id },
-      ]);
-      expect(getAgentRun(orphan.id)?.status).toBe("cancelled");
-      expect(getAgentSession(sessionId)?.status).toBe("idle");
-      expect(mocks.createAgentSession).toHaveBeenCalledOnce();
-    });
-
-    it("idles a session when cancellation persisted before a crash but session cleanup did not", async () => {
-      const sessionId = `partial-cancel-${crypto.randomUUID()}`;
-      insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
-      updateAgentSessionStatus(sessionId, "running");
-      const run = createAgentRun({ sessionId, prompt: "interrupted task" });
-      recordAgentEvent({ type: "run.started", sessionId, runId: run.id, delivery: "normal" });
-      updateAgentRunStatus(run.id, "cancelled");
-      recordAgentEvent({ type: "run.cancelled", sessionId, runId: run.id });
-      const runtime = new PiSdkRuntime();
-
-      await runtime.abort(sessionId);
-
-      expect(getAgentSession(sessionId)?.status).toBe("idle");
-      expect(runLifecycle(sessionId)).toEqual([
-        { type: "run.started", runId: run.id },
-        { type: "run.cancelled", runId: run.id },
-      ]);
-      expect(mocks.createAgentSession).not.toHaveBeenCalled();
-    });
-
-    it("preserves an orphan boundary while a live PlanBuild reservation owns session startup", async () => {
-      const sessionId = `plan-build-reconcile-${crypto.randomUUID()}`;
-      insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
-      updateAgentSessionStatus(sessionId, "running");
-      const run = createAgentRun({ sessionId, prompt: "approved build" });
-      recordAgentEvent({ type: "run.started", sessionId, runId: run.id, delivery: "normal" });
-      expect(planBuildStore.reservePlanBuildSession({ sessionId, ownerId: 4 })).toBe(true);
-
-      try {
-        await new PiSdkRuntime().abort(sessionId);
-
-        expect(getAgentRun(run.id)?.status).toBe("running");
-        expect(getAgentSession(sessionId)?.status).toBe("running");
-        expect(runLifecycle(sessionId)).toEqual([{ type: "run.started", runId: run.id }]);
-      } finally {
-        planBuildStore.releasePlanBuildSession({ sessionId, ownerId: 4 });
-      }
     });
 
     it("never cancels a live run when another prompt arrives while it streams", async () => {

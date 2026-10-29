@@ -23,6 +23,6 @@ describe("Linux worker packaging contract", () => {
     expect(ciWorkflow).toContain(
       "-p modus-plugin-execution-supervisor -p modus-plugin-execution-worker",
     );
-    expect(releaseWorkflow).toMatch(/- "crates\/(?:\*\*|plugin-execution-worker\/\*\*)"/);
+    expect(releaseWorkflow).toContain('"crates/plugin-execution-worker/**"');
   });
 });

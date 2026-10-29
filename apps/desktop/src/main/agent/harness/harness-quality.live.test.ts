@@ -6,28 +6,14 @@ import { performance } from "node:perf_hooks";
 import type { BrowserWindow } from "electron";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { CODE_REPAIR_PROVENANCE } from "../../../../scripts/harness-quality/code-repair";
-import {
-  QUALITY_FIXTURES,
-  type QualityFixture,
-  verifyFixture,
-} from "../../../../scripts/harness-quality/fixtures";
-import {
-  ITERATIVE_REPAIR_FIXTURE,
-  registerIterativeRepairTool,
-} from "../../../../scripts/harness-quality/iterative-repair";
+import { QUALITY_FIXTURES, verifyFixture } from "../../../../scripts/harness-quality/fixtures";
 import { QualityRunReporter } from "../../../../scripts/harness-quality/report";
 import {
-  FIXTURE_VERIFY_REPAIR_TOOL as FIXTURE_VERIFY_REPAIR_TOOL_NAME,
   fixtureFilePath,
   fixtureToolDecision,
   QUALITY_TOOL_NAMES,
 } from "../../../../scripts/harness-quality/scope";
-import {
-  buildScopedRecallContext,
-  SCOPED_RECALL_FIXTURE,
-  seedScopedRecallEvaluationMemories,
-} from "../../../../scripts/harness-quality/scoped-recall";
-import type { ContextItem, ThinkingLevel } from "../../../shared/contracts";
+import type { ThinkingLevel } from "../../../shared/contracts";
 
 const boundary = vi.hoisted(() => ({
   userData: "",
@@ -40,8 +26,6 @@ const boundary = vi.hoisted(() => ({
   tasksStarted: 0,
   sessionsCreated: 0,
   deniedTools: [] as string[],
-  fixtureId: "",
-  repairVerifierCalls: 0,
 }));
 
 // Desktop and discovery boundaries only. No installed application data is opened.
@@ -56,7 +40,7 @@ vi.mock("node:os", async (importOriginal) => {
 
 vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
-  const allowed = new Set<string>([...QUALITY_TOOL_NAMES, FIXTURE_VERIFY_REPAIR_TOOL_NAME]);
+  const allowed = new Set<string>(QUALITY_TOOL_NAMES);
   return {
     ...actual,
     DefaultResourceLoader: class extends actual.DefaultResourceLoader {
@@ -75,28 +59,10 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
               selectedModel: boundary.model,
               delegationAllowed: boundary.delegationAllowed,
               tasksStarted: boundary.tasksStarted,
-              repairVerifierAllowed: boundary.fixtureId === ITERATIVE_REPAIR_FIXTURE.id,
             });
             if (decision) boundary.deniedTools.push(event.toolName);
             else if (event.toolName === "task") boundary.tasksStarted += 1;
             return decision;
-          });
-        };
-        const fixtureVerifier: import("@earendil-works/pi-coding-agent").ExtensionFactory = (
-          pi,
-        ) => {
-          if (boundary.fixtureId !== ITERATIVE_REPAIR_FIXTURE.id) return;
-          registerIterativeRepairTool({
-            pi,
-            onInvocation: () => ++boundary.repairVerifierCalls <= 4,
-            readCandidate: async () => {
-              const candidate = fixtureFilePath(
-                boundary.workspace,
-                "command-line.ts",
-                boundary.writable,
-              );
-              return candidate ? readFile(candidate, "utf8") : undefined;
-            },
           });
         };
         super({
@@ -106,7 +72,7 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
           noPromptTemplates: true,
           noThemes: true,
           noContextFiles: true,
-          extensionFactories: [guard, fixtureVerifier, ...(options.extensionFactories ?? [])],
+          extensionFactories: [guard, ...(options.extensionFactories ?? [])],
         });
       }
     },
@@ -135,12 +101,6 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
 });
 
 const enabled = process.env.MODUS_HARNESS_QUALITY_LIVE === "1";
-const corpusName = process.env.MODUS_HARNESS_QUALITY_CORPUS ?? "v1";
-const extendedFixtures: readonly QualityFixture[] = [
-  ITERATIVE_REPAIR_FIXTURE,
-  SCOPED_RECALL_FIXTURE,
-];
-const selectedFixtures = corpusName === "v2" ? extendedFixtures : QUALITY_FIXTURES;
 const results: Record<string, unknown>[] = [];
 let scratch = "";
 let manifest: Record<string, unknown> = {};
@@ -157,11 +117,10 @@ describe.skipIf(!enabled)("Harness real-inference quality evaluation (explicit o
       schemaVersion: 1,
       startedAt: new Date().toISOString(),
       selectedModel: boundary.model,
-      qualityCorpus: corpusName,
       thinkingLevel: thinking,
       sourceRevision: process.env.MODUS_HARNESS_QUALITY_REVISION ?? null,
       fixtureHash: createHash("sha256")
-        .update(JSON.stringify(selectedFixtures.map(({ verify: _verify, ...fixture }) => fixture)))
+        .update(JSON.stringify(QUALITY_FIXTURES.map(({ verify: _verify, ...fixture }) => fixture)))
         .digest("hex"),
       inference: "real-pi-sdk",
       codeRepairProvenance: CODE_REPAIR_PROVENANCE,
@@ -174,8 +133,6 @@ describe.skipIf(!enabled)("Harness real-inference quality evaluation (explicit o
       ],
     };
     try {
-      if (corpusName !== "v1" && corpusName !== "v2")
-        throw new Error("MODUS_HARNESS_QUALITY_CORPUS must be either v1 or v2.");
       if (!/^[^/\s]+\/[^\s]+$/.test(boundary.model))
         throw new Error(
           "Set MODUS_HARNESS_QUALITY_MODEL to the user's exact provider/model choice.",
@@ -212,8 +169,6 @@ describe.skipIf(!enabled)("Harness real-inference quality evaluation (explicit o
         new URL("../model-service.ts", import.meta.url),
         new URL("../../../../scripts/harness-quality/fixtures.ts", import.meta.url),
         new URL("../../../../scripts/harness-quality/code-repair.ts", import.meta.url),
-        new URL("../../../../scripts/harness-quality/iterative-repair.ts", import.meta.url),
-        new URL("../../../../scripts/harness-quality/scoped-recall.ts", import.meta.url),
         new URL(
           "../../../../scripts/harness-quality/code-repair/command-line.ts.txt",
           import.meta.url,
@@ -279,7 +234,7 @@ describe.skipIf(!enabled)("Harness real-inference quality evaluation (explicit o
     vi.restoreAllMocks();
   });
 
-  for (const fixture of selectedFixtures) {
+  for (const fixture of QUALITY_FIXTURES) {
     it(`${fixture.language}: ${fixture.id}`, async () => {
       if (setupError) throw new Error(setupError);
       boundary.workspace = resolve(scratch, fixture.id);
@@ -289,8 +244,6 @@ describe.skipIf(!enabled)("Harness real-inference quality evaluation (explicit o
       boundary.tasksStarted = 0;
       boundary.sessionsCreated = 0;
       boundary.deniedTools = [];
-      boundary.fixtureId = fixture.id;
-      boundary.repairVerifierCalls = 0;
       await mkdir(boundary.workspace);
       await Promise.all(
         Object.entries(fixture.files).map(([path, content]) =>
@@ -302,18 +255,6 @@ describe.skipIf(!enabled)("Harness real-inference quality evaluation (explicit o
       const { listSubagentSessions } = await import("../agent-store");
       const { resolvePermissionRequest } = await import("../../permissions/permission-broker");
       const workspace = upsertWorkspace(boundary.workspace, false);
-      let expectedRecallMemoryId = "";
-      let decoyRecallMemoryId = "";
-      if (fixture.id === SCOPED_RECALL_FIXTURE.id) {
-        const decoyRoot = resolve(scratch, "decoy-workspace");
-        await mkdir(decoyRoot, { recursive: true });
-        const decoyWorkspace = upsertWorkspace(decoyRoot, false);
-        ({ expectedMemoryId: expectedRecallMemoryId, decoyMemoryId: decoyRecallMemoryId } =
-          seedScopedRecallEvaluationMemories({
-            workspaceId: workspace.id,
-            decoyWorkspaceId: decoyWorkspace.id,
-          }));
-      }
       const window = {
         webContents: { send() {} },
         isDestroyed: () => false,
@@ -323,8 +264,6 @@ describe.skipIf(!enabled)("Harness real-inference quality evaluation (explicit o
       const runtime = new PiSdkRuntime();
       const reporter = new QualityRunReporter();
       let sessionId: string | undefined;
-      let context: ContextItem[] = [];
-      let contextMemoryIds: string[] = [];
       let timedOut = false;
       let questionPending = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -355,13 +294,6 @@ describe.skipIf(!enabled)("Harness real-inference quality evaluation (explicit o
           model: boundary.model,
         });
         sessionId = session.id;
-        if (fixture.id === SCOPED_RECALL_FIXTURE.id) {
-          const digest = await buildScopedRecallContext(workspace.id, session.id);
-          contextMemoryIds = digest.memoryIds;
-          context = digest.text
-            ? [{ type: "excerpt", path: "local project memory", text: digest.text }]
-            : [];
-        }
         timer = setTimeout(() => {
           timedOut = true;
           void runtime.abort(session.id);
@@ -369,7 +301,7 @@ describe.skipIf(!enabled)("Harness real-inference quality evaluation (explicit o
         const result = await runtime.prompt(window, {
           sessionId: session.id,
           message: `${fixture.prompt}\n\nThis is a trusted tiny fixture workspace. Available files: ${boundary.files.join(", ")}. File access is limited to these files. Use read/write/edit directly; shell and external tools are unavailable. Finish the requested work without asking questions.`,
-          context,
+          context: [],
           model: boundary.model,
           thinkingLevel,
         });
@@ -388,14 +320,6 @@ describe.skipIf(!enabled)("Harness real-inference quality evaluation (explicit o
           childSessions: children.length,
           successfulWaits: reporter.successfulWaits,
         });
-        if (fixture.id === SCOPED_RECALL_FIXTURE.id) {
-          checks.push({
-            name: "context planner used only this workspace's relevant memory",
-            passed:
-              contextMemoryIds.includes(expectedRecallMemoryId) &&
-              !contextMemoryIds.includes(decoyRecallMemoryId),
-          });
-        }
         checks.push({
           name: "runtime completed without timeout or question",
           passed: result.outcome === "ok" && !timedOut && !questionPending,
@@ -427,8 +351,6 @@ describe.skipIf(!enabled)("Harness real-inference quality evaluation (explicit o
           elapsedMs: performance.now() - startedMs,
           checks,
           deniedTools: [...boundary.deniedTools],
-          contextMemoryIds,
-          repairVerifierCalls: boundary.repairVerifierCalls,
           ...snapshot,
         });
       } catch {

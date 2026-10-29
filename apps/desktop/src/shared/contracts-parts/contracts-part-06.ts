@@ -85,7 +85,7 @@ export type TestCustomProviderResult = {
 
 export type McpTransportKind = "stdio" | "http";
 
-export type McpServerStatus = "connecting" | "connected" | "failed" | "disabled" | "untrusted";
+export type McpServerStatus = "connecting" | "connected" | "failed" | "disabled";
 
 export type McpToolInfo = {
   /** Tool name as exposed by the server. */
@@ -100,8 +100,6 @@ export type McpServerInfo = {
   transport: McpTransportKind;
   /** Config file this server came from (project beats user on conflicts). */
   source: string;
-  /** SHA-256 identity of the current resolved config, never the config values themselves. */
-  configFingerprint?: string | undefined;
   status: McpServerStatus;
   error?: string | undefined;
   tools: McpToolInfo[];

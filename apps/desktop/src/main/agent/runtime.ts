@@ -157,7 +157,7 @@ export type AgentRuntime = {
     onProgress?: (text: string) => void;
   }): Promise<BackgroundWaitResult>;
   /** Stop the turn; prompts still queued come back (not sent) for the composer. */
-  abort(sessionId: string, window?: BrowserWindowType): Promise<AbortAgentResult>;
+  abort(sessionId: string): Promise<AbortAgentResult>;
   /** The chat's visible prompt queue (prompts waiting for the running turn). */
   listQueuedPrompts(sessionId: string): QueuedPromptItem[];
   /** Remove one queued prompt by id; `removed: false` when pi already took it to send. */

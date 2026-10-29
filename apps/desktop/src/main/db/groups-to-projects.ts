@@ -341,11 +341,11 @@ function runInTransaction(
     const chunkSize = 500;
     for (let i = 0; i < liveRuns.length; i += chunkSize) {
       const chunk = liveRuns.slice(i, i + chunkSize);
+      const placeholders = chunk.map(() => "?").join(",");
       const cancelRun = db.prepare(
-        `update agent_runs set status = 'cancelled', completed_at = ?, error = ? from json_each(?) j where agent_runs.id = j.value`,
+        `update agent_runs set status = 'cancelled', completed_at = ?, error = ? where id in (${placeholders})`,
       );
-      if (chunk.length > 0)
-        cancelRun.run(at, GROUPS_MIGRATION_RUN_ERROR, JSON.stringify(chunk.map((r) => r.id)));
+      cancelRun.run(at, GROUPS_MIGRATION_RUN_ERROR, ...chunk.map((r) => r.id));
     }
   }
   for (const run of liveRuns) {
@@ -361,10 +361,11 @@ function runInTransaction(
       const CHUNK_SIZE = 500;
       for (let i = 0; i < jobs.length; i += CHUNK_SIZE) {
         const chunk = jobs.slice(i, i + CHUNK_SIZE);
+        const placeholders = chunk.map(() => "?").join(",");
         const cancel = db.prepare(
-          `update group_jobs set status = 'cancelled', updated_at = ? from json_each(?) j where group_jobs.id = j.value`,
+          `update group_jobs set status = 'cancelled', updated_at = ? where id in (${placeholders})`,
         );
-        if (chunk.length > 0) cancel.run(at, JSON.stringify(chunk.map((j) => j.id)));
+        cancel.run(at, ...chunk.map((j) => j.id));
       }
       for (const job of jobs) {
         note(job.group_id, `- Job ${job.id} was cancelled.`);
@@ -380,8 +381,8 @@ function runInTransaction(
         const chunk = rows.slice(i, i + 100);
         const ids = chunk.map((r) => r.id);
         db.prepare(
-          `update group_task_integrations set status = 'aborted', updated_at = ? from json_each(?) j where group_task_integrations.id = j.value`,
-        ).run(at, JSON.stringify(ids));
+          `update group_task_integrations set status = 'aborted', updated_at = ? where id in (${ids.map(() => "?").join(",")})`,
+        ).run(at, ...ids);
       }
       for (const row of rows) {
         note(row.group_id, `- Integration ${row.id} was being applied and was aborted.`);

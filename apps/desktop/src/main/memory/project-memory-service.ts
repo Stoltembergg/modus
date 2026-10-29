@@ -67,10 +67,6 @@ export const PROJECT_MEMORY_EVIDENCE_DTO_LIMIT = 32;
 export const PROJECT_MEMORY_PLANNING_RESULT_LIMIT = 160;
 /** Reserve one quarter of the planner feed for exact file/symbol-linked memories. */
 export const PROJECT_MEMORY_PLANNING_EXACT_EVIDENCE_RESERVE = 40;
-/** Reserve up to 60 bounded candidates for textual relevance before recency fills the feed. */
-export const PROJECT_MEMORY_PLANNING_TEXT_MATCH_RESERVE = 60;
-const PROJECT_MEMORY_SEARCH_QUERY_CHARS = 2048;
-const PROJECT_MEMORY_SEARCH_TERM_LIMIT = 16;
 /** Limit evidence path hints independently so Git paths cannot be crowded out. */
 export const PROJECT_MEMORY_PLANNING_PATH_HINT_LIMIT = 32;
 export const PROJECT_MEMORY_PLANNING_SYMBOL_HINT_LIMIT = 64;
@@ -779,7 +775,6 @@ function planningEvidenceForMemory(
 /** Bounded, settings/scope-filtered active-memory feed for local Context Planner scoring. */
 export function getProjectMemoriesForPlanning(
   input: Pick<ProjectMemoryRetrievalInput, "workspaceId" | "inbox"> & {
-    query?: string;
     contextPaths?: string[];
     changedPaths?: string[];
     contextSymbols?: string[];
@@ -821,15 +816,6 @@ export function getProjectMemoriesForPlanning(
         .filter(Boolean),
     ),
   ];
-  const searchTerms =
-    input.query
-      ?.slice(0, PROJECT_MEMORY_SEARCH_QUERY_CHARS)
-      .normalize("NFKC")
-      .match(/[\p{L}\p{N}_]+/gu)
-      ?.slice(0, PROJECT_MEMORY_SEARCH_TERM_LIMIT) ?? [];
-  const searchQuery = searchTerms.length
-    ? searchTerms.map((term) => `"${term.replaceAll('"', '""')}"`).join(" AND ")
-    : undefined;
   const exactClauses: string[] = [];
   const exactParams: string[] = [];
   if (paths.length > 0) {
@@ -859,36 +845,16 @@ export function getProjectMemoriesForPlanning(
       : [];
   const remaining = Math.max(0, PROJECT_MEMORY_PLANNING_RESULT_LIMIT - exactRows.length);
   const excludedIds = exactRows.map((row) => row.id);
-  const textLimit = Math.min(PROJECT_MEMORY_PLANNING_TEXT_MATCH_RESERVE, remaining);
-  const textRows =
-    searchQuery && textLimit > 0
-      ? (db
-          .prepare(`select r.* from project_memory_search
-          join project_memory_records r on r.rowid = project_memory_search.rowid
-          where project_memory_search match ? and ${scopeAndSettingsSql}
-          ${
-            excludedIds.length > 0
-              ? `and r.id not in (${excludedIds.map(() => "?").join(",")})`
-              : ""
-          }
-          order by bm25(project_memory_search), coalesce(r.last_verified_at, r.created_at) desc, r.id asc
-          limit ?`)
-          .all(searchQuery, ...scopeParams, ...excludedIds, textLimit) as RecordRow[])
-      : [];
-  const afterText = Math.max(0, remaining - textRows.length);
-  const recentExcludedIds = [...excludedIds, ...textRows.map((row) => row.id)];
   const excludeSql =
-    recentExcludedIds.length > 0
-      ? `and r.id not in (${recentExcludedIds.map(() => "?").join(",")})`
-      : "";
+    excludedIds.length > 0 ? `and r.id not in (${excludedIds.map(() => "?").join(",")})` : "";
   const recentRows =
-    afterText > 0
+    remaining > 0
       ? (db
           .prepare(`select r.* from project_memory_records r where ${scopeAndSettingsSql} ${excludeSql}
       order by coalesce(r.last_verified_at, r.created_at) desc, r.id asc limit ?`)
-          .all(...scopeParams, ...recentExcludedIds, afterText) as RecordRow[])
+          .all(...scopeParams, ...excludedIds, remaining) as RecordRow[])
       : [];
-  return [...exactRows, ...textRows, ...recentRows].map((row) =>
+  return [...exactRows, ...recentRows].map((row) =>
     toRecord(row, planningEvidenceForMemory(row.id, paths, symbols)),
   );
 }

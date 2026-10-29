@@ -7,7 +7,7 @@ import {
   IconPlus,
   IconTrash,
 } from "@tabler/icons-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ModusApi } from "../../../../preload/types";
 import { localDateTimeToInstant } from "../../../../shared/automation-schedule";
 import type {
@@ -25,12 +25,6 @@ type AutomationApi = ModusApi["automations"];
 type Screen = { kind: "list" } | { kind: "detail"; id: string } | { kind: "editor"; id?: string };
 type AutomationFormInput = Omit<CreateAutomationRequest, "thinkingVariant"> & {
   thinkingVariant?: string | null;
-};
-type AutomationHistoryState = {
-  automationId: string;
-  requestGeneration: number;
-  entries: AutomationExecution[];
-  loading: boolean;
 };
 
 const FIELD_CLASS =
@@ -63,11 +57,7 @@ export function AutomationsPage({
   const t = useShellText();
   const [screen, setScreen] = useState<Screen>({ kind: "list" });
   const [definitions, setDefinitions] = useState<AutomationDefinition[]>([]);
-  const [history, setHistory] = useState<AutomationHistoryState | null>(null);
-  const historyRequestGeneration = useRef(0);
-  const selectedAutomationId = screen.kind === "detail" ? screen.id : undefined;
-  const selectedAutomationIdRef = useRef(selectedAutomationId);
-  selectedAutomationIdRef.current = selectedAutomationId;
+  const [history, setHistory] = useState<AutomationExecution[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const selected =
@@ -88,26 +78,10 @@ export function AutomationsPage({
 
   const refreshHistory = useCallback(
     async (id: string) => {
-      if (selectedAutomationIdRef.current !== id) return;
-      const requestGeneration = ++historyRequestGeneration.current;
-      setHistory({ automationId: id, requestGeneration, entries: [], loading: true });
       try {
-        const entries = await api.history(id, 50);
-        if (
-          historyRequestGeneration.current !== requestGeneration ||
-          selectedAutomationIdRef.current !== id
-        ) {
-          return;
-        }
-        setHistory({ automationId: id, requestGeneration, entries, loading: false });
+        setHistory(await api.history(id, 50));
       } catch (cause) {
-        if (
-          historyRequestGeneration.current === requestGeneration &&
-          selectedAutomationIdRef.current === id
-        ) {
-          setHistory({ automationId: id, requestGeneration, entries: [], loading: false });
-          setError(errorMessage(cause));
-        }
+        setError(errorMessage(cause));
       }
     },
     [api],
@@ -117,17 +91,14 @@ export function AutomationsPage({
     void refreshDefinitions();
     return api.onEvent((event) => {
       void refreshDefinitions();
-      const selectedId = selectedAutomationIdRef.current;
+      const selectedId = screen.kind === "detail" ? screen.id : undefined;
       if (selectedId && event.type === "execution-changed") void refreshHistory(selectedId);
     });
-  }, [api, refreshDefinitions, refreshHistory]);
+  }, [api, refreshDefinitions, refreshHistory, screen]);
 
   useEffect(() => {
     if (screen.kind === "detail") void refreshHistory(screen.id);
-    else setHistory(null);
-    return () => {
-      historyRequestGeneration.current += 1;
-    };
+    else setHistory([]);
   }, [refreshHistory, screen]);
 
   const openEditor = (id?: string) => {
@@ -188,8 +159,7 @@ export function AutomationsPage({
   }
 
   if (screen.kind === "detail" && selected) {
-    const selectedHistory = history?.automationId === selected.id ? history : undefined;
-    const activeExecution = selectedHistory?.entries.find((entry) => isActive(entry.status));
+    const activeExecution = history.find((entry) => isActive(entry.status));
     return (
       <PageFrame
         back={() => setScreen({ kind: "list" })}
@@ -244,13 +214,10 @@ export function AutomationsPage({
             className={cn(BUTTON_CLASS, "text-danger hover:text-danger")}
             onClick={() => {
               if (window.confirm(t("automation.deleteConfirm"))) {
-                const deletingId = selected.id;
                 void api
-                  .delete(deletingId)
+                  .delete(selected.id)
                   .then(() => {
-                    if (selectedAutomationIdRef.current === deletingId) {
-                      setScreen({ kind: "list" });
-                    }
+                    setScreen({ kind: "list" });
                     return refreshDefinitions();
                   })
                   .catch((cause) => setError(errorMessage(cause)));
@@ -285,13 +252,11 @@ export function AutomationsPage({
         </section>
         <section className="mt-6">
           <h3 className="mb-2 text-sm font-medium text-fg">{t("automation.history")}</h3>
-          {!selectedHistory || selectedHistory.loading ? (
-            <p className="py-3 text-sm text-fg-muted">…</p>
-          ) : selectedHistory.entries.length === 0 ? (
+          {history.length === 0 ? (
             <p className="py-3 text-sm text-fg-muted">{t("automation.noHistory")}</p>
           ) : (
             <ul className="-mx-3 flex flex-col gap-1">
-              {selectedHistory.entries.map((execution) => (
+              {history.map((execution) => (
                 <li
                   className="flex min-w-0 items-center gap-3 rounded-lg px-3 py-3 transition-colors hover:bg-hover/40"
                   key={execution.id}

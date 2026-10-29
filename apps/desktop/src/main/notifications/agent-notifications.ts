@@ -38,8 +38,7 @@ export function maybeNotifyAgentEvent(window: BrowserWindowType, event: AgentEve
   if (
     event.type !== "run.completed" &&
     event.type !== "run.failed" &&
-    event.type !== "permission.requested" &&
-    event.type !== "question.requested"
+    event.type !== "permission.requested"
   ) {
     return;
   }
@@ -61,10 +60,6 @@ export function maybeNotifyAgentEvent(window: BrowserWindowType, event: AgentEve
       title,
       mainText("main.notification.failed", locale, { message: truncate(event.message, 120) }),
     );
-    return;
-  }
-  if (event.type === "question.requested") {
-    notify(window, event.sessionId, title, mainText("main.notification.question", locale));
     return;
   }
   notify(

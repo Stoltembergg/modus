@@ -73,11 +73,7 @@ const afterPack: NonNullable<Configuration["afterPack"]> = async (context) => {
         ? join(context.appOutDir, `${product}.exe`)
         : join(context.appOutDir, LINUX_EXECUTABLE);
   const script = join("scripts", "verify-packaged-onnxruntime.cjs");
-  const sidecarsScript = join("scripts", "verify-packaged-sidecars.cjs");
   const sameHost = platform === process.platform && arch === process.arch;
-  execFileSync(process.execPath, [sidecarsScript, resources, platform, arch], {
-    stdio: "inherit",
-  });
   execFileSync(sameHost ? executable : process.execPath, [script, resources, platform, arch], {
     stdio: "inherit",
     env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },

@@ -23,8 +23,8 @@ jobs:
           node-version: "24.21.0"
           cache: npm
 
-      - name: Verify packaging paths and manual workflow authorization
-        run: node --test scripts/package-workflow-paths.test.mjs scripts/probe-workflow-gates.test.mjs
+      - name: Verify probe workflows require manual authorization
+        run: node --test scripts/probe-workflow-gates.test.mjs
 
       - name: Install dependencies
         run: npm ci

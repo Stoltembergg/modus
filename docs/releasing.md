@@ -87,15 +87,14 @@ There are no signing certificates yet:
 
 ## electron-builder version pin
 
-`electron-builder` is pinned to `26.15.3` in `apps/desktop/package.json`. Keep it below
+`electron-builder` is pinned to `26.8.1` in `apps/desktop/package.json`. Keep it below
 v28: starting with v28 the NSIS updater fails closed on unsigned builds, which would
 break Windows auto-update until the installer is signed. Treat any upgrade as a change
 to the release pipeline and dry-run it (next section).
 
-`electron-updater` (the in-app updater) is pinned to `6.8.9`; the resolved
-`builder-util-runtime` version is `9.7.0`. These versions are recorded in the root
-`package-lock.json`. Review the lockfile when upgrading the release toolchain; keep
-electron-builder below v28 until unsigned Windows updates are supported.
+`electron-updater` (the in-app updater) is pinned to `6.8.3`, the version released
+together with electron-builder 26.8.x (both use `builder-util-runtime` 9.5.1). Upgrade
+the two together, and keep them below electron-builder v28.
 
 ## In-app updates
 
@@ -125,27 +124,19 @@ in dev (`npm run dev`) or in builds whose version is not a plain `X.Y.Z` (betas)
 
 ## Dry runs on pull requests
 
-A pull request that changes the app, its Rust crates, npm manifests/lockfile, `.npmrc`,
-or a package workflow runs platform packaging checks. These are three coordinated
-dry-run workflows, not a single release run:
+A pull request that changes the release workflow, `apps/desktop/scripts/release/**` or
+`apps/desktop/electron-builder.config.ts` runs the same workflow as a dry run:
 
-- `Package macOS` builds arm64 and x64 on macOS and checks sidecar architectures,
-  expected zip/DMG outputs, and ad-hoc signatures of both the `.app` and the app
-  extracted from the zip. It has no Developer ID or release credentials.
-- `Package Windows` builds x64 and checks sidecar architecture and package outputs;
-  Windows remains unsigned and has no Authenticode credentials.
-- The PR path of `Release` builds Linux x64 and checks package outputs. It does not
-  create a draft release, merge macOS metadata, or upload public release assets.
-- Each workflow has `contents: read`. The channel for metadata comes from
-  `apps/desktop/package.json` (`-beta.N` → beta, otherwise latest).
-- macOS and Windows package workflows retain test artifacts as Actions artifacts for
-  7 days. The Linux release dry run retains update metadata for 7 days; its large
-  installers are not uploaded for PRs.
-
-The real tag path separately builds all three platforms, merges the two macOS feeds,
-and only then uploads to a draft release. Creating and uploading to a GitHub release
-remain tag-only. These dry runs do not prove Developer ID notarization, Authenticode,
-installation on every supported OS version, or updater behavior after publication.
+- all builds (mac arm64 + x64, Windows, Linux), the codesign verification and the mac
+  metadata merge run exactly as on a tag;
+- the channel comes from the `apps/desktop/package.json` version (`-beta.N` → beta,
+  otherwise latest), since there is no tag;
+- the jobs that create or upload to a GitHub release are skipped, and the run only has
+  `contents: read`;
+- only the update metadata is kept as Actions artifacts, for 7 days
+  (`update-metadata-mac-merged`, `update-metadata-mac-{arm64,x64}`,
+  `update-metadata-win-x64`, `update-metadata-linux-x64`), so the real files can be
+  inspected. Installers are not uploaded on pull requests.
 
 On tag runs the installers are passed to `publish-assets` as `release-assets-*`
 artifacts with a 1-day retention. To redo a release later, re-run the whole workflow

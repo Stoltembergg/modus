@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import type { AgentSessionInfo, SubagentWorktreeInfo } from "../../shared/contracts";
 import { getDatabase } from "../db/database";
 import { getWorkspace } from "../workspace/workspace-store";
-import { listAgentSessionActivitySnapshots } from "./agent-event-store";
 
 type AgentSessionRow = {
   id: string;
@@ -365,13 +364,7 @@ export function listAgentSessions(options: { includeSessionId?: string } = {}): 
       sessions.push(included);
     }
   }
-  const snapshots = listAgentSessionActivitySnapshots(sessions.map((session) => session.id));
-  return sessions.map((session) => {
-    const snapshot = snapshots.get(session.id);
-    return snapshot && snapshot.eventCursor > 0
-      ? { ...session, activitySnapshot: snapshot }
-      : session;
-  });
+  return sessions;
 }
 
 /**

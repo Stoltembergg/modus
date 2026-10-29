@@ -762,14 +762,6 @@ export const mcpServerNameSchema = z.object({
   name: nonEmptyString,
 });
 
-export const mcpApproveSchema = z
-  .object({
-    cwd: nonEmptyString,
-    name: nonEmptyString,
-    expectedFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
-  })
-  .strict();
-
 export const mcpSetEnabledSchema = z.object({
   cwd: nonEmptyString,
   name: nonEmptyString,

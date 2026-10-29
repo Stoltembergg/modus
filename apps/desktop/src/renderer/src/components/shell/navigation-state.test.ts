@@ -2,20 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   closeSettingsNavigation,
   INITIAL_PRIMARY_NAVIGATION,
-  isSessionConversationVisible,
   navigatePrimary,
   normalizePrimaryDestination,
   restorePrimaryNavigation,
 } from "./navigation-state";
 
 describe("primary navigation", () => {
-  it("only treats a session as watched while its conversation pane is visible", () => {
-    expect(isSessionConversationVisible("direct-messages", "session-1", "session-1")).toBe(true);
-    expect(isSessionConversationVisible("settings", "session-1", "session-1")).toBe(false);
-    expect(isSessionConversationVisible("automations", "session-1", "session-1")).toBe(false);
-    expect(isSessionConversationVisible("direct-messages", "session-2", "session-1")).toBe(false);
-  });
-
   it("opens on Projects", () => {
     expect(INITIAL_PRIMARY_NAVIGATION).toEqual({
       active: "direct-messages",

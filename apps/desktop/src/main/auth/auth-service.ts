@@ -101,10 +101,8 @@ export function createAuthService(deps: Deps): AuthService {
   let listener: OAuthCallbackChannel | undefined;
   let persistedRefreshToken: string | undefined;
   let unsubscribeBackend: (() => void) | undefined;
-  /** Invalidates late work when a newer auth attempt, cancellation, sign-out, or shutdown wins. */
+  /** Bumped on sign-out so a late profile fetch cannot resurrect a signed-out user. */
   let generation = 0;
-  let activeOAuthAttempt: number | undefined;
-  let persistenceQueue: Promise<void> = Promise.resolve();
   let refreshing: Promise<string> | undefined;
   /** The backend dropped the session (supabase-js SIGNED_OUT) and nothing replaced it yet. */
   let lostByBackend = false;
@@ -137,42 +135,21 @@ export function createAuthService(deps: Deps): AuthService {
     };
   }
 
-  function serializePersistence(work: () => Promise<void>): Promise<void> {
-    const next = persistenceQueue.then(work, work);
-    persistenceQueue = next.catch(() => undefined);
-    return next;
+  async function persist(session: AuthBackendSession): Promise<void> {
+    if (session.refreshToken === persistedRefreshToken) return;
+    try {
+      const saved = await store.save(session.refreshToken);
+      persistedRefreshToken = saved ? session.refreshToken : undefined;
+    } catch {
+      // Encryption failed: stay signed in for this run, never fall back to plaintext.
+      persistedRefreshToken = undefined;
+      await store.clear().catch(() => undefined);
+    }
   }
 
-  async function persist(session: AuthBackendSession, run = generation): Promise<void> {
-    if (run !== generation) return;
-    await serializePersistence(async () => {
-      if (run !== generation || session.refreshToken === persistedRefreshToken) return;
-      const previousRefreshToken = persistedRefreshToken;
-      try {
-        const saved = await store.save(session.refreshToken);
-        if (run === generation) {
-          persistedRefreshToken = saved ? session.refreshToken : undefined;
-          return;
-        }
-      } catch {
-        if (run === generation) {
-          // Encryption failed: stay signed in for this run, never fall back to plaintext.
-          persistedRefreshToken = undefined;
-          await store.clear().catch(() => undefined);
-          return;
-        }
-      }
-
-      // A cancellation or newer auth attempt won while the write was in flight. Restore the
-      // token that was current before this write; the serialized queue lets newer writes follow.
-      if (previousRefreshToken) await store.save(previousRefreshToken);
-      else await store.clear();
-    });
-  }
-
-  async function adoptSession(session: AuthBackendSession, run = generation): Promise<AuthState> {
-    if (run !== generation) return snapshot();
-    await persist(session, run);
+  async function adoptSession(session: AuthBackendSession): Promise<AuthState> {
+    const run = generation;
+    await persist(session);
     if (run !== generation) return snapshot();
     const user = profileFrom(session);
     lostByBackend = false;
@@ -197,17 +174,7 @@ export function createAuthService(deps: Deps): AuthService {
   async function clearLocalSession(): Promise<void> {
     generation += 1;
     persistedRefreshToken = undefined;
-    await serializePersistence(() => store.clear());
-  }
-
-  function beginAuthAttempt(): number {
-    generation += 1;
-    if (activeOAuthAttempt !== undefined) {
-      activeOAuthAttempt = undefined;
-      flows.cancel();
-      void closeListener();
-    }
-    return generation;
+    await store.clear();
   }
 
   function requireBackend(): AuthBackend {
@@ -221,11 +188,10 @@ export function createAuthService(deps: Deps): AuthService {
     await current?.close();
   }
 
-  async function guarded(run: () => Promise<AuthState>, attempt?: number): Promise<AuthState> {
+  async function guarded(run: () => Promise<AuthState>): Promise<AuthState> {
     try {
       return await run();
     } catch (error) {
-      if (attempt !== undefined && attempt !== generation) return snapshot();
       return setState({
         status: state.user ? "signed-in" : "signed-out",
         pendingProvider: null,
@@ -236,9 +202,7 @@ export function createAuthService(deps: Deps): AuthService {
 
   return {
     async initialize() {
-      const run = generation;
       persistence = await store.persistence().catch(() => "memory-only" as const);
-      if (run !== generation) return snapshot();
       if (!backend || !config) return setState({ status: "unconfigured" });
       unsubscribeBackend ??= backend.onSessionChange((session) => {
         if (session) {
@@ -253,15 +217,11 @@ export function createAuthService(deps: Deps): AuthService {
       });
       setState({ status: "restoring" });
       const refreshToken = await store.load().catch(() => undefined);
-      if (run !== generation) return snapshot();
       if (!refreshToken) return setState({ status: "signed-out" });
       try {
         persistedRefreshToken = refreshToken;
-        const restored = await backend.restore(refreshToken);
-        if (run !== generation) return snapshot();
-        return await adoptSession(restored, run);
+        return await adoptSession(await backend.restore(refreshToken));
       } catch (error) {
-        if (run !== generation) return snapshot();
         if (error instanceof AuthBackendError && error.kind === "network") {
           // Keep the stored token: the next start may be online.
           return setState({ status: "signed-out", error: NETWORK_ERROR });
@@ -274,27 +234,21 @@ export function createAuthService(deps: Deps): AuthService {
     getState: snapshot,
 
     signUp(input) {
-      const attempt = beginAuthAttempt();
       return guarded(async () => {
         const result = await requireBackend().signUp(input.email, input.password);
-        if (attempt !== generation) return snapshot();
-        if (result.session) return await adoptSession(result.session, attempt);
+        if (result.session) return await adoptSession(result.session);
         return setState({ status: "signed-out", notice: "confirm-email", error: null });
-      }, attempt);
+      });
     },
 
     signInWithPassword(input) {
-      const attempt = beginAuthAttempt();
       return guarded(async () => {
         const session = await requireBackend().signInWithPassword(input.email, input.password);
-        if (attempt !== generation) return snapshot();
-        return await adoptSession(session, attempt);
-      }, attempt);
+        return await adoptSession(session);
+      });
     },
 
     signInWithOAuth(provider) {
-      const attempt = beginAuthAttempt();
-      activeOAuthAttempt = attempt;
       return guarded(async () => {
         const auth = requireBackend();
         if (!isAuthOAuthProviderId(provider) || !config?.oauthProviders.includes(provider)) {
@@ -302,21 +256,18 @@ export function createAuthService(deps: Deps): AuthService {
         }
         if (state.status === "signed-in") throw new Error("Already signed in.");
         await closeListener();
-        if (attempt !== generation) return snapshot();
         const flow = flows.begin(provider);
-        let channel: OAuthCallbackChannel | undefined;
+        let channel: OAuthCallbackChannel;
+        if (config?.oauthTransport === "deep-link") {
+          if (!deps.startDeepLinkCallback) throw new Error("Deep-link sign-in is unavailable.");
+          channel = await deps.startDeepLinkCallback({ timeoutMs: oauthTimeoutMs });
+        } else {
+          channel = loopbackChannel(await deps.startLoopback({ timeoutMs: oauthTimeoutMs }));
+        }
+        listener = channel;
         try {
-          if (config?.oauthTransport === "deep-link") {
-            if (!deps.startDeepLinkCallback) throw new Error("Deep-link sign-in is unavailable.");
-            channel = await deps.startDeepLinkCallback({ timeoutMs: oauthTimeoutMs });
-          } else {
-            channel = loopbackChannel(await deps.startLoopback({ timeoutMs: oauthTimeoutMs }));
-          }
-          if (attempt !== generation) return snapshot();
-          listener = channel;
           const redirectTo = channel.redirectTo(flow.state);
           const authorizeUrl = await auth.createOAuthUrl(provider, redirectTo);
-          if (attempt !== generation) return snapshot();
           setState({
             status: "awaiting-oauth",
             pendingProvider: provider,
@@ -324,16 +275,14 @@ export function createAuthService(deps: Deps): AuthService {
             error: null,
           });
           await deps.openExternal(authorizeUrl);
-          if (attempt !== generation) return snapshot();
           let params: URLSearchParams;
           try {
             ({ params } = await channel.callback);
           } catch {
             // cancelOAuth()/signOut() already reset the state; anything else is the timeout.
-            if (attempt !== generation || listener !== channel) return snapshot();
+            if (listener !== channel) return snapshot();
             throw new AuthBackendError("rejected", "The sign-in timed out. Try again.");
           }
-          if (attempt !== generation) return snapshot();
           const verdict = flows.consume(params.get("state"));
           if (!verdict.ok) {
             throw new AuthBackendError(
@@ -346,31 +295,17 @@ export function createAuthService(deps: Deps): AuthService {
           }
           const code = params.get("code");
           if (!code) throw new AuthBackendError("rejected", "The sign-in response was incomplete.");
-          const session = await auth.exchangeCode(code);
-          if (attempt !== generation) return snapshot();
-          return await adoptSession(session, attempt);
+          return await adoptSession(await auth.exchangeCode(code));
         } finally {
-          if (activeOAuthAttempt === attempt) {
-            activeOAuthAttempt = undefined;
-            flows.cancel();
-          }
-          if (listener === channel) listener = undefined;
-          await channel?.close();
-        }
-      }, attempt).finally(() => {
-        if (activeOAuthAttempt === attempt) {
-          activeOAuthAttempt = undefined;
           flows.cancel();
+          if (listener === channel) listener = undefined;
+          await channel.close();
         }
       });
     },
 
     cancelOAuth() {
-      if (activeOAuthAttempt !== undefined) {
-        generation += 1;
-        activeOAuthAttempt = undefined;
-        flows.cancel();
-      }
+      flows.cancel();
       void closeListener();
       if (state.status !== "awaiting-oauth") return snapshot();
       return setState({ status: "signed-out", pendingProvider: null });
@@ -378,8 +313,6 @@ export function createAuthService(deps: Deps): AuthService {
 
     async signOut() {
       lostByBackend = false;
-      generation += 1;
-      activeOAuthAttempt = undefined;
       flows.cancel();
       await closeListener();
       // Local state is cleared even if the server call fails (offline, revoked token).
@@ -445,8 +378,6 @@ export function createAuthService(deps: Deps): AuthService {
     },
 
     async shutdown() {
-      generation += 1;
-      activeOAuthAttempt = undefined;
       flows.cancel();
       await closeListener();
       unsubscribeBackend?.();

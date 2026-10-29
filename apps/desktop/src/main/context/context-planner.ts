@@ -434,7 +434,6 @@ async function rankedCandidates(
     local = getProjectMemoriesForPlanning({
       ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
       inbox: input.inbox,
-      query: input.query,
       contextPaths: input.contextPaths,
       changedPaths: input.git.changedPaths,
       contextSymbols: input.contextSymbols,

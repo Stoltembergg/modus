@@ -6,7 +6,6 @@ import type { AuthState } from "../../shared/auth";
 import {
   createFakeBackend,
   createFakeSafeStorage,
-  fakeSession,
   SECRET_CODE,
   SECRET_REFRESH_TOKEN,
 } from "./auth.test-helpers";
@@ -24,14 +23,6 @@ const CONFIG: AuthConfig = {
 };
 
 const CREDENTIALS = { email: "ana@example.com", password: "correct horse" };
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 describe("auth service", () => {
   let userDataPath: string;
@@ -204,115 +195,6 @@ describe("auth service", () => {
     await expect(fetch(`${redirectTo}&code=${SECRET_CODE}`)).rejects.toThrow();
     expect((await started).status).toBe("signed-out");
     expect(fake.backend.exchangeCode).not.toHaveBeenCalled();
-  });
-
-  it("does not persist an OAuth session when cancellation wins during code exchange", async () => {
-    const { service, fake, store } = setup({
-      callback: (redirectTo) => `${redirectTo}&code=${SECRET_CODE}`,
-    });
-    await service.initialize();
-    const exchange = deferred<ReturnType<typeof fakeSession>>();
-    fake.backend.exchangeCode.mockImplementation(() => exchange.promise);
-    const save = vi.spyOn(store, "save");
-
-    const pending = service.signInWithOAuth("github");
-    await vi.waitFor(() => expect(fake.backend.exchangeCode).toHaveBeenCalledOnce());
-    service.cancelOAuth();
-    exchange.resolve(fakeSession({ user: { ...fakeSession().user, provider: "github" } }));
-
-    await expect(pending).resolves.toMatchObject({ status: "signed-out", user: null });
-    expect(save).not.toHaveBeenCalled();
-    expect(service.getState().status).toBe("signed-out");
-  });
-
-  it("does not let a late OAuth exchange replace a newer password sign-in", async () => {
-    const { service, fake } = setup({
-      callback: (redirectTo) => `${redirectTo}&code=${SECRET_CODE}`,
-    });
-    await service.initialize();
-    const exchange = deferred<ReturnType<typeof fakeSession>>();
-    fake.backend.exchangeCode.mockImplementation(() => exchange.promise);
-
-    const oauth = service.signInWithOAuth("github");
-    await vi.waitFor(() => expect(fake.backend.exchangeCode).toHaveBeenCalledOnce());
-    const passwordState = await service.signInWithPassword(CREDENTIALS);
-    exchange.resolve(fakeSession({ user: { ...fakeSession().user, provider: "github" } }));
-
-    await oauth;
-
-    expect(passwordState.user?.provider).toBe("email");
-    expect(service.getState().user?.provider).toBe("email");
-  });
-
-  it("removes a session write when cancellation wins while secure storage is saving", async () => {
-    const { service, fake, store } = setup({
-      callback: (redirectTo) => `${redirectTo}&code=${SECRET_CODE}`,
-    });
-    await service.initialize();
-    const sessionToPersist = fakeSession({
-      refreshToken: "oauth-refresh-token",
-      user: { ...fakeSession().user, provider: "github" },
-    });
-    fake.backend.exchangeCode.mockResolvedValue(sessionToPersist);
-    const originalSave = store.save.bind(store);
-    const enteredSave = deferred<void>();
-    const finishSave = deferred<boolean>();
-    vi.spyOn(store, "save").mockImplementation(async (token) => {
-      if (token === sessionToPersist.refreshToken) {
-        enteredSave.resolve();
-        await finishSave.promise;
-        return await originalSave(token);
-      }
-      return await originalSave(token);
-    });
-
-    const pending = service.signInWithOAuth("github");
-    await enteredSave.promise;
-    service.cancelOAuth();
-    finishSave.resolve(true);
-
-    await expect(pending).resolves.toMatchObject({ status: "signed-out", user: null });
-    await expect(store.load()).resolves.toBeUndefined();
-  });
-
-  it("serializes a newer sign-in after rolling back an in-flight OAuth session write", async () => {
-    const { service, fake, store } = setup({
-      callback: (redirectTo) => `${redirectTo}&code=${SECRET_CODE}`,
-    });
-    await service.initialize();
-    const oauthSession = fakeSession({
-      refreshToken: "oauth-refresh-token",
-      user: { ...fakeSession().user, provider: "github" },
-    });
-    const passwordSession = fakeSession({
-      refreshToken: "password-refresh-token",
-      user: { ...fakeSession().user, provider: "email" },
-    });
-    fake.backend.exchangeCode.mockResolvedValue(oauthSession);
-    fake.backend.signInWithPassword.mockResolvedValue(passwordSession);
-    const originalSave = store.save.bind(store);
-    const enteredSave = deferred<void>();
-    const finishSave = deferred<boolean>();
-    vi.spyOn(store, "save").mockImplementation(async (token) => {
-      if (token === oauthSession.refreshToken) {
-        enteredSave.resolve();
-        await finishSave.promise;
-        return await originalSave(token);
-      }
-      return await originalSave(token);
-    });
-
-    const oauth = service.signInWithOAuth("github");
-    await enteredSave.promise;
-    const password = service.signInWithPassword(CREDENTIALS);
-    finishSave.resolve(true);
-
-    await oauth;
-    await expect(password).resolves.toMatchObject({
-      status: "signed-in",
-      user: { provider: "email" },
-    });
-    await expect(store.load()).resolves.toBe("password-refresh-token");
   });
 
   it("times out an OAuth sign-in that never returns", async () => {

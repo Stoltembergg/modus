@@ -339,30 +339,6 @@ function buildRawEntry(input: McpServerUpsertInput): Record<string, unknown> {
   };
 }
 
-/** Resolve the exact configuration represented by a Settings form submission. */
-export function resolveMcpServerUpsertConfig(
-  input: McpServerUpsertInput,
-  source: string,
-  workspaceRoot: string,
-  env: NodeJS.ProcessEnv = process.env,
-): McpServerConfig {
-  const name = input.name.trim();
-  const result = parseMcpConfig(
-    JSON.stringify({ mcpServers: { [name]: buildRawEntry(input) } }),
-    source,
-    env,
-  );
-  const config = result.servers.find((server) => server.name === name);
-  if (!config) {
-    throw new Error(
-      result.errors[0]?.message ?? "The submitted MCP server configuration is invalid.",
-    );
-  }
-  return config.transport === "stdio" && config.cwd === undefined
-    ? { ...config, cwd: workspaceRoot }
-    : config;
-}
-
 /** Create or update a server entry; returns the file that was written. */
 export function upsertMcpServerEntry(
   cwd: string,

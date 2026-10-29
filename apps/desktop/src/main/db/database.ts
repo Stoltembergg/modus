@@ -415,53 +415,6 @@ export function migrateDatabase(db: DatabaseSync): void {
     end;
   `);
 
-  // Keep a local, bounded FTS5 index for planning-time text recall. External content means the
-  // records remain canonical; the marker makes the initial rebuild a one-time migration step.
-  db.exec(`
-    create virtual table if not exists project_memory_search using fts5(
-      title, claim,
-      content='project_memory_records',
-      content_rowid='rowid',
-      tokenize='unicode61 remove_diacritics 2'
-    );
-    create table if not exists project_memory_search_state (
-      id integer primary key check (id = 1),
-      version integer not null
-    );
-    create trigger if not exists trg_project_memory_search_insert
-    after insert on project_memory_records begin
-      insert into project_memory_search(rowid, title, claim)
-      values (new.rowid, new.title, new.claim);
-    end;
-    create trigger if not exists trg_project_memory_search_update
-    after update of title, claim on project_memory_records begin
-      insert into project_memory_search(project_memory_search, rowid, title, claim)
-      values ('delete', old.rowid, old.title, old.claim);
-      insert into project_memory_search(rowid, title, claim)
-      values (new.rowid, new.title, new.claim);
-    end;
-    create trigger if not exists trg_project_memory_search_delete
-    after delete on project_memory_records begin
-      insert into project_memory_search(project_memory_search, rowid, title, claim)
-      values ('delete', old.rowid, old.title, old.claim);
-    end;
-  `);
-  const projectMemorySearchState = db
-    .prepare("select version from project_memory_search_state where id = 1")
-    .get() as { version: number } | undefined;
-  if (projectMemorySearchState?.version !== 1) {
-    db.exec("begin");
-    try {
-      db.exec(`insert into project_memory_search(project_memory_search) values ('rebuild');
-        insert into project_memory_search_state(id, version) values (1, 1)
-        on conflict(id) do update set version = excluded.version;`);
-      db.exec("commit");
-    } catch (error) {
-      db.exec("rollback");
-      throw error;
-    }
-  }
-
   const evidenceSql =
     (
       db
