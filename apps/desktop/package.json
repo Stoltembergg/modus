@@ -1,6 +1,6 @@
 {
   "name": "@modus/desktop",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "description": "Local-first Modus desktop agent window.",
   "author": "Modus contributors",
   "homepage": "https://github.com/Stoltembergg/modus",

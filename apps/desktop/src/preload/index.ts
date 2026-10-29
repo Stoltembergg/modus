@@ -388,6 +388,7 @@ const api: ModusApi = {
   mcp: {
     list: () => ipcRenderer.invoke("mcp:list"),
     sync: (cwd) => ipcRenderer.invoke("mcp:sync", cwd),
+    approve: (input) => ipcRenderer.invoke("mcp:approve", input),
     openConfig: (cwd) => ipcRenderer.invoke("mcp:open-config", cwd),
     upsert: (input) => ipcRenderer.invoke("mcp:upsert", input),
     delete: (input) => ipcRenderer.invoke("mcp:delete", input),

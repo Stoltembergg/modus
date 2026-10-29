@@ -51,6 +51,7 @@ import { agentChatPersonaPrompt, getAgent, requireSessionWritable } from "../age
 import { releaseAgentBrowserControl } from "../browser/browser-service";
 import { planTurnContext } from "../context/context-planner";
 import { formatResolvedContext, resolveContext } from "../context/context-service";
+import { createProjectModelContextSource } from "../context/project-model-context-source";
 import {
   cleanupSubagentWorktree,
   createSubagentWorktree,
@@ -220,6 +221,7 @@ import {
   resolvePackageCheckScript,
   summarizeRunQA,
 } from "./harness/qa-evidence";
+import { requestedCheckKinds } from "./harness/required-checks";
 import {
   defaultPromptBuildResponsePolicyHook,
   defaultTurnSettleResponsePolicyHook,
@@ -534,69 +536,6 @@ function projectMemoryHints(
     }
   }
   return { paths: [...paths], symbols: [...symbols] };
-}
-
-function negatedCheckAction(text: string, actionStart: number): boolean {
-  const before = text.slice(0, actionStart);
-  const boundaries = /[.!?;,\n]|\b(?:but|however|instead|mas|porém|porem)\b/gi;
-  let clauseStart = 0;
-  for (const match of before.matchAll(boundaries)) {
-    clauseStart = (match.index ?? 0) + match[0].length;
-  }
-  return /\b(?:do\s+not|don't|dont|never|avoid|skip|not|não|nao|nunca|evite)\s*$/i.test(
-    before.slice(clauseStart),
-  );
-}
-
-function negatedCheckTarget(text: string, targetStart: number): boolean {
-  const before = text.slice(0, targetStart);
-  const boundaries = /[.!?;,\n]|\b(?:but|however|instead|mas|porém|porem)\b/gi;
-  let clauseStart = 0;
-  for (const match of before.matchAll(boundaries)) {
-    clauseStart = (match.index ?? 0) + match[0].length;
-  }
-  return /\b(?:do\s+not|don't|dont|never|avoid|skip|não|nao|nunca|evite)\s+(?:(?:run|execute|rerun|verify|check|executar|rode|rodar|verifique|verificar|reexecute)\s+)?$/i.test(
-    before.slice(clauseStart),
-  );
-}
-
-function requestsCheck(text: string, target: RegExp, prohibited = false): boolean {
-  const actions =
-    /\b(?:run|execute|rerun|verify|check|executar|rode|rodar|verifique|verificar|reexecute|skip|avoid|evite)\b/gi;
-  const clauseBoundaries =
-    /[.!?;,\n]|\b(?:but|however|instead|mas|porém|porem)\b|\b(?:run|execute|rerun|verify|check|executar|rode|rodar|verifique|verificar|reexecute|skip|avoid|evite)\b/gi;
-  const targetMatches = new RegExp(target.source, `${target.flags.replace(/[gy]/g, "")}g`);
-  for (const action of text.matchAll(actions)) {
-    const start = action.index ?? 0;
-    const afterAction = start + action[0].length;
-    clauseBoundaries.lastIndex = afterAction;
-    const boundary = clauseBoundaries.exec(text);
-    const targetWindow = text.slice(start, boundary?.index ?? text.length);
-    if (
-      [...targetWindow.matchAll(targetMatches)].some((match) => {
-        const negative =
-          negatedCheckAction(text, start) ||
-          negatedCheckTarget(text, start + (match.index ?? 0)) ||
-          /^(?:skip|avoid|evite)$/i.test(action[0]);
-        return negative === prohibited;
-      })
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-const CHECK_TARGETS: Array<[HarnessTaskCheckKind, RegExp]> = [
-  ["tests", /\b(?:tests?|testes?|vitest|jest)\b/i],
-  ["typecheck", /\btype[ -]?check\b/i],
-  ["lint", /\b(?:lint|eslint|biome)\b/i],
-  ["build", /\bbuild\b/i],
-];
-function requestedCheckKinds(message: string, prohibited = false): HarnessTaskCheckKind[] {
-  return CHECK_TARGETS.filter(([, target]) => requestsCheck(message, target, prohibited)).map(
-    ([kind]) => kind,
-  );
 }
 
 function requiredChecksForRun(input: PromptAgentInput, plan?: PlanRef): HarnessTaskCheckKind[] {
@@ -1856,16 +1795,22 @@ export class PiSdkRuntime implements AgentRuntime {
         !tracker.adaptiveRetrievalDigest
       ) {
         try {
-          const memoryDigest = await planTurnContext({
-            workspaceId: input.workspaceId,
-            inbox: false,
-            query: tracker.taskQuery ?? input.classification.taskType,
-            contextPaths: [],
-            contextSymbols: [],
-            git: { changedPaths: input.changedPaths ?? [] },
-            sessionId: input.sessionId,
-            runId: input.runId,
-          });
+          const memoryDigest = await planTurnContext(
+            {
+              workspaceId: input.workspaceId,
+              inbox: false,
+              query: tracker.taskQuery ?? input.classification.taskType,
+              contextPaths: [],
+              contextSymbols: [],
+              git: {
+                ...(input.revision ? { head: input.revision } : {}),
+                changedPaths: input.changedPaths ?? [],
+              },
+              sessionId: input.sessionId,
+              runId: input.runId,
+            },
+            [createProjectModelContextSource()],
+          );
           if (memoryDigest.text) tracker.adaptiveRetrievalDigest = memoryDigest.text.slice(0, 4000);
         } catch {
           // Local retrieval is best-effort; decision still stands.
@@ -2602,6 +2547,26 @@ export class PiSdkRuntime implements AgentRuntime {
     };
   }
 
+  private emitDetachedEvent(event: AgentEvent): void {
+    const eventCursor = recordAgentEvent(event);
+    const observable = { ...event, eventCursor };
+    for (const listener of this.eventListeners) {
+      try {
+        listener(observable);
+      } catch (error) {
+        console.warn("[modus] agent event listener failed:", error);
+      }
+    }
+    if (
+      event.type === "run.completed" ||
+      event.type === "run.failed" ||
+      event.type === "run.blocked" ||
+      event.type === "run.cancelled"
+    ) {
+      releasePlanBuildRunReservation({ sessionId: event.sessionId, runId: event.runId });
+    }
+  }
+
   private parentSessionIdFor(sessionId: string): string | undefined {
     if (this.parentSessionByChild.has(sessionId)) {
       return this.parentSessionByChild.get(sessionId) ?? undefined;
@@ -3017,6 +2982,9 @@ export class PiSdkRuntime implements AgentRuntime {
     sessionId: string,
     requestedModelId?: string | null,
   ): Promise<AgentSessionInfo> {
+    if (getAgentSession(sessionId)) {
+      this.reconcileOrphanedRuns(sessionId, this.emitToWindow(window));
+    }
     const runtimeSession = await this.getOrResume(window, sessionId, requestedModelId);
     if (!runtimeSession) {
       throw new Error(`Agent session not found: ${sessionId}`);
@@ -4082,27 +4050,63 @@ export class PiSdkRuntime implements AgentRuntime {
    * session fails closed with "run boundaries overlap". A run owned by a live
    * output tracker is never touched.
    */
-  private closeOrphanedRuns(sessionId: string, emit: EmitAgentEvent, keepRunId?: string): void {
+  private closeOrphanedRuns(sessionId: string, emit: EmitAgentEvent, keepRunId?: string): boolean {
     const liveRunId = this.runOutputTrackers.get(sessionId)?.runId;
     let orphanRunIds: string[];
     try {
       orphanRunIds = listUnterminatedAgentRunIds(sessionId);
     } catch (error) {
       console.warn("[modus] open run lookup failed:", error);
-      return;
+      return false;
     }
+    let closedAny = false;
     for (const runId of orphanRunIds) {
       if (runId === liveRunId || runId === keepRunId) continue;
       try {
-        if (getAgentRun(runId)?.status === "running") {
+        const run = getAgentRun(runId);
+        if (run && run.status !== "cancelled") {
           updateAgentRunStatus(runId, "cancelled", "The run ended without a recorded outcome.");
           finalizeProjectMemoryRunBestEffort({ sessionId, runId, outcome: "cancelled" });
         }
         emit({ type: "run.cancelled", sessionId, runId });
+        closedAny = true;
       } catch (error) {
         console.warn("[modus] open run could not be closed:", error);
       }
     }
+    return closedAny;
+  }
+
+  /** Reconcile durable runs only when no current-process owner can still settle them. */
+  private reconcileOrphanedRuns(sessionId: string, emit: EmitAgentEvent): void {
+    if (isPlanBuildSessionReserved(sessionId) || this.preflightReservations.has(sessionId)) return;
+    const runtimeSession = this.sessions.get(sessionId);
+    if (runtimeSession?.session.isStreaming || runtimeSession?.session.isCompacting) return;
+
+    this.closeOrphanedRuns(sessionId, emit);
+    if (
+      this.runOutputTrackers.has(sessionId) ||
+      runtimeSession?.session.isStreaming ||
+      runtimeSession?.session.isCompacting
+    ) {
+      return;
+    }
+    const persistedSession = getAgentSession(sessionId);
+    if (persistedSession?.status !== "running") return;
+    try {
+      // A crash can occur after run.cancelled is durable but before the
+      // session-status write. Verify no open boundary remains before retrying
+      // that second half of the reconciliation.
+      if (listUnterminatedAgentRunIds(sessionId).length > 0) return;
+    } catch (error) {
+      console.warn("[modus] open run verification failed:", error);
+      return;
+    }
+    updateAgentSessionStatus(sessionId, "idle");
+    if (runtimeSession) {
+      runtimeSession.info = { ...runtimeSession.info, status: "idle" };
+    }
+    emit({ type: "session.status", sessionId, status: { type: "idle" } });
   }
 
   private async executePromptInTurn(
@@ -5637,16 +5641,19 @@ export class PiSdkRuntime implements AgentRuntime {
       }
       try {
         const workspaceId = runtimeSession.info.workspaceId;
-        const memoryDigest = await planTurnContext({
-          ...(workspaceId ? { workspaceId } : {}),
-          inbox: !workspaceId || workspaceId === CHATS_WORKSPACE_ID,
-          query: input.message,
-          contextPaths: paths,
-          contextSymbols: symbols,
-          git: gitMetadata,
-          sessionId: runtimeSession.info.id,
-          ...(options.runId ? { runId: options.runId } : {}),
-        });
+        const memoryDigest = await planTurnContext(
+          {
+            ...(workspaceId ? { workspaceId } : {}),
+            inbox: !workspaceId || workspaceId === CHATS_WORKSPACE_ID,
+            query: input.message,
+            contextPaths: paths,
+            contextSymbols: symbols,
+            git: gitMetadata,
+            sessionId: runtimeSession.info.id,
+            ...(options.runId ? { runId: options.runId } : {}),
+          },
+          [createProjectModelContextSource()],
+        );
         if (memoryDigest.text.trim()) {
           const safeDigest = memoryDigest.text.replace(
             /<\/?project_memory_context/gi,
@@ -6255,10 +6262,11 @@ export class PiSdkRuntime implements AgentRuntime {
     return false;
   }
 
-  async abort(sessionId: string): Promise<AbortAgentResult> {
+  async abort(sessionId: string, window?: BrowserWindowType): Promise<AbortAgentResult> {
     this.cancelPendingIntentGate(sessionId);
     clearTodoSessionCache(sessionId);
     const activeRunId = getActiveAgentRun(sessionId)?.id;
+    const runtimeWasLoaded = this.sessions.has(sessionId);
     let restored: AbortAgentResult["restored"] = [];
     try {
       await this.closeSubagentTree(sessionId, "Parent session aborted");
@@ -6266,21 +6274,30 @@ export class PiSdkRuntime implements AgentRuntime {
       if (currentRunId === undefined || currentRunId === activeRunId) {
         this.clearBackgroundTasksForParent(sessionId);
         this.backgroundChildTasks.delete(sessionId);
-        restored = await this.abortSessionOnly(sessionId);
+        restored = await this.abortSessionOnly(sessionId, window);
       }
     } finally {
-      if (activeRunId) await this.cleanupRunProcesses(sessionId, activeRunId);
+      if (activeRunId && (runtimeWasLoaded || getAgentRun(activeRunId)?.status === "cancelled")) {
+        await this.cleanupRunProcesses(sessionId, activeRunId);
+      }
     }
     return { restored };
   }
 
-  private async abortSessionOnly(sessionId: string): Promise<AbortAgentResult["restored"]> {
+  private async abortSessionOnly(
+    sessionId: string,
+    window?: BrowserWindowType,
+  ): Promise<AbortAgentResult["restored"]> {
     this.cancelPendingIntentGate(sessionId);
     clearTodoSessionCache(sessionId);
     const activeRun = getActiveAgentRun(sessionId);
     if (activeRun) clearMcpCitationRun(sessionId, activeRun.id);
     const runtimeSession = this.sessions.get(sessionId);
     if (!runtimeSession) {
+      this.reconcileOrphanedRuns(
+        sessionId,
+        window ? this.emitToWindow(window) : (event) => this.emitDetachedEvent(event),
+      );
       return [];
     }
     // pi keeps its steer/follow-up queues through abort() and would send them

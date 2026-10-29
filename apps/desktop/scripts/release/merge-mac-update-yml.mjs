@@ -88,6 +88,8 @@ export function mergeMacUpdateInfo(inputs) {
         byUrl.set(file.url, { ...file });
       } else if (existing.sha512 !== file.sha512 || existing.size !== file.size) {
         throw new Error(`Conflicting entries for ${file.url} (different sha512/size).`);
+      } else {
+        throw new Error(`Duplicate entry for ${file.url} across mac metadata inputs.`);
       }
     }
   }
