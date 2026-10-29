@@ -163,6 +163,21 @@ function resolveUpdate<T>(update: T | ((current: T) => T), current: T): T {
   return typeof update === "function" ? (update as (value: T) => T)(current) : update;
 }
 
+function isDraftSnapshot(current: ComposerDraft, submitted: ComposerDraft): boolean {
+  return (
+    current.value === submitted.value &&
+    current.images === submitted.images &&
+    current.selectedSkills === submitted.selectedSkills &&
+    current.parts === submitted.parts
+  );
+}
+
+function isContextSnapshot(current: ContextItem[], submitted: ContextItem[]): boolean {
+  return (
+    current.length === submitted.length && current.every((item, index) => item === submitted[index])
+  );
+}
+
 export function Composer({
   model,
   models,
@@ -190,6 +205,10 @@ export function Composer({
   const [uncontrolledDraft, setUncontrolledDraft] =
     useState<ComposerDraft>(createEmptyComposerDraft);
   const activeDraft = draft ?? uncontrolledDraft;
+  const activeDraftRef = useRef(activeDraft);
+  activeDraftRef.current = activeDraft;
+  const contextItemsRef = useRef(contextItems);
+  contextItemsRef.current = contextItems;
   const [dragging, setDragging] = useState(false);
   const [isComposing, setIsComposing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -205,12 +224,6 @@ export function Composer({
       }
     },
     [onDraftChange],
-  );
-  const setValue = useCallback(
-    (update: string | ((current: string) => string)): void => {
-      setDraft((current) => ({ ...current, value: resolveUpdate(update, current.value) }));
-    },
-    [setDraft],
   );
   const setSelectedSkills = useCallback(
     (update: SkillSelection[] | ((current: SkillSelection[]) => SkillSelection[])): void => {
@@ -234,15 +247,15 @@ export function Composer({
     }
   };
   const editorRef = useRef<MentionEditorHandle>(null);
+  const submissionInFlightRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [toolbarRef, toolbarTier] = useWidthTier<HTMLDivElement>(COMPOSER_TOOLBAR_BREAKPOINTS);
   // sm: secondary actions (Attach) collapse into one overflow menu.
   const toolbarOverflow = toolbarTier === "sm" && !isInlineEdit;
-  const { addFiles, clearImages, images, removeImage, toAttachments, updateImage } =
-    useComposerImages({
-      images: activeDraft.images,
-      onImagesChange: setImages,
-    });
+  const { addFiles, images, removeImage, toAttachments, updateImage } = useComposerImages({
+    images: activeDraft.images,
+    onImagesChange: setImages,
+  });
   const value = activeDraft.value;
   const selectedSkills = activeDraft.selectedSkills;
   const [textBeforeCaret, setTextBeforeCaret] = useState(value);
@@ -288,10 +301,13 @@ export function Composer({
     : [];
   const slash = useComposerSlash({ actions: slashActions, cwd, value: textBeforeCaret });
 
-  function send(delivery: PromptDelivery = isRunning ? "follow-up" : "normal"): void {
-    if (!hasContent || !canSubmit || submitting || !model) {
+  async function send(
+    delivery: PromptDelivery = isRunning ? "follow-up" : "normal",
+  ): Promise<void> {
+    if (!hasContent || !canSubmit || submissionInFlightRef.current || !model) {
       return;
     }
+    submissionInFlightRef.current = true;
     // Providers reject empty text blocks, so image-only sends get a stub line.
     const message = hasText
       ? messageFromParts(activeDraft.parts, value.trim())
@@ -310,42 +326,42 @@ export function Composer({
       mode,
     } as const;
 
-    if (isInlineEdit) {
-      setSubmitError(undefined);
-      setSubmitting(true);
-      void Promise.resolve(
-        onSubmit(
-          payload.message,
-          payload.contextItems,
-          payload.delivery,
-          payload.attachments,
-          payload.skills,
-          payload.mode,
-        ),
-      )
-        .then(() => {
-          // Success unmounts this surface via timeline reload — skip clear flash.
-        })
-        .catch((cause: unknown) => {
-          setSubmitError(cause instanceof Error ? cause.message : String(cause));
-          setSubmitting(false);
-        });
-      return;
-    }
+    const submittedDraft = activeDraft;
+    const submittedContext = contextItems;
+    setSubmitError(undefined);
+    setSubmitting(true);
+    try {
+      await onSubmit(
+        payload.message,
+        payload.contextItems,
+        payload.delivery,
+        payload.attachments,
+        payload.skills,
+        payload.mode,
+      );
 
-    onSubmit(
-      payload.message,
-      payload.contextItems,
-      payload.delivery,
-      payload.attachments,
-      payload.skills,
-      payload.mode,
-    );
-    setValue("");
-    clearImages();
-    setSelectedSkills([]);
-    onContextChange([]);
-    editorRef.current?.clear();
+      // Inline edit owns its history reload and is removed by the host on success.
+      // A new prompt clears only the exact snapshot accepted by its destination.
+      if (!isInlineEdit) {
+        const submittedDraftIsCurrent = isDraftSnapshot(activeDraftRef.current, submittedDraft);
+        setDraft((current) => {
+          return submittedDraftIsCurrent && isDraftSnapshot(current, submittedDraft)
+            ? createEmptyComposerDraft()
+            : current;
+        });
+        if (
+          submittedDraftIsCurrent &&
+          isContextSnapshot(contextItemsRef.current, submittedContext)
+        ) {
+          onContextChange([]);
+        }
+      }
+    } catch (cause) {
+      setSubmitError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      submissionInFlightRef.current = false;
+      setSubmitting(false);
+    }
   }
 
   function selectSlashItem(item: SlashItem): void {

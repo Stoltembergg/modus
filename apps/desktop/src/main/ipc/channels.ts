@@ -134,6 +134,7 @@ export const IPC_CHANNELS = {
   mcpDelete: "mcp:delete",
   mcpSetEnabled: "mcp:set-enabled",
   mcpEntry: "mcp:entry",
+  mcpApprove: "mcp:approve",
   reaGetStatus: "rea:get-status",
   reaSetEnabled: "rea:set-enabled",
   reaRetry: "rea:retry",

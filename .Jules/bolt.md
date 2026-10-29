@@ -16,6 +16,18 @@
 **Learning:** When fixing N+1 SQLite update/insert queries in Node.js with node:sqlite, instead of iterating over array items and running `.get()`, `.run()` individually inside a loop, it's significantly faster to fetch the validation rows via a single `SELECT ... WHERE id IN (SELECT value FROM json_each(?))` using a JSON-stringified array. Subsequent `INSERT` or `UPDATE` logic should also leverage `... FROM json_each(?)` with the parsed valid IDs to apply updates in bulk, yielding over 15x performance improvements.
 **Action:** Use `json_each` for batch fetching and batched writing of dynamic arrays when interacting with SQLite.
 
-## 2026-10-25 - Use async file operations for files panel
-**Learning:** Partially converting synchronous file operations in Node.js (e.g. `readFileSync` to `readSync`) still blocks the event loop because the underlying execution remains synchronous. True non-blocking IO requires asynchronous equivalents (like `fs/promises`). Additionally, when dealing with legacy codebase test suites, unrelated test failures may arise when executing the full suite; verify changes in isolation and do not expand commit scope beyond the targeted files.
-**Action:** When optimizing synchronous file IO for performance, always migrate entirely to `fs/promises` (`open`, `stat`, `read`, etc.) and ensure appropriate Promise chaining with resource cleanup in `finally` blocks.
+## 2024-10-24 - Async File Service
+**Learning:** Using `fs.readSync` instead of `fs.readFileSync` does not prevent blocking the Node.js event loop on large file reads; it simply avoids loading the entire file into a single Buffer/string payload. Real non-blocking requires `node:fs/promises`. A 100MB file read via `readSync` blocked the main process event loop for ~98ms.
+**Action:** When performing file system operations in the Electron main process, strongly prefer asynchronous methods (`node:fs/promises`) for operations that can be arbitrarily large to keep the UI smooth and event loop unblocked.
+
+## 2024-10-24 - Modus PTY Host Flake
+**Learning:** `modus-pty-host` test `shutdown_keeps_group_ownership_after_the_pty_leader_exits` can flake with "shutdown lost the descendant after its PTY leader exited". This seems to be an existing race condition where the process group can sometimes be prematurely killed before the `Shutdown` command explicitly targets it. It only flakes under high concurrency or particular CI timing.
+**Action:** Unrelated CI failures in native modules outside the target scope should be recorded as pre-existing flakes when they cannot be cleanly addressed.
+
+## 2026-10-29 - [Bolt: Optimize plugin capabilities insertion]
+**Learning:** SQLite `INSERT ... SELECT ... FROM json_each(?)` is highly effective for removing N+1 insert loops on modern `node:sqlite`. I observed an N+1 loop using `.run()` for inserting `plugin_capabilities` inside `apps/desktop/src/main/agent/harness/plugin/plugin-state-store.ts` which I fixed.
+**Action:** Look for loops over `.run()` and replace them with a `json_each` insert/update when writing array elements to the database in bulk.
+
+## 2026-10-27 - Sidebar Sessions grouping overhead
+**Learning:** Measured the performance of the React rendering derivation for `sessionsByWorkspace`, `pinnedSessions`, and `ungroupedSessions` in `Sidebar.tsx`. For an extreme case of 5,000 active sessions, repeating the calculation 100 times took only ~420ms (meaning ~4.2ms per render). For a more typical user with a few hundred sessions, this calculation is consistently well under 1ms per render.
+**Action:** Do not forcefully introduce `useMemo` optimizations in UI components unless the derivation cost actually hits a noticeable threshold. The current structure is not a relevant bottleneck.

@@ -30,6 +30,7 @@ const {
   getRunToolEvidence,
   getHarnessQAEventByRowId,
   listAgentEventPage,
+  listAgentSessionActivitySnapshots,
   listAgentEventRawPage,
   listAgentRunMessagePage,
   listAgentEvents,
@@ -3090,6 +3091,64 @@ fs.renameSync("original-manifest-link", "package.json");
     recordAgentEvent({ type: "run.completed", sessionId, runId: "next-run" });
     expect(runAssistantOutput(sessionId, "next-run")).toBe("oi");
     expect(listUnterminatedAgentRunIds(sessionId)).toEqual([]);
+  });
+
+  it("snapshots every pending permission and question for sidebar activity", () => {
+    const sessionId = `activity-snapshot-${crypto.randomUUID()}`;
+    const otherSessionId = `activity-snapshot-other-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    insertSession(otherSessionId);
+    recordAgentEvent({ type: "run.started", sessionId, runId: "activity-run", delivery: "normal" });
+    recordAgentEvent({
+      type: "question.requested",
+      sessionId,
+      request: { id: "stale-question", questions: [] },
+    });
+    recordAgentEvent({
+      type: "question.resolved",
+      sessionId,
+      requestId: "stale-question",
+      answers: [],
+      skipped: false,
+    });
+    recordAgentEvent({
+      type: "question.requested",
+      sessionId,
+      request: { id: "question-one", questions: [] },
+    });
+    recordAgentEvent({
+      type: "question.requested",
+      sessionId,
+      request: { id: "question-two", questions: [] },
+    });
+    recordAgentEvent({
+      type: "permission.requested",
+      sessionId,
+      request: { id: "permission-one", action: "shell.execute", target: "ls", reason: "test" },
+    });
+    recordAgentEvent({
+      type: "permission.requested",
+      sessionId,
+      request: { id: "permission-two", action: "shell.execute", target: "pwd", reason: "test" },
+    });
+    recordAgentEvent({
+      type: "permission.resolved",
+      sessionId,
+      requestId: "permission-one",
+      decision: "allow-once",
+    });
+
+    const snapshots = listAgentSessionActivitySnapshots([sessionId, otherSessionId]);
+
+    expect(snapshots.get(sessionId)).toMatchObject({
+      pendingInputRequestIds: [
+        "question:question-one",
+        "question:question-two",
+        "permission:permission-two",
+      ],
+    });
+    expect(snapshots.get(sessionId)?.eventCursor).toBeGreaterThan(0);
+    expect(snapshots.get(otherSessionId)).toEqual({ eventCursor: 0, pendingInputRequestIds: [] });
   });
 
   it("loads the newest page first and walks older pages with one fixed snapshot", () => {

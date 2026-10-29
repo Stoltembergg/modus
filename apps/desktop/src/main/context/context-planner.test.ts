@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
+import * as projectModel from "../agent/harness/project-model-store";
 import { getDatabase } from "../db/database";
 import * as memory from "../memory/project-memory-service";
 import {
@@ -14,6 +15,7 @@ import {
   diagnoseTurnContext,
   planTurnContext,
 } from "./context-planner";
+import { createProjectModelContextSource } from "./project-model-context-source";
 
 const testState = vi.hoisted(() => ({ userDataPath: "" }));
 let root: string;
@@ -214,6 +216,61 @@ describe("Context Planner fixed corpus", () => {
     expect(first.ranked.find((candidate) => candidate.id === relevant.id)?.reasons).toEqual(
       expect.arrayContaining([expect.stringMatching(/task-term-overlap/i)]),
     );
+  });
+
+  it("passes the current query to local memory recall before recency completes the candidate window", async () => {
+    const relevant = propose(
+      "Rare archived token invariant",
+      "The archived token invariant preserves resumable local context.",
+    );
+    for (let index = 0; index < CONTEXT_PLANNER_LOCAL_RESULT_LIMIT + 1; index += 1) {
+      propose(
+        `Recent unrelated record ${index}`,
+        `This recent record contains no archived-token context match ${index}.`,
+      );
+    }
+    finalize();
+    db.prepare(
+      "update project_memory_records set verification = 'unverified', last_verified_at = null, created_at = ? where id = ?",
+    ).run("2020-01-01T00:00:00.000Z", relevant.id);
+    db.prepare(
+      "update project_memory_records set created_at = '2026-09-26T00:00:00.000Z' where id != ?",
+    ).run(relevant.id);
+
+    const digest = await planTurnContext(
+      plannerInput({ query: "archived token resumable context" }),
+    );
+
+    expect(digest.memoryIds).toContain(relevant.id);
+  });
+
+  it("adds only Project Model discoveries from the current commit to the context digest", async () => {
+    const head = "c".repeat(40);
+    const staleHead = "d".repeat(40);
+    projectModel.upsertProjectModelDiscoveries({
+      workspaceId: "ws-a",
+      revision: head,
+      hits: [{ path: "src/cache-index.ts" }],
+    });
+    projectModel.upsertProjectModelDiscoveries({
+      workspaceId: "ws-a",
+      revision: staleHead,
+      hits: [{ path: "src/stale-cache.ts" }],
+    });
+    projectModel.upsertProjectModelDiscoveries({
+      workspaceId: "ws-b",
+      revision: head,
+      hits: [{ path: "src/foreign-cache.ts" }],
+    });
+
+    const digest = await planTurnContext(
+      plannerInput({ query: "cache index", git: { head, changedPaths: [] } }),
+      [createProjectModelContextSource()],
+    );
+
+    expect(digest.text).toContain("src/cache-index.ts");
+    expect(digest.text).not.toContain("src/stale-cache.ts");
+    expect(digest.text).not.toContain("src/foreign-cache.ts");
   });
 
   it("prefers recent verified evidence over equally relevant old unverified evidence", async () => {
