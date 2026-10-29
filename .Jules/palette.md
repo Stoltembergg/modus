@@ -18,3 +18,7 @@
 ## 2026-10-28 - [Palette: Add missing focus-visible styles to Plan components]
 **Learning:** Some custom UI elements in `PlanTool.tsx`, `ReviewPlanCard.tsx`, and `PlanTimelineCard.tsx` (like icon-only buttons for expand/collapse and close) lacked `focus-visible` styles which meant keyboard tabbing did not show an active ring. Also Playwright electron launch failed during verification due to headless display issues on testing environment.
 **Action:** Always ensure `button`s or elements handling click interactions have `focus-visible:ring-2 focus-visible:ring-focus-ring/35` either via classes or `@apply` in global CSS. Document verification environment limitations if real screenshots cannot be captured.
+
+## 2026-10-25 - [Palette: Add focus-visible styles to QuestionCard buttons]
+**Learning:** Interactive QuestionCard controls need an explicit visible focus treatment, especially when their default outline is suppressed.
+**Action:** Ensure keyboard-operated custom buttons retain a visible focus ring and adequate surrounding space.
