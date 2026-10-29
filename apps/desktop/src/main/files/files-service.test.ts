@@ -17,15 +17,15 @@ beforeEach(() => {
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 describe("listDirectory", () => {
-  it("lists immediate children, directories first then alphabetical", async () => {
-    const entries = await listDirectory(root);
+  it("lists immediate children, directories first then alphabetical", () => {
+    const entries = listDirectory(root);
     expect(entries.map((e) => e.name)).toEqual(["src", "zeta", "bin.dat", "README.md"]);
     expect(entries[0]?.kind).toBe("directory");
     expect(entries.find((e) => e.name === "app.ts")).toBeUndefined(); // not recursive
   });
 
-  it("lists a subdirectory by path", async () => {
-    const entries = await listDirectory(root, join(root, "src"));
+  it("lists a subdirectory by path", () => {
+    const entries = listDirectory(root, join(root, "src"));
     expect(entries.map((e) => e.name)).toEqual(["app.ts"]);
     expect(entries[0]?.relativePath).toBe("src/app.ts");
   });
@@ -76,7 +76,7 @@ describe("workspace containment (authoritative safety check)", () => {
     await expect(readWorkspaceFile(root, join(root, "..", "secret.txt"))).rejects.toThrow(
       /outside/,
     );
-    await expect(listDirectory(root, join(root, "..", ".."))).rejects.toThrow(/outside/);
+    expect(() => listDirectory(root, join(root, "..", ".."))).toThrow(/outside/);
     await expect(writeWorkspaceFile(root, join(root, "..", "secret.txt"), "x")).rejects.toThrow(
       /outside/,
     );

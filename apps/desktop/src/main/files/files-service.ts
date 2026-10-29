@@ -7,8 +7,8 @@
  * containment, not a name blacklist).
  */
 
-import { existsSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { open, readdir, stat } from "node:fs/promises";
+import { existsSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { open, stat } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import type { FileEntry, FileReadResult, FileWriteResult } from "../../shared/contracts";
 import { resolveWithin } from "./path-within";
@@ -21,43 +21,30 @@ const MAX_READ_BYTES = 2 * 1024 * 1024;
  * Directories first, then files, each alphabetical (case-insensitive) — the
  * conventional explorer ordering. Unreadable entries are skipped, not fatal.
  */
-export async function listDirectory(root: string, dir?: string): Promise<FileEntry[]> {
+export function listDirectory(root: string, dir?: string): FileEntry[] {
   const abs = dir ? resolveWithin(root, dir) : resolve(root);
   const entries: FileEntry[] = [];
-
-  // Optimization: use fs/promises instead of readdirSync and chunk synchronous loop iterations to avoid blocking the event loop on large directories.
-  // Measured gain: 50k files directory sync read blocked event loop for ~725ms, now it drops max event loop block to ~360ms and takes ~680ms total latency.
-  const dirents = await readdir(abs, { withFileTypes: true });
-
-  const BATCH_SIZE = 1000;
-  for (let i = 0; i < dirents.length; i += BATCH_SIZE) {
-    const batch = dirents.slice(i, i + BATCH_SIZE);
-    await Promise.all(
-      batch.map(async (dirent) => {
-        const childAbs = join(abs, dirent.name);
-        const isDir = dirent.isDirectory();
-        // Resolve symlinks defensively; a broken link is simply omitted.
-        if (!isDir && !dirent.isFile() && !dirent.isSymbolicLink()) {
-          return;
-        }
-        let kind: FileEntry["kind"] = isDir ? "directory" : "file";
-        if (dirent.isSymbolicLink()) {
-          try {
-            const stats = await stat(childAbs);
-            kind = stats.isDirectory() ? "directory" : "file";
-          } catch {
-            return;
-          }
-        }
-        entries.push({
-          name: dirent.name,
-          path: childAbs,
-          relativePath: relative(resolve(root), childAbs).split(sep).join("/"),
-          kind,
-        });
-      }),
-    );
-    await new Promise((r) => setImmediate(r));
+  for (const dirent of readdirSync(abs, { withFileTypes: true })) {
+    const childAbs = join(abs, dirent.name);
+    const isDir = dirent.isDirectory();
+    // Resolve symlinks defensively; a broken link is simply omitted.
+    if (!isDir && !dirent.isFile() && !dirent.isSymbolicLink()) {
+      continue;
+    }
+    let kind: FileEntry["kind"] = isDir ? "directory" : "file";
+    if (dirent.isSymbolicLink()) {
+      try {
+        kind = statSync(childAbs).isDirectory() ? "directory" : "file";
+      } catch {
+        continue;
+      }
+    }
+    entries.push({
+      name: dirent.name,
+      path: childAbs,
+      relativePath: relative(resolve(root), childAbs).split(sep).join("/"),
+      kind,
+    });
   }
   entries.sort((a, b) => {
     if (a.kind !== b.kind) {
