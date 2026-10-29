@@ -15,14 +15,7 @@
 ## 2026-10-24 - Add focus visible styles to WorkStatusLine toggle
 **Learning:** Some custom UI elements with `.work-status-line__toggle` (e.g. progress disclosures during reasoning) lacked `focus-visible` styles which meant keyboard tabbing did not show an active ring.
 **Action:** Always ensure `button`s or elements handling click interactions have `focus-visible:ring-2 focus-visible:ring-focus-ring/35` either via classes or `@apply` in global CSS. Pre-existing test failures (e.g. `qa-evidence.test.ts`) that are un-related to my style changes should be documented instead of fixed per guidelines.
-## 2026-10-28 - [Palette: Add missing focus-visible styles to Plan components]
-**Learning:** Some custom UI elements in `PlanTool.tsx`, `ReviewPlanCard.tsx`, and `PlanTimelineCard.tsx` (like icon-only buttons for expand/collapse and close) lacked `focus-visible` styles which meant keyboard tabbing did not show an active ring. Also Playwright electron launch failed during verification due to headless display issues on testing environment.
-**Action:** Always ensure `button`s or elements handling click interactions have `focus-visible:ring-2 focus-visible:ring-focus-ring/35` either via classes or `@apply` in global CSS. Document verification environment limitations if real screenshots cannot be captured.
-
-## 2026-10-25 - [Palette: Add focus-visible styles to QuestionCard buttons]
-**Learning:** Interactive QuestionCard controls need an explicit visible focus treatment, especially when their default outline is suppressed.
-**Action:** Ensure keyboard-operated custom buttons retain a visible focus ring and adequate surrounding space.
 
 ## 2026-10-25 - [Palette: Add focus-visible style to "Open file" button in FilesPanel]
-**Learning:** Some custom UI buttons (like the FilesPanel's Open button) use `outline-none` but lack an explicit `focus-visible` fallback, making keyboard focus invisible. A solid focus ring can also provide better contrast than a translucent ring.
-**Action:** Add an explicit `focus-visible` ring to custom buttons that suppress their outline, and check the component's mounted context before changing shared UI.
+**Learning:** Some custom UI buttons (like the `FilesPanel`'s Open button) use `outline-none` but forget to define an explicit `focus-visible` fallback, rendering keyboard focus invisible. Additionally, utilizing standard transparent rings (`ring-focus-ring/35`) can fail contrast requirements against certain backgrounds, necessitating solid variants (e.g. `ring-focus-ring` without opacity). Also, UI components may live in non-restricted folders but be rendered inside restricted areas (e.g., chat timeline), which must be checked beforehand.
+**Action:** When auditing `outline-none` buttons, always use `focus-visible:ring-2 focus-visible:ring-focus-ring` (without transparency if the 35% version lacks contrast), ensuring adequate contrast against adjacent colors. Always verify where a component is mounted in the app before modifying it to avoid touching restricted areas.

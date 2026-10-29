@@ -39,33 +39,6 @@ export type DesignThemeTokens = {
   shadow: string;
 };
 
-/** Keep content-part indices aligned with the live element payload array. */
-export function remapSelectionContentParts<T extends { el: { isConnected: boolean } }>(
-  contentParts: Array<{ type: string; index?: number; [key: string]: unknown }>,
-  selectedItems: T[],
-) {
-  const oldToNew = new Map<number, number>();
-  const items: T[] = [];
-
-  for (const part of contentParts) {
-    if (part.type !== "element" || !Number.isInteger(part.index)) continue;
-    const oldIndex = part.index as number;
-    const item = selectedItems[oldIndex];
-    if (!item?.el.isConnected || oldToNew.has(oldIndex)) continue;
-
-    oldToNew.set(oldIndex, items.length);
-    items.push(item);
-  }
-
-  const remappedContentParts = contentParts.flatMap((part) => {
-    if (part.type !== "element") return [part];
-    const newIndex = part.index === undefined ? undefined : oldToNew.get(part.index);
-    return newIndex === undefined ? [] : [{ ...part, index: newIndex }];
-  });
-
-  return { items, contentParts: remappedContentParts };
-}
-
 /**
  * Styles live INSIDE the shadow root (injected as a <style> by the bootstrap),
  * so they are immune to the page and need no `insertCSS`. `:host` styles the
@@ -803,18 +776,20 @@ export const DESIGN_OVERLAY_BOOTSTRAP = `
     events.push(p);
   }
 
-  ${remapSelectionContentParts.toString()}
-
   function emitMulti(kind, contentParts) {
-    var remapped = remapSelectionContentParts(contentParts || [], selectedItems);
-    if (remapped.items.length === 0) { return; }
+    var indices = (contentParts || []).filter(function (part) { return part.type === "element"; })
+      .map(function (part) { return part.index; });
+    if (indices.length === 0) { return; }
     var live = [];
-    for (var i = 0; i < remapped.items.length; i++) {
-      var item = remapped.items[i];
-      var payload = payloadOf(item.el);
-      payload.color = item.payload.color || nextMarkColor();
-      live.push({ el: item.el, payload: payload });
+    for (var i = 0; i < indices.length; i++) {
+      var item = selectedItems[indices[i]];
+      if (item && item.el.isConnected) {
+        var payload = payloadOf(item.el);
+        payload.color = item.payload.color || nextMarkColor();
+        live.push({ el: item.el, payload: payload });
+      }
     }
+    if (live.length === 0) { return; }
     selectedItems = live;
     prepareCapture();
     var p = {
@@ -828,7 +803,7 @@ export const DESIGN_OVERLAY_BOOTSTRAP = `
     };
     var text = plainInputText(contentParts || []);
     if (text) { p.seedText = text; }
-    if (remapped.contentParts.length > 0) { p.contentParts = remapped.contentParts; }
+    if (contentParts && contentParts.length > 0) { p.contentParts = contentParts; }
     events.push(p);
   }
 
