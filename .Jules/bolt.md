@@ -23,3 +23,6 @@
 ## 2024-10-24 - Modus PTY Host Flake
 **Learning:** `modus-pty-host` test `shutdown_keeps_group_ownership_after_the_pty_leader_exits` can flake with "shutdown lost the descendant after its PTY leader exited". This seems to be an existing race condition where the process group can sometimes be prematurely killed before the `Shutdown` command explicitly targets it. It only flakes under high concurrency or particular CI timing.
 **Action:** Unrelated CI failures in native modules outside the target scope should be recorded as pre-existing flakes when they cannot be cleanly addressed.
+## 2024-10-27 - Sidebar Sessions grouping overhead
+**Learning:** Measured the performance of the React rendering derivation for `sessionsByWorkspace`, `pinnedSessions`, and `ungroupedSessions` in `Sidebar.tsx`. For an extreme case of 5,000 active sessions, repeating the calculation 100 times took only ~420ms (meaning ~4.2ms per render). For a more typical user with a few hundred sessions, this calculation is consistently well under 1ms per render.
+**Action:** Do not forcefully introduce `useMemo` optimizations in UI components unless the derivation cost actually hits a noticeable threshold. The current structure is not a relevant bottleneck.
