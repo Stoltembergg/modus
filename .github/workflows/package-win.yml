@@ -9,6 +9,10 @@ on:
       - "crates/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "package.json"
+      - "package-lock.json"
+      - ".npmrc"
+      - ".github/workflows/release.yml"
       - ".github/workflows/package-win.yml"
 
 permissions:

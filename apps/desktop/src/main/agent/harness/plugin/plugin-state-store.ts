@@ -409,13 +409,13 @@ export class PluginStateStore {
     const delStmt = this.#db.prepare("DELETE FROM plugin_capabilities WHERE plugin_id = ?");
     delStmt.run(pluginId);
 
-    const insStmt = this.#db.prepare(`
-      INSERT INTO plugin_capabilities (plugin_id, capability_id, api_version)
-      VALUES (?, ?, ?)
-    `);
-
-    for (const c of caps) {
-      insStmt.run(pluginId, c.capability, c.apiVersion);
+    if (caps.length > 0) {
+      const insStmt = this.#db.prepare(`
+        INSERT INTO plugin_capabilities (plugin_id, capability_id, api_version)
+        SELECT ?, json_extract(value, '$.capability'), json_extract(value, '$.apiVersion')
+        FROM json_each(?)
+      `);
+      insStmt.run(pluginId, JSON.stringify(caps));
     }
   }
 

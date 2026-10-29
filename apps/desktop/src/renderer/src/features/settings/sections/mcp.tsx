@@ -42,6 +42,7 @@ const MCP_STATUS_STYLE: Record<
   connecting: { dot: "bg-focus-ring-soft", labelKey: "settings.mcp.statusConnecting" },
   failed: { dot: "bg-danger", labelKey: "settings.mcp.statusFailed" },
   disabled: { dot: "bg-fg-faint", labelKey: "settings.mcp.statusDisabled" },
+  untrusted: { dot: "bg-warning", labelKey: "settings.mcp.statusUntrusted" },
 };
 
 /** One-click starting points so first-time users never face an empty form. */
@@ -164,6 +165,7 @@ function mcpCount(count: number, t: SettingsTextFn = settingsTextFor()): string 
 
 function mcpServerSummary(server: McpServerInfo, t: SettingsTextFn = settingsTextFor()): string {
   if (server.status === "disabled") return t("settings.mcp.statusDisabled");
+  if (server.status === "untrusted") return t("settings.mcp.statusUntrusted");
   if (server.status === "connecting") return t("settings.mcp.statusConnecting");
   if (server.status === "failed") {
     return server.error?.toLowerCase().includes("auth")
@@ -376,6 +378,25 @@ export function McpSettingsPanel({
     }
   }
 
+  async function approveServer(server: McpServerInfo): Promise<void> {
+    if (!effectiveProjectCwd || !server.configFingerprint) return;
+    setSaving(true);
+    setMcpError(undefined);
+    try {
+      setServerList(
+        await window.modus.mcp.approve({
+          cwd: effectiveProjectCwd,
+          name: server.name,
+          expectedFingerprint: server.configFingerprint,
+        }),
+      );
+    } catch (err) {
+      setMcpError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function deleteServer(server: McpServerInfo): Promise<void> {
     if (!effectiveProjectCwd) return;
     setMcpError(undefined);
@@ -541,12 +562,21 @@ export function McpSettingsPanel({
                     <div
                       className={cn(
                         "flex items-center gap-1 text-xs",
-                        server.status === "failed" ? "text-danger" : "text-fg-muted",
+                        server.status === "failed"
+                          ? "text-danger"
+                          : server.status === "untrusted"
+                            ? "text-warning"
+                            : "text-fg-muted",
                       )}
                     >
                       <span>{mcpServerSummary(server, t)}</span>
                       {server.tools.length > 0 ? <IconChevronRight size={12} stroke={1.8} /> : null}
                     </div>
+                    {server.status === "untrusted" ? (
+                      <div className="truncate text-warning/80 text-2xs" title={server.source}>
+                        {t("settings.mcp.untrustedHint")}
+                      </div>
+                    ) : null}
                   </button>
                   <span className="flex shrink-0 items-center gap-1">
                     {deleting ? (
@@ -592,13 +622,24 @@ export function McpSettingsPanel({
                             <IconTrash size={14} stroke={1.8} />
                           </button>
                         </Tooltip>
-                        <Switch.Root
-                          checked={server.status !== "disabled"}
-                          className="ml-1 flex h-5 w-9 shrink-0 cursor-pointer rounded-full bg-chip-strong p-0.5 transition-colors data-checked:bg-accent"
-                          onCheckedChange={(checked) => void toggleServer(server, checked)}
-                        >
-                          <Switch.Thumb className="size-4 rounded-full bg-fg-muted transition-[translate,background-color] duration-(--motion-duration-base) ease-standard data-checked:bg-on-accent data-checked:translate-x-4" />
-                        </Switch.Root>
+                        {server.status === "untrusted" ? (
+                          <button
+                            className="h-7 rounded-md bg-warning/10 px-2 text-warning text-xs transition-colors hover:bg-warning/20 disabled:opacity-40"
+                            disabled={saving || !server.configFingerprint}
+                            onClick={() => void approveServer(server)}
+                            type="button"
+                          >
+                            {t("settings.mcp.trustProjectServer")}
+                          </button>
+                        ) : (
+                          <Switch.Root
+                            checked={server.status !== "disabled"}
+                            className="ml-1 flex h-5 w-9 shrink-0 cursor-pointer rounded-full bg-chip-strong p-0.5 transition-colors data-checked:bg-accent"
+                            onCheckedChange={(checked) => void toggleServer(server, checked)}
+                          >
+                            <Switch.Thumb className="size-4 rounded-full bg-fg-muted transition-[translate,background-color] duration-(--motion-duration-base) ease-standard data-checked:bg-on-accent data-checked:translate-x-4" />
+                          </Switch.Root>
+                        )}
                       </>
                     )}
                   </span>

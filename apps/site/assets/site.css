@@ -76,3 +76,136 @@ footer {
 footer a {
   color: inherit;
 }
+
+/* Site pages (pricing, download, privacy, terms): accent, glass, no borders. */
+:root {
+  --accent: #863ff5;
+  --on-accent: #fff;
+  --accent-text: #7432e6; /* #863ff5 darkened for 4.5:1 on the draft pill */
+  --glass: color-mix(in srgb, var(--card) 72%, transparent);
+  --glow: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --accent-text: #b48af9;
+    --glass: color-mix(in srgb, #fff 6%, transparent);
+    --glow: color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+}
+
+body.page {
+  background: radial-gradient(60rem 30rem at 50% -10rem, var(--glow), transparent 70%), var(--bg);
+  min-height: 100vh;
+}
+
+.nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+  align-items: center;
+  margin-bottom: 3rem;
+  font-size: 0.9rem;
+}
+
+.nav a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.nav a:first-child {
+  color: var(--fg);
+  font-weight: 700;
+  margin-right: auto;
+}
+
+.nav a[aria-current="page"],
+.nav a:hover {
+  color: var(--accent-text);
+}
+
+a:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.glass {
+  background: var(--glass);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border-radius: 16px;
+  padding: 1.5rem;
+  margin-top: 1.25rem;
+  box-shadow: 0 1px 24px color-mix(in srgb, #000 6%, transparent);
+}
+
+.glass h2 {
+  font-size: 1.05rem;
+  margin: 0 0 0.25rem;
+}
+
+.glass p {
+  margin: 0.25rem 0 0;
+}
+
+.price {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--fg);
+  margin: 0.25rem 0 0;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 1rem;
+}
+
+.grid {
+  margin-top: 1rem;
+}
+
+.grid .glass {
+  margin-top: 0;
+}
+
+.button.accent {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.note {
+  font-size: 0.9rem;
+}
+
+.draft {
+  display: inline-block;
+  padding: 0.3rem 0.75rem;
+  border-radius: 999px;
+  background: var(--glow);
+  color: var(--accent-text);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.legal h2 {
+  margin-top: 2rem;
+  font-size: 1.1rem;
+}
+
+.legal p,
+.legal li {
+  color: var(--muted);
+}
+
+code {
+  font-size: 0.85em;
+  overflow-wrap: anywhere;
+}
+
+footer.links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+}

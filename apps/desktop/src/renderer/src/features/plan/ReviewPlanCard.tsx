@@ -30,7 +30,7 @@ export function ReviewPlanCard({
         <span className="flex-1" />
         <button
           aria-label="Dismiss plan"
-          className="flex size-6 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg-subtle"
+          className="flex size-6 items-center justify-center rounded-md text-fg-faint outline-none transition-colors hover:bg-hover hover:text-fg-subtle focus-visible:ring-2 focus-visible:ring-focus-ring/35"
           disabled={busy}
           onClick={onContinuePlanning}
           type="button"
@@ -45,7 +45,7 @@ export function ReviewPlanCard({
         </div>
       ) : null}
       <button
-        className="group mt-2 flex h-11 w-full items-center gap-3 rounded-lg bg-hover px-2.5 text-left transition-colors hover:bg-active"
+        className="group mt-2 flex h-11 w-full items-center gap-3 rounded-lg bg-hover px-2.5 text-left outline-none transition-colors hover:bg-active focus-visible:ring-2 focus-visible:ring-focus-ring/35"
         disabled={busy}
         onClick={onBuildLocally}
         type="button"
@@ -65,7 +65,7 @@ export function ReviewPlanCard({
 
       <button
         disabled={busy}
-        className="mt-1 flex h-11 w-full items-center gap-3 rounded-lg px-2.5 text-left transition-colors hover:bg-hover"
+        className="mt-1 flex h-11 w-full items-center gap-3 rounded-lg px-2.5 text-left outline-none transition-colors hover:bg-hover focus-visible:ring-2 focus-visible:ring-focus-ring/35"
         onClick={onContinuePlanning}
         type="button"
       >

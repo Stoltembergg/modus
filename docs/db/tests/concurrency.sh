@@ -407,6 +407,31 @@ echo "ordering B: wallet=$wallet11_b lot=$lot11_b ledger=$ledger11_b collected=$
   || { cat "$out/ob1" "$out/ob2"; fail "ordering B: consistent result"; }
 
 echo "ok - pack refund racing settle_usage on the same reservation: orderings A and B both reach 700/0/0, lot refunded, ledger consistent"
+
+# 12) A14: the first delivery of an approved pack payment already includes a partial refund.
+# Six concurrent webhook-equivalent RPC calls must atomically grant the gross lot and reverse
+# the proportional amount once; no caller can observe or duplicate the gross balance.
+uid12="$(q "select tests.create_user('race-first-refund@example.com', true)")"
+pur12="$(q "set role service_role; select private.mp_create_purchase('$uid12', 'credits_5k') ->> 'purchase_id'")"
+pay12="{\"id\":\"920001\",\"status\":\"approved\",\"amount_minor\":3690,\"refunded_minor\":1845,\"live_mode\":false,\"collector_id\":\"777\",\"currency\":\"BRL\",\"external_reference\":\"$pur12\"}"
+for i in $(seq 1 6); do
+  ( "$PSQL" -X -q -t -A -c "set role service_role; select private.process_mp_purchase_payment('$pay12'::jsonb, '{\"live_mode\": false, \"collector_id\": \"777\"}'::jsonb, null) ->> 'code'" \
+      >"$out/pf$i" 2>&1 || true ) &
+done
+wait
+reversed12="$(cat "$out"/pf* | grep -c '^reversed$' || true)"
+duplicate12="$(cat "$out"/pf* | grep -c '^already_credited$' || true)"
+errors12="$(cat "$out"/pf* | grep -c 'ERROR' || true)"
+wallet12="$(q "select balance || '/' || reserved from public.credit_wallets where user_id = '$uid12'")"
+lot12="$(q "select credits_granted || ':' || reversed_credits || ':' || remaining || ':' || status from public.credit_lots where payment_id = 920001")"
+grant12="$(q "select count(*) from public.credit_transactions where user_id = '$uid12' and idempotency_key = 'mp:purchase-payment:920001'")"
+reversal12="$(q "select count(*) from public.credit_transactions where user_id = '$uid12' and idempotency_key = 'mp:purchase-reversal:920001:2500'")"
+echo "first partial refund x6: reversed=$reversed12 duplicates=$duplicate12 errors=$errors12 wallet=$wallet12 lot=$lot12 grant_rows=$grant12 reversal_rows=$reversal12"
+[[ "$reversed12" == 1 && "$duplicate12" == 5 && "$errors12" == 0 && "$wallet12" == 3500/0 \
+   && "$lot12" == 5000:2500:2500:credited && "$grant12" == 1 && "$reversal12" == 1 ]] \
+  || { cat "$out"/pf*; fail "first partially-refunded pack delivery under concurrency"; }
+echo "ok - 6 concurrent first deliveries of a 50%-refunded pack: exactly one net grant/reversal"
+
 q "update private.billing_settings set mercadopago_enabled = ${settings11%%,*}, mercadopago_subscriptions_enabled = ${settings11##*,}"
 
 rm -rf "$out"

@@ -178,6 +178,7 @@ import {
 } from "../interaction/question-broker";
 import { currentUiLocale, type UiLanguageController } from "../locale/ui-language-controller";
 import {
+  approveMcpServer,
   deleteMcpServer,
   ensureMcpConfigFile,
   getMcpServerEntry,
@@ -289,6 +290,7 @@ import {
   filesWriteSchema,
   gitCheckoutSchema,
   gitLogSchema,
+  mcpApproveSchema,
   mcpServerNameSchema,
   mcpSetEnabledSchema,
   mcpUpsertSchema,
@@ -666,6 +668,7 @@ export function registerAppIpc({
     assertTrustedSender(event);
     return getAgentRuntime().abort(
       parseIpcInput(sessionIdSchema, sessionId, IPC_CHANNELS.agentAbort),
+      getSenderWindow(event),
     );
   });
 
@@ -1138,7 +1141,7 @@ export function registerAppIpc({
   ipcMain.handle(IPC_CHANNELS.filesWrite, async (event, input) => {
     assertTrustedSender(event);
     const parsed = parseIpcInput(filesWriteSchema, input, IPC_CHANNELS.filesWrite);
-    const result = writeWorkspaceFile(parsed.cwd, parsed.path, parsed.content);
+    const result = await writeWorkspaceFile(parsed.cwd, parsed.path, parsed.content);
     emitGitEvent({ cwd: parsed.cwd, kind: "working" });
     emitFilesEvent({ cwd: resolve(parsed.cwd), paths: [result.path] });
     return result;
@@ -1413,6 +1416,12 @@ export function registerAppIpc({
   ipcMain.handle(IPC_CHANNELS.mcpSync, async (event, cwd: string) => {
     assertTrustedSender(event);
     return await syncWorkspaceMcp(parseIpcInput(cwdSchema, cwd, IPC_CHANNELS.mcpSync));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.mcpApprove, async (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(mcpApproveSchema, input, IPC_CHANNELS.mcpApprove);
+    return await approveMcpServer(parsed.cwd, parsed.name, parsed.expectedFingerprint);
   });
 
   ipcMain.handle(IPC_CHANNELS.mcpOpenConfig, async (event, cwd: string) => {

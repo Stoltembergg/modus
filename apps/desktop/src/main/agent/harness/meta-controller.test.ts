@@ -46,6 +46,39 @@ describe("meta-controller", () => {
     expect(formatAdaptiveDecisionHint(decision)).toBeUndefined();
   });
 
+  it.each([
+    [
+      "failed QA overrides not-required verification",
+      "failed",
+      "not_required",
+      "verification_failed",
+    ],
+    ["timed-out QA overrides verified status", "timed_out", "verified", "qa_timed_out"],
+    ["blocked verification overrides passed QA", "passed", "blocked", "verification_blocked"],
+    [
+      "failed verification overrides user confirmation",
+      "user_confirmed",
+      "failed",
+      "verification_failed",
+    ],
+  ] as const)("does not recommend finish when %s", (_label, qaStatus, verificationStatus, reasonCode) => {
+    const decision = decideNext(
+      snapshot({
+        qaStatus,
+        taskState: {
+          phase: "terminal",
+          verificationStatus,
+          criteria: [],
+          openQuestionRefs: [],
+          hypothesisRefs: [],
+        },
+      }),
+    );
+
+    expect(decision.action).not.toBe("finish");
+    expect(decision.reasonCodes).toContain(reasonCode);
+  });
+
   it("avoids repeating a failed strategy at the same revision", () => {
     const attempt: AdaptiveFailureAttempt = {
       id: "a1",

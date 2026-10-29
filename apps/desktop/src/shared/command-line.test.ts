@@ -36,4 +36,15 @@ describe("joinCommandLine", () => {
   it("represents empty tokens explicitly", () => {
     expect(joinCommandLine(["a", ""])).toBe('a ""');
   });
+
+  it.each([
+    ["double quote", ["npx", 'a"b']],
+    ["both quote kinds", ["node", `a"b' c`]],
+    ["trailing backslashes", ["node", "C:\\tools\\"]],
+    ["tabs and newlines", ["command", "two\tlines\nsecond"]],
+    ["unicode", ["npx", "ação 東京 🧭"]],
+    ["shell-looking text stays literal", ["node", "$(touch nope)", "${HOME}"]],
+  ])("round-trips %s arguments", (_label, parts) => {
+    expect(splitCommandLine(joinCommandLine(parts))).toEqual(parts);
+  });
 });

@@ -3,6 +3,7 @@ import type { AgentEvent } from "../../../../shared/contracts";
 import {
   AgentEventHub,
   type AgentEventItem,
+  activityFromSnapshot,
   affectsActivity,
   appendAgentEvents,
   appendUniqueAgentEvents,
@@ -66,6 +67,90 @@ describe("reduceActivity", () => {
     );
     expect(resolved.needsInput).toBe(false);
     expect(resolved.running).toBe(true);
+  });
+
+  it("keeps the input indicator until every pending question and permission is resolved", () => {
+    let activity = reduceActivity(undefined, runStarted, false);
+    activity = reduceActivity(activity, permissionRequested, false);
+    activity = reduceActivity(
+      activity,
+      {
+        type: "question.requested",
+        sessionId: "s",
+        request: { id: "q1", questions: [] },
+      },
+      false,
+    );
+    activity = reduceActivity(
+      activity,
+      {
+        type: "question.requested",
+        sessionId: "s",
+        request: { id: "q2", questions: [] },
+      },
+      false,
+    );
+
+    expect(activity.needsInput).toBe(true);
+    expect(activity.unread).toBe(true);
+    expect(
+      affectsActivity({
+        type: "question.requested",
+        sessionId: "s",
+        request: { id: "q3", questions: [] },
+      }),
+    ).toBe(true);
+
+    activity = reduceActivity(
+      activity,
+      { type: "question.resolved", sessionId: "s", requestId: "q1", answers: [], skipped: false },
+      false,
+    );
+    activity = reduceActivity(
+      activity,
+      { type: "permission.resolved", sessionId: "s", requestId: "p", decision: "allow-once" },
+      false,
+    );
+    expect(activity.needsInput).toBe(true);
+
+    activity = reduceActivity(
+      activity,
+      { type: "question.resolved", sessionId: "s", requestId: "q2", answers: [], skipped: false },
+      false,
+    );
+    expect(activity.needsInput).toBe(false);
+  });
+
+  it("does not resurrect a request when its resolution arrives before its request event", () => {
+    const resolved = reduceActivity(
+      undefined,
+      { type: "question.resolved", sessionId: "s", requestId: "q", answers: [], skipped: false },
+      false,
+    );
+    const replayed = reduceActivity(
+      resolved,
+      { type: "question.requested", sessionId: "s", request: { id: "q", questions: [] } },
+      false,
+    );
+
+    expect(replayed.needsInput).toBe(false);
+  });
+
+  it("hydrates all pending request IDs without overriding a newer activity cursor", () => {
+    const snapshot = {
+      eventCursor: 12,
+      pendingInputRequestIds: ["question:q1", "permission:p1"],
+    };
+    const hydrated = activityFromSnapshot(undefined, snapshot, "running");
+    expect(hydrated).toMatchObject({
+      running: true,
+      needsInput: true,
+      pendingInputRequestIds: ["question:q1", "permission:p1"],
+      eventCursor: 12,
+    });
+
+    const newer = reduceActivity(hydrated, { ...runStarted, eventCursor: 20 } as AgentEvent, false);
+    expect(activityFromSnapshot(newer, snapshot, "idle")).toBe(newer);
   });
 
   it("returns the same reference for irrelevant events so state updates can bail", () => {
