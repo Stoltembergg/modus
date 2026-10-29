@@ -15,3 +15,7 @@
 ## 2025-02-12 - [Bolt: Optimize group mailbox ackMany batching]
 **Learning:** When fixing N+1 SQLite update/insert queries in Node.js with node:sqlite, instead of iterating over array items and running `.get()`, `.run()` individually inside a loop, it's significantly faster to fetch the validation rows via a single `SELECT ... WHERE id IN (SELECT value FROM json_each(?))` using a JSON-stringified array. Subsequent `INSERT` or `UPDATE` logic should also leverage `... FROM json_each(?)` with the parsed valid IDs to apply updates in bulk, yielding over 15x performance improvements.
 **Action:** Use `json_each` for batch fetching and batched writing of dynamic arrays when interacting with SQLite.
+
+## 2026-10-24 - [Bolt: fix token sync incorrectly restacking tokens]
+**Learning:** When serializing DOM-based rich text or tokens to an AST/backend format, ensure that positional indices or mappings align with the reconstructed order of elements. Mismatches between visually preserved DOM node order and a mapped backend array's references will lead to data corruption or reordering bugs upon deserialization.
+**Action:** When mapping between selection/contenteditable nodes and backend structures, explicitly verify and remap internal positional indices to match the newly generated linear element array before emitting the payload.
