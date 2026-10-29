@@ -1135,7 +1135,7 @@ export function registerAppIpc({
   ipcMain.handle(IPC_CHANNELS.filesRead, async (event, input) => {
     assertTrustedSender(event);
     const parsed = parseIpcInput(filesReadSchema, input, IPC_CHANNELS.filesRead);
-    return await readWorkspaceFile(parsed.cwd, parsed.path);
+    return readWorkspaceFile(parsed.cwd, parsed.path);
   });
 
   ipcMain.handle(IPC_CHANNELS.filesWrite, async (event, input) => {
