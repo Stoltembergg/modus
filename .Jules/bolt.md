@@ -23,3 +23,7 @@
 ## 2024-10-24 - Modus PTY Host Flake
 **Learning:** `modus-pty-host` test `shutdown_keeps_group_ownership_after_the_pty_leader_exits` can flake with "shutdown lost the descendant after its PTY leader exited". This seems to be an existing race condition where the process group can sometimes be prematurely killed before the `Shutdown` command explicitly targets it. It only flakes under high concurrency or particular CI timing.
 **Action:** Unrelated CI failures in native modules outside the target scope should be recorded as pre-existing flakes when they cannot be cleanly addressed.
+
+## 2026-10-29 - [Bolt: Optimize plugin capabilities insertion]
+**Learning:** SQLite `INSERT ... SELECT ... FROM json_each(?)` is highly effective for removing N+1 insert loops on modern `node:sqlite`. I observed an N+1 loop using `.run()` for inserting `plugin_capabilities` inside `apps/desktop/src/main/agent/harness/plugin/plugin-state-store.ts` which I fixed.
+**Action:** Look for loops over `.run()` and replace them with a `json_each` insert/update when writing array elements to the database in bulk.
