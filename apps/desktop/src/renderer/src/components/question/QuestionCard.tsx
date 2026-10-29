@@ -304,7 +304,7 @@ function QuestionMode({
           <>
             <button
               aria-label={t("settings.question.previousQuestion")}
-              className="flex size-5 items-center justify-center rounded transition-colors hover:bg-hover hover:text-fg-subtle disabled:opacity-40"
+              className="flex size-5 items-center justify-center rounded outline-none transition-colors hover:bg-hover hover:text-fg-subtle focus-visible:ring-2 focus-visible:ring-focus-ring/35 disabled:opacity-40"
               disabled={index === 0}
               onClick={() => goToPage(index - 1)}
               type="button"
@@ -316,7 +316,7 @@ function QuestionMode({
             </span>
             <button
               aria-label={t("settings.question.nextQuestion")}
-              className="flex size-5 items-center justify-center rounded transition-colors hover:bg-hover hover:text-fg-subtle disabled:opacity-40"
+              className="flex size-5 items-center justify-center rounded outline-none transition-colors hover:bg-hover hover:text-fg-subtle focus-visible:ring-2 focus-visible:ring-focus-ring/35 disabled:opacity-40"
               disabled={isLast}
               onClick={() => goToPage(index + 1)}
               type="button"
@@ -414,7 +414,7 @@ function QuestionMode({
           />
           {onSkip ? (
             <button
-              className="flex shrink-0 items-center gap-1 text-fg-faint text-xs transition-colors enabled:hover:text-fg-subtle disabled:opacity-50"
+              className="flex shrink-0 items-center gap-1 rounded-md text-fg-faint text-xs outline-none transition-colors enabled:hover:text-fg-subtle focus-visible:ring-2 focus-visible:ring-focus-ring/35 disabled:opacity-50"
               disabled={locked}
               onClick={skip}
               type="button"
@@ -426,7 +426,7 @@ function QuestionMode({
             </button>
           ) : null}
           <button
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-build px-3 py-[6px] font-medium text-sm text-build-fg transition-colors enabled:hover:bg-build-hover disabled:opacity-50"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-build px-3 py-[6px] font-medium text-sm text-build-fg outline-none transition-colors enabled:hover:bg-build-hover focus-visible:ring-2 focus-visible:ring-focus-ring/35 disabled:opacity-50"
             disabled={locked}
             onClick={primaryAction}
             type="button"
@@ -591,7 +591,7 @@ function ApprovalMode({
           <div className="mt-2">
             <button
               aria-expanded={showDetails}
-              className="text-xs text-fg-faint transition-colors hover:text-fg-subtle"
+              className="rounded-md text-xs text-fg-faint outline-none transition-colors hover:text-fg-subtle focus-visible:ring-2 focus-visible:ring-focus-ring/35"
               data-testid="approval-details-toggle"
               onClick={() => setShowDetails((value) => !value)}
               type="button"
@@ -684,7 +684,7 @@ function ApprovalMode({
             </p>
           ) : null}
           <button
-            className="flex shrink-0 items-center gap-1 rounded-md px-2 py-[6px] text-fg-faint text-xs transition-colors enabled:hover:bg-hover enabled:hover:text-fg-subtle disabled:opacity-50"
+            className="flex shrink-0 items-center gap-1 rounded-md px-2 py-[6px] text-fg-faint text-xs outline-none transition-colors enabled:hover:bg-hover enabled:hover:text-fg-subtle focus-visible:ring-2 focus-visible:ring-focus-ring/35 disabled:opacity-50"
             disabled={locked}
             onClick={() => void submit(denyChoice)}
             type="button"
@@ -693,7 +693,7 @@ function ApprovalMode({
             <kbd className="rounded border border-hairline px-1 py-px font-sans text-2xs">ESC</kbd>
           </button>
           <button
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-build px-3 py-[6px] font-medium text-sm text-build-fg transition-colors enabled:hover:bg-build-hover disabled:opacity-50"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-build px-3 py-[6px] font-medium text-sm text-build-fg outline-none transition-colors enabled:hover:bg-build-hover focus-visible:ring-2 focus-visible:ring-focus-ring/35 disabled:opacity-50"
             disabled={locked}
             onClick={() => void submit()}
             type="button"
@@ -754,7 +754,7 @@ function SummaryMode({ running = false, items, label, className }: QuestionCardS
     <div className={cn("min-w-0 text-sm", className)} data-mode="summary" data-status="answered">
       <button
         aria-expanded={open}
-        className="flex min-w-0 items-center gap-1.5 rounded-md py-0.5 text-left text-fg-subtle transition-colors hover:text-fg-muted"
+        className="flex min-w-0 items-center gap-1.5 rounded-md py-0.5 pr-1 outline-none text-left text-fg-subtle transition-colors hover:text-fg-muted focus-visible:ring-2 focus-visible:ring-focus-ring/35"
         onClick={() => setOpen((value) => !value)}
         type="button"
       >
@@ -836,7 +836,7 @@ export function ApprovalDetails({ details }: { details: string }) {
       </pre>
       {hidden > 0 ? (
         <button
-          className="mt-1 text-xs text-fg-faint transition-colors hover:text-fg-subtle"
+          className="mt-1 rounded-md text-xs text-fg-faint outline-none transition-colors hover:text-fg-subtle focus-visible:ring-2 focus-visible:ring-focus-ring/35"
           data-testid="approval-details-show-all"
           onClick={() => setShowAll((value) => !value)}
           type="button"
