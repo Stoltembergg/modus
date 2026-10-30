@@ -453,7 +453,7 @@ function runInTransaction(
       for (let i = 0; i < updateKeys.length; i += chunkSize) {
         const chunkKeys = updateKeys.slice(i, i + chunkSize);
         const chunk: Record<string, string> = {};
-        for (const k of chunkKeys) chunk[k] = renameUpdates[k];
+        for (const k of chunkKeys) chunk[k] = renameUpdates[k] as string;
         updateQuery.run(at, JSON.stringify(chunk));
       }
     }
