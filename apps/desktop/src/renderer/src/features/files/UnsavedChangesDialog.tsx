@@ -18,7 +18,7 @@ type UnsavedChangesDialogProps = {
 };
 
 const BUTTON =
-  "h-8 rounded-md px-3 text-sm transition-colors outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/35 disabled:opacity-50";
+  "h-8 rounded-md px-3 text-sm transition-colors outline-none focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-50";
 
 /**
  * "Save / Discard / Cancel" before leaving a dirty file (C2.2). Base UI alert
