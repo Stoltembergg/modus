@@ -51,6 +51,23 @@ describe("formatClock", () => {
       vi.restoreAllMocks();
     });
 
+    it("handles boundary exact edge cases", () => {
+      const startOfTodayMs = new Date(2026, 5, 11, 0, 0, 0).getTime();
+      const laterToday = new Date(2026, 5, 11, 23, 59).getTime();
+      expect(formatClock(laterToday, now)).toBe("11:59 PM");
+      const tomorrow = new Date(2026, 5, 12, 8, 30).getTime();
+      expect(formatClock(tomorrow, now)).toBe("8:30 AM");
+      expect(formatClock(startOfTodayMs, now)).toBe("12:00 AM");
+      const yesterday1ms = startOfTodayMs - 1;
+      expect(formatClock(yesterday1ms, now)).toBe("Wednesday 11:59 PM");
+      const sixDaysAgo = startOfTodayMs - 6 * 24 * 60 * 60 * 1000;
+      expect(formatClock(sixDaysAgo, now)).toBe("Friday 12:00 AM");
+      const beyondSixDays = sixDaysAgo - 1;
+      expect(formatClock(beyondSixDays, now)).toBe("Jun 4 11:59 PM");
+      const sevenDaysAgo = startOfTodayMs - 7 * 24 * 60 * 60 * 1000;
+      expect(formatClock(sevenDaysAgo, now)).toBe("Jun 4 12:00 AM");
+    });
+
     it("12h time, same as before C6", () => {
       expect(systemHourCycle()).toBe("h12");
       expect(formatClock(evening, now)).toBe("9:47 PM");
