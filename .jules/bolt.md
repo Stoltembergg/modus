@@ -31,3 +31,7 @@
 ## 2026-10-27 - Sidebar Sessions grouping overhead
 **Learning:** Measured the performance of the React rendering derivation for `sessionsByWorkspace`, `pinnedSessions`, and `ungroupedSessions` in `Sidebar.tsx`. For an extreme case of 5,000 active sessions, repeating the calculation 100 times took only ~420ms (meaning ~4.2ms per render). For a more typical user with a few hundred sessions, this calculation is consistently well under 1ms per render.
 **Action:** Do not forcefully introduce `useMemo` optimizations in UI components unless the derivation cost actually hits a noticeable threshold. The current structure is not a relevant bottleneck.
+
+## 2024-05-14 - Reject N+1 Optimization for One-Time Migrations
+**Learning:** Chunked database queries and apparent N+1 issues in local one-time migration scripts (like `groups-to-projects.ts`), especially those executing entirely within a single transaction, do not suffer from network-bound query latency. Attempting to optimize these by batching via `json_each` yields negligible performance gains (e.g., < 2% improvement for thousands of records).
+**Action:** Do not prematurely refactor N+1 patterns in Node.js SQLite (`node:sqlite`) one-time migration scripts. Always benchmark to prove a measured gain first, and explicitly avoid optimizing such scripts without demonstrable cost reduction.
