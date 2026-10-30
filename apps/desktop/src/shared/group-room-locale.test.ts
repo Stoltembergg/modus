@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi, afterEach } from "vitest";
 import {
   groupAgentWorkingLabel,
   groupRoomLabel,
   resolveGroupRoomLocale,
   thinkingStateKeyFromLive,
+  systemHourCycle,
 } from "./group-room-locale";
 
 describe("group-room-locale", () => {
@@ -42,5 +43,32 @@ describe("groupAgentWorkingLabel", () => {
       "Planner e Builder estão a trabalhar…",
     );
     expect(groupAgentWorkingLabel([], "en")).toBe("Working…");
+  });
+});
+
+describe("systemHourCycle", () => {
+  const OriginalIntl = Intl;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns hour cycle when available", () => {
+    const mockResolvedOptions = vi.fn().mockReturnValue({ hourCycle: "h23" });
+    const MockDateTimeFormat = vi.fn().mockImplementation(function() {
+      return { resolvedOptions: mockResolvedOptions };
+    });
+    vi.stubGlobal("Intl", { ...OriginalIntl, DateTimeFormat: MockDateTimeFormat });
+
+    expect(systemHourCycle()).toBe("h23");
+  });
+
+  it("returns undefined when it throws", () => {
+    const MockDateTimeFormat = vi.fn().mockImplementation(function() {
+      throw new Error("Intl error");
+    });
+    vi.stubGlobal("Intl", { ...OriginalIntl, DateTimeFormat: MockDateTimeFormat });
+
+    expect(systemHourCycle()).toBeUndefined();
   });
 });
