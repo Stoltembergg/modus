@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   groupAgentWorkingLabel,
   groupRoomLabel,
   resolveGroupRoomLocale,
+  systemHourCycle,
   thinkingStateKeyFromLive,
 } from "./group-room-locale";
 
@@ -42,5 +43,45 @@ describe("groupAgentWorkingLabel", () => {
       "Planner e Builder estão a trabalhar…",
     );
     expect(groupAgentWorkingLabel([], "en")).toBe("Working…");
+  });
+});
+
+describe("systemHourCycle", () => {
+  it("returns the system hour cycle from Intl.DateTimeFormat resolvedOptions", () => {
+    const OriginalDateTimeFormat = Intl.DateTimeFormat;
+
+    vi.stubGlobal("Intl", {
+      ...Intl,
+      DateTimeFormat: class MockDateTimeFormat {
+        resolvedOptions() {
+          return { hourCycle: "h12" };
+        }
+      },
+    });
+
+    try {
+      expect(systemHourCycle()).toBe("h12");
+    } finally {
+      vi.stubGlobal("Intl", { ...Intl, DateTimeFormat: OriginalDateTimeFormat });
+    }
+  });
+
+  it("returns undefined when Intl throws an error", () => {
+    const OriginalDateTimeFormat = Intl.DateTimeFormat;
+
+    vi.stubGlobal("Intl", {
+      ...Intl,
+      DateTimeFormat: class MockDateTimeFormat {
+        resolvedOptions() {
+          throw new Error("Simulated error");
+        }
+      },
+    });
+
+    try {
+      expect(systemHourCycle()).toBeUndefined();
+    } finally {
+      vi.stubGlobal("Intl", { ...Intl, DateTimeFormat: OriginalDateTimeFormat });
+    }
   });
 });
