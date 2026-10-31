@@ -26,3 +26,6 @@
 ## 2026-10-25 - [Palette: Add focus-visible style to "Open file" button in FilesPanel]
 **Learning:** Some custom UI buttons (like the FilesPanel's Open button) use `outline-none` but lack an explicit `focus-visible` fallback, making keyboard focus invisible. A solid focus ring can also provide better contrast than a translucent ring.
 **Action:** Add an explicit `focus-visible` ring to custom buttons that suppress their outline, and check the component's mounted context before changing shared UI.
+## 2026-10-31 - [Palette: Remove low-opacity focus ring from WorkStatusLine toggle]
+**Learning:** Shared global classes using translucent focus rings (e.g., `/35` opacity on `focus-ring`) can violate contrast guidelines (>= 4.5:1). A solid focus ring (`focus-visible:ring-focus-ring`) should be used instead.
+**Action:** Remove opacity modifiers from explicit `focus-visible:ring-focus-ring` classes to ensure solid focus styles and adequate contrast. Pre-existing out-of-scope test failures should be documented and left unfixed.
