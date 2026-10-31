@@ -23,6 +23,16 @@ describe("lookupModel", () => {
     expect(lookupModel(catalog, "missing/model")).toBeUndefined();
     expect(lookupModel(undefined, "openai/gpt-5.6-terra")).toBeUndefined();
   });
+
+  it("returns undefined when given an empty catalog", () => {
+    expect(lookupModel([], "openai/gpt-5.6-terra")).toBeUndefined();
+  });
+
+  it("returns undefined when given an empty or undefined model id", () => {
+    const catalog = [model({ id: "openai/gpt-5.6-terra", name: "GPT 5.6 Terra" })];
+    expect(lookupModel(catalog, undefined)).toBeUndefined();
+    expect(lookupModel(catalog, "")).toBeUndefined();
+  });
 });
 
 describe("modelIdentityLabel", () => {
@@ -64,5 +74,35 @@ describe("modelIdentityLabel", () => {
         }),
       ),
     ).toBe("GPT 5.6 Terra");
+  });
+
+  it("appends budget tokens as thinking label when the model uses thinking budget", () => {
+    expect(
+      modelIdentityLabel(
+        model({
+          id: "anthropic/claude-3.7-sonnet",
+          name: "Claude 3.7 Sonnet",
+          supportsThinking: true,
+          thinkingLevel: "high",
+          thinkingVariant: "1024",
+          thinkingBudget: { min: 1024, max: 2048 },
+        }),
+      ),
+    ).toBe("Claude 3.7 Sonnet 1,024 tokens");
+  });
+
+  it("ignores empty thinking labels", () => {
+    expect(
+      modelIdentityLabel(
+        model({
+          id: "test/model",
+          name: "Test Model",
+          supportsThinking: true,
+          thinkingLevel: "xhigh",
+          thinkingVariant: "xhigh",
+          thinkingOptions: [{ value: "xhigh", label: "", level: "xhigh" }],
+        }),
+      ),
+    ).toBe("Test Model");
   });
 });
