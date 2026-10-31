@@ -474,16 +474,10 @@ function runInTransaction(
     const title = `${m.agent_name ?? "Agent"} · ${group?.name ?? "Group"} (room work)`;
     roomWorkChats += Number(convert.run(m.agent_id, m.group_id, title, at, m.session_id).changes);
   }
-  const orphans = db
-    .prepare("select id, title from agent_sessions where kind = 'group_member'")
-    .all() as Array<{ id: string; title: string }>;
-  const convertOrphan = db.prepare(
-    `update agent_sessions set kind = 'chat', read_only = 1, title = ?, updated_at = ? where id = ?`,
+  const convertOrphans = db.prepare(
+    `update agent_sessions set kind = 'chat', read_only = 1, title = title || ' (room work)', updated_at = ? where kind = 'group_member'`,
   );
-  for (const o of orphans) {
-    convertOrphan.run(`${o.title} (room work)`, at, o.id);
-    roomWorkChats += 1;
-  }
+  roomWorkChats += Number(convertOrphans.run(at).changes);
   // Existing 1:1 chats of former members: tag them (display only).
   db.prepare(
     `update agent_sessions set migrated_from_group_id = (
