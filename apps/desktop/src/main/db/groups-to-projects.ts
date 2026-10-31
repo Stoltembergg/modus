@@ -464,15 +464,32 @@ function runInTransaction(
         agent_name: string | null;
       }>)
     : [];
-  const convert = db.prepare(
-    `update agent_sessions set kind = 'chat', read_only = 1, agent_id = ?,
-       migrated_from_group_id = ?, title = ?, updated_at = ? where id = ? and kind = 'group_member'`,
-  );
   let roomWorkChats = 0;
-  for (const m of memberRows) {
-    const group = groupById.get(m.group_id);
-    const title = `${m.agent_name ?? "Agent"} · ${group?.name ?? "Group"} (room work)`;
-    roomWorkChats += Number(convert.run(m.agent_id, m.group_id, title, at, m.session_id).changes);
+  if (memberRows.length > 0) {
+    // Group updates into chunks to limit bind parameter count and memory overhead.
+    const CHUNK_SIZE = 500;
+    const convert = db.prepare(
+      `update agent_sessions
+       set kind = 'chat',
+           read_only = 1,
+           agent_id = json_extract(j.value, '$.a'),
+           migrated_from_group_id = json_extract(j.value, '$.g'),
+           title = json_extract(j.value, '$.t'),
+           updated_at = ?
+       from json_each(?) as j
+       where agent_sessions.id = j.key and agent_sessions.kind = 'group_member'`,
+    );
+
+    for (let i = 0; i < memberRows.length; i += CHUNK_SIZE) {
+      const chunk = memberRows.slice(i, i + CHUNK_SIZE);
+      const updateMap: Record<string, { a: string; g: string; t: string }> = {};
+      for (const m of chunk) {
+        const group = groupById.get(m.group_id);
+        const title = `${m.agent_name ?? "Agent"} · ${group?.name ?? "Group"} (room work)`;
+        updateMap[m.session_id] = { a: m.agent_id, g: m.group_id, t: title };
+      }
+      roomWorkChats += Number(convert.run(at, JSON.stringify(updateMap)).changes);
+    }
   }
   const convertOrphans = db.prepare(
     `update agent_sessions set kind = 'chat', read_only = 1, title = title || ' (room work)', updated_at = ? where kind = 'group_member'`,
