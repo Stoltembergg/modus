@@ -184,7 +184,7 @@ export function PlanToolCard({
           <button
             aria-expanded={expanded}
             aria-label={expanded ? "Collapse plan" : "Expand plan"}
-            className="flex size-6 items-center justify-center rounded-md text-fg-faint outline-none transition-colors hover:bg-hover hover:text-fg-muted focus-visible:ring-2 focus-visible:ring-focus-ring/35"
+            className="flex size-6 items-center justify-center rounded-md text-fg-faint outline-none transition-colors hover:bg-hover hover:text-fg-muted focus-visible:ring-2 focus-visible:ring-focus-ring"
             onClick={() => setExpanded((value) => !value)}
             type="button"
           >
@@ -233,7 +233,7 @@ export function PlanToolCard({
         {canExpand ? (
           <div className="mt-2.5 flex items-center border-hairline-soft border-t pt-2">
             <button
-              className="-mx-1.5 h-6 rounded-md px-1.5 text-fg-faint text-xs outline-none transition-colors hover:bg-hover hover:text-fg-muted focus-visible:ring-2 focus-visible:ring-focus-ring/35"
+              className="-mx-1.5 h-6 rounded-md px-1.5 text-fg-faint text-xs outline-none transition-colors hover:bg-hover hover:text-fg-muted focus-visible:ring-2 focus-visible:ring-focus-ring"
               onClick={() => setExpanded((value) => !value)}
               type="button"
             >

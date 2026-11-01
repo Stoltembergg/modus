@@ -64,7 +64,7 @@ export type SearchToolCardProps = {
 
 /** Focus ring shared by every focusable row / match line (Modus focus token). */
 const NAV_FOCUS =
-  "outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/35 focus-visible:ring-inset";
+  "outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-inset";
 
 const NAV_SELECTOR = "[data-search-nav]:not(:disabled)";
 

@@ -108,7 +108,7 @@ export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
           <label className="flex flex-col gap-1.5">
             <span className="text-xs text-fg-subtle">{t("settings.skillsRules.name")}</span>
             <input
-              className="h-8 rounded-md border border-hairline bg-surface px-2.5 text-sm text-fg outline-none focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
+              className="h-8 rounded-md border border-hairline bg-surface px-2.5 text-sm text-fg outline-none focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring"
               onChange={(event) => setDraftName(event.target.value)}
               placeholder={t("settings.skillsRules.namePlaceholder")}
               value={draftName}
@@ -117,7 +117,7 @@ export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
           <label className="flex flex-col gap-1.5">
             <span className="text-xs text-fg-subtle">{t("settings.skillsRules.description")}</span>
             <textarea
-              className="scroll-thin min-h-[68px] resize-none rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-fg leading-5 outline-none focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
+              className="scroll-thin min-h-[68px] resize-none rounded-md border border-hairline bg-surface px-2.5 py-2 text-sm text-fg leading-5 outline-none focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring"
               maxLength={280}
               onChange={(event) => setDraftDescription(event.target.value)}
               placeholder={t("settings.skillsRules.descriptionPlaceholder")}
@@ -127,7 +127,7 @@ export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
           <label className="flex flex-col gap-1.5">
             <span className="text-xs text-fg-subtle">{t("settings.skillsRules.instructions")}</span>
             <textarea
-              className="scroll-thin min-h-48 resize-y rounded-md border border-hairline bg-surface px-3 py-2 font-mono text-xs text-fg leading-5 outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
+              className="scroll-thin min-h-48 resize-y rounded-md border border-hairline bg-surface px-3 py-2 font-mono text-xs text-fg leading-5 outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring"
               onChange={(event) => setDraftBody(event.target.value)}
               placeholder={t("settings.skillsRules.instructionsPlaceholder")}
               value={draftBody}

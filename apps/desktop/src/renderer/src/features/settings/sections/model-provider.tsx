@@ -613,7 +613,7 @@ function ProviderAuthDialog({
             }}
           >
             <input
-              className="h-9 min-w-0 flex-1 rounded-md border border-hairline bg-panel px-3 text-sm text-fg outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
+              className="h-9 min-w-0 flex-1 rounded-md border border-hairline bg-panel px-3 text-sm text-fg outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring"
               onChange={(event) => setValue(event.target.value)}
               placeholder={operation.placeholder}
               type="text"

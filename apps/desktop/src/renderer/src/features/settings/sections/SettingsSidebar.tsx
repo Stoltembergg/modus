@@ -94,7 +94,7 @@ export function SettingsSidebar({
           stroke={1.7}
         />
         <input
-          className="h-9 w-full rounded-lg bg-surface/45 pr-3 pl-8 text-sm text-fg outline-none transition-colors placeholder:text-fg-faint focus:bg-surface focus-visible:ring-2 focus-visible:ring-focus-ring/35"
+          className="h-9 w-full rounded-lg bg-surface/45 pr-3 pl-8 text-sm text-fg outline-none transition-colors placeholder:text-fg-faint focus:bg-surface focus-visible:ring-2 focus-visible:ring-focus-ring"
           onChange={(event) => onQueryChange(event.target.value)}
           placeholder={t("settings.window.searchPlaceholder")}
           value={query}

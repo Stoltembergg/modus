@@ -182,7 +182,7 @@ export const SETTINGS_PRIMARY_BUTTON =
 
 /** Focus ring for settings inputs and selects: accent, visible in both themes. */
 export const SETTINGS_FOCUS_RING =
-  "focus-visible:border-focus-ring/60 focus-visible:ring-2 focus-visible:ring-focus-ring/35";
+  "focus-visible:border-focus-ring/60 focus-visible:ring-2 focus-visible:ring-focus-ring";
 
 /** Selected chip/tab inside Settings: accent tint + accent text. */
 export const SETTINGS_SELECTED = "bg-selected text-(--accent-text,var(--color-accent))";

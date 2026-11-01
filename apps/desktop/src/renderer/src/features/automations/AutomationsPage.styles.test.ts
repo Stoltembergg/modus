@@ -13,7 +13,7 @@ describe("Automations glass styling", () => {
   it("styles fields on keyboard focus with the shared focus ring, not :focus", () => {
     const field = source.match(/const FIELD_CLASS =\s*"([^"]+)"/)?.[1] ?? "";
     expect(field).toContain("focus-visible:ring-2");
-    expect(field).toContain("focus-visible:ring-focus-ring/35");
+    expect(field).toContain("focus-visible:ring-focus-ring");
     expect(field).not.toMatch(/(^|\s)focus:/);
     expect(source).not.toMatch(/(^|[\s"`])focus:/);
   });

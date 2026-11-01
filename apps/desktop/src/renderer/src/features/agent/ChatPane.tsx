@@ -1480,7 +1480,7 @@ export function ChatPane({
               >
                 <button
                   aria-label="Scroll to latest"
-                  className="pointer-events-auto flex size-10 items-center justify-center rounded-full border border-popup-border bg-elevated text-fg-muted shadow-popup outline-none transition-colors duration-(--motion-duration-fast) hover:bg-hover hover:text-fg focus-visible:ring-2 focus-visible:ring-focus-ring/35"
+                  className="pointer-events-auto flex size-10 items-center justify-center rounded-full border border-popup-border bg-elevated text-fg-muted shadow-popup outline-none transition-colors duration-(--motion-duration-fast) hover:bg-hover hover:text-fg focus-visible:ring-2 focus-visible:ring-focus-ring"
                   onClick={autoScroll.scrollToLatest}
                   title="Scroll to latest"
                   type="button"

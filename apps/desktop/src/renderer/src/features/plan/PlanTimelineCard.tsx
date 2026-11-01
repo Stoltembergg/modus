@@ -58,7 +58,7 @@ export function PlanTimelineCard({
                 {onOpen ? (
                   <button
                     aria-label="Open plan"
-                    className="flex size-6 items-center justify-center rounded-md text-fg-faint outline-none transition-colors hover:bg-hover hover:text-fg-muted focus-visible:ring-2 focus-visible:ring-focus-ring/35"
+                    className="flex size-6 items-center justify-center rounded-md text-fg-faint outline-none transition-colors hover:bg-hover hover:text-fg-muted focus-visible:ring-2 focus-visible:ring-focus-ring"
                     onClick={() => onOpen(plan)}
                     title="Open plan"
                     type="button"

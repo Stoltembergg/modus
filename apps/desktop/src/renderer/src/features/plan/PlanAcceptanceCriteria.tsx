@@ -223,7 +223,7 @@ export function PlanAcceptanceCriteria({
               ) : null}
               {earlierEvidenceCount ? (
                 <details className="mt-2 border-hairline border-t pt-2">
-                  <summary className="cursor-pointer text-xs text-fg-muted outline-none hover:text-fg focus-visible:ring-2 focus-visible:ring-focus-ring/35">
+                  <summary className="cursor-pointer text-xs text-fg-muted outline-none hover:text-fg focus-visible:ring-2 focus-visible:ring-focus-ring">
                     Earlier evidence ({earlierEvidenceCount})
                   </summary>
                   <div className="mt-2 space-y-2">

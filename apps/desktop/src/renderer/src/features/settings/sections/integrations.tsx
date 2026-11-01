@@ -464,7 +464,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
               <span className="mb-1.5 block">{t("settings.integrations.apiKeyLabel")}</span>
               <input
                 autoComplete="new-password"
-                className="h-9 w-full rounded-md bg-canvas px-3 text-sm text-fg outline-none placeholder:text-fg-faint focus-visible:ring-2 focus-visible:ring-focus-ring/35"
+                className="h-9 w-full rounded-md bg-canvas px-3 text-sm text-fg outline-none placeholder:text-fg-faint focus-visible:ring-2 focus-visible:ring-focus-ring"
                 onChange={(event) => setApiKey(event.target.value)}
                 placeholder={
                   settings?.apiKeyConfigured
@@ -635,7 +635,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
               <label className="block">
                 <span className="sr-only">{t("settings.integrations.searchConsumerTools")}</span>
                 <input
-                  className="h-8 w-full rounded-md bg-canvas px-2.5 text-xs text-fg outline-none placeholder:text-fg-faint focus-visible:ring-2 focus-visible:ring-focus-ring/35"
+                  className="h-8 w-full rounded-md bg-canvas px-2.5 text-xs text-fg outline-none placeholder:text-fg-faint focus-visible:ring-2 focus-visible:ring-focus-ring"
                   onChange={(event) => setConsumerQuery(event.target.value)}
                   placeholder={t("settings.integrations.searchConsumerToolsPlaceholder")}
                   value={consumerQuery}
@@ -706,7 +706,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
           <label className="relative block">
             <span className="sr-only">{t("settings.integrations.searchPlatforms")}</span>
             <input
-              className="h-9 w-full rounded-md bg-panel px-3 text-sm text-fg outline-none placeholder:text-fg-faint focus-visible:ring-2 focus-visible:ring-focus-ring/35"
+              className="h-9 w-full rounded-md bg-panel px-3 text-sm text-fg outline-none placeholder:text-fg-faint focus-visible:ring-2 focus-visible:ring-focus-ring"
               onChange={(event) => setCatalogQuery(event.target.value)}
               placeholder={t("settings.integrations.searchPlatformsPlaceholder")}
               value={catalogQuery}
@@ -916,7 +916,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
                                 {t("settings.integrations.accountNameLabel")}
                               </span>
                               <input
-                                className="h-8 w-full rounded-md bg-panel px-2.5 text-sm text-fg outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/35"
+                                className="h-8 w-full rounded-md bg-panel px-2.5 text-sm text-fg outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
                                 maxLength={80}
                                 onChange={(event) => setConnectionAlias(event.target.value)}
                                 value={connectionAlias}
@@ -1012,7 +1012,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
                                 })}
                               </span>
                               <input
-                                className="h-8 w-full rounded-md bg-canvas px-2.5 text-xs text-fg outline-none placeholder:text-fg-faint focus-visible:ring-2 focus-visible:ring-focus-ring/35"
+                                className="h-8 w-full rounded-md bg-canvas px-2.5 text-xs text-fg outline-none placeholder:text-fg-faint focus-visible:ring-2 focus-visible:ring-focus-ring"
                                 onChange={(event) =>
                                   setToolQueries((current) => ({
                                     ...current,

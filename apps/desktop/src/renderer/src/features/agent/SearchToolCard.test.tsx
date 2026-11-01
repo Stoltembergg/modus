@@ -175,7 +175,7 @@ describe("SearchToolCard clickable rows (C2.1)", () => {
     expect(row.tagName).toBe("BUTTON");
     expect(row.getAttribute("type")).toBe("button");
     expect(row.className).toContain("focus-visible:ring-2");
-    expect(row.className).toContain("focus-visible:ring-focus-ring/35");
+    expect(row.className).toContain("focus-visible:ring-focus-ring");
   });
 
   it("expands and collapses a multi-match file with aria-expanded", () => {
