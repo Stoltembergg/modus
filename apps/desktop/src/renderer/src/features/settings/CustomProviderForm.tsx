@@ -586,14 +586,14 @@ function ModelRowEditor({
       <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] items-center gap-2 px-3 py-2.5">
         <input
           aria-label={t("settings.customProvider.modelId")}
-          className="h-9 min-w-0 rounded-md border border-hairline bg-canvas px-3 font-mono text-xs text-fg outline-none placeholder:text-fg-faint transition-colors hover:border-hairline-strong focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
+          className="h-9 min-w-0 rounded-md border border-hairline bg-canvas px-3 font-mono text-xs text-fg outline-none placeholder:text-fg-faint transition-colors hover:border-hairline-strong focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring"
           onChange={(event) => onChange({ id: event.target.value })}
           placeholder={t("settings.customProvider.modelIdPlaceholder")}
           value={row.id}
         />
         <input
           aria-label={t("settings.customProvider.modelDisplayName")}
-          className="h-9 min-w-0 rounded-md border border-hairline bg-canvas px-3 text-sm text-fg outline-none placeholder:text-fg-faint transition-colors hover:border-hairline-strong focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
+          className="h-9 min-w-0 rounded-md border border-hairline bg-canvas px-3 text-sm text-fg outline-none placeholder:text-fg-faint transition-colors hover:border-hairline-strong focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring"
           onChange={(event) => onChange({ name: event.target.value })}
           placeholder={t("settings.customProvider.modelDisplayNamePlaceholder")}
           value={row.name}

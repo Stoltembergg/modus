@@ -189,7 +189,7 @@ export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
               ) : null}
             </div>
             <textarea
-              className="scroll-thin min-h-[280px] w-full resize-y settings-group px-4 py-3 font-mono text-sm text-fg leading-6 outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35 disabled:opacity-60"
+              className="scroll-thin min-h-[280px] w-full resize-y settings-group px-4 py-3 font-mono text-sm text-fg leading-6 outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring disabled:opacity-60"
               disabled={loading || saving}
               onChange={(event) => {
                 setDraft(event.target.value);

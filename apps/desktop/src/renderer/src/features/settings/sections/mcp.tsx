@@ -939,7 +939,7 @@ export function McpServerForm({
 
       <McpField hint={t("settings.mcp.fieldNameHint")} label={t("settings.mcp.fieldName")}>
         <input
-          className="h-9 w-full rounded-md bg-surface px-3 font-mono text-sm text-fg outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
+          className="h-9 w-full rounded-md bg-surface px-3 font-mono text-sm text-fg outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring"
           onChange={(event) => set({ name: event.target.value })}
           placeholder={t("settings.mcp.namePlaceholder")}
           value={form.name}
@@ -953,7 +953,7 @@ export function McpServerForm({
             label={t("settings.mcp.fieldCommand")}
           >
             <input
-              className="h-9 w-full rounded-md bg-surface px-3 font-mono text-sm text-fg outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
+              className="h-9 w-full rounded-md bg-surface px-3 font-mono text-sm text-fg outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring"
               onChange={(event) => set({ commandLine: event.target.value })}
               placeholder={DEFAULT_COMMAND_PLACEHOLDER}
               value={form.commandLine}
@@ -973,7 +973,7 @@ export function McpServerForm({
         <>
           <McpField hint={t("settings.mcp.fieldUrlHint")} label={t("settings.mcp.fieldUrl")}>
             <input
-              className="h-9 w-full rounded-md bg-surface px-3 font-mono text-sm text-fg outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
+              className="h-9 w-full rounded-md bg-surface px-3 font-mono text-sm text-fg outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring"
               onChange={(event) => set({ url: event.target.value })}
               placeholder={DEFAULT_URL_PLACEHOLDER}
               value={form.url}
@@ -1127,7 +1127,7 @@ function McpKeyValueRows({
       {pairs.map((item) => (
         <div className="flex items-center gap-1.5" key={item.id}>
           <input
-            className="h-8 w-2/5 rounded-md bg-surface px-2.5 font-mono text-fg text-xs outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
+            className="h-8 w-2/5 rounded-md bg-surface px-2.5 font-mono text-fg text-xs outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring"
             onChange={(event) =>
               onChange(
                 pairs.map((existing) =>
@@ -1139,7 +1139,7 @@ function McpKeyValueRows({
             value={item.key}
           />
           <input
-            className="h-8 min-w-0 flex-1 rounded-md bg-surface px-2.5 font-mono text-fg text-xs outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
+            className="h-8 min-w-0 flex-1 rounded-md bg-surface px-2.5 font-mono text-fg text-xs outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring"
             onChange={(event) =>
               onChange(
                 pairs.map((existing) =>

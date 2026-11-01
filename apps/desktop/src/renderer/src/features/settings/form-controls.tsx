@@ -66,7 +66,7 @@ export function Field({
       <input
         autoComplete={autoComplete}
         className={cn(
-          "h-10 w-full rounded-md border border-hairline bg-canvas px-3 text-sm text-fg outline-none placeholder:text-fg-faint transition-colors hover:border-hairline-strong focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35",
+          "h-10 w-full rounded-md border border-hairline bg-canvas px-3 text-sm text-fg outline-none placeholder:text-fg-faint transition-colors hover:border-hairline-strong focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring",
           mono && "font-mono",
         )}
         onChange={(event) => onChange(event.target.value)}
@@ -322,14 +322,14 @@ export function KeyValueEditor({
             >
               <input
                 aria-label={t("settings.window.keyValueKeyAriaLabel", { title })}
-                className="h-9 rounded-md border border-hairline bg-canvas px-3 font-mono text-xs text-fg outline-none placeholder:text-fg-faint transition-colors hover:border-hairline-strong focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
+                className="h-9 rounded-md border border-hairline bg-canvas px-3 font-mono text-xs text-fg outline-none placeholder:text-fg-faint transition-colors hover:border-hairline-strong focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring"
                 onChange={(event) => onChange(row.rowId, { key: event.target.value })}
                 placeholder={keyPlaceholder}
                 value={row.key}
               />
               <input
                 aria-label={t("settings.window.keyValueValueAriaLabel", { title })}
-                className="h-9 rounded-md border border-hairline bg-canvas px-3 font-mono text-xs text-fg outline-none placeholder:text-fg-faint transition-colors hover:border-hairline-strong focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35"
+                className="h-9 rounded-md border border-hairline bg-canvas px-3 font-mono text-xs text-fg outline-none placeholder:text-fg-faint transition-colors hover:border-hairline-strong focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring"
                 onChange={(event) => onChange(row.rowId, { value: event.target.value })}
                 placeholder={valuePlaceholder}
                 value={row.value}

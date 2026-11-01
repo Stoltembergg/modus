@@ -108,7 +108,7 @@ export function PersonalizationSettingsPanel() {
 
       <SettingsSection title={t("settings.appearance.customInstructions")}>
         <textarea
-          className="scroll-thin min-h-[320px] resize-y settings-group px-4 py-3 font-mono text-sm text-fg leading-6 outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring/35 disabled:opacity-60"
+          className="scroll-thin min-h-[320px] resize-y settings-group px-4 py-3 font-mono text-sm text-fg leading-6 outline-none placeholder:text-fg-faint focus:border-focus-ring/60 focus:ring-2 focus:ring-focus-ring disabled:opacity-60"
           disabled={loading}
           onChange={(event) => {
             setDraft(event.target.value);

@@ -58,7 +58,7 @@ export function CheckpointRestoreButton({ checkpointId, onRestore }: CheckpointR
     <button
       aria-label="Restore checkpoint"
       className={cn(
-        "flex h-6 items-center rounded-md text-fg-faint outline-none transition-colors hover:bg-hover hover:text-fg-muted focus-visible:ring-2 focus-visible:ring-focus-ring/35",
+        "flex h-6 items-center rounded-md text-fg-faint outline-none transition-colors hover:bg-hover hover:text-fg-muted focus-visible:ring-2 focus-visible:ring-focus-ring",
         phase === "restoring" ? "gap-1 px-1.5" : "w-6 justify-center",
         phase === "restoring" && "cursor-wait text-fg-muted",
       )}

@@ -51,7 +51,7 @@ export function DefaultModelSetting({
                 ? t("settings.providers.noModelConfigured")
                 : t("settings.providers.chooseModel")
             }
-            triggerClassName="flex h-8 w-[min(320px,calc(100vw-48px))] min-w-[180px] items-center justify-between gap-2 rounded-md border border-hairline bg-canvas px-2 text-sm text-fg outline-none transition-colors hover:border-hairline-strong focus-visible:border-focus-ring/60 focus-visible:ring-2 focus-visible:ring-focus-ring/35 data-popup-open:border-hairline-strong"
+            triggerClassName="flex h-8 w-[min(320px,calc(100vw-48px))] min-w-[180px] items-center justify-between gap-2 rounded-md border border-hairline bg-canvas px-2 text-sm text-fg outline-none transition-colors hover:border-hairline-strong focus-visible:border-focus-ring/60 focus-visible:ring-2 focus-visible:ring-focus-ring data-popup-open:border-hairline-strong"
             value={defaultModel}
           />
         }

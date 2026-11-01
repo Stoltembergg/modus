@@ -314,7 +314,7 @@ export function NavRail({ label, pinned, compactMenuLabel, className, children }
         <button
           aria-expanded={sheetOpen}
           aria-label={compactMenuLabel}
-          className="nav-rail-icon-button outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/35"
+          className="nav-rail-icon-button outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
           onClick={() => setSheetOpen((open) => !open)}
           ref={menuButtonRef}
           type="button"
