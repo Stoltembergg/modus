@@ -389,7 +389,7 @@ export function BrowserPanel({ active, workspaceId }: BrowserPanelProps) {
         </BrowserIconButton>
         <form className="mx-3 min-w-0 flex-1" onSubmit={(event) => void submitAddress(event)}>
           <input
-            className="h-8 w-full rounded-md border border-transparent bg-transparent px-3 text-center text-fg text-sm outline-none transition-colors placeholder:text-fg-muted hover:bg-hover focus:border-hairline focus:bg-hover focus:text-left"
+            className="h-8 w-full rounded-md border border-transparent bg-transparent px-3 text-center text-fg text-sm outline-none transition-colors placeholder:text-fg-muted hover:bg-hover focus:border-hairline focus:bg-hover focus:text-left focus-visible:ring-2 focus-visible:ring-focus-ring"
             onChange={(event) => setAddress(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Escape") {
@@ -660,7 +660,7 @@ function BrowserRecentsDrawer({
       style={{ width: RECENTS_DRAWER_WIDTH }}
     >
       <input
-        className="h-8 w-full rounded-md border border-hairline bg-transparent px-2 text-fg text-sm outline-none placeholder:text-fg-muted focus:border-hairline-strong"
+        className="h-8 w-full rounded-md border border-hairline bg-transparent px-2 text-fg text-sm outline-none placeholder:text-fg-muted focus:border-hairline-strong focus-visible:ring-2 focus-visible:ring-focus-ring"
         onChange={(event) => onQueryChange(event.target.value)}
         placeholder="Search"
         value={query}

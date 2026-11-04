@@ -875,7 +875,7 @@ function ReviewToolbar({
       role="toolbar"
     >
       <Menu.Root>
-        <Menu.Trigger className="flex h-8 shrink-0 items-center gap-2 rounded-md px-2 text-fg text-sm outline-none transition-colors hover:bg-hover data-popup-open:bg-hover">
+        <Menu.Trigger className="flex h-8 shrink-0 items-center gap-2 rounded-md px-2 text-fg text-sm outline-none transition-colors hover:bg-hover focus-visible:ring-2 focus-visible:ring-focus-ring data-popup-open:bg-hover">
           <span>{SCOPE_META[scope].label}</span>
           <span className="rounded-full bg-chip px-1.5 py-px text-2xs text-fg-muted tabular-nums">
             {count}
@@ -1067,7 +1067,7 @@ function OverflowMenu({
     <Menu.Root>
       <Menu.Trigger
         aria-label="Changes options"
-        className="flex size-6 items-center justify-center rounded-md text-fg-faint outline-none transition-colors hover:bg-hover hover:text-fg-subtle data-popup-open:bg-hover"
+        className="flex size-6 items-center justify-center rounded-md text-fg-faint outline-none transition-colors hover:bg-hover hover:text-fg-subtle focus-visible:ring-2 focus-visible:ring-focus-ring data-popup-open:bg-hover"
       >
         <IconDots size={16} stroke={1.8} />
       </Menu.Trigger>

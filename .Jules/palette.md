@@ -26,3 +26,7 @@
 ## 2026-10-25 - [Palette: Add focus-visible style to "Open file" button in FilesPanel]
 **Learning:** Some custom UI buttons (like the FilesPanel's Open button) use `outline-none` but lack an explicit `focus-visible` fallback, making keyboard focus invisible. A solid focus ring can also provide better contrast than a translucent ring.
 **Action:** Add an explicit `focus-visible` ring to custom buttons that suppress their outline, and check the component's mounted context before changing shared UI.
+
+## 2026-11-04 - [Palette: Add focus-visible styles to miscellaneous UI elements]
+**Learning:** Some custom UI elements (like "Open externally" in PreviewHost, `Menu.Trigger`s in DiffPanel, and input fields in BrowserPanel) use `outline-none` but lacked explicit `focus-visible` fallback, making keyboard focus invisible.
+**Action:** Always ensure interactive elements that suppress their default outline have a visible focus ring using `focus-visible:ring-2 focus-visible:ring-focus-ring`.
