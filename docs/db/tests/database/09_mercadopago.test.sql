@@ -31,7 +31,7 @@ create function pg_temp.pre(p_id text, p_ref text, p_status text default 'author
 returns jsonb language sql as $$
   select jsonb_build_object('id', p_id, 'status', p_status, 'external_reference', p_ref,
     'collector_id', p_collector, 'amount_minor', p_amount, 'currency', p_currency,
-    'next_payment_date', '2026-11-03T10:00:00.000-03:00')
+    'next_payment_date', '2030-11-03T10:00:00.000-03:00')
 $$;
 grant execute on function pg_temp.pre(text, text, text, bigint, text, text) to service_role;
 create function pg_temp.pay(p_id text, p_status text, p_amount bigint default 10990,

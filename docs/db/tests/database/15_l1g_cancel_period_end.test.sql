@@ -10,7 +10,7 @@ select no_plan();
 \set expect '{"live_mode": false, "collector_id": "777"}'
 
 create function pg_temp.pre(p_id text, p_ref uuid, p_status text default 'authorized',
-                            p_next text default '2026-11-03T10:00:00.000-03:00')
+                            p_next text default '2030-11-03T10:00:00.000-03:00')
 returns jsonb language sql as $$
   select jsonb_build_object('id', p_id, 'status', p_status, 'external_reference', p_ref::text,
     'collector_id', '777', 'amount_minor', 4990, 'currency', 'BRL', 'next_payment_date', p_next)
@@ -98,7 +98,7 @@ select pg_temp.period_end('PREGA1') as a_end \gset
 select ok(:'a_end'::timestamptz > now(), 'A: the paid period is in the future');
 select is(private.mp_mark_cancel_requested(:'a', 'PREGA1') ->> 'code', 'marked', 'A: cancel requested');
 select is(private.process_mp_preapproval(
-  pg_temp.pre('PREGA1', :'coa', 'canceled', '2026-12-03T10:00:00.000-03:00'), :'expect') ->> 'code',
+  pg_temp.pre('PREGA1', :'coa', 'canceled', '2030-12-03T10:00:00.000-03:00'), :'expect') ->> 'code',
   'subscription_canceled', 'A: MP canceled');
 select is(pg_temp.sub('PREGA1'), 'canceled:true:false',
   'A: canceled + cancel_at_period_end (paid until the period end), request cleared');
